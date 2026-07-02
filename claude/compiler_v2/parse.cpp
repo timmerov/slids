@@ -69,10 +69,40 @@ bool classHasField(ClassInfo const& info, std::string const& name) {
     return false;
 }
 
+bool userParamsEqual(std::vector<widen::TypeRef> const& a,
+                     std::vector<widen::TypeRef> const& b) {
+    if (a.size() != b.size()) return false;
+    // Skip param 0 (`_$recv`): it differs by class between a base method and its
+    // override, so it is never part of a method's user-visible signature.
+    for (std::size_t i = 1; i < a.size(); ++i)
+        if (widen::deepStrip(a[i]) != widen::deepStrip(b[i])) return false;
+    return true;
+}
+
+int findMethodInFrame(Tree const& t, int ns_frame, std::string const& name,
+                      std::vector<widen::TypeRef> const& params, int exclude) {
+    if (ns_frame < 0) return -1;
+    for (std::size_t id = 0; id < t.entries.size(); ++id) {
+        if (static_cast<int>(id) == exclude) continue;
+        Entry const& e = t.entries[id];
+        if (e.kind == EntryKind::kFunction && e.owner_ns_frame == ns_frame
+            && e.name == name && userParamsEqual(e.param_types, params))
+            return static_cast<int>(id);
+    }
+    return -1;
+}
+
 widen::TypeRef baseTypeOf(ClassInfo const& info) {
     if (!info.field_names.empty() && info.field_names[0] == "_$base")
         return widen::strip(info.field_types[0]);
     return widen::kNoType;
+}
+
+// True for a ROOT virtual class — one carrying its own hidden `_$vptr` (the vtable
+// pointer) as the unnamed first field. A derived virtual class inherits the vptr through
+// `_$base` and has NO `_$vptr` of its own, so the two are mutually exclusive at slot 0.
+bool hasVptr(ClassInfo const& info) {
+    return !info.field_names.empty() && info.field_names[0] == "_$vptr";
 }
 
 widen::TypeRef classBaseType(Tree const& t, widen::TypeRef cls) {
@@ -112,6 +142,11 @@ int classEntryForFrame(Tree const& t, int ns_frame) {
             return static_cast<int>(id);
     }
     return -1;
+}
+
+int classNsFrame(Tree const& t, widen::TypeRef cls) {
+    int cid = classEntryForType(t, widen::strip(cls));
+    return cid < 0 ? -1 : t.entries[cid].ns_frame_id;
 }
 
 widen::TypeRef entryType(Tree const& t, int entry_id) {

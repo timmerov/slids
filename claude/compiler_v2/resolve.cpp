@@ -763,6 +763,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
     tree.open_ns_frames.push_back(frame);
     std::vector<std::string> const* saved_mf = tree.method_fields;
     std::string saved_base = tree.current_base_name;
+    std::string saved_class = tree.current_class_name;
     if (isClass) {
         auto it = tree.classes.find(widen::strip(node.return_type));
         // Bare field names in a method/ctor/dtor body rewrite to `self.field` via
@@ -771,6 +772,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         tree.method_fields = (it != tree.classes.end()) ? &it->second.field_names
                                                         : nullptr;
         tree.current_base_name = node.text;   // base name for the `Base:` reframe (or "")
+        tree.current_class_name = (it != tree.classes.end()) ? it->second.name : "";
         // Field-default exprs, with the class frame open (a default may name a
         // sibling member bare).
         for (auto& p : node.params) {
@@ -781,6 +783,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
     } else {
         tree.method_fields = nullptr;   // a free function does not self-bind
         tree.current_base_name.clear();
+        tree.current_class_name.clear();
     }
     for (auto& m : node.children) {
         if (!m) continue;
@@ -806,6 +809,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
     }
     tree.method_fields = saved_mf;
     tree.current_base_name = saved_base;
+    tree.current_class_name = saved_class;
     tree.open_ns_frames.pop_back();
     for (int i = 0; i < base_pushed; i++) tree.open_ns_frames.pop_back();
 }
@@ -1216,17 +1220,47 @@ bool frameHasFunction(parse::Tree& tree, int frame, std::string const& name) {
     return id >= 0 && tree.entries[id].kind == parse::EntryKind::kFunction;
 }
 
+// Base hops from `self` to the subobject named by `className`: 0 = the CURRENT class
+// itself (`Self:` — no reframe, `self` as-is), d>=1 = a transitive base at depth d
+// (`Base:` — self._$base...(d)), -1 = neither (not in the self chain). Unifies the
+// own-class and ancestor qualifier spellings behind one hop count for buildBaseReceiver.
+int selfOrBaseDepth(parse::Tree& tree, std::string const& className) {
+    if (!tree.current_class_name.empty() && className == tree.current_class_name)
+        return 0;
+    int d = baseClassDepth(tree, className);
+    return d > 0 ? d : -1;
+}
+
 bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
                              diagnostic::Sink& diag, bool unevaluated) {
+    // Spelling `X:self.method(args)` — a method call whose receiver (children[0]) is the
+    // qualified `X:self`. This is the explicit-self twin of `X:method(args)`: reframe the
+    // receiver to X's subobject (0 hops for the own class, d for a base) and BYPASS
+    // dispatch — a static call to X's method, not the runtime-most-derived override.
+    if (e.kind == parse::Kind::kMethodCallStmt
+        && !e.children.empty() && e.children[0]
+        && e.children[0]->kind == parse::Kind::kIdentExpr
+        && e.children[0]->qualifier.size() == 1
+        && e.children[0]->name == "self") {
+        int depth = selfOrBaseDepth(tree, e.children[0]->qualifier[0]);
+        if (depth < 0) return false;   // an unrelated qualifier — let normal lookup diagnose
+        e.children[0] = buildBaseReceiver(depth, e.file_id, e.tok);   // self._$base...(depth)
+        e.bypass_virtual = true;
+        for (auto& ch : e.children)
+            if (ch) resolveExpr(tree, *ch, diag, unevaluated);
+        return true;
+    }
     if (e.qualifier.size() != 1) return false;
-    int depth = baseClassDepth(tree, e.qualifier[0]);   // a transitive base? (1 = immediate)
-    if (depth == 0) return false;
+    // 0 = the OWN class (`Self:` — no reframe), d>=1 = a transitive base (`Base:` at
+    // depth d), -1 = neither (not in the self chain -> defer to normal lookup).
+    int depth = selfOrBaseDepth(tree, e.qualifier[0]);
+    if (depth < 0) return false;
     bool is_call  = (e.kind == parse::Kind::kCallExpr || e.kind == parse::Kind::kCallStmt);
     bool is_ident = (e.kind == parse::Kind::kIdentExpr);
     if (!is_call && !is_ident) return false;
-    // `Base:X` reframes self to the base ONLY for an INSTANCE member (a field, a method,
-    // or `self`). A static (const / alias / enum / nested type) is left for the normal
-    // qualified-name lookup — it is not reached through `self._$base`.
+    // `X:member` reframes self ONLY for an INSTANCE member (a field, a method, or `self`).
+    // A static (const / alias / enum / nested type) is left for the normal qualified-name
+    // lookup — it is not reached through `self` / `self._$base`.
     int aid = resolveName(tree, e.qualifier[0]);
     if (aid < 0) return false;
     widen::TypeRef anc = widen::strip(tree.entries[aid].slids_type);
@@ -1234,25 +1268,38 @@ bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
     bool is_field = (ci != tree.classes.end())
         && parse::classHasField(ci->second, e.name);
     bool is_self   = (is_ident && e.name == "self");
-    bool is_method = (is_call && frameHasFunction(tree, tree.entries[aid].ns_frame_id, e.name));
+    // A METHOD reached via the qualifier — the qualified class's own frame OR one it
+    // INHERITS from a base (so `Mid:m()` reaches `Top`'s `m`). This mirrors the
+    // `X:self.method()` form, which binds against the full chain in classify; without
+    // the base-chain walk the two spellings would diverge (one bypasses, one errors).
+    bool is_method = false;
+    if (is_call) {
+        for (int fr : parse::classAndBaseFrames(tree, anc))
+            if (frameHasFunction(tree, fr, e.name)) { is_method = true; break; }
+    }
     if (!is_self && !(is_ident && is_field) && !is_method) return false;  // static -> defer
-    auto base_recv = buildBaseReceiver(depth, e.file_id, e.tok);   // self._$base...(depth)
+    auto base_recv = buildBaseReceiver(depth, e.file_id, e.tok);   // depth 0 = self as-is
     e.qualifier.clear();
     e.qualifier_toks.clear();
     if (is_ident && e.name == "self") {
-        e.kind = parse::Kind::kFieldExpr;            // Base:self -> self._$base
-        e.name = "_$base";
+        // `X:self` as a bare value: the own class (depth 0) is plain `self`; a base
+        // (depth>=1) is `self._$base...(depth)` — take the reframed receiver verbatim.
+        e.kind = base_recv->kind;
+        e.name = base_recv->name;
         e.children = std::move(base_recv->children);
     } else if (is_ident) {
-        e.kind = parse::Kind::kFieldExpr;            // Base:field -> self._$base.field
+        e.kind = parse::Kind::kFieldExpr;            // X:field -> self[._$base...].field
         e.children.clear();
-        e.children.push_back(std::move(base_recv));  // [0] = self._$base; e.name = field
-    } else {                                         // Base:method(args) -> method call
+        e.children.push_back(std::move(base_recv));  // [0] = the reframed receiver
+    } else {                                         // X:method(args) -> method call
         std::vector<std::unique_ptr<parse::Node>> args = std::move(e.children);
         e.kind = parse::Kind::kMethodCallStmt;       // e.name = method
         e.children.clear();
-        e.children.push_back(std::move(base_recv));  // [0] = receiver self._$base
+        e.children.push_back(std::move(base_recv));  // [0] = the reframed receiver
         for (auto& a : args) e.children.push_back(std::move(a));
+        // A qualified call BYPASSES virtual dispatch: it statically targets the named
+        // class's method (own or ancestor), not the runtime-most-derived override.
+        e.bypass_virtual = true;
     }
     for (auto& ch : e.children)
         if (ch) resolveExpr(tree, *ch, diag, unevaluated);
@@ -1877,6 +1924,12 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             }
         }
     }
+    // A base-qualified call STATEMENT (`Base:method();`) is the static bypass: reframe it
+    // to a method call on the base subobject and mark it (bypass_virtual) so desugar skips
+    // vtable dispatch. Must run BEFORE resolveCallTarget's bare-method rewrite, which would
+    // otherwise drop the `Base:` and rebind it as a dispatched `self.method()`. (The
+    // expression form is handled by tryResolveBaseQualifier inside resolveExpr.)
+    if (tryResolveBaseQualifier(tree, s, diag, /*unevaluated=*/false)) return;
     if (resolveCallTarget(tree, s, diag)) {
         // `Class(args)` construction: resolveCallTarget marked it (is_construction)
         // and stamped the class entry. There is no function arity / method / nested
@@ -2733,6 +2786,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kMethodCallStmt: {
+            // A `X:self.method()` statement is the static bypass: reframe + mark it
+            // (bypass_virtual) BEFORE the children resolve — else resolving the `X:self`
+            // receiver rewrites it in place and the call stays dispatched. (The
+            // expression form runs through tryResolveBaseQualifier at resolveExpr's top.)
+            if (tryResolveBaseQualifier(tree, s, diag, /*unevaluated=*/false))
+                return Completion::Normal;
             // Resolve the receiver (children[0]) and the args (children[1..]); the
             // method name binds in classify against the receiver's class type.
             for (auto& ch : s.children)
@@ -3925,6 +3984,8 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             e.file_id = m->file_id;
             e.tok = m->name_tok;
             e.defined = (m->kind == parse::Kind::kFunctionDef);
+            e.is_virtual = m->is_virtual;
+            e.is_pure = m->is_pure;
             if (e.defined) { e.def_file_id = m->file_id; e.def_tok = m->name_tok; }
             e.owner_ns_frame = frame;
             m->resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -3966,8 +4027,13 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
         // recursion registers into the shared frame; the class BODY passes
         // (registerClassBody / cycle / needs) skip a reopen node.
         if (prev.kind == parse::EntryKind::kClass) {
+            // The synthetic `_$vptr` / `_$base` are not user fields — a re-open whose
+            // segment has a `virtual` member picks up a spurious `_$vptr` from the parser
+            // (it does not know yet this is a re-open); ignore it. The layout is the
+            // primary's regardless (a re-open node skips the class BODY passes).
             bool has_fields = false;
-            for (auto& p : node.params) if (p) { has_fields = true; break; }
+            for (auto& p : node.params)
+                if (p && p->name != "_$vptr" && p->name != "_$base") { has_fields = true; break; }
             if (has_fields) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
                     "Duplicate definition of class '" + node.name + "'; a re-open "
@@ -4070,6 +4136,121 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     widen::setSlidLifecycle(type, has_ctor, has_dtor);
 }
 
+// True if `cls` (or an ancestor) is a WELL-FORMED virtual class — one that carries a
+// vtable pointer. Only a ROOT virtual class holds `_$vptr`; derived classes inherit it,
+// so walking to the root and checking hasVptr answers the whole chain.
+bool classIsVirtual(parse::Tree const& tree, widen::TypeRef cls) {
+    int guard = static_cast<int>(tree.classes.size()) + 2;
+    for (widen::TypeRef c = widen::strip(cls); guard-- > 0; ) {
+        auto it = tree.classes.find(c);
+        if (it == tree.classes.end()) return false;
+        if (parse::hasVptr(it->second)) return true;
+        c = parse::baseTypeOf(it->second);
+        if (c == widen::kNoType) return false;
+    }
+    return false;
+}
+
+// The method entry across `frames` matching (name, user-params), other than `exclude`;
+// -1 if none. `frames` is most-derived first, so the first hit is the closest
+// declaration. Per-frame lookup + signature equality are the shared parse:: primitives.
+int findMethodInFrames(parse::Tree const& tree, std::vector<int> const& frames,
+                       std::string const& name,
+                       std::vector<widen::TypeRef> const& params, int exclude) {
+    for (int fr : frames) {
+        int id = parse::findMethodInFrame(tree, fr, name, params, exclude);
+        if (id >= 0) return id;
+    }
+    return -1;
+}
+
+// Enforce the virtual-class rules on ONE class declaration node: the base of a virtual
+// class must be virtual; an explicit destructor must be virtual; an override must agree
+// with the inherited method on virtual-ness and return type; a re-open may not add a new
+// virtual method.
+void validateVirtualClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+    if (node.resolved_entry_id < 0) return;
+    widen::TypeRef cls = widen::strip(node.return_type);
+    auto it = tree.classes.find(cls);
+    if (it == tree.classes.end()) return;
+    parse::ClassInfo const& info = it->second;
+    widen::TypeRef base = parse::baseTypeOf(info);
+
+    // Own declared virtual-ness (from this node's members — a re-open node carries only
+    // its own segment's members).
+    bool has_own_virtual = false;
+    parse::Node* dtor = nullptr;
+    for (auto& m : node.children) {
+        if (!m) continue;
+        if (m->kind != parse::Kind::kFunctionDef && m->kind != parse::Kind::kFunctionDecl)
+            continue;
+        if (m->name == "_$dtor") { dtor = m.get(); if (m->is_virtual) has_own_virtual = true; }
+        else if (m->name == "_$ctor") continue;
+        else if (m->is_virtual) has_own_virtual = true;
+    }
+    bool base_virtual = (base != widen::kNoType) && classIsVirtual(tree, base);
+    if (!has_own_virtual && !base_virtual) return;   // not a virtual class
+
+    // A virtual class ALWAYS needs construction (to stamp its vtable pointer at offset 0)
+    // and destruction (its vtable dtor slot + the field/base chain), even with no user
+    // ctor/dtor and no hook fields — so the construct/destruct hooks are emitted for it.
+    it->second.needs_ctor = true;
+    it->second.needs_dtor = true;
+    widen::setSlidNeeds(cls, true, true);
+
+    // The base of a virtual class must itself be virtual. (Checked on the PRIMARY node —
+    // a re-open carries the same base and would only double-report.)
+    if (!node.is_reopen && has_own_virtual && base != widen::kNoType && !base_virtual) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "The base class of a virtual class must itself be virtual.", {}});
+    }
+    // An explicitly declared destructor of a virtual class must be virtual.
+    if (dtor && !dtor->is_virtual) {
+        diagnostic::report(diag, {dtor->file_id, dtor->name_tok,
+            "The destructor of a virtual class must be virtual.", {}});
+    }
+
+    std::vector<int> base_frames = (base != widen::kNoType)
+        ? parse::classAndBaseFrames(tree, base) : std::vector<int>{};
+    std::vector<int> self_and_base = parse::classAndBaseFrames(tree, cls);
+    for (auto& m : node.children) {
+        if (!m || m->resolved_entry_id < 0) continue;
+        if (m->kind != parse::Kind::kFunctionDef && m->kind != parse::Kind::kFunctionDecl)
+            continue;
+        if (m->name == "_$ctor" || m->name == "_$dtor") continue;
+        parse::Entry const& em = tree.entries[m->resolved_entry_id];
+        int inh = findMethodInFrames(tree, base_frames, em.name, em.param_types, -1);
+        if (inh >= 0) {
+            parse::Entry const& ei = tree.entries[inh];
+            if (ei.is_virtual && !m->is_virtual) {
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "'" + m->name + "' overrides a virtual method and must be declared "
+                    "'virtual' (a non-virtual method cannot shadow a virtual one).", {}});
+            } else if (!ei.is_virtual && m->is_virtual) {
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "'" + m->name + "' is 'virtual' but the inherited method it shadows "
+                    "is not (a virtual method cannot shadow a non-virtual one).", {}});
+            } else if (ei.is_virtual && m->is_virtual
+                       && widen::deepStrip(em.slids_type) != widen::deepStrip(ei.slids_type)) {
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "The return type of override '" + m->name + "' must match the "
+                    "inherited method.", {}});
+            }
+        } else if (m->is_virtual && node.is_reopen) {
+            // A re-open may implement/override an existing slot (found above) but not
+            // introduce a NEW virtual method — unless a matching slot was declared in the
+            // class's PRIMARY body (same frame, a different entry).
+            if (findMethodInFrames(tree, self_and_base, em.name, em.param_types,
+                                   m->resolved_entry_id) < 0) {
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "A re-opened virtual class may not add the new virtual method '"
+                    + m->name + "'; all virtual methods must be in the original "
+                    "declaration.", {}});
+            }
+        }
+    }
+}
+
 // Reject by-value cycles and run the transitive ctor/dtor-needs fixpoint over a
 // class set whose field types were already resolved by resolveScopeTypes (the TYPES
 // phase). Used for a LOCAL set (a function-body class / local namespace), which the
@@ -4093,6 +4274,7 @@ void checkClassCyclesAndNeeds(parse::Tree& tree, std::vector<parse::Node*> const
         if (c->resolved_entry_id < 0) continue;
         parse::ClassInfo const& info = tree.classes.at(widen::strip(c->return_type));
         widen::setSlidNeeds(c->return_type, info.needs_ctor, info.needs_dtor);
+        validateVirtualClass(tree, *c, diag);
     }
 }
 
@@ -4534,6 +4716,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // nested namespaces AND classes uniformly. Every class NODE — file-scope,
     // namespace-nested, hoisted, any depth — is collected into `all_classes`.
     std::vector<parse::Node*> all_classes;
+    // Re-open nodes are held out of all_classes (they own no layout body) but still carry
+    // their own member set — collected here so the virtual-class rules (notably: a re-open
+    // may not add a NEW virtual method) run on them too.
+    std::vector<parse::Node*> reopen_classes;
     for (auto& ch : program->children) {
         if (!ch) continue;
         if (ch->kind == parse::Kind::kNamespaceDecl) {
@@ -4544,7 +4730,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             registerScopeNames(tree, *ch, ns, all_classes, diag);
         } else if (ch->kind == parse::Kind::kClassDef) {
             registerClassName(tree, *ch, diag);   // file scope: member_of = -1
-            if (!ch->is_reopen) all_classes.push_back(ch.get());   // re-open owns no body
+            if (ch->is_reopen) reopen_classes.push_back(ch.get());
+            else all_classes.push_back(ch.get());   // re-open owns no body
             if (ch->resolved_entry_id >= 0)
                 registerScopeNames(tree, *ch,
                     tree.entries[ch->resolved_entry_id].ns_frame_id, all_classes, diag);
@@ -4602,6 +4789,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             widen::setSlidNeeds(ctype, info.needs_ctor, info.needs_dtor);
         }
     }
+    // Virtual-class rules (base-must-be-virtual, dtor-must-be-virtual, override + re-open
+    // rules) — method signatures are resolved by now.
+    for (parse::Node* c : all_classes) validateVirtualClass(tree, *c, diag);
+    for (parse::Node* c : reopen_classes) validateVirtualClass(tree, *c, diag);
 
     // Pass 1a — collect entries at program scope WITHOUT walking init
     // expressions. This lets globals reference each other regardless of
@@ -4821,7 +5012,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // declaration's name. (Cross-TU `.slh` headers legitimately declare-only;
     // that distinction defers with the rest of the .slh work.)
     for (parse::Entry const& e : tree.entries) {
-        if (e.kind == parse::EntryKind::kFunction && !e.defined) {
+        // A PURE virtual (`= delete`) is intentionally bodyless — not an orphan.
+        if (e.kind == parse::EntryKind::kFunction && !e.defined && !e.is_pure) {
             // A forward declaration is SATISFIED by a same-signature DEFINITION in
             // the same scope. A free function merges its decl + def into ONE entry
             // (Pass 1a, matched by signature); a class METHOD's decl + def stay

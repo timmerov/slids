@@ -15,8 +15,8 @@ preferredSpelling
 spellOrEmpty
 widen::strip
 
-ensure we can define and re-open a class in any scope.
-decide about re-opening a class in a scope not visible to the original declaration.
+remaining class todo:
+incomplete, operator, refine, virtual
 
 inferred reference type.
 int x = 100;

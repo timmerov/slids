@@ -274,6 +274,96 @@ std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
     return base;
 }
 
+// ---- Virtual dispatch: vtable slot map ----------------------------------------
+// The vtable layout for a virtual class is: the base's slots first (each still at its
+// base index), then this class's NEW virtual methods appended. An override reuses the
+// inherited slot (same name + same user parameters) but supplies this class's impl.
+// g_entry_slot maps every virtual method ENTRY to its slot (all overrides of a slot map
+// to the same index — stable across the hierarchy, so a call resolves to a slot regardless
+// of the runtime type). Populated by buildVtables before the lowering pass; read by
+// lowerMethodCall.
+std::map<int, int> g_entry_slot;
+
+struct VSlot {
+    std::string name;
+    std::vector<widen::TypeRef> params;   // includes the receiver at [0]
+    int impl_entry;                       // most-derived implementer for THIS class
+};
+
+std::map<widen::TypeRef, std::vector<VSlot>> g_vtable_cache;
+
+// The ordered vtable slots for `cls` (memoized). Inherits the base's slots, then folds
+// in this class's own virtual methods (overrides replace the slot's impl; new virtuals
+// append). Side effect: stamps g_entry_slot for every own virtual method entry.
+std::vector<VSlot> const& vtableOf(parse::Tree const& tree, widen::TypeRef cls) {
+    cls = widen::strip(cls);
+    auto cached = g_vtable_cache.find(cls);
+    if (cached != g_vtable_cache.end()) return cached->second;
+    std::vector<VSlot> slots;
+    widen::TypeRef base = parse::classBaseType(tree, cls);
+    if (base != widen::kNoType) slots = vtableOf(tree, base);   // inherit base slots
+    int frame = parse::classNsFrame(tree, cls);
+    if (frame >= 0) {
+        for (int ei = 0; ei < (int)tree.entries.size(); ei++) {
+            parse::Entry const& e = tree.entries[ei];
+            if (e.kind != parse::EntryKind::kFunction
+                || e.owner_ns_frame != frame || !e.is_virtual)
+                continue;
+            int found = -1;
+            for (int k = 0; k < (int)slots.size(); k++)
+                if (slots[k].name == e.name
+                    && parse::userParamsEqual(slots[k].params, e.param_types)) {
+                    found = k;
+                    break;
+                }
+            if (found >= 0) {          // override — reuse the inherited slot
+                slots[found].impl_entry = ei;
+                g_entry_slot[ei] = found;
+            } else {                   // a new virtual — append
+                g_entry_slot[ei] = (int)slots.size();
+                slots.push_back({e.name, e.param_types, ei});
+            }
+        }
+    }
+    return g_vtable_cache[cls] = std::move(slots);
+}
+
+// Build a per-virtual-class vtable global for codegen and populate g_entry_slot for
+// dispatch. A class is virtual iff its slot list is non-empty.
+void buildVtables(parse::Tree const& tree, ast::Tree& out) {
+    g_entry_slot.clear();
+    g_vtable_cache.clear();
+    for (auto const& kv : tree.classes) {
+        std::vector<VSlot> const& slots = vtableOf(tree, kv.first);
+        if (slots.empty()) continue;
+        ast::Vtable vt;
+        vt.class_symbol = widen::classSymbol(widen::strip(kv.first));
+        // Slot 0 is ALWAYS the destructor — the class's COMPLETE dtor (`__$vdtor`, which
+        // runs the dtor body then chains through fields + the base subobject). It sits at
+        // a fixed index across the whole hierarchy so `delete base_ptr` dispatches to the
+        // most-derived dtor. Virtual methods follow at slots 1+ (g_entry_slot is 0-based
+        // over the methods, so lowerMethodCall adds 1).
+        vt.slot_symbols.push_back(vt.class_symbol + "__$vdtor");
+        for (VSlot const& s : slots) {
+            // A PURE slot has no implementation — emit null (an "" sentinel). The class
+            // is abstract (not instantiable), so its vtable is never dispatched; a derived
+            // that overrides the slot fills in its own impl.
+            if (tree.entries[s.impl_entry].is_pure) {
+                vt.slot_symbols.push_back("");
+                continue;
+            }
+            int ce = parse::classEntryForFrame(
+                tree, tree.entries[s.impl_entry].owner_ns_frame);
+            assert(ce >= 0 && "a vtable slot's implementer has no owning class");
+            widen::TypeRef defCls = (ce >= 0)
+                ? widen::strip(tree.entries[ce].slids_type) : widen::strip(kv.first);
+            vt.slot_symbols.push_back(
+                methodSymbol(tree, defCls, s.name, s.impl_entry));
+        }
+        out.vtables.push_back(std::move(vt));
+    }
+}
+
 // next_id is a single program-wide counter, seeded by run() at the (frozen)
 // parse::Tree::entries size, threaded through every copy so the helper locals a
 // lowered short-for mints get globally-unique resolved_entry_ids that never
@@ -2260,6 +2350,19 @@ std::unique_ptr<ast::Node> lowerMethodCall(parse::Node const& p,
     for (std::size_t i = 1; i < p.children.size(); i++)
         if (p.children[i])
             call->children.push_back(copyNode(*p.children[i], tree, next_id));
+
+    // VIRTUAL DISPATCH: a call to a virtual method — unless it is a `Base:method()`
+    // bypass — loads the receiver's vtable and calls indirect through the method's slot.
+    // The static symbol (call->name) is left as a harmless fallback; codegen ignores it
+    // when vtable_slot >= 0. An inherited method resolves to the base's (virtual) entry,
+    // whose slot is valid in every derived vtable (base slots keep their index).
+    if (p.resolved_entry_id >= 0 && !p.bypass_virtual
+        && tree.entries[p.resolved_entry_id].is_virtual) {
+        auto it = g_entry_slot.find(p.resolved_entry_id);
+        assert(it != g_entry_slot.end()
+            && "a virtual method has no vtable slot (buildVtables missed it)");
+        if (it != g_entry_slot.end()) call->vtable_slot = it->second + 1;  // +1: dtor at 0
+    }
     return call;
 }
 
@@ -2271,6 +2374,9 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     // are done and constfold doesn't append, so entries.size() is frozen here; the
     // counter is never restarted per loop, so two lowered short-fors can't collide.
     int next_id = static_cast<int>(in.entries.size());
+    // Compute the vtable slot map + per-class vtable globals BEFORE lowering, so
+    // lowerMethodCall can stamp each virtual call's slot (via g_entry_slot).
+    buildVtables(in, out);
     for (auto const& n : in.nodes) {
         out.nodes.push_back(copyNode(*n, in, next_id));
     }

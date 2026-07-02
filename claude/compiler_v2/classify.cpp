@@ -174,7 +174,9 @@ int flatFieldWidth(parse::Tree& tree, widen::TypeRef cls) {
         if (it == tree.classes.end()) { w += 1; break; }   // a non-class type is one slot
         parse::ClassInfo const& info = it->second;
         widen::TypeRef next = parse::baseTypeOf(info);      // only the base (slot 0) splices
-        w += (int)info.field_names.size() - (next != widen::kNoType ? 1 : 0);
+        // The synthetic slot-0 field (`_$base` OR `_$vptr`) is never a construction slot.
+        int synth0 = (next != widen::kNoType || parse::hasVptr(info)) ? 1 : 0;
+        w += (int)info.field_names.size() - synth0;
         if (next == widen::kNoType) break;
         c = next;
     }
@@ -590,6 +592,39 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
 
+// A class is ABSTRACT when the most-derived declaration of some virtual method (over the
+// class + its base chain) is PURE (`= delete`) — that vtable slot has no implementation.
+// An abstract class cannot be instantiated as a complete object (only as a base subobject
+// of a concrete derived class). classAndBaseFrames is most-derived first, so the first
+// declaration seen for each signature is the winning one.
+bool classIsAbstract(parse::Tree const& tree, widen::TypeRef cls) {
+    std::set<std::string> seen;
+    for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
+        if (fr < 0) continue;
+        for (parse::Entry const& e : tree.entries) {
+            if (e.kind != parse::EntryKind::kFunction || e.owner_ns_frame != fr
+                || !e.is_virtual)
+                continue;
+            std::string key = e.name;
+            for (std::size_t i = 1; i < e.param_types.size(); i++)
+                key += "|" + std::to_string(widen::deepStrip(e.param_types[i]));
+            if (!seen.insert(key).second) continue;   // a more-derived decl already won
+            if (e.is_pure) return true;               // an un-overridden pure slot
+        }
+    }
+    return false;
+}
+
+// Report + return true if `cls` is abstract and being instantiated as a complete object.
+bool rejectAbstractInstantiation(parse::Tree const& tree, widen::TypeRef cls,
+                                 int file_id, int tok, diagnostic::Sink& diag) {
+    if (!classIsAbstract(tree, cls)) return false;
+    diagnostic::report(diag, {file_id, tok,
+        "Cannot instantiate the abstract class '" + widen::spellOrEmpty(widen::strip(cls))
+        + "'; it has an unimplemented (pure) virtual method.", {}});
+    return true;
+}
+
 // Type-check a SCOPE's member bodies — one uniform recursion over any declaration
 // scope (program, namespace, or class). A member function (method, ctor, dtor, or
 // free function) gets its body typed; a const member's init is inferred + checked;
@@ -598,6 +633,22 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
 // with no per-context arm. Member bodies MUST be typed here, else desugar lowers an
 // un-typed field access.
 void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+    // A by-value field of an ABSTRACT class is ill-formed — it would be an incomplete
+    // abstract subobject (its pure vtable slots are null). The base subobject (`_$base`)
+    // is exempt: a concrete derived overrides the pure slots. A pointer/reference field is
+    // fine — that IS polymorphism. Checked once here, at the field.
+    if (node.kind == parse::Kind::kClassDef) {
+        for (auto& p : node.params) {
+            if (!p || p->name == "_$base" || p->name == "_$vptr") continue;
+            widen::TypeRef ft = widen::deepStrip(p->return_type);
+            if (widen::form(ft) == widen::Type::Form::kSlid
+                && classIsAbstract(tree, ft)) {
+                diagnostic::report(diag, {p->file_id, p->name_tok,
+                    "Field '" + p->name + "' cannot embed the abstract class '"
+                    + widen::spellOrEmpty(ft) + "' by value; use a reference '^'.", {}});
+            }
+        }
+    }
     for (auto& m : node.children) {
         if (!m) continue;
         if (m->kind == parse::Kind::kFunctionDef) {
@@ -786,7 +837,8 @@ std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             parse::ClassInfo const& info,
                                             std::unique_ptr<parse::Node> init,
                                             int file_id, int tok,
-                                            diagnostic::Sink& diag);
+                                            diagnostic::Sink& diag,
+                                            bool subobject = false);
 
 // Element-wise arithmetic over two AGGREGATE operands (array and/or tuple),
 // shared by the kBinaryExpr arm and the kAugAssignStmt arith path so they never
@@ -1279,6 +1331,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Cannot allocate '" + elem + "'.", {}});
             }
+            // (The abstract-class check is not here: `new Class` builds its object through
+            // constructClass -> classifyClassInit below, where the check lives.)
             // Constructor args (children[2]) belong to a SINGLE class object.
             parse::Node* args = (e.children.size() > 2) ? e.children[2].get() : nullptr;
             if (args && (!is_class || is_array)) {
@@ -2382,7 +2436,8 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
 // each field takes its init slot (left to right), else the author default, else
 // zero. The result is a kTupleExpr typed as the class; codegen fills the struct.
 void classifyClassInit(parse::Tree& tree, parse::Node& s,
-                       parse::ClassInfo const& info, diagnostic::Sink& diag);
+                       parse::ClassInfo const& info, diagnostic::Sink& diag,
+                       bool subobject = false);
 
 // Build a fully-constructed value for class `info` from an optional init value
 // (a scalar / tuple / same-class value), filling the field defaults / zeros.
@@ -2392,18 +2447,28 @@ std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             parse::ClassInfo const& info,
                                             std::unique_ptr<parse::Node> init,
                                             int file_id, int tok,
-                                            diagnostic::Sink& diag) {
+                                            diagnostic::Sink& diag,
+                                            bool subobject) {
     auto holder = std::make_unique<parse::Node>();
     holder->kind = parse::Kind::kVarDeclStmt;
     holder->file_id = file_id;
     holder->tok = tok;
     if (init) holder->children.push_back(std::move(init));
-    classifyClassInit(tree, *holder, info, diag);
+    classifyClassInit(tree, *holder, info, diag, subobject);
     return std::move(holder->children[0]);
 }
 
 void classifyClassInit(parse::Tree& tree, parse::Node& s,
-                       parse::ClassInfo const& info, diagnostic::Sink& diag) {
+                       parse::ClassInfo const& info, diagnostic::Sink& diag,
+                       bool subobject) {
+    // THE construction funnel: every instantiation of a class — a local, a `new`, a
+    // temporary, an array/tuple element (init or default) — reaches here, so the
+    // abstract-instantiation check lives here and nowhere else. `subobject` is set only
+    // when constructing a class-typed base/field member (see the field loop): a base may
+    // legitimately be abstract (a concrete derived completes its pure slots), and a
+    // regular field's abstractness is diagnosed at the class DEFINITION (classifyScope),
+    // so skipping the check there avoids a duplicate report.
+    if (!subobject) rejectAbstractInstantiation(tree, info.type, s.file_id, s.tok, diag);
     std::size_t n = info.field_names.size();
     std::vector<std::unique_ptr<parse::Node>> provided;
     bool provided_built = false;
@@ -2496,6 +2561,14 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             ? fparam->children[0].get() : nullptr;
         bool is_base = (info.field_names[i] == "_$base");
 
+        // The hidden `_$vptr` (root virtual class, slot 0) is synthetic: never a
+        // constructor argument. Fill it with a zero (null) — the ctor stamps the real
+        // vtable pointer at offset 0 — and consume NO initializer from the flat list.
+        if (info.field_names[i] == "_$vptr") {
+            tup->children.push_back(classZeroValue(tree, ft, s.file_id, s.tok, diag));
+            continue;
+        }
+
         // A CLASS field is constructed (not raw-filled): a value already of the
         // field's class type is a copy; a scalar / tuple is the field's constructor
         // input, recursively filled with the sub-class's defaults; no value
@@ -2513,10 +2586,12 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             if (pi < provided.size() && provided[pi] && sameClass) {
                 slot = std::move(provided[pi++]);   // same-class value -> copy
             } else if (is_base) {
-                // FLAT: the base consumes its flat width of initializers (maybe 0).
+                // FLAT: the base consumes its flat width of initializers (maybe 0). A base
+                // is a subobject — an abstract base is allowed (the concrete derived
+                // completes its pure slots), so its construction skips the abstract check.
                 int bw = flatFieldWidth(tree, ft);
                 if (bw <= 0) {
-                    slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag);
+                    slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true);
                 } else {
                     auto subtup = std::make_unique<parse::Node>();
                     subtup->kind = parse::Kind::kTupleExpr;
@@ -2527,16 +2602,18 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                     for (int k = 0; k < bw && pi < provided.size(); k++)
                         subtup->children.push_back(std::move(provided[pi++]));
                     slot = constructClass(tree, sub, std::move(subtup),
-                                          s.file_id, s.tok, diag);
+                                          s.file_id, s.tok, diag, true);
                 }
+            // A regular class field is a subobject too: its abstractness (if any) is
+            // reported once at the class definition (classifyScope), so skip the check.
             } else if (pi < provided.size() && provided[pi]) {
                 slot = constructClass(tree, sub, std::move(provided[pi++]),
-                                      s.file_id, s.tok, diag);
+                                      s.file_id, s.tok, diag, true);
             } else if (fdefault) {
                 slot = constructClass(tree, sub, cloneExpr(*fdefault),
-                                      s.file_id, s.tok, diag);
+                                      s.file_id, s.tok, diag, true);
             } else {
-                slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag);
+                slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true);
             }
             tup->children.push_back(std::move(slot));
             continue;
@@ -2946,8 +3023,11 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             // Only DEFINED methods are candidates — a forward declaration shares the
             // name + signature with its definition (separate entries), so skipping
             // undefined entries keeps a decl+def pair from looking like an ambiguous
-            // overload. A decl with no definition is already an orphan error.
-            if (e.kind == parse::EntryKind::kFunction && e.defined
+            // overload. A decl with no definition is already an orphan error. A PURE
+            // virtual (`= delete`) is the exception: it has no definition by design and
+            // IS a valid dispatch target (the call resolves to its vtable slot, which a
+            // concrete override fills), so it stays a candidate.
+            if (e.kind == parse::EntryKind::kFunction && (e.defined || e.is_pure)
                 && e.owner_ns_frame == fr && e.name == s.name) {
                 cands.push_back((int)id);
             }

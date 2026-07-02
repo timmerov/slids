@@ -1,0 +1,54 @@
+get = 7
+Vc:show x=7
+sizeof Vc = 16
+sizeof Pc = 4
+Vc:dtor
+Shape
+Square
+Square
+sq.area = 25
+Square
+sp^.area = 25
+scale(3) = 15
+scale(3,4) = 7
+Shape
+woof
+Dog:dtor
+Animal:dtor
+id = 3
+Leaf3:dtor
+Root3:dtor
+Button:render
+cost = 50
+Button:render
+Label:render
+tick = 5
+f() = 10
+f(3) = 6
+Noisy:dtor
+SynBase:dtor
+mid id = 2
+Root3:dtor
+leaf id = 3
+Leaf3:dtor
+Root3:dtor
+Bp:who
+Bp:who
+Dp:who
+Bp:who
+Bp:who
+Dp:who
+Dp:who
+Dp:who
+Dp:who
+Dp:who
+Bp:who
+Life:stage
+Grown:stage
+Life:stage
+fp = 2.5
+big = 999
+sum = 30
+Dp:who
+empty sz = 8
+empty k = 42

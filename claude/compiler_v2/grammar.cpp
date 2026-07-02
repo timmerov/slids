@@ -2953,6 +2953,7 @@ struct Parser {
         }
         token::Kind after = peekKind(close + 1);
         if (after == token::Kind::kLBrace) return true;        // definition
+        if (after == token::Kind::kEquals) return true;        // `= delete` pure virtual
         if (after != token::Kind::kSemicolon) return false;
         token::Kind first = peekKind(open + 1);
         if (first == token::Kind::kRParen) return false;       // `()` -> construction
@@ -3083,11 +3084,20 @@ struct Parser {
         std::string recv_type = name + "^";   // the implicit receiver param's type
         bool ctor_decl = false, ctor_def = false;
         bool dtor_decl = false, dtor_def = false;
+        bool saw_any_virtual = false;        // any `virtual` member -> a virtual class
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
                 || peek().kind == token::Kind::kEndOfInput) {
                 error("Expected '}'.");
                 return nullptr;
+            }
+            // A leading `virtual` modifies the method or the destructor that follows.
+            bool saw_virtual = false;
+            int virt_tok = pos;
+            if (peek().kind == token::Kind::kVirtual) {
+                saw_virtual = true;
+                saw_any_virtual = true;
+                advance();   // virtual
             }
             // ctor/dtor are method-shaped and class-only — peel them off first
             // (a `_()` / `~()` also matches looksLikeClassDef). Everything else is
@@ -3099,8 +3109,28 @@ struct Parser {
             if (!is_ctor && !is_dtor) {
                 auto m = parseDefinitionMember(/*in_class=*/true, recv_type);
                 if (!m) return nullptr;
+                if (saw_virtual) {
+                    // `virtual` only decorates a method (a function member).
+                    if (m->kind != parse::Kind::kFunctionDef
+                        && m->kind != parse::Kind::kFunctionDecl) {
+                        errorAt(virt_tok, "'virtual' may modify only a method or the "
+                                          "destructor.");
+                        return nullptr;
+                    }
+                    m->is_virtual = true;
+                }
+                // A pure method (`= delete`) only exists as a virtual — it is the empty
+                // vtable slot of an abstract class, so it is meaningless without dispatch.
+                if (m->is_pure && !m->is_virtual) {
+                    errorAt(m->name_tok, "A pure method ('= delete') must be virtual.");
+                    return nullptr;
+                }
                 node->children.push_back(std::move(m));
                 continue;
+            }
+            if (saw_virtual && is_ctor) {
+                errorAt(virt_tok, "A constructor cannot be virtual.");
+                return nullptr;
             }
             int m_file = peek().file_id;
             int m_tok = pos;
@@ -3131,6 +3161,7 @@ struct Parser {
             auto member = newNodeAt(parse::Kind::kFunctionDef, m_file, m_tok);
             member->name = is_ctor ? "_$ctor" : "_$dtor";
             member->name_tok = m_tok;
+            member->is_virtual = saw_virtual;   // `virtual ~()` — a virtual destructor
             member->return_type = widen::internOrNone("void");
             member->params.push_back(
                 parse::makeReceiverParam(widen::internOrNone(recv_type),
@@ -3164,6 +3195,21 @@ struct Parser {
         if (dtor_decl && !dtor_def) {
             errorAt(name_tok, "A forward-declared destructor must be defined.");
             return nullptr;
+        }
+        // A virtual class carries a vtable pointer at OFFSET 0 (C++ ABI). A ROOT
+        // virtual class (>=1 `virtual` member, no base) gets a hidden `_$vptr` field as
+        // its UNNAMED FIRST FIELD — like `_$base`, it flows into the class layout so the
+        // vptr occupies real storage (sizeof grows) and lands at offset 0. A DERIVED
+        // virtual class does NOT: its `_$base` (slot 0) already carries the inherited
+        // vptr, so offset 0 stays the vptr transitively. The two are mutually exclusive.
+        // Construction skips `_$vptr` (the ctor stamps the real vtable); it is never a
+        // constructor argument.
+        if (saw_any_virtual && base_name.empty()) {
+            auto vp = newNodeAt(parse::Kind::kParam, cls_file, name_tok);
+            vp->name = "_$vptr";
+            vp->name_tok = name_tok;
+            vp->return_type = widen::internPointer(widen::intern("int"));
+            node->params.insert(node->params.begin(), std::move(vp));
         }
         return node;
     }
@@ -3218,6 +3264,21 @@ struct Parser {
 
         if (!parseParamList(node.get())) return nullptr;
 
+        // A PURE virtual: `virtual T m(...) = delete;` — no body. Only valid on a virtual
+        // method (resolve enforces that + rejects it on a free function); parse just
+        // records is_pure and leaves it bodyless like a forward decl.
+        if (peek().kind == token::Kind::kEquals) {
+            advance();   // =
+            if (peek().kind != token::Kind::kDelete) {
+                error("Expected 'delete' after '=' in a pure virtual method.");
+                return nullptr;
+            }
+            advance();   // delete
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            node->kind = parse::Kind::kFunctionDecl;
+            node->is_pure = true;
+            return node;
+        }
         if (peek().kind == token::Kind::kSemicolon) {
             advance();
             node->kind = parse::Kind::kFunctionDecl;

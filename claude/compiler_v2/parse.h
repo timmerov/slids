@@ -234,6 +234,17 @@ struct Node {
                                  // rejects a parenless non-class so `f;` is not a call.
     bool is_mutable = false;     // kParam: declared with leading `mutable` — opts OUT
                                  // of the default const-pointee munge (mungeParamType)
+    bool is_virtual = false;     // kFunctionDef/kFunctionDecl (a class method or the
+                                 // `_$dtor`): declared with leading `virtual` — dispatched
+                                 // through the vtable. A class with >=1 virtual method is
+                                 // a virtual class.
+    bool is_pure = false;        // kFunctionDecl: a pure virtual (`virtual T m() = delete;`)
+                                 // — no body; a class with a pure method is abstract (not
+                                 // instantiable). Always accompanies is_virtual.
+    bool bypass_virtual = false; // kMethodCallStmt/kMethodCallExpr: a `Base:method()`
+                                 // qualified call — resolve reframed the receiver to the
+                                 // base subobject and this call STATICALLY targets that
+                                 // ancestor's method (skips vtable dispatch).
     bool default_move_init = false;      // kVarDeclStmt: initialized with `<--` (a move),
                                  // so desugar nulls the init's pointer leaves
     bool quiet_diag = false;     // kStringifyType inside a `#x` desugar: the same
@@ -309,6 +320,12 @@ struct Entry {
     int file_id = -1;
     int tok = -1;
     bool defined = false;         // Function: true once a body has been seen
+    bool is_virtual = false;      // kFunction (a class method): declared `virtual` —
+                                  // dispatched through the vtable. Copied from the
+                                  // method's parse::Node is_virtual at registration.
+    bool is_pure = false;         // kFunction: a pure virtual (`= delete`) — no body,
+                                  // never an orphan; a class with an un-overridden pure
+                                  // method is abstract (not instantiable).
     int def_file_id = -1;         // Function: source of the first definition
     int def_tok = -1;             // Function: token of the first definition (for
                                   // "first defined here"; distinct from tok, which
@@ -379,6 +396,10 @@ struct Tree {
     // empty. A qualified `Base:member` whose qualifier is this base reframes `self` to
     // the base sub-object (slot 0): `Base:member` -> `self._$base.member`.
     std::string current_base_name;
+    // The OWN class name while resolving a class member body, else empty. A qualified
+    // `Self:method()` (own-class qualifier) is a static dispatch bypass with `self`
+    // unchanged (0 base hops) — the self-referential twin of `current_base_name`.
+    std::string current_class_name;
 
     // Transient scope state — valid only during classify's run.
     std::vector<int> frame_id_stack;
@@ -468,6 +489,15 @@ int  findInFrame(Tree const& t, int frame_id, std::string const& name);
 // A namespace/class MEMBER by name in its owning frame (owner_ns_frame == ns_frame;
 // at kGlobalFrame, a file-scope non-member). Returns entry id or -1.
 int  findMemberDeclared(Tree const& t, int ns_frame, std::string const& name);
+// Signature equality of two method parameter lists, skipping param 0 (`_$recv`) — the
+// receiver differs by class between a base method and its override, so it is not part of
+// the user-visible signature. THE single decode of "same method signature".
+bool userParamsEqual(std::vector<widen::TypeRef> const& a,
+                     std::vector<widen::TypeRef> const& b);
+// The method entry in `ns_frame` matching (name, user-params), other than `exclude`
+// (-1 for none); -1 if no match. The overload-aware sibling of findMemberDeclared.
+int  findMethodInFrame(Tree const& t, int ns_frame, std::string const& name,
+                       std::vector<widen::TypeRef> const& params, int exclude);
 // True if `info` declares a field named `name`. The synthetic base slot `_$base`
 // is included, but a user field name never collides with it (the `_$` prefix is
 // reserved), so callers checking a user name need no special-case.
@@ -479,6 +509,9 @@ bool classHasField(ClassInfo const& info, std::string const& name);
 // directly (no map lookup); classBaseType is the lookup-then-decode for a TypeRef.
 widen::TypeRef baseTypeOf(ClassInfo const& info);
 widen::TypeRef classBaseType(Tree const& t, widen::TypeRef cls);
+// True for a ROOT virtual class carrying its own hidden `_$vptr` at slot 0 (the vtable
+// pointer). Derived virtual classes inherit it via `_$base` and have no `_$vptr`.
+bool hasVptr(ClassInfo const& info);
 // A class's own member frame + every transitive base frame (most-derived first), for
 // member lookup / scope-opening that sees inherited members. The shared chain iterator.
 std::vector<int> classAndBaseFrames(Tree const& t, widen::TypeRef cls);
@@ -486,6 +519,9 @@ std::vector<int> classAndBaseFrames(Tree const& t, widen::TypeRef cls);
 // (ns_frame_id match). The one place a class type <-> its entry is bridged.
 int  classEntryForType(Tree const& t, widen::TypeRef classType);
 int  classEntryForFrame(Tree const& t, int ns_frame);
+// A class TYPE -> its own member frame (ns_frame_id); -1 if not a registered class.
+// The class->frame bridge (inverse of classEntryForFrame), built on classEntryForType.
+int  classNsFrame(Tree const& t, widen::TypeRef cls);
 widen::TypeRef entryType(Tree const& t, int entry_id);
 
 // Build the implicit method-receiver param `_$recv` of the given (already-interned)

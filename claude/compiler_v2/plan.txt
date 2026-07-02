@@ -897,7 +897,31 @@ Phase 7 — class advanced
     DEFERRED: a derived STATIC shadowing a same-named base static is bare-ambiguous
     (qualify to disambiguate) — see todo "OPENED-SCOPE NAME AMBIGUITY".
     [[project_inheritance]]
-  * virtual methods + virtual destructors  — OUT OF SCOPE for now
+  * VIRTUAL METHODS + VIRTUAL DESTRUCTORS — LANDED. A virtual class (>=1 `virtual`
+    member) carries a vtable pointer at OFFSET 0 (C++ ABI): a ROOT gets a hidden
+    `_$vptr` unnamed first field (parse::hasVptr), a DERIVED reuses the base's via
+    `_$base` (mutually exclusive at slot 0). Each class emits `@<Class>__$vtable`
+    ([N x ptr]): slot 0 = the COMPLETE destructor `@<Class>__$vdtor`, methods at 1+
+    (base slots first, overrides reuse the slot, new virtuals append, overloaded
+    virtuals each own a slot, a pure slot = `ptr null`). buildVtables (desugar) fills
+    g_entry_slot + tree.vtables; a self./obj./ptr^ call loads the vptr, GEPs the slot,
+    calls indirect (lowerMethodCall sets vtable_slot; codegen emitCall). The vptr is
+    stamped per-class at CONSTRUCTION (emitConstructHooks, before the ctor body) and
+    RE-STAMPED per-class during DESTRUCTION (emitDestructHooks, before each dtor body)
+    so a virtual call in a base ctor/dtor reaches the class being built/destroyed,
+    never a not-yet-built / torn-down derived override. A virtual class ALWAYS
+    needs-ctor/dtor, so its vptr stamps even with no user ctor/dtor. A PURE virtual
+    (`= delete`) is a bodyless dispatch target that makes its class ABSTRACT;
+    instantiating an abstract class is rejected at the single construction funnel
+    (classifyClassInit, a `subobject` flag exempts base subobjects; an abstract
+    by-value field is caught at the class def). validateVirtualClass (resolve, over
+    all classes incl. re-opens) enforces: base-must-be-virtual, dtor-must-be-virtual,
+    override-must-be-virtual + return-type-match (no covariance), no virtual<->non-
+    virtual shadowing, no NEW virtual in a re-open. A qualified call is a STATIC
+    bypass — all four spellings (Base:m() / Self:m() / Base:self.m() / Self:self.m(),
+    inherited methods included via selfOrBaseDepth + classAndBaseFrames); only bare
+    self.m() dispatches. MI is not supported. Canon test_v2/class/virtual.sl.
+    [[project_virtual_classes]]
   * RE-OPENING CLASSES + THE EXTERNAL FORM — LANDED (non-virtual). A class re-opens to
     add members after its primary def, as a BLOCK (`Class() {}`, EMPTY field list) or the
     EXTERNAL qualified form (`Class:member`); all openings merge into ONE frame (members

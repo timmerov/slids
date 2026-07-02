@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ostream>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -154,6 +155,11 @@ std::string newTmp(char const* tag) {
     static int n = 0;
     return std::string("%") + tag + "_" + std::to_string(n++);
 }
+
+// Class symbols that have a vtable (virtual classes). Populated by run() from
+// ast::Tree::vtables. A virtual class's ctor stamps its vtable; `delete` of a virtual
+// pointer dispatches the destructor through the vtable (slot 0).
+std::set<std::string> g_vtable_syms;
 
 bool isFloatType(widen::TypeRef t) {
     widen::TypeKind k;
@@ -758,6 +764,21 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
             arg_vals.push_back({"ptr", it->second.alloca_name});
         }
     }
+    // VIRTUAL DISPATCH: load the vtable pointer at offset 0 of the receiver (arg 0),
+    // index the method's slot, load the function pointer, and call THROUGH it. Otherwise
+    // the callee is the static symbol `@<name>`.
+    std::string callee = "@" + call.name;
+    if (call.vtable_slot >= 0 && !arg_vals.empty()) {
+        std::string self = arg_vals[0].second;   // the receiver address (a ptr)
+        std::string vp = newTmp("vptr");
+        out << "  " << vp << " = load ptr, ptr " << self << "\n";
+        std::string vs = newTmp("vslot");
+        out << "  " << vs << " = getelementptr inbounds ptr, ptr " << vp
+            << ", i32 " << call.vtable_slot << "\n";
+        std::string fp = newTmp("vfn");
+        out << "  " << fp << " = load ptr, ptr " << vs << "\n";
+        callee = fp;
+    }
     std::string ret_llty = llvmForRef(call.return_type);
     std::string result;
     if (isSretReturn(call.return_type)) {
@@ -779,7 +800,7 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
             slot = newTmp("srettmp");
             out << "  " << slot << " = alloca " << ret_llty << "\n";
         }
-        out << "  call void @" << call.name << "(ptr " << slot;
+        out << "  call void " << callee << "(ptr " << slot;
         for (size_t i = 0; i < arg_vals.size(); i++)
             out << ", " << arg_vals[i].first << " " << arg_vals[i].second;
         out << ")\n";
@@ -796,7 +817,7 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
         result = newTmp("call");
         out << result << " = ";
     }
-    out << "call " << ret_llty << " @" << call.name << "(";
+    out << "call " << ret_llty << " " << callee << "(";
     for (size_t i = 0; i < arg_vals.size(); i++) {
         if (i > 0) out << ", ";
         out << arg_vals[i].first << " " << arg_vals[i].second;
@@ -1786,6 +1807,14 @@ void emitConstructHooks(std::string const& addr, widen::TypeRef type,
             emitConstructHooks(gep, ct.slots[i], out);
         }
     }
+    // Stamp the vtable pointer at offset 0 for a virtual class — at CONSTRUCTION, before
+    // the ctor body runs (so virtual calls inside the ctor already dispatch to this class)
+    // and INDEPENDENT of whether a user ctor exists. Base subobjects stamped their own
+    // vtables during the field recursion above; this most-derived stamp overwrites them.
+    if (ct.form == widen::Type::Form::kSlid
+        && g_vtable_syms.count(widen::classSymbol(cs)))
+        out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
+            << addr << "\n";
     if (ct.form == widen::Type::Form::kSlid && ct.has_ctor)
         out << "  call void @" << widen::classSymbol(cs) << "__$ctor(ptr " << addr << ")\n";
 }
@@ -1810,6 +1839,16 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
         }
         return;
     }
+    // Re-stamp the vtable pointer at offset 0 BEFORE this class's dtor body runs, so a
+    // virtual call from within the destructor dispatches to THIS class — never to a
+    // more-derived override whose object part has already been torn down. This mirrors
+    // construction's per-class stamp, in reverse: the slot recursion below reaches the
+    // base subobject (slot 0, offset 0) and re-stamps the base's vtable, so the vptr
+    // "downgrades" as teardown walks toward the root (the C++ rule).
+    if (ct.form == widen::Type::Form::kSlid
+        && g_vtable_syms.count(widen::classSymbol(cs)))
+        out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
+            << addr << "\n";
     if (ct.form == widen::Type::Form::kSlid && ct.has_dtor)
         out << "  call void @" << widen::classSymbol(cs) << "__$dtor(ptr " << addr << ")\n";
     for (std::size_t i = ct.slots.size(); i-- > 0; ) {      // kSlid / kTuple slots
@@ -2336,6 +2375,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 ? widen::get(pts).pointee : widen::kNoType;
             bool needs = pointee != widen::kNoType
                 && typeNeedsHook(pointee, /*ctor=*/false);
+            // A VIRTUAL pointee always dispatches its destructor through the vtable — the
+            // runtime (most-derived) type may need destruction even when the static base
+            // type does not, so force the dtor path on.
+            bool virtual_pointee = pf == widen::Type::Form::kPointer
+                && pointee != widen::kNoType
+                && widen::form(widen::strip(pointee)) == widen::Type::Form::kSlid
+                && g_vtable_syms.count(widen::classSymbol(widen::strip(pointee))) > 0;
+            if (virtual_pointee) needs = true;
             // The pointer value to free: from the lvalue's address (computed ONCE so
             // a side-effecting operand like `arr[bump()]` runs once), or evaluated
             // directly for an rvalue.
@@ -2403,7 +2450,18 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     out << "  br i1 " << nn << ", label %" << db << ", label %"
                         << de << "\n";
                     out << db << ":\n";
-                    emitDestructHooks(p, pointee, out);
+                    if (virtual_pointee) {
+                        // Dispatch the destructor through vtable slot 0 (the complete
+                        // dtor of the runtime type), so deleting a base pointer runs the
+                        // most-derived destruction + chain.
+                        std::string vp = newTmp("dvptr");
+                        out << "  " << vp << " = load ptr, ptr " << p << "\n";
+                        std::string fp = newTmp("dvfn");
+                        out << "  " << fp << " = load ptr, ptr " << vp << "\n";
+                        out << "  call void " << fp << "(ptr " << p << ")\n";
+                    } else {
+                        emitDestructHooks(p, pointee, out);
+                    }
                     out << "  br label %" << de << "\n";
                     out << de << ":\n";
                 }
@@ -3010,6 +3068,9 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         out << "  " << obj << " = load ptr, ptr " << recv_reg << "\n";
         syms[fn.self_entry_id] = {obj, llvmForRef(self_ty), self_ty};
     }
+    // (The vtable pointer is stamped at CONSTRUCTION — emitConstructHooks — before the
+    // ctor body runs, so a virtual call inside a ctor already dispatches correctly and a
+    // virtual class with no user ctor is still stamped.)
     // Hoist every local's alloca into the entry block. An alloca emitted at its
     // declaration site would re-allocate stack on every pass through an
     // enclosing loop — unbounded growth → stack overflow (the v1 bug). The entry
@@ -3076,6 +3137,23 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
 
     std::ostringstream body;
     std::vector<ast::Node const*> nested;
+    // A vtable global per virtual class: `[N x ptr]` of the class's slot implementations.
+    // Collect their class symbols too, so each class's ctor stamps its own vtable. (A
+    // global may reference a function symbol defined later in the module — LLVM resolves
+    // the forward reference.)
+    g_vtable_syms.clear();
+    for (ast::Vtable const& vt : tree.vtables) {
+        g_vtable_syms.insert(vt.class_symbol);
+        body << "@" << vt.class_symbol
+             << "__$vtable = private unnamed_addr constant ["
+             << vt.slot_symbols.size() << " x ptr] [";
+        for (std::size_t i = 0; i < vt.slot_symbols.size(); i++) {
+            if (i) body << ", ";
+            if (vt.slot_symbols[i].empty()) body << "ptr null";   // a pure slot
+            else body << "ptr @" << vt.slot_symbols[i];
+        }
+        body << "]\n\n";
+    }
     for (auto const& n : tree.nodes) {
         if (n->kind != ast::Kind::kProgram) continue;
         for (auto const& fn : n->children) {
@@ -3099,6 +3177,18 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     for (ast::Node const* fn : nested) {
         if (diagnostic::hasErrors(diag)) break;   // stop at the first error
         emitFunction(*fn, pool, body, diag);
+    }
+    // Per-virtual-class COMPLETE destructor. `@<Name>__$vdtor(obj)` runs the full
+    // destruction of `obj` at its EXACT type — the dtor body then the reverse-order
+    // field + base-subobject chain (exactly emitDestructHooks). It sits at vtable slot 0,
+    // so `delete base_ptr` dispatches the most-derived one and the whole chain runs.
+    for (widen::TypeRef ct : tree.classes) {
+        if (diagnostic::hasErrors(diag)) break;
+        std::string sym = widen::classSymbol(ct);
+        if (!g_vtable_syms.count(sym)) continue;
+        body << "define internal void @" << sym << "__$vdtor(ptr %o) {\n";
+        emitDestructHooks("%o", ct, body);
+        body << "  ret void\n}\n\n";
     }
     // Per-class size helper. LLVM owns the struct layout, so the byte size is the
     // GEP-null/ptrtoint of the struct type — emitted as `<Name>__$sizeof()` (v1's

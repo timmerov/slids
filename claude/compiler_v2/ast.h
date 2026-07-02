@@ -112,6 +112,21 @@ struct Node {
     std::vector<widen::TypeRef> capture_types;   // nested fn: each capture's slids type
     int self_entry_id = -1;                      // method/ctor/dtor: the `self` local
                                                  // (address = `_$recv^`); -1 otherwise
+    int vtable_slot = -1;                        // kCallExpr: >=0 means a VIRTUAL dispatch
+                                                 // call — codegen loads the vptr at
+                                                 // offset 0 of children[0] (the receiver),
+                                                 // GEPs this slot, and calls indirect
+                                                 // instead of `@name`. -1 = static call.
+};
+
+// A per-class vtable: the class's symbol and, per slot, the implementing method's
+// symbol (the most-derived override visible to that class). desugar builds these
+// (base slots first, overrides reuse the slot, new virtuals append); codegen emits
+// `@<class_symbol>__$vtable = ... constant [N x ptr] [ptr @slot0, ...]` and stamps it
+// into offset 0 in each virtual class's constructor.
+struct Vtable {
+    std::string class_symbol;
+    std::vector<std::string> slot_symbols;
 };
 
 struct Tree {
@@ -119,6 +134,7 @@ struct Tree {
     // Class kSlid types carried from parse, so codegen can emit each class's
     // `<Name>__$sizeof()` helper (GEP-null/ptrtoint — LLVM owns the layout).
     std::vector<widen::TypeRef> classes;
+    std::vector<Vtable> vtables;
 };
 
 }  // namespace ast

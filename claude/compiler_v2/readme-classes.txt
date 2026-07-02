@@ -502,8 +502,9 @@ SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
   resolve.frameHasFunction is just findMemberDeclared + a kind check.
 
   DEFERRED: a derived static shadowing a SAME-NAMED base static is bare-ambiguous
-  (qualify to pick) — see todo "OPENED-SCOPE NAME AMBIGUITY". OUT OF SCOPE: virtual
-  (re-open is now landed — see RE-OPENING CLASSES below). Canon test_v2/class/inheritance.sl
+  (qualify to pick) — see todo "OPENED-SCOPE NAME AMBIGUITY". VIRTUAL classes are now
+  landed and compose with inheritance (see VIRTUAL CLASSES below); re-open is landed too
+  (see RE-OPENING CLASSES below). Canon test_v2/class/inheritance.sl
   (Stages 1-5; positives incl. synthesized ctor/dtor, field shadowing, transitive sizeof +
   single heap derived; negatives: implicit downcast, unrelated/sibling cast, off-chain
   qualifier, cycle + direct self-inheritance, name hiding).
@@ -577,3 +578,72 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   empty class, consistent with the block field-less create-or-re-open rule.) OUT OF SCOPE for
   re-open proper: `global` vars, `...` incomplete classes, and the cross-scope run-time variant
   (REFINEMENTS, above). Canon test_v2/class/reopen.sl.
+
+
+VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
+
+  A class with >=1 `virtual` member is a virtual class: it carries a vtable pointer for
+  runtime dispatch. Composes with single inheritance (the `_$base` slot-0 subobject) and
+  re-open. Canon test_v2/class/virtual.sl.
+
+  LAYOUT — vptr at OFFSET 0 (C++ ABI). A ROOT virtual class gets a hidden `_$vptr` as its
+  unnamed FIRST field (parse::hasVptr, field_names[0] == "_$vptr"); a DERIVED virtual class
+  reuses the base's vptr through `_$base` and has NO `_$vptr` of its own — the two are
+  mutually exclusive at slot 0. `_$vptr` rides the class layout exactly like `_$base`: sizeof
+  grows one pointer, it is never a constructor argument (flatFieldWidth / classifyClassInit
+  skip it), and field access resolves by name over the shifted slots.
+
+  VTABLE. Each virtual class emits `@<Class>__$vtable`, a `[N x ptr]` constant: SLOT 0 is the
+  COMPLETE destructor `@<Class>__$vdtor`, virtual methods occupy slots 1+. Slot map (desugar
+  buildVtables / vtableOf, memoized): base slots first (a stable index valid in every derived
+  vtable), an override REUSES its base slot, a new virtual APPENDS, and OVERLOADED virtuals
+  each take their own slot (overload resolution picks the slot at compile time, the vptr picks
+  the impl at run time). A PURE slot is `ptr null`. buildVtables stamps g_entry_slot
+  (entry -> slot) and fills ast::Tree::vtables; signature match is parse::userParamsEqual,
+  class -> frame is parse::classNsFrame.
+
+  DISPATCH. A `self.` / `obj.` / `ptr^` virtual call loads the vptr at offset 0, GEPs the
+  method's slot, loads the fn ptr, and calls indirect: desugar lowerMethodCall sets
+  call->vtable_slot = g_entry_slot[id] + 1 (the +1 skips the dtor at slot 0) when the target
+  is virtual and NOT bypass_virtual; codegen emitCall emits the indirect callee. So an
+  override wins at runtime even through a base pointer, and an inherited method resolves to
+  the base slot. `delete` of a virtual pointer dispatches the destructor through slot 0.
+
+  VPTR STAMP — construction AND destruction, per class. emitConstructHooks stamps the vtable
+  at offset 0 BEFORE the ctor body, per class as the object builds up (base first) — so a
+  virtual call inside a base ctor dispatches to the class UNDER CONSTRUCTION, and the
+  most-derived vtable ends up installed. emitDestructHooks RE-STAMPS the vtable before EACH
+  class's dtor body, so as teardown walks toward the root the vptr "downgrades" and a virtual
+  call inside a base dtor dispatches to the class UNDER DESTRUCTION — never to a more-derived
+  override whose object part is already gone (the C++ rule; must be this way or a torn-down
+  override runs). A virtual class ALWAYS needs-ctor/dtor (validateVirtualClass +
+  widen::setSlidNeeds), so its vptr is stamped even with no user ctor/dtor — no node synthesis.
+
+  PURE / ABSTRACT. `virtual T m(...) = delete;` is a bodyless kFunctionDecl (is_pure), exempt
+  from the orphan "declared but never defined" check, a valid dispatch target (null slot), and
+  makes its class ABSTRACT. A pure method MUST be virtual (rejected at parse otherwise). The
+  abstract-instantiation check lives at the ONE construction funnel classifyClassInit, gated
+  by a `subobject` flag: a base subobject may be abstract (the concrete derived completes its
+  pure slots) and a by-value FIELD is diagnosed at the class definition (classifyScope), while
+  every genuine instantiation — a local, `new`, a temporary, an array/tuple element — is
+  rejected uniformly.
+
+  RULES (resolve validateVirtualClass, over ALL classes incl. re-opens): the base of a virtual
+  class must be virtual; an explicitly declared dtor must be virtual; an override must be
+  declared `virtual` and match the inherited return type (NO covariance); a virtual method may
+  not shadow a non-virtual one (nor vice versa); a re-open may override/implement an existing
+  (inherited or original) slot but may NOT add a NEW virtual method. Multiple inheritance is
+  not supported.
+
+  BYPASS. A qualified method call is a STATIC dispatch bypass (parse.h bypass_virtual, set by
+  resolve tryResolveBaseQualifier). ALL FOUR spellings bypass — `Base:m()` / `Self:m()` (base +
+  own-class qualifier) and `Base:self.m()` / `Self:self.m()` (the same with an explicit
+  `self.`). selfOrBaseDepth unifies them (0 hops = own class, d = a transitive base, -1 =
+  unrelated -> defer), and is_method walks classAndBaseFrames so a qualifier naming a class
+  that only INHERITS the method still bypasses (to the nearest impl) and `X:m()` agrees with
+  `X:self.m()`. Only an unqualified `self.m()` dispatches.
+
+  GOTCHA. A virtual method's DEFAULT ARGUMENT binds from the STATIC receiver type (a call-site
+  rewrite) while the body is chosen dynamically — a base pointer uses the base's default even
+  when it dispatches to a derived override. Deliberate (the C++ rule); see todo "VIRTUAL
+  DEFAULT ARGUMENTS". A class returned BY VALUE (sret), float64, and int64 all dispatch fine.

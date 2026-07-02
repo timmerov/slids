@@ -8,6 +8,15 @@ quest's progress lives in plan.txt).
 
 BUGS
 
+  * EMPTY DERIVED CLASS MIS-PARSES — a derived class with an EMPTY param list,
+    `Base : Derived() { ... }`, fails with "'Derived' needs a namespace qualifier."
+    The `Derived()` head is taken as a qualified call (`Base:Derived(...)`) rather
+    than a class def with no fields. NOT virtual-specific: a non-virtual empty
+    derived (`B:D() {}`) fails identically. A root empty class (`Empty() {}`) is
+    fine — only the inheriting form breaks. Workaround: give the derived at least
+    one field/param (`Derived(int y_)`). Surfaced auditing virtual.sl coverage
+    (an empty-field derived virtual class cannot be spelled today).
+
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
     (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,
@@ -96,9 +105,10 @@ BLOCKED FEATURES
     needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
     not worth it. prerequisite: a 1-tuple spelling (none planned).
 
-  * FOR-CLASS — needs classes + a for-each
-    protocol (op[]/size or begin/end/next, Phase 5). Lowers to a kForLongStmt in
-    desugar like the others. Not landable until classes exist.
+  * FOR-CLASS — classes have LANDED (incl. inheritance / re-open / virtual); what
+    remains is the for-each PROTOCOL (op[]/size or begin/end/next, Phase 5), which is
+    blocked on OPERATOR OVERLOADING (op[] does not parse yet). Lowers to a kForLongStmt
+    in desugar like the others once the protocol exists.
 
   * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
     the first DEFINITION (Entry.def_tok) and "first declared here" the first
@@ -259,6 +269,18 @@ REACH GOALS
     tricky bit is a class declared in a .slh header file.
     safest is for every method to get ^self and maybe not use it.
     otherwise it needs to be decorated somehow.
+
+  * VIRTUAL DEFAULT ARGUMENTS — STATIC vs DYNAMIC. A virtual method's default
+    argument currently binds from the STATIC receiver type (the C++ rule): a
+    call `dp^.f()` through a `Def^` fills the default off `Def::f`'s signature,
+    then dispatches to the dynamic body — so a `Ddef` override with a DIFFERENT
+    default has its default silently ignored through a base pointer. This is a
+    compile-time call-site rewrite (`f()` -> `f(<static-default>)`) feeding
+    normal dispatch; the runtime type isn't known when the default is filled.
+    Locked into virtual.sl's golden (`f() = 10`, not 18). Reach goal: decide
+    whether Slids should instead resolve the default from the DYNAMIC type
+    (non-C++, needs the default threaded through dispatch, not the call site).
+    Purely a semantics choice — today's behavior is deliberate, not a bug.
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 
