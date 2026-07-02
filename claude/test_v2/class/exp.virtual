@@ -52,3 +52,6 @@ sum = 30
 Dp:who
 empty sz = 8
 empty k = 42
+Plain:render
+plain cost = 7
+Plain:render

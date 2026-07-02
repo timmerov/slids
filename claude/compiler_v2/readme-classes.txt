@@ -542,10 +542,14 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   `Class:Reopen() { }` (EMPTY parens). A field-bearing head `Class:Name(fields) { }` is NOT
   this form — token-identical to inheritance (`Base:Derived(fields)`) and STAYS inheritance.
   The TAIL disambiguates at grammar (looksLikeQualifiedScopeDef, checked BEFORE
-  looksLikeClassDef so the empty-parens re-open isn't grabbed as an empty-field derived
-  class): `{` -> namespace, `()` -> class re-open, `(fields)` -> inheritance. The form works
-  in ANY scope the class is DECLARED in — file, namespace body, class body, function body /
-  nested block — because relocation runs per-scope (below), not only over program->children.
+  looksLikeClassDef): `{` -> namespace, `()` -> class re-open, `(fields)` -> inheritance. The
+  empty-parens `A:B() {}` is genuinely AMBIGUOUS with an empty-field DERIVED class
+  `A : B() {}` (token-identical); grammar always routes it as a re-open, then relocation (below)
+  decides SEMANTICALLY: if A is a CLASS whose openings do not already contain B, it is
+  reinterpreted in place as inheritance (B derives from A); B already in A -> re-open; A a
+  namespace -> create nested. The form works in ANY scope the class is DECLARED in — file,
+  namespace body, class body, function body / nested block — because relocation runs per-scope
+  (below), not only over program->children.
 
   RELOCATION. grammar tags a qualified head with node->qualifier (the target path):
   parseFunctionDef parses `Ret A:B:m`; parseQualifiedScopeDef parses `A:B:X {` / `A:B:X() {`;
@@ -574,8 +578,10 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   its parent scope: `'Gone' is not a class or namespace in scope` (first segment) /
   `'Onest' has no class or namespace member 'Gone'` (a later one). A refine attempt (external
   member on a class merely visible from an enclosing scope) hits the same first-segment
-  message. (Finding: `Class:Reopen()` of a non-existent hoisted class silently creates a new
-  empty class, consistent with the block field-less create-or-re-open rule.) OUT OF SCOPE for
+  message. (`Ns:Member()` of a non-existent NAMESPACE member silently creates a new empty
+  class, consistent with the block field-less create-or-re-open rule; but `Class:New()` of a
+  non-existent member of a CLASS is instead read as INHERITANCE — the empty-field derived
+  `Class : New()` — see the empty-parens disambiguation above.) OUT OF SCOPE for
   re-open proper: `global` vars, `...` incomplete classes, and the cross-scope run-time variant
   (REFINEMENTS, above). Canon test_v2/class/reopen.sl.
 

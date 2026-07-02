@@ -4652,6 +4652,37 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                 {ch->file_id, ch->qualifier_toks[fail_i], msg, {}});
             continue;
         }
+        // AMBIGUITY: `A:B() {}` (a qualified class re-open, empty parens) is
+        // token-identical to an empty-field DERIVED class `A : B() {}`. Disambiguate
+        // semantically: if `A` is a CLASS that does NOT already contain a class/namespace
+        // `B`, read it as INHERITANCE (B derives from A) rather than creating a nested
+        // A::B. (B already an opening of A -> re-open, relocated below; A a namespace ->
+        // create nested, below.) Only the single-segment `A:B` form — a multi-segment
+        // path is a genuine nested-scope target.
+        if (ch->kind == parse::Kind::kClassDef && ch->qualifier.size() == 1
+            && level.front()->kind == parse::Kind::kClassDef) {
+            std::vector<parse::Node*> b_openings;
+            for (parse::Node* a_open : level)
+                collectScopeOpenings(a_open->children, ch->name, b_openings);
+            if (b_openings.empty()) {
+                // Reinterpret as a derived class of the CURRENT scope: mirror grammar's
+                // inheritance setup (base name on ->text + the unnamed `_$base` slot-0
+                // field of type A) and leave the node in place with the qualifier cleared,
+                // so ordinary registration handles it as `A : B()`.
+                auto bp = std::make_unique<parse::Node>();
+                bp->kind = parse::Kind::kParam;
+                bp->name = "_$base";
+                bp->file_id = ch->file_id;
+                bp->tok = ch->name_tok;
+                bp->name_tok = ch->name_tok;
+                bp->return_type = widen::internOrNone(ch->qualifier[0]);
+                ch->text = ch->qualifier[0];
+                ch->params.insert(ch->params.begin(), std::move(bp));
+                ch->qualifier.clear();
+                ch->qualifier_toks.clear();
+                continue;
+            }
+        }
         parse::Node* target = level.front();
         // A method (function whose immediate scope is a class) needs the implicit
         // receiver `_$recv` of type `Class^`. A namespace/class node, or a free

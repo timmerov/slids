@@ -8,15 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * EMPTY DERIVED CLASS MIS-PARSES — a derived class with an EMPTY param list,
-    `Base : Derived() { ... }`, fails with "'Derived' needs a namespace qualifier."
-    The `Derived()` head is taken as a qualified call (`Base:Derived(...)`) rather
-    than a class def with no fields. NOT virtual-specific: a non-virtual empty
-    derived (`B:D() {}`) fails identically. A root empty class (`Empty() {}`) is
-    fine — only the inheriting form breaks. Workaround: give the derived at least
-    one field/param (`Derived(int y_)`). Surfaced auditing virtual.sl coverage
-    (an empty-field derived virtual class cannot be spelled today).
-
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
     (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,

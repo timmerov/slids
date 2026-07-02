@@ -343,6 +343,13 @@ Empty() {
     virtual int k() { return 42; }
 }
 
+/* COVERAGE — an EMPTY-FIELD DERIVED class `Base : Derived()` (no OWN fields, overrides
+   only). Its head is token-identical to the external re-open form `Base:Derived()`;
+   resolve disambiguates (Base is a class, Plain is not a member of it -> inheritance). */
+Widget : Plain() {
+    virtual void render() { __println("Plain:render"); }   /* implements Widget's pure */
+}
+
 int32 main() {
     {
         Vc v(7);
@@ -472,6 +479,15 @@ int32 main() {
         Empty^ ep = new Empty();
         __println("empty k = " + ep^.k());           // 42
         delete ep;
+    }
+
+    /* COVERAGE — an empty-field derived class (`Base : Derived()`). */
+    {
+        Plain pl(7);                       // inherits Widget's id_ field (7)
+        pl.render();                       // Plain:render (implements the pure)
+        __println("plain cost = " + pl.cost());  // 7 (inherited Widget::cost)
+        Widget^ wpl = ^pl;
+        wpl^.render();                     // Plain:render (dispatch through the abstract base)
     }
     return 0;
 }

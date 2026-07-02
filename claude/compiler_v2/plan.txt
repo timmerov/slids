@@ -943,8 +943,15 @@ Phase 7 — class advanced
     AND namespaces (all openings searched) and MOVES the node under the LOCAL target sibling — a
     method into a CLASS gets `_$recv` HERE (the parser skips the receiver for a qualified method
     in a class body, else it doubles); a namespace/class node or namespace free function gets
-    none. SAME-SCOPE for classes: the target must be a local sibling, so re-opening a class merely
-    VISIBLE from an enclosing scope (refine) fails the walk and errors per-segment. NAMESPACES
+    none. EMPTY-FIELD DERIVED: the empty-parens head `A:B() {}` is token-identical to an
+    external re-open, so grammar always routes it as a re-open, then relocation decides
+    SEMANTICALLY — if A is a CLASS whose openings do not already contain B, the node is
+    reinterpreted in place as INHERITANCE (`A : B()`: set ->text, prepend the `_$base` slot-0
+    field, clear the qualifier); B-in-A -> re-open, A-a-namespace -> create nested. So an
+    empty-field derived class is now spellable; creating a NEW nested class inside a class via
+    the external empty-parens form is not (write a block). SAME-SCOPE for classes: the target
+    must be a local sibling, so re-opening a class merely VISIBLE from an enclosing scope
+    (refine) fails the walk and errors per-segment. NAMESPACES
     open in any scope: a qualified LEAF whose first segment names an enclosing-scope namespace is
     registered into that frame IN PLACE (registerQualifiedLeaf, node left for constfold; the
     intermediate resolve passes skip a qualified leaf). A qualified MUTABLE var is rejected
