@@ -7,22 +7,22 @@
 OPTS="-j 8"
 
 echo "building slids compiler..."
-make ${OPTS} -C compiler_v2/ || { echo "compiler build FAILED"; exit 1; }
+make ${OPTS} -C compiler/ || { echo "compiler build FAILED"; exit 1; }
 
 echo "running type-arena self-test..."
 ./bin/slidsc --type-selftest || { echo "type self-test FAILED"; exit 1; }
 
 echo "building test code..."
-make ${OPTS} -C test_v2/ || { echo "test build FAILED"; exit 1; }
+make ${OPTS} -C test/ || { echo "test build FAILED"; exit 1; }
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 echo "running positive tests..."
-make ${OPTS} -C test_v2/ positives 2>&1 | tee "$TMP/pos.out"
+make ${OPTS} -C test/ positives 2>&1 | tee "$TMP/pos.out"
 
 echo "running negative tests..."
-make ${OPTS} -C test_v2/ negatives 2>&1 | tee "$TMP/neg.out"
+make ${OPTS} -C test/ negatives 2>&1 | tee "$TMP/neg.out"
 
 # Aggregate the per-subdir tally lines into grand totals. The runners print
 # "N passed, M failed" (positives) and "N passed, S skipped, M failed"
