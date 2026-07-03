@@ -1,0 +1,74 @@
+main:Function:ctor: 10
+foo:NestedFunction:ctor: 20
+foo:NestedFunction:dtor: 20
+shadow:Function:ctor: 30
+shadow:Function:dtor: 30
+main:Block:ctor: 40
+main:Block:dtor: 40
+main:If:ctor: 50
+main:If:dtor: 50
+main:Else:ctor: 60
+main:Else:dtor: 60
+main:While:ctor: 70
+main:While:dtor: 70
+main:WhilePost:ctor: 80
+main:WhilePost:dtor: 80
+main:For:ctor: 90
+main:For:dtor: 90
+main:Switch:ctor: 100
+main:Switch:dtor: 100
+Inner:ctor: 0
+outer.i = 0
+Inner:dtor: 0
+LOCAL:Shadowed: 8
+Geo:Real e=2 S=1
+sizeof Heap = 4
+Heap:ctor: 11
+Heap:dtor: 11
+Held:ctor: 7
+Holder:ctor: 7
+hh.h.v = 7
+Holder:dtor: 7
+Held:dtor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+arr: 7 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+tup: 7 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:ctor: 7
+deep: 7 7 7 | 7 7 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Loc:ctor: 1
+Loc:ctor: 2
+Loc:ctor: 3
+Loc:ctor: 4
+init: 1 2 3 4
+Loc:dtor: 4
+Loc:dtor: 3
+Loc:dtor: 2
+Loc:dtor: 1
+Loc:ctor: 7
+Loc:ctor: 7
+Loc:dtor: 7
+Loc:dtor: 7
+Cell:ctor: 3
+Cell:ctor: 3
+grid: 3 3
+Cell:dtor: 3
+Cell:dtor: 3
+main:Function:dtor: 10

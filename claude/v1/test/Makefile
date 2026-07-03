@@ -4,7 +4,7 @@ CXX      = g++
 LLCFLAGS = --filetype=obj --relocation-model=pic
 
 BIN_DIR   = ../bin
-BUILD_DIR = ../build/test_v1
+BUILD_DIR = ../build/test
 
 SAMPLES = \
 	alias \

@@ -1,0 +1,126 @@
+expect ctors 100,200 after.
+CtorDtor:ctor: 100
+CtorDtor:ctor: 200
+expect ctors 100,200 before and dtors 200,100 after.
+CtorDtor:dtor: 200
+CtorDtor:dtor: 100
+expect dtors 200,100 before.
+expect Leaf/Middle/Deep ctors after.
+Leaf:ctor 5
+Middle:ctor
+Deep:ctor
+expect ctors above, dtors Deep/Middle/Leaf below.
+Deep:dtor
+Middle:dtor
+Leaf:dtor 5
+expect dtors above.
+expect ctors 1,2,3 below.
+CtorDtor:ctor: 1
+CtorDtor:ctor: 2
+CtorDtor:ctor: 3
+expect ctors 1,2,3 above and dtors 3,2,1 below.
+CtorDtor:dtor: 3
+CtorDtor:dtor: 2
+CtorDtor:dtor: 1
+expect dtors 3,2,1 above.
+ForwardCtorDtor:ctor: 57
+ForwardCtorDtor:dtor: 57
+ctors 36,37,38 after.
+CtorDtor:ctor: 36
+CtorDtor:ctor: 37
+CtorDtor:ctor: 38
+ctors 36,37,38 before dtors 38,37,36 after.
+CtorDtor:dtor: 38
+CtorDtor:dtor: 37
+CtorDtor:dtor: 36
+dtors 38,37,36 before.
+ctors 41,42,43,44 after.
+CtorDtor:ctor: 41
+CtorDtor:ctor: 42
+CtorDtor:ctor: 43
+CtorDtor:ctor: 44
+ctors 41,42,43,44 before dtors 44,43,42,41 after.
+CtorDtor:dtor: 44
+CtorDtor:dtor: 43
+CtorDtor:dtor: 42
+CtorDtor:dtor: 41
+dtors 44,43,42,41 before.
+ctors 14,24,34 after.
+CtorDtor:ctor: 14
+CtorDtor:ctor: 24
+CtorDtor:ctor: 34
+ctors 14,24,34 before dtors 34,24,14 after.
+CtorDtor:dtor: 34
+CtorDtor:dtor: 24
+CtorDtor:dtor: 14
+dtors 34,24,14 before.
+Later:ctor: 97
+Now:ctor: 97
+Now:dtor: 97
+Later:dtor: 97
+early_return(1): expect ctors 1,2 then dtors 2,1.
+CtorDtor:ctor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+CtorDtor:dtor: 1
+early_return(0): expect ctors 1,3 then dtors 3,1.
+CtorDtor:ctor: 1
+CtorDtor:ctor: 3
+CtorDtor:dtor: 3
+CtorDtor:dtor: 1
+loop_break_continue(5): expect ctor/dtor 1,2,3,4 (break at 4).
+CtorDtor:ctor: 1
+CtorDtor:dtor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+CtorDtor:ctor: 3
+CtorDtor:dtor: 3
+CtorDtor:ctor: 4
+CtorDtor:dtor: 4
+if_else(1): expect ctor/dtor 11.
+CtorDtor:ctor: 11
+CtorDtor:dtor: 11
+if_else(0): expect ctor/dtor 12.
+CtorDtor:ctor: 12
+CtorDtor:dtor: 12
+makeCtorDtor(7): expect ctor/dtor 7.
+CtorDtor:ctor: 7
+CtorDtor:dtor: 7
+for_range(3): expect ctor/dtor 0,1,2.
+CtorDtor:ctor: 0
+CtorDtor:dtor: 0
+CtorDtor:ctor: 1
+CtorDtor:dtor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+do_while(3): expect ctor/dtor 0,1,2.
+CtorDtor:ctor: 0
+CtorDtor:dtor: 0
+CtorDtor:ctor: 1
+CtorDtor:dtor: 1
+CtorDtor:ctor: 2
+CtorDtor:dtor: 2
+switch_clause(1): expect ctor/dtor 81.
+CtorDtor:ctor: 81
+CtorDtor:dtor: 81
+labeled_break(2): expect ctors 91,92 then dtors 92,91.
+CtorDtor:ctor: 91
+CtorDtor:ctor: 92
+CtorDtor:dtor: 92
+CtorDtor:dtor: 91
+new/delete: expect ctor/dtor 50.
+CtorDtor:ctor: 50
+CtorDtor:dtor: 50
+RAII: expect Resource ctor then dtor.
+Resource:ctor
+Resource:dtor
+new[]/delete: expect ctors 0,0,0 then dtors 0,0,0.
+CtorDtor:ctor: 0
+CtorDtor:ctor: 0
+CtorDtor:ctor: 0
+CtorDtor:dtor: 0
+CtorDtor:dtor: 0
+CtorDtor:dtor: 0
+placement new + obj^.~(): expect ctor/dtor 60.
+CtorDtor:ctor: 60
+CtorDtor:dtor: 60

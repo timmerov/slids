@@ -1,0 +1,43 @@
+single= 42
+freed single= true
+array[0]= 7
+array[3]= 9
+freed array= true
+placement[0]= 100
+placement[1]= 200
+wide[2]= 7
+placement single= 5
+to void^= true
+to intptr= true
+alias elem= 11
+ctor 1 after
+Simple:ctor: 1
+Simple:dtor: 1
+dtor 1 before
+ctor -2 -2 -2 after
+Simple:ctor: -2
+Simple:ctor: -2
+Simple:ctor: -2
+Simple:dtor: 12
+Simple:dtor: 11
+Simple:dtor: 10
+dtor 12 11 10 before
+ctor 20 after
+Simple:ctor: 20
+Simple:dtor: 20
+dtor 20 before
+plain single: 1 2
+plain array: 9 8
+default ctor after
+Simple:ctor: -2
+Simple:dtor: -2
+default dtor before
+pv.a= 7
+Simple:ctor: 5
+Simple:dtor: 99
+survived null delete
+empty array ok
+ea[0] null= true
+et[0] null= true
+deref delete, rr null= true
+non-variable delete ok

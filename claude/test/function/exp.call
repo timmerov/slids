@@ -1,0 +1,38 @@
+helper
+add= 5
+i= 7
+f= 3.5
+b= true
+callee
+v64= 100
+v64= 7
+greet
+pos
+nonpos
+s= 5
+n= 7
+w= 30
+e= 43
+d= 42
+fwd= 18
+makeA3= 3 5
+sumA3= 12
+arrSum= 12
+arrSumN= 12
+makeArrN= 6 8
+sumTupN= 16
+a1 = [10,20,30]
+t1 = (40,50,60)
+t2 = (40,50,60)
+cls1.field_ = 70
+cls2.field_ = 70
+pp = 33 44
+va = 11 22
+gg = 1 2
+param_size = 12
+echo= 9 8 7
+t_arr[0] = (40,50,60)
+t3 = (40,50,60)
+mix_b= 7 8 9
+mx[0] = 5
+bare = ok

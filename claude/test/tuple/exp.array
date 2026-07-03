@@ -1,0 +1,80 @@
+arr[0]= 0
+arr[3]= 9
+arr[4]= 16
+arr[2]= 100
+iter^= 9
+twodim[0][0]= 0
+twodim[0][2]= 4
+twodim[4][0]= 4
+twodim[4][2]= 8
+twodim[3][1]= 4
+it2^= 4
+grid[2,3]= 7
+grid[3][2]= 7
+grideq= true
+ca[3]= 7 size= 16
+sa size= 16
+ea[4]= 9 size= 20
+cg[3][2]= 5 size= 48
+t1= 1 2 3
+t1b= 4 5 6
+td[0][0]= 1
+td[0][1]= 2
+td[1][0]= 3
+td[2][1]= 6
+td2[0][0]= 10
+td2[2][1]= 15
+ct= 1 6
+wv= 5 9
+a3[0][0][0]= 0
+a3[1][2][3]= 123
+a3[0][1][2]= 12
+a3comma= 123
+n3= 1 8 6
+commaiter= 7
+it= 1
+itnext= 4
+itwrap= 1
+a4 = ( 1 2 3 4 )
+a5 = ( 10 9 8 7 6 )
+a6 = ( ( 5 6 ) ( 7 8 ) ( 9 10 ) )
+va= 1 6 3
+row= 1 2
+2
+2
+7
+aa+bb= 11 22 33
+aa+=bb= 11 22 33
+mm+=nn= 11 44
+mm[0]+= 111 222
+fa+= 1.75 2.75
+bw&= 8 4
+arr+s= 11 12 13
+arr+=s= 11 12 13
+s-arr= 90 80 70
+arr8+=s= 2 3 4
+md+=s= 11 14
+w3= 1 2 3
+w3a= 4 5 6
+wm= 1 2 3 4
+mvd<--= 7 8 9
+swap= 4 6 1 3
+pmove= 5 6
+paNull= true true
+rowswap= 5 6 1 2
+rowmove= 9 9
+awmove= 5 6 7
+awret= 1 2 3
+sh<<= 2 4 6
+sh>>= 1 2 3
+pshift= 8 8 6
+aa<<= 8 8 6
+msh= 2 8
+pick
+sx= 4 5 6
+pick
+sd= 4 5 6
+pick
+sm= 4 5 6
+pick
+si= 4 5 6

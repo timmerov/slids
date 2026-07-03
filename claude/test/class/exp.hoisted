@@ -1,0 +1,31 @@
+Outer:ctor: 1
+Outer:dtor: 1
+Inner:ctor: 2
+Inner:dtor: 2
+Item:ctor: 0
+box.i = 0
+Item:dtor: 0
+sizeof Item = 4
+Item:ctor: 5
+Item:dtor: 5
+Leaf:ctor: 8
+Side:right = 1
+Leaf:dtor: 8
+FILE:Node: 1
+HOISTED:Node: 2
+Reader: 99 99
+Sub:ctor: 3
+Sub:dtor: 3
+Widget:ctor: 7
+useWidget: 7
+Widget:dtor: 7
+Inner:ctor: 5
+Inner:dtor: 5
+sizeof Ring:Ping = 8
+Pen: 1 1
+Units:Metric:Real = 2.5
+Pixel:ctor: 0
+Cell:ctor
+c.pixel = 0
+Cell:dtor
+Pixel:dtor: 0

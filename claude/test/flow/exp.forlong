@@ -1,0 +1,33 @@
+sum_for(5) = 10
+empty_clauses(4) = 6
+for_empty_cond(5) = 4
+for_true_terminator(4) = 4
+two_vars(10) = 5
+for_continue(6) = 9
+for_break(5) = 4
+for_grid(3, 4) = 12
+for_shadow(3) = 126
+for_typed_noinit(3) = 6
+for_update_reads_body(3) = 3
+for_nested_break(3, 5) = 6
+for_nested_continue(2, 4) = 6
+for_break_in_update(3) = 3
+for_ppid_cond(3) = 3
+for_ppid_varinit(8) = 306
+for_and_cond(5) = 10
+for_empty_body(4) = 4
+for_update_local(6) = 6
+for_typeless(5) = 10
+for_reuse(4) = 4
+for_noinit_reuse(4) = 6
+for_typeless_mixed(10) = 5
+for_two_typeless(10) = 5
+for_typeless_shadow(3) = 126
+for_typeless_ppid(8) = 306
+for_typeless_nested(3, 4) = 12
+stack leak detected: false
+CtorVar ctor 7
+CtorVar dtor 7
+for_ctor_var() = 21
+for-ref body
+for-iter body

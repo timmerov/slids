@@ -1,0 +1,11 @@
+basic(5) = 10
+read_cap(5) = 15
+write_cap(5) = 10
+recurse(5) = 120
+call_before(7) = 7
+void_nested(5) = 1
+void_nested(-5) = -1
+with_def(5) = 15
+fwd_nested(5) = 6
+fn_local_class:nested_fn: 42
+fn_local_class:nested_fn: 37

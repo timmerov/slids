@@ -1,0 +1,29 @@
+x = 5
+y = 6
+z = 11
+z = 111
+z = 112
+q = 11
+i = 15
+fa = 10
+mv = 5
+da = 30 db = 40
+vd = 9 10 ((int[3], int))
+i32a = 1 2 3
+i32b = 1 2 3
+ti = 10 20
+wu = 200 201 202
+ni = 1 3 4
+m32 = 1 6
+nti = 1 2 3 4
+wd = -1 0 1
+matrix = 7 8 9 8
+pdst^ = 4 5 6
+mdst = 10 20 30
+rret = 11 12 13
+csum = 66
+td = 1 te = 3
+sra = 3 99
+sar = 6 77
+grp = 6 (int)
+garr = 9 (int[3])

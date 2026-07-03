@@ -1,0 +1,70 @@
+ctor a
+ctor a
+a nullptr nullptr
+a 42 98
+ctor b
+ctor b
+b 7 99
+b 7 99
+c 7 99
+c 7 99
+ctor d
+d 42 98
+d nullptr nullptr
+ctor s
+s 42 98
+ctor a
+ctor a
+a nullptr nullptr
+a 42 98
+ctor a
+ctor b
+ctor a
+ctor b
+a nullptr nullptr
+b nullptr nullptr
+a 42 98
+b 7 99
+ctor a
+ctor b
+ctor a
+ctor b
+a nullptr nullptr
+b nullptr nullptr
+a 42 98
+b 7 99
+Plain ctor p
+Plain ctor p
+pl.n_ = 9
+ctor a
+ctor b
+ctor a
+ctor b
+a nullptr nullptr
+a 42 98
+ctor z
+z 42 98
+z nullptr nullptr
+dtor z
+dtor b
+dtor a
+dtor b
+dtor a
+Plain dtor p
+Plain dtor p
+dtor b
+dtor z
+dtor b
+dtor a
+dtor b
+dtor a
+dtor b
+dtor a
+dtor a
+dtor a
+dtor s
+dtor d
+dtor c
+dtor b
+dtor d
+dtor a

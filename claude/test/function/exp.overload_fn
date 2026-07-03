@@ -1,0 +1,10 @@
+area(5) = 25
+area(3, 4) = 12
+kind(i32) = 1
+kind(f32) = 2
+rank(i32) = 32
+rank(i64) = 64
+conv(i16) = 1
+withdef(5) = 105
+withdef(5, 6) = 11
+withdef(2.5) = 999
