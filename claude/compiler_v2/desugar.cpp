@@ -2396,6 +2396,25 @@ void recordGlobal(parse::Node const& n, parse::Tree const& in, ast::Tree& out,
     out.globals[id] = std::move(gv);
 }
 
+// A group's ctor/dtor member is spelled `_$gctor`/`_$gdtor` in a NAMED group (unique
+// within its namespace) and `_$glazyctor_<id>`/`_$glazydtor_<id>` in a dissolved ANON
+// group (hoisted to program scope, so it needs a globally-unique name). One predicate
+// per role recognizes both spellings, so the collector's ctor-vs-dtor test is uniform.
+bool isGlobalCtorName(std::string const& n) {
+    return n == "_$gctor" || n.rfind("_$glazyctor_", 0) == 0;
+}
+bool isGlobalDtorName(std::string const& n) {
+    return n == "_$gdtor" || n.rfind("_$glazydtor_", 0) == 0;
+}
+
+// Fill a group's sentinel + first-touch gate symbols from a per-id prefix. The
+// prefix distinguishes the three group flavors so their symbols never collide:
+// `__global_` (named group), `__ganon_` (dissolved anon group), `__cg_` (compound).
+void setGroupGateSymbols(ast::GlobalGroup& g, char const* prefix, int id) {
+    g.sentinel_symbol = std::string(prefix) + "sentinel_" + std::to_string(id);
+    g.touch_symbol = std::string(prefix) + "touch_" + std::to_string(id);
+}
+
 // Walk scope containers, recording every global declaration into out.globals.
 // A global GROUP (an is_global namespace) with a `_$gctor` member is LAZY: record a
 // GlobalGroup (sentinel/touch/ctor/dtor symbols) and stamp each member's
@@ -2412,10 +2431,9 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
         if (n->kind == parse::Kind::kFunctionDef && n->global_group_id >= 0) {
             int gid = n->global_group_id;
             ast::GlobalGroup& g = lazy_anon[gid];
-            g.sentinel_symbol = "__ganon_sentinel_" + std::to_string(gid);
-            g.touch_symbol = "__ganon_touch_" + std::to_string(gid);
+            setGroupGateSymbols(g, "__ganon_", gid);
             std::string sym = functionSymbol(*n, in);
-            if (n->name.rfind("_$glazyctor_", 0) == 0) g.ctor_symbol = sym;
+            if (isGlobalCtorName(n->name)) g.ctor_symbol = sym;
             else g.dtor_symbol = sym;
             collectGlobals(n->children, in, out, next_id, lazy_anon);
             continue;
@@ -2426,8 +2444,7 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
             if (n->global_group_id >= 0 && n->resolved_entry_id >= 0) {
                 int gid = n->global_group_id;
                 ast::GlobalGroup& g = lazy_anon[gid];
-                g.sentinel_symbol = "__ganon_sentinel_" + std::to_string(gid);
-                g.touch_symbol = "__ganon_touch_" + std::to_string(gid);
+                setGroupGateSymbols(g, "__ganon_", gid);
                 out.globals[n->resolved_entry_id].touch_symbol = g.touch_symbol;
             }
             continue;
@@ -2437,15 +2454,14 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
             parse::Node* dtor = nullptr;
             for (auto const& m : n->children) {
                 if (!m || m->kind != parse::Kind::kFunctionDef) continue;
-                if (m->name == "_$gctor") ctor = m.get();
-                else if (m->name == "_$gdtor") dtor = m.get();
+                if (isGlobalCtorName(m->name)) ctor = m.get();
+                else if (isGlobalDtorName(m->name)) dtor = m.get();
             }
             std::string touch;
             if (ctor) {
                 ast::GlobalGroup g;
                 int gid = n->resolved_entry_id;
-                g.sentinel_symbol = "__global_sentinel_" + std::to_string(gid);
-                g.touch_symbol = "__global_touch_" + std::to_string(gid);
+                setGroupGateSymbols(g, "__global_", gid);
                 g.ctor_symbol = functionSymbol(*ctor, in);
                 g.dtor_symbol = dtor ? functionSymbol(*dtor, in) : std::string();
                 touch = g.touch_symbol;
@@ -2496,8 +2512,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         if (!has_class && !(aggregate && gv.init)) continue;   // scalars / zero-init stay static
         ast::GlobalGroup g;
         g.synth_global_id = id;
-        g.sentinel_symbol = "__cg_sentinel_" + std::to_string(id);
-        g.touch_symbol = "__cg_touch_" + std::to_string(id);
+        setGroupGateSymbols(g, "__cg_", id);
         g.ctor_symbol = "__cgctor_" + std::to_string(id);
         g.dtor_symbol = has_class ? "__cgdtor_" + std::to_string(id) : std::string();
         gv.touch_symbol = g.touch_symbol;

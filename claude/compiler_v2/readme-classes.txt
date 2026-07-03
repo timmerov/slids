@@ -517,12 +517,30 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   merges into ONE class — members are visible bare or qualified across ALL openings. The
   PRIMARY (field-bearing) definition must come first; the class's LAYOUT is the primary's
   kSlid, and a field-bearing re-open is rejected ("Duplicate definition of class 'X'; a
-  re-open cannot add fields"). Re-open is a SAME-SCOPE construct — all openings live in the
+  re-open cannot add fields") — UNLESS the class is INCOMPLETE (its field tuple ends with a
+  trailing `...`), which lets later same-scope re-opens APPEND fields (see INCOMPLETE CLASSES
+  below). Re-open is a SAME-SCOPE construct — all openings live in the
   scope where the class is declared. The CROSS-SCOPE / run-time-scope variant (re-opening a
   class from a scope that isn't its own) is a SEPARATE, not-yet-landed feature — REFINEMENTS:
   a scoped zero-field derived class ($T) that USURPS the base's name in the scope and only
   LOOKS like re-opening (rides the landed inheritance + a free offset-0 cast; motivated by
   giving a generic like `sort<T>` a method the element type lacks). Canon test_v2/class/refine.sl.
+
+  INCOMPLETE CLASSES (landed; single-file). A class whose field tuple ends with a trailing
+  `...` is INCOMPLETE (grammar sets Node.is_incomplete; parseParamList, class field lists
+  only, `...` must be LAST — v2 has no leading/interior form). The re-open field rule is then
+  STATEFUL on ClassInfo.is_open: while OPEN a re-open APPENDS its fields (recorded as
+  pending_fields POINTERS, kept owned by the re-open node so their default exprs resolve with
+  the class frame open); a re-open whose tuple omits `...` CLOSES the class. registerClassBody
+  interns the primary's own fields THEN the pending ones through ONE addField funnel, so the
+  layout freezes in exactly one place — the slotless-handle-then-fill intern already deferred
+  the freeze, and single-file every opening is seen before it. classify / desugar / codegen are
+  UNTOUCHED: once interned it is an ordinary class (construction, field access, sizeof reuse
+  existing paths; no privacy single-file; defaults optional on every field; an empty completed
+  class is 1 byte). A COMPLETE class rejects a field-bearing re-open (above) and cannot be
+  re-opened as incomplete. Canon test_v2/class/incomplete.sl. Multi-file (future) rides the same
+  model: a TU that never sees the close keeps the type open -> size deferred to link-time
+  __$sizeof().
 
   BLOCK RE-OPEN. A same-name class with an EMPTY field list re-opens the existing one.
   registerClassName points the re-open node's resolved_entry_id at the PRIMARY's entry and

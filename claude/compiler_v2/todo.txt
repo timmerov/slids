@@ -26,6 +26,30 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
+  * BY-VALUE / INLINE-ARRAY CLASS MEMBER IN A USER LAZY GROUP GETS NO SYNTH
+    CTOR/DTOR — the compound-lazy synth loop skips any member already in a group
+    (`if (!gv.touch_symbol.empty()) continue;`, desugar.cpp:2506), so a
+    `Contents trunk_` or `Green house_[3]` declared inside
+    `global stash(...) { _(){} ~(){} }` is never per-element constructed or
+    destructed — only the user's `_()` / `~()` run. v1 peeled `T[N]` and ran
+    construct/destruct per element (compiler_v1/codegen.cpp:862-878). Not covered
+    by test_v2/assign/global.sl. Confirm the intended semantics (is member
+    construction the author's responsibility in a user group, or should it auto-
+    construct like v1?) before fixing.
+
+
+UNBLOCKED FEATURES
+
+  * NON-SCALAR CONST AT FILE SCOPE — a file-scope `const` of array / tuple /
+    class / pointer type is rejected ("requires global storage, which is not yet
+    supported", resolve.cpp:5119), but a non-scalar `global` of the same type now
+    compiles via the compound-lazy path (desugar.cpp:2506). A non-scalar const IS
+    an immutable global; route it through the same storage instead of rejecting.
+    The const + global file-scope registration arms already share addVarEntry
+    (resolve.cpp:~5121-5147); the remaining work is routing the const arm's
+    non-scalar case through the global-storage path rather than erroring.
+
+
 
 BLOCKED FEATURES
 

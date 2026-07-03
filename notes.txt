@@ -7,7 +7,8 @@ things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.
 check for frame scope violations/shortcuts and stored canonical names.
 what test coverage gaps remain ?
-update readme.txt, todo.txt, plan*.txt, and memories.
+update readme*.txt, plan*.txt, and memories.
+remove landed items from todo.txt. update stale entries.
 
 claude really likes to look at types as a string.
 trying to eradicate this practice.

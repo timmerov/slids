@@ -1561,8 +1561,9 @@ struct Parser {
     }
 
     // `global;` — the statement that opens the global lifetime for its enclosing
-    // scope. (A block-scope global DECLARATION — `global int x;` inside a function —
-    // is a later stage; only the scope statement is wired in statement position.)
+    // scope. A block-scope global DECLARATION — `global int x;` or a group inside a
+    // function — is delegated to parseGlobal below (a group is a namespace, and a
+    // namespace nests in a function), so it needs no separate statement-position path.
     std::unique_ptr<parse::Node> parseGlobalStmt() {
         int g_file = peek().file_id, g_tok = pos;
         // `global;` opens the ONE global scope for the program — only inside `main`
@@ -1590,7 +1591,8 @@ struct Parser {
     //          static members of the namespace `name` (or the unnamed global
     //          namespace, reached bare / via `::`, when anonymous). Group members
     //          are lowered to is_global var-decls; the group node is a is_global
-    //          kNamespaceDecl. (A non-empty body — ctor/dtor — is a later stage.)
+    //          kNamespaceDecl. A non-empty body carries the group's `_()` / `~()`
+    //          ctor/dtor (parsed below), which makes the group lazy.
     //   SHORT  `global [Type] name [= init];` — an anonymous single member; reuses
     //          parseVarDeclStmt.
     std::unique_ptr<parse::Node> parseGlobal() {
@@ -1683,7 +1685,10 @@ struct Parser {
             }
             if (!expect(token::Kind::kRBrace, "}")) return nullptr;
             if (ctor_def != dtor_def) {
-                errorAt(node->name_tok,
+                // name_tok is set only for a NAMED group; an anon group leaves it -1,
+                // so fall back to the `global` keyword tok (always set) — never -1,
+                // which would index tokens[-1] and drop the caret sled.
+                errorAt(node->name_tok >= 0 ? node->name_tok : node->tok,
                         ctor_def ? "A global constructor requires a matching destructor."
                                  : "A global destructor requires a matching constructor.");
                 return nullptr;
@@ -3166,8 +3171,22 @@ struct Parser {
     // `allow_mutable` distinguishes a function/method parameter list (where the
     // `mutable` pointer-qualifier is legal) from a class FIELD list (where it is not —
     // a field is a non-parameter; parseType then diagnoses the misplaced keyword).
-    bool parseParamList(parse::Node* node, bool allow_mutable = true) {
+    bool parseParamList(parse::Node* node, bool allow_mutable = true,
+                        bool allow_incomplete = false) {
         while (peek().kind != token::Kind::kRParen) {
+            // A trailing `...` marks an INCOMPLETE class field tuple (a later same-scope
+            // re-open may append fields). Only a CLASS field list allows it, and only as
+            // the LAST item — v2 has no leading/interior ellipsis (unlike v1).
+            if (allow_incomplete && peek().kind == token::Kind::kEllipsis) {
+                node->is_incomplete = true;
+                int ell_tok = pos;   // caret the ellipsis itself, not the token after it
+                advance();   // ...
+                if (peek().kind != token::Kind::kRParen) {
+                    errorAt(ell_tok, "'...' must be the last item in a class field list.");
+                    return false;
+                }
+                break;
+            }
             // `[mutable] [type] name [= constexpr]` — the type is optional; a typeless
             // param infers its type from its default value. For a FUNCTION param
             // list, resolve/classify enforce that a typeless param HAS a default
@@ -3246,7 +3265,8 @@ struct Parser {
         node->name_tok = name_tok;
         node->text = base_name;          // "" if not derived
 
-        if (!parseParamList(node.get(), /*allow_mutable=*/false)) return nullptr;
+        if (!parseParamList(node.get(), /*allow_mutable=*/false,
+                            /*allow_incomplete=*/true)) return nullptr;
         // A derived class carries its base as the UNNAMED FIRST FIELD `_$base` of
         // type Base: the layout becomes [Base, own fields...], so construction,
         // ctor/dtor hooks, the needs-fixpoint, and the by-value cycle check all reuse

@@ -3264,6 +3264,25 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                             + "' is not a constant expression.", {}});
                     }
                 }
+                // A GLOBAL scalar is static-initialized, so its initializer must fold
+                // to a constant. constfold has run, so a constant primitive init is now
+                // a literal node; a non-constant one (e.g. referring to another global,
+                // which is never substituted) is not. Report it here instead of letting
+                // codegen's static-fold hit an assert. A COMPOUND global (array / tuple
+                // / class) is built by a synthesized ctor, not folded — so this is scoped
+                // to a PRIMITIVE-typed global with an initializer present. The const path
+                // above is the analog for a const; kGlobalVar was never routed through it.
+                if (s.is_global && !s.children.empty() && s.children[0]
+                    && s.resolved_entry_id >= 0) {
+                    widen::TypeRef t = tree.entries[s.resolved_entry_id].slids_type;
+                    if (t != widen::kNoType
+                        && widen::form(widen::strip(t)) == widen::Type::Form::kPrimitive
+                        && !isLiteralKind(s.children[0]->kind)) {
+                        diagnostic::report(diag, {s.file_id, s.name_tok,
+                            "Initializer for '" + s.name
+                            + "' is not a constant expression.", {}});
+                    }
+                }
                 // A for-tuple LITERAL spill temp must be homogeneous — the loop
                 // iterates by an iterator strided by slot 0's type, so a mixed
                 // tuple would misread the other slots. (A tuple VARIABLE is checked

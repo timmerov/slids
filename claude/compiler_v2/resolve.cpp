@@ -3890,6 +3890,21 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
 // after every name across every scope exists. Each nested class NODE is appended to
 // `classes` so the caller can run the global BODY phase (registerClassBody) after ALL
 // names, letting a field forward-reference any class regardless of scope.
+// Build + register a simple variable entry (const / global) from a var-decl node,
+// carrying its provisional type. `owner_ns_frame < 0` (the default) resolves bare;
+// a namespace/class member passes its owning frame. Returns the new entry id.
+int addVarEntry(parse::Tree& tree, parse::EntryKind kind, parse::Node const& d,
+                int owner_ns_frame = -1) {
+    parse::Entry e;
+    e.kind = kind;
+    e.name = d.name;
+    e.slids_type = d.return_type;
+    e.file_id = d.file_id;
+    e.tok = d.name_tok;
+    e.owner_ns_frame = owner_ns_frame;
+    return parse::addEntry(tree, std::move(e));
+}
+
 void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
                         std::vector<parse::Node*>& classes,
                         diagnostic::Sink& diag) {
@@ -3961,15 +3976,9 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
         if (m->kind == parse::Kind::kVarDeclStmt && (m->is_const || m->is_global)) {
             if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             if (isDup(*m)) continue;
-            parse::Entry e;
-            e.kind = m->is_global ? parse::EntryKind::kGlobalVar
-                                  : parse::EntryKind::kConst;
-            e.name = m->name;
-            e.slids_type = m->return_type;   // provisional (kNoType if inferred)
-            e.file_id = m->file_id;
-            e.tok = m->name_tok;
-            e.owner_ns_frame = frame;
-            m->resolved_entry_id = parse::addEntry(tree, std::move(e));
+            parse::EntryKind kind = m->is_global ? parse::EntryKind::kGlobalVar
+                                                 : parse::EntryKind::kConst;
+            m->resolved_entry_id = addVarEntry(tree, kind, *m, frame);
         } else if (m->kind == parse::Kind::kFunctionDef
                 || m->kind == parse::Kind::kFunctionDecl) {
             if (m->name == "_$ctor" || m->name == "_$dtor") continue;
@@ -4048,18 +4057,42 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
         if (prev.kind == parse::EntryKind::kClass) {
             // The synthetic `_$vptr` / `_$base` are not user fields — a re-open whose
             // segment has a `virtual` member picks up a spurious `_$vptr` from the parser
-            // (it does not know yet this is a re-open); ignore it. The layout is the
-            // primary's regardless (a re-open node skips the class BODY passes).
+            // (it does not know yet this is a re-open); ignore it.
+            parse::ClassInfo& info = tree.classes.at(widen::strip(prev.slids_type));
             bool has_fields = false;
             for (auto& p : node.params)
                 if (p && p->name != "_$vptr" && p->name != "_$base") { has_fields = true; break; }
-            if (has_fields) {
+            // The re-open rule is stateful on the class's OPEN (incomplete) flag:
+            //   open   + fields  -> APPEND to the layout (still growing)
+            //   open   + none    -> just merge body members
+            //   closed + fields  -> error: a complete class adds no fields
+            //   closed + `...`   -> error: a complete class cannot re-open incomplete
+            // Either way the re-open closes (or keeps) the class per its own `...`.
+            if (info.is_open) {
+                // Point at the appended fields; leave them OWNED by this re-open node so
+                // the body phase resolves their default exprs (resolveClassMemberBodies
+                // walks node.params with the class frame open). registerClassBody interns
+                // them onto the primary's layout.
+                if (has_fields)
+                    for (auto& p : node.params)
+                        if (p && p->name != "_$vptr" && p->name != "_$base")
+                            info.pending_fields.push_back(p.get());
+                info.is_open = node.is_incomplete;   // no trailing `...` -> now closed
+            } else if (has_fields) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
                     "Duplicate definition of class '" + node.name + "'; a re-open "
                     "cannot add fields (use '" + node.name + "()' to add members).",
                     {{prev.file_id, prev.tok, "first defined here"}}});
                 return;
+            } else if (node.is_incomplete) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "Class '" + node.name + "' is already complete; it cannot be "
+                    "re-opened as incomplete.",
+                    {{prev.file_id, prev.tok, "first defined here"}}});
+                return;
             }
+            // The layout is the primary's regardless (a re-open node skips the class
+            // BODY passes); any appended fields flow to the primary via pending_fields.
             node.is_reopen = true;
             node.resolved_entry_id = prev_id;
             node.return_type = prev.slids_type;
@@ -4093,6 +4126,7 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     info.def_file_id = node.file_id;
     info.def_tok = node.name_tok;
     info.type = type;
+    info.is_open = node.is_incomplete;   // an INCOMPLETE primary accepts appended fields
     tree.classes.emplace(type, std::move(info));   // placeholder; fields filled in Phase 2
     // NAME-only: the class's members are registered by the caller (registerScopeNames
     // recurses into this class's frame), so all class NAMES across all scopes register
@@ -4113,15 +4147,18 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     parse::ClassInfo& info = tree.classes.at(widen::strip(type));
     int def_id = widen::get(widen::strip(type)).def_id;
     std::vector<std::pair<int, int>> field_locs;   // first-seen loc per field name
-    for (auto& p : node.params) {
-        if (!p) continue;
+    // One field-slot funnel for the primary's own fields AND the fields appended by
+    // open re-opens of an INCOMPLETE class (info.pending_fields) — so the layout is
+    // interned in exactly one place regardless of how many re-opens grew it.
+    auto addField = [&](parse::Node* p) {
+        if (!p) return;
         int dup = info.fieldIndex(p->name);
         if (dup >= 0) {
             diagnostic::report(diag, {p->file_id, p->name_tok,
                 "Duplicate field '" + p->name + "' in class '" + node.name + "'.",
                 {{field_locs[dup].first, field_locs[dup].second,
                   "first declared here"}}});
-            continue;
+            return;
         }
         if (p->return_type == widen::kNoType) {
             // A typeless field with a DEFAULT infers its type from that default — but
@@ -4132,16 +4169,18 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
             if (p->children.empty() || !p->children[0]) {
                 diagnostic::report(diag, {p->file_id, p->name_tok,
                     "Field '" + p->name + "' needs an explicit type.", {}});
-                continue;
+                return;
             }
         } else {
             resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
         }
         info.field_names.push_back(p->name);
         info.field_types.push_back(p->return_type);   // kNoType -> inferred in classify
-        info.field_params.push_back(p.get());   // stable; default read live later
+        info.field_params.push_back(p);   // stable; default read live later
         field_locs.push_back({p->file_id, p->name_tok});
-    }
+    };
+    for (auto& p : node.params) addField(p.get());
+    for (parse::Node* p : info.pending_fields) addField(p);
     // Constructor / destructor presence (parsed as `_$ctor`/`_$dtor` members).
     bool has_ctor = false, has_dtor = false;
     for (auto& m : node.children) {
@@ -5071,7 +5110,9 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             // here.
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
             // A non-scalar const at file scope is a not-mutable GLOBAL (allocated,
-            // not substituted) — globals are not yet built (Phase 8).
+            // not substituted). Globals now have storage (the compound-lazy path,
+            // desugar.cpp:2489), but the const path has not been routed through it
+            // yet, so this stays a diagnostic — see todo.txt FEATURES.
             if (constNeedsStorage(ch->return_type)) {
                 diagnostic::report(diag, {ch->file_id, ch->name_tok,
                     "A const variable of a non-scalar type (array, tuple, class, or "
@@ -5084,13 +5125,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                                     prev.file_id, prev.tok, ch->file_id, ch->name_tok);
                 continue;
             }
-            parse::Entry e;
-            e.kind = parse::EntryKind::kConst;
-            e.name = ch->name;
-            e.slids_type = ch->return_type;
-            e.file_id = ch->file_id;
-            e.tok = ch->name_tok;
-            ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
+            ch->resolved_entry_id = addVarEntry(tree, parse::EntryKind::kConst, *ch);
             continue;
         }
         if (ch->kind == parse::Kind::kVarDeclStmt && ch->is_global) {
@@ -5107,13 +5142,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                                     prev.file_id, prev.tok, ch->file_id, ch->name_tok);
                 continue;
             }
-            parse::Entry e;
-            e.kind = parse::EntryKind::kGlobalVar;
-            e.name = ch->name;
-            e.slids_type = ch->return_type;   // kNoType if inferred — classify fills it
-            e.file_id = ch->file_id;
-            e.tok = ch->name_tok;
-            ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
+            // kNoType stays as-is when inferred — classify fills it.
+            ch->resolved_entry_id = addVarEntry(tree, parse::EntryKind::kGlobalVar, *ch);
             continue;
         }
         if (ch->kind == parse::Kind::kAliasDecl) continue;     // handled above

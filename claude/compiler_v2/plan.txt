@@ -843,8 +843,9 @@ Phase 6 — const correctness
     initialized), not a substituted constant — resolve's constNeedsStorage gate
     routes it to a kLocalVar with a deepConst-wrapped type; a foldable SCALAR const
     stays substituted. A non-scalar const at a NON-RUNTIME scope (file / namespace /
-    class body) is a global -> "requires global storage" (Phase 8). ast `is_const`
-    now means "substituted constant" (set from the entry kind in desugar). A TYPELESS
+    class body) still errors "requires global storage" — globals now HAVE storage (the
+    compound-lazy path), the const path just isn't routed through it yet (see todo.txt). ast
+    `is_const` now means "substituted constant" (set from the entry kind in desugar). A TYPELESS
     const (`const x = rhs`) is the same split decided in CLASSIFY: constfold defers
     the unfoldable case, classify infers the rhs type and routes a non-scalar one to
     the same kLocalVar + deepConst path (a leftover typeless scalar errors; the
@@ -926,7 +927,8 @@ Phase 7 — class advanced
     add members after its primary def, as a BLOCK (`Class() {}`, EMPTY field list) or the
     EXTERNAL qualified form (`Class:member`); all openings merge into ONE frame (members
     visible bare + qualified across openings), the PRIMARY (field-bearing) def comes first, a
-    field-bearing re-open is rejected ("a re-open cannot add fields"). BLOCK: registerClassName
+    field-bearing re-open is rejected ("a re-open cannot add fields") UNLESS the class is
+    INCOMPLETE (trailing `...`; see the INCOMPLETE CLASSES bullet). BLOCK: registerClassName
     points the re-open node's resolved_entry_id at the primary + marks is_reopen;
     registerScopeNames recurses members into the shared ns_frame_id; the field-body pass +
     class-collection loops skip the is_reopen node (primary's layout/lifecycle intact);
@@ -960,6 +962,20 @@ Phase 7 — class advanced
     split into REFINEMENTS below. Canon test_v2/class/reopen.sl (Stages A-F: block/method/
     namespace/hoisted-reopen/chained + const/alias/enum in file/namespace/class/function scope;
     field-add / redefine / leak / bad-path / refine-reject negatives). [[project_reopen_classes]]
+  * INCOMPLETE CLASSES — LANDED (single-file). A class whose field tuple ends with a trailing
+    `...` is INCOMPLETE (Node.is_incomplete; grammar parseParamList, class field lists only,
+    `...` must be LAST — no leading/interior form). The re-open field rule becomes STATEFUL on
+    ClassInfo.is_open: while OPEN a re-open APPENDS fields (pending_fields POINTERS, kept owned
+    by the re-open node so their defaults resolve with the class frame open); a re-open omitting
+    `...` CLOSES the class. registerClassBody interns primary fields THEN pending ones via ONE
+    addField funnel — the layout freezes in one place (the slotless-handle-then-fill intern
+    already deferred it; single-file all openings are seen first). classify / desugar / codegen
+    UNTOUCHED: an interned incomplete class is ORDINARY (construction, field access, sizeof; no
+    privacy single-file; optional defaults; empty completed class = 1 byte). Negatives:
+    add-field-to-complete, re-incomplete-a-complete, leading/mid-list `...`, dup-field-across-
+    openings, typeless-no-default appended. Multi-file (Phase 8) rides the same model: a
+    never-closed TU keeps the type open -> link-time __$sizeof(). Canon test_v2/class/
+    incomplete.sl. [[project_incomplete_classes]]
   * REFINEMENTS (run-time-scope re-open) — PLANNED (stub test_v2/class/refine.sl). Re-opening
     a class from a scope that ISN'T its own is an ILLUSION: it desugars to an anonymous
     zero-field DERIVED class ($T : T) that USURPS the base's name within that lexical scope,

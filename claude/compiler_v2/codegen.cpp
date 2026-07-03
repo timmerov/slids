@@ -177,6 +177,16 @@ void emitTouch(std::string const& sym, std::ostream& out) {
     if (!sym.empty()) out << "  call void @" << sym << "()\n";
 }
 
+// Seed a SymTab with every file-local global: a global is a variable whose address
+// is its `@`-symbol (an LLVM `ptr`), so every load / store / GEP / assign path treats
+// it exactly like a local — no separate global lookup. A LAZY global carries its
+// touch thunk so its access sites gate on first-touch construction. Reads g_globals,
+// populated by run() before any function or synthesized ctor is emitted.
+void seedGlobalSyms(SymTab& syms) {
+    for (auto const& [id, gv] : g_globals)
+        syms[id] = {"@" + gv->symbol, llvmForRef(gv->type), gv->type, gv->touch_symbol};
+}
+
 bool isFloatType(widen::TypeRef t) {
     widen::TypeKind k;
     return widen::classify(t, k) && k.cat == widen::Category::kFloat;
@@ -3133,14 +3143,8 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // The function body is the outermost dtor scope: a class instance declared
     // at top level is destroyed at the function's exit. An explicit `return`
     // unwinds this scope itself; the implicit fall-through below does it here.
-    // Seed the SymTab with every file-local global: a global is a variable whose
-    // address is its `@`-symbol (LLVM `ptr`), so every load / store / GEP / assign
-    // path treats it exactly like a local — no separate global lookup. A LAZY global
-    // carries its touch thunk so its access sites gate on first-touch construction.
-    for (auto const& [id, gv] : g_globals) {
-        syms[id] = {"@" + gv->symbol, llvmForRef(gv->type), gv->type,
-                    gv->touch_symbol};
-    }
+    // Seed the SymTab with every file-local global (see seedGlobalSyms).
+    seedGlobalSyms(syms);
     DtorScope root_scope;
     // The global lifetime is opened by a `global;` statement (auto-inserted at the
     // top of `main` by desugar, or placed explicitly) — its emitStmt registers the
@@ -3291,9 +3295,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             // defaults and the hooks run the ctors.
             if (gv.init) {
                 SymTab gsyms;
-                for (auto const& [id2, gv2] : tree.globals)
-                    gsyms[id2] = {"@" + gv2.symbol, llvmForRef(gv2.type), gv2.type,
-                                  gv2.touch_symbol};
+                seedGlobalSyms(gsyms);
                 // An ARRAY filled from a tuple literal needs the tuple->array element
                 // walk (their LLVM types differ); a tuple/scalar/class value stores
                 // whole. Mirrors the local class/aggregate decl path in emitStmt.

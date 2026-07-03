@@ -311,6 +311,20 @@ global tally_ = 0;            /* type inferred: int */
 global bool ready_ = false;
 global float64 ratio_ = 2.5;
 
+/* SCALAR-KIND breadth + a const-substituted init: a const folds into a global's
+   initializer (globals themselves are never substituted, so `shots_ + 1` below is
+   the negative), and float32 / int64 / char globals ride the same static path. */
+const int kBonus = 5;
+global int fromconst_ = kBonus + 3;   /* const substitutes -> folds to 8 */
+global float32 f32_ = 1.5;
+global int64 big_ = 5000000000;
+global char ch_ = 'A';
+
+/* ENUM-typed global — an enum value is a foldable constant, so it initializes a
+   static global just like any scalar. */
+enum Hue ( kRed = 0, kGreen = 1, kBlue = 2 );
+global Hue hue_ = Hue:kGreen;
+
 /* BARE form — at file scope the `global` keyword is optional: a plain var-decl IS a
    global (`int x = 0;` desugars to `global int x = 0;`). Typed and inferred. */
 int bare_ = 100;
@@ -370,6 +384,13 @@ global back(
     ~() { __println("back:dtor"); }
 }
 
+/* DEEPER reverse-order teardown (beyond front->back's two levels): a 3-level lazy
+   chain. lvl1's ctor touches lvl2, whose ctor touches lvl3 — so construction is
+   lvl1 -> lvl2 -> lvl3 and teardown is lvl3 -> lvl2 -> lvl1 (LIFO). */
+global lvl1( q_ = 0 ) { _() { __println("lvl1:ctor"); lvl2:q_ = 1; } ~() { __println("lvl1:dtor"); } }
+global lvl2( q_ = 0 ) { _() { __println("lvl2:ctor"); lvl3:q_ = 1; } ~() { __println("lvl2:dtor"); } }
+global lvl3( q_ = 0 ) { _() { __println("lvl3:ctor"); } ~() { __println("lvl3:dtor"); } }
+
 /* LAZY ANONYMOUS group — a nameless lazy singleton: its member is BARE (no group
    qualifier), constructed on first access, torn down at exit (LIFO with the rest). */
 global (
@@ -414,6 +435,10 @@ Widget(int id_ = 100, int tag_ = 7) {
     ~() { __println("widget:dtor"); }
 }
 global Widget w_ = Widget(42);
+
+/* POINTER-typed global — a static null init (a pointer is a foldable constant, so
+   it stays static, not lazy). Read + null-compared in main. */
+global Widget^ wp_ = nullptr;
 
 /* METHOD-INTERNAL static — same, scoped to the method body. */
 Counter() {
@@ -487,6 +512,14 @@ int32 main() {
     __println("combo=" + combo_[0] + "," + combo_[1]);                 // 7,true
     __println("wid=" + w_.id_ + "," + w_.tag_);   // widget:ctor, then 42,7 (arg + default)
 
+    /* scalar-kind breadth + const-into-global; and a pointer global (null) */
+    __println("fromconst=" + fromconst_);    // 8 (kBonus + 3, const substituted)
+    __println("f32=" + f32_);                // 1.5
+    __println("big=" + big_);                // 5000000000
+    __println("ch=" + ch_);                  // A
+    __println("hue=" + hue_);                // 1 (Hue:kGreen)
+    if (wp_ == nullptr) { __println("wp null"); }   // wp null
+
     /* shadowing: a local `shots_` hides the global; `::shots_` reaches it */
     {
         int shots_ = 7;
@@ -537,7 +570,11 @@ int32 main() {
     taggify();                               // tag:ctor, then tag #1
     taggify();                               // tag #2
 
-    /* at exit, dtors run LIFO: tank, back, front, depot */
+    /* 3-level lazy chain: touching lvl1 constructs lvl1 -> lvl2 -> lvl3 */
+    lvl1:q_ = 9;                             // lvl1:ctor, lvl2:ctor, lvl3:ctor
+
+    /* at exit, dtors run LIFO by construction order:
+       lvl3, lvl2, lvl1, tag, bin, tank, back, front, depot, widget */
     return 0;
 }
 
@@ -550,6 +587,42 @@ int32 main() {
 /* a global constructor without a matching destructor (the pairing rule). */
 //-EXPECT-ERROR: requires a matching destructor
 //global lonely(a_ = 0) { _() {} }
+
+/* the ANON-group form of the same pairing violation (name_tok is unset for an anon
+   group, so the caret must fall back to the `global` keyword, not tokens[-1]). */
+//-EXPECT-ERROR: requires a matching destructor
+//global ( a_ = 0 ) { _() {} }
+
+/* a global destructor without a matching constructor (the mirror direction). */
+//-EXPECT-ERROR: requires a matching constructor
+//global orphan(a_ = 0) { ~() {} }
+
+/* a global group ctor/dtor takes no parameters. */
+//-EXPECT-ERROR: takes no parameters
+//global withparam(a_ = 0) { _(x) {} ~() {} }
+
+/* a global group body holds only the ctor/dtor — no other members. */
+//-EXPECT-ERROR: holds only the constructor
+//global badbody(a_ = 0) { int junk_ = 0; }
+
+/* duplicate constructor / duplicate destructor within one group. */
+//-EXPECT-ERROR: Duplicate constructor
+//global twoctor(a_ = 0) { _() {} _() {} ~() {} }
+//-EXPECT-ERROR: Duplicate destructor
+//global twodtor(a_ = 0) { _() {} ~() {} ~() {} }
+
+/* an intra-file global name collision (here re-declaring `shots_`). */
+//-EXPECT-ERROR: Duplicate declaration
+//global int shots_ = 99;
+
+/* a global's scalar initializer must fit its type. */
+//-EXPECT-ERROR: does not fit
+//global int8 toobig_ = 999;
+
+/* a global's scalar initializer must be a constant — `shots_` is a global (never
+   substituted), so `shots_ + 1` is not constant-foldable. */
+//-EXPECT-ERROR: is not a constant expression
+//global int nc_ = shots_ + 1;
 
 /* a function-internal global is invisible outside its body: a function is not a
    namespace, so another body cannot qualify into it. */

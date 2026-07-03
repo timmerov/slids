@@ -230,9 +230,15 @@ struct Node {
                                  // a LAZY anonymous group (resolve explodes it into
                                  // bare siblings); collectGlobals rebuilds the shared
                                  // sentinel/ctor/dtor GlobalGroup keyed by this id.
-    bool is_reopen = false;      // kClassDef: a field-less RE-OPEN of an existing class
-                                 // (resolve points resolved_entry_id at the primary's
-                                 // entry; the class BODY passes skip this node)
+    bool is_reopen = false;      // kClassDef: a RE-OPEN of an existing class (resolve
+                                 // points resolved_entry_id at the primary's entry; the
+                                 // class BODY passes skip this node). A re-open adds only
+                                 // body members, EXCEPT an INCOMPLETE class (see
+                                 // is_incomplete), where a re-open may append fields.
+    bool is_incomplete = false;  // kClassDef: the field tuple ends with a trailing `...`
+                                 // — an INCOMPLETE class. A later same-scope re-open may
+                                 // append fields until one CLOSES it (a re-open whose
+                                 // field tuple omits the trailing `...`).
     bool is_construction = false; // kCallStmt/kCallExpr: a `Class(args)` nameless
                                  // class construction (target resolved to a kClass),
                                  // NOT a function call. resolve sets it; classify
@@ -382,6 +388,15 @@ struct ClassInfo {
     int def_tok = -1;                    // "first defined here" dup note)
     bool needs_ctor = false;             // layout: false in the trivial bucket
     bool needs_dtor = false;
+    // INCOMPLETE class: `is_open` is true while the class still carries a trailing
+    // `...` (a re-open may append fields); it flips false at the closing re-open.
+    // `pending_fields` points at the field kParams appended by open re-opens (still
+    // OWNED by their re-open node, so the body phase resolves their default exprs with
+    // the class frame open). registerClassBody interns them onto the layout after the
+    // primary's own fields — the whole feature freezes the layout in ONE place
+    // (single-file: all appends are seen in Phase 1 before Phase 2 interns).
+    bool is_open = false;
+    std::vector<Node*> pending_fields;
     int fieldIndex(std::string const& f) const {
         for (std::size_t i = 0; i < field_names.size(); ++i)
             if (field_names[i] == f) return static_cast<int>(i);

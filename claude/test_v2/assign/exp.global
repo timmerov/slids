@@ -15,6 +15,12 @@ grid1=99
 combo=7,true
 widget:ctor
 wid=42,7
+fromconst=8
+f32=1.5
+big=5000000000
+ch=A
+hue=1
+wp null
 local=7
 global=43
 cars=2
@@ -44,6 +50,12 @@ hits=2
 tag:ctor
 tag #1
 tag #2
+lvl1:ctor
+lvl2:ctor
+lvl3:ctor
+lvl3:dtor
+lvl2:dtor
+lvl1:dtor
 tag:dtor
 bin:dtor
 tank:dtor

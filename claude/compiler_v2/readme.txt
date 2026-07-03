@@ -88,7 +88,8 @@ TYPE REPRESENTATION (the carrier; not a stage)
     not-mutable VARIABLE — resolve's constNeedsStorage gate routes it to a kLocalVar
     with a deepConst type instead of the substitution path (unenforced; behaves as an
     ordinary local). At a NON-RUNTIME scope (file / namespace / class body) a
-    non-scalar const is a global -> "requires global storage" (Phase 8). ast
+    non-scalar const still errors "requires global storage" — globals now HAVE storage
+    (the compound-lazy path), but the const path isn't routed through it yet (todo.txt). ast
     `is_const` means "substituted constant", set from the entry kind in desugar.
     A TYPELESS const (`const x = rhs`, no declared type) is the SAME split but
     decided in CLASSIFY (the type is unknown at resolve): constfold DEFERS a typeless
