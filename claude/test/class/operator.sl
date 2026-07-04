@@ -67,6 +67,14 @@ lvalues:
     Class lhs <--> SameClass rhs
         -> lhs.op<-->(rhs)
 
+it is assumed that creating temporary objects is expensive.
+while evaluating expressions we want to minimize the number
+of temporary objects that are created.
+fuse binary operations whenever possible.
+elide expression results into fresh variables when possible.
+otherwise use move semantics to transfer a temporary to an
+un-elidable variable.
+
 Binary operations on temps are fused in place when
 possible — covers everything compoundable (arithmetic,
 bitwise, logical):
@@ -79,8 +87,8 @@ Otherwise binary operations produce a fresh temp:
     Class temp = Class lhs + Type rhs
         -> temp.op+(lhs, rhs)
 
-Some operators don't produce self — they return a value
-instead. The returned type must be a built-in type;
+Some operators return a value instead of mutating self.
+The returned type must be a built-in type;
 otherwise the operator would fall under the binary-op
 rules:
 
@@ -376,6 +384,84 @@ Holder(
 ) {
 }
 
+/* ---- stage 1: user operator-method DEFINITIONS. Every op<sym> in the catalog
+   PARSES and lowers as an ordinary method (operator USES land in later stages).
+   Also exercises overloading by arity: op+/op- at 0/1/2, op^ at 0 (deref) / 2
+   (xor), op~/op! at 0/1, and op<-- by parameter type (value vs pointer). */
+OpDefs(
+    int v_
+) {
+    /* assignment / move / swap */
+    op=(int a)                 { v_ = a; }
+    op<--(int a)               { v_ = a; }              // move from a value
+    op<--(mutable OpDefs^ a)   { v_ = a^.v_; }          // move from a pointer (mutable)
+    op<-->(mutable OpDefs^ c)  { int t = v_; v_ = c^.v_; c^.v_ = t; }
+
+    /* binary -> self */
+    op+(int a, int b)          { v_ = a + b; }
+    op-(int a, int b)          { v_ = a - b; }
+    op*(int a, int b)          { v_ = a * b; }
+    op/(int a, int b)          { v_ = a / b; }
+    op%(int a, int b)          { v_ = a % b; }
+    op&(int a, int b)          { v_ = a; }
+    op|(int a, int b)          { v_ = a; }
+    op^(int a, int b)          { v_ = a; }              // binary xor (arity 2)
+    op<<(int a, int b)         { v_ = a; }
+    op>>(int a, int b)         { v_ = a; }
+    op&&(int a, int b)         { v_ = a; }
+    op||(int a, int b)         { v_ = a; }
+    op^^(int a, int b)         { v_ = a; }
+
+    /* compound assignment -> self */
+    op+=(int a)                { v_ = v_ + a; }
+    op-=(int a)                { v_ = v_ - a; }
+    op*=(int a)                { v_ = a; }
+    op/=(int a)                { v_ = a; }
+    op%=(int a)                { v_ = a; }
+    op&=(int a)                { v_ = a; }
+    op|=(int a)                { v_ = a; }
+    op^=(int a)                { v_ = a; }
+    op<<=(int a)               { v_ = a; }
+    op>>=(int a)               { v_ = a; }
+    op&&=(int a)               { v_ = a; }
+    op||=(int a)               { v_ = a; }
+    op^^=(int a)               { v_ = a; }
+
+    /* comparison -> built-in */
+    bool op==(int a)           { return v_ == a; }
+    bool op!=(int a)           { return v_ != a; }
+    bool op<(int a)            { return v_ < a; }
+    bool op>(int a)            { return v_ > a; }
+    bool op<=(int a)           { return v_ <= a; }
+    bool op>=(int a)           { return v_ >= a; }
+
+    /* index, dereference -> reference */
+    int^ op[](int i)           { return ^v_; }
+    int^ op^()                 { return ^v_; }          // deref (arity 0)
+
+    /* unary -> built-in (arity 0) */
+    bool op+()                 { return v_ > 0; }
+    bool op-()                 { return v_ < 0; }
+    bool op~()                 { return v_ == 0; }
+    bool op!()                 { return v_ == 0; }
+
+    /* unary-from-operand -> self (arity 1) */
+    op+(int a)                 { v_ = a; }
+    op-(int a)                 { v_ = a; }
+    op~(int a)                 { v_ = a; }
+    op!(int a)                 { v_ = a; }
+}
+
+/* ---- stage 5: convert fallback. When no op= matches the arg EXACTLY, the integer
+   arg is widened to a matching overload; the SMALLEST widening wins (canon 130-132).
+   int8 widens to the narrower int32 overload, not int64. ---- */
+Widen(
+    int which_
+) {
+    op=(int32 a)  { which_ = 32; }
+    op=(int64 a)  { which_ = 64; }
+}
+
 int32 main() {
 
     int a = 42;
@@ -452,6 +538,53 @@ int32 main() {
     print(^pr2.a_);               // z 42 98
     print(^srcf);                 // z nullptr nullptr
 
+    /* ---- stage 2: assignment / move / swap / compound USES dispatch to the
+       user operators (canon 51-68, 167-180). ---- */
+    OpDefs od(7);
+    od = 3;                       // op=(int)       -> v_ = 3
+    od += 10;                     // op+=(int)      -> v_ = 13
+    __println("od = " + od.v_);   // od = 13
+    OpDefs oe(50);
+    od <-- oe;                    // op<--(OpDefs^)  -> od.v_ = 50
+    __println("od = " + od.v_);   // od = 50
+    OpDefs of(1);
+    od <--> of;                   // op<-->         -> od.v_ = 1, of.v_ = 50
+    __println("od = " + od.v_);   // od = 1
+    __println("of = " + of.v_);   // of = 50
+
+    /* ---- stage 3 (partial): a single binary expression dispatches to the class's
+       binary operator — `dest = X op Y` -> dest.opOP(X, Y) (canon 79-80). Operand
+       chains (the fuse lowering) are a later slice. ---- */
+    int m = 8;
+    int n = 5;
+    OpDefs og(0);
+    og = m + n;                   // op+(int, int)  -> og.v_ = 13
+    __println("og = " + og.v_);   // og = 13
+
+    /* a binary CHAIN fuses into the destination: head via the 2-arg op, each further
+       operand via the compound op (canon 70-80). `og` is the accumulator (no temp). */
+    int r = 100;
+    OpDefs oh(0);
+    oh = m + n + r;               // oh.op+(m,n)=13; oh.op+=(r) -> 113
+    __println("oh = " + oh.v_);   // oh = 113
+
+    /* ---- stage 4: comparison returns a built-in; index / deref return references
+       (canon 87-119). OpDefs' op[]/op^ back onto the scalar v_. ---- */
+    bool eq = (oh == 113);        // oh.op==(int) -> true
+    __println("eq = " + eq);      // eq = true
+    int oi = oh[0];               // (oh.op[](0))^ -> v_ = 113
+    __println("oi = " + oi);      // oi = 113
+    oh[0] = 7;                    // (oh.op[](0))^ = 7   (writes v_)
+    int oj = oh^;                 // (oh.op^())^ -> 7
+    __println("oj = " + oj);      // oj = 7
+
+    /* ---- stage 5: convert fallback — int8 has no exact op=; the narrower int32
+       overload wins over int64 (smallest widening). ---- */
+    Widen wc(0);
+    int8 wb = 1;
+    wc = wb;                      // wc.op=(int32) chosen over op=(int64)
+    __println("wc = " + wc.which_);   // wc = 32
+
     return 0;
 }
 
@@ -478,3 +611,92 @@ negatives — one //-block uncommented per run.
 //    DefaultMove dm <-- pr;
 //    return 0;
 //}
+
+/* ---- stage 1 signature negatives: the op<sym> validation pass (arity, no default
+   parameter values, no misplaced 'mutable'). One //-block uncommented per run. ---- */
+
+/* an operator parameter may not carry a default value. */
+//-EXPECT-ERROR: An operator parameter may not have a default value.
+//Neg1(int v_) {
+//    op+(int a = 5, int b) { v_ = a; }
+//}
+
+/* op+ accepts 0, 1, or 2 parameters — three is over the maximum. */
+//-EXPECT-ERROR: The 'op+' operator takes 0, 1, or 2 parameters, not 3.
+//Neg2(int v_) {
+//    op+(int a, int b, int c) { v_ = a; }
+//}
+
+/* a binary-only operator (op*) requires exactly two parameters. */
+//-EXPECT-ERROR: The 'op*' operator takes exactly 2 parameters, not 1.
+//Neg3(int v_) {
+//    op*(int a) { v_ = a; }
+//}
+
+/* comparison takes exactly one parameter. */
+//-EXPECT-ERROR: The 'op==' operator takes exactly 1 parameter, not 0.
+//Neg4(int v_) {
+//    bool op==() { return v_ == 0; }
+//}
+
+/* swap takes exactly one (same-class, mutable) parameter. */
+//-EXPECT-ERROR: The 'op<-->' operator takes exactly 1 parameter, not 2.
+//Neg5(int v_) {
+//    op<-->(mutable Neg5^ a, int b) { v_ = b; }
+//}
+
+/* index takes exactly one parameter. */
+//-EXPECT-ERROR: The 'op[]' operator takes exactly 1 parameter, not 0.
+//Neg6(int v_) {
+//    int^ op[]() { return ^v_; }
+//}
+
+/* 'mutable' is a move/swap-only qualifier — every other operator forbids it. */
+//-EXPECT-ERROR: The 'op+' operator parameter may not be 'mutable'.
+//Neg7(int v_) {
+//    op+(mutable int^ a, int b) { v_ = b; }
+//}
+
+/* ---- stage 1b type-dependent negatives (classify): return categories, move/swap
+   mutability + same-class, and naked operators. One //-block uncommented per run. */
+
+/* comparison must return a built-in — void (an omitted return) is not one. */
+//-EXPECT-ERROR: The 'op==' operator must return a built-in type (bool, an integer, a float, or a pointer).
+//Neg8(int v_) {
+//    op==(int a) { v_ = a; }
+//}
+
+/* index must return a reference, not a value. */
+//-EXPECT-ERROR: The 'op[]' operator must return a reference '^'.
+//Neg9(int v_) {
+//    int op[](int i) { return v_; }
+//}
+
+/* a produce-self operator must not spell a return type. */
+//-EXPECT-ERROR: The 'op+' operator produces self and must not have a return type.
+//Neg10(int v_) {
+//    int op+(int a, int b) { v_ = a; return a; }
+//}
+
+/* a move operator's pointer parameter must be mutable. */
+//-EXPECT-ERROR: A move operator's pointer parameter must be 'mutable'.
+//Neg11(int v_) {
+//    op<--(Neg11^ a) { v_ = a^.v_; }
+//}
+
+/* a swap operator's parameter must be mutable. */
+//-EXPECT-ERROR: A swap operator's parameter must be 'mutable'.
+//Neg12(int v_) {
+//    op<-->(Neg12^ a) { v_ = 0; }
+//}
+
+/* a swap operator's parameter must reference the SAME class. */
+//-EXPECT-ERROR: A swap operator's parameter must be a reference to the same class.
+//NegOther(int w_) {}
+//Neg13(int v_) {
+//    op<-->(mutable NegOther^ a) { v_ = 0; }
+//}
+
+/* no naked operators — an operator must be a class method. */
+//-EXPECT-ERROR: An operator can only be defined as a method of a class.
+//op+(int a, int b) { }

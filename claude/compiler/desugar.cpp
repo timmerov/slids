@@ -254,14 +254,49 @@ std::string functionSymbol(parse::Node const& p, parse::Tree const& tree) {
     return p.name;
 }
 
+// An operator method name ("op+", "op<--", "op[]", …) carries characters that are
+// illegal in an unquoted LLVM identifier. Encode each into a `$`-prefixed token so
+// the symbol stays a valid, unquoted, injective identifier ("op=" -> "op$eq"). A
+// user method name (alphanumeric + '_', never '$') passes through unchanged, so no
+// encoded name can collide with an ordinary one.
+std::string sanitizeSymbolName(std::string const& name) {
+    auto tokenFor = [](char c) -> char const* {
+        switch (c) {
+            case '=': return "$eq";
+            case '<': return "$lt";
+            case '>': return "$gt";
+            case '+': return "$pl";
+            case '-': return "$mi";
+            case '*': return "$mu";
+            case '/': return "$dv";
+            case '%': return "$rem";
+            case '&': return "$and";
+            case '|': return "$or";
+            case '^': return "$xor";
+            case '~': return "$not";
+            case '!': return "$bang";
+            case '[': return "$lb";
+            case ']': return "$rb";
+            default:  return nullptr;
+        }
+    };
+    std::string out;
+    for (char c : name) {
+        char const* t = tokenFor(c);
+        if (t) out += t; else out += c;
+    }
+    return out;
+}
+
 // The LLVM symbol for a method: classSymbol(defClass) + "__" + name, plus an
 // entry-id suffix when the method name is OVERLOADED in its class (2+ same-name
 // method entries in the owner frame) — so distinct overloads get distinct symbols,
 // exactly like functionSymbol. The call site and the chosen definition share the
-// entry id, so they mangle identically.
+// entry id, so they mangle identically. Operator names are $-encoded so the symbol
+// is a valid LLVM identifier (the raw name still drives the overload count below).
 std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
                          std::string const& name, int entry_id) {
-    std::string base = widen::classSymbol(defCls) + "__" + name;
+    std::string base = widen::classSymbol(defCls) + "__" + sanitizeSymbolName(name);
     if (entry_id < 0) return base;
     int frame = tree.entries[entry_id].owner_ns_frame;
     int count = 0;

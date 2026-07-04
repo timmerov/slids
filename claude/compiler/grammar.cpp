@@ -3074,34 +3074,170 @@ struct Parser {
     // Pure lookahead: do the tokens form `<return-type> <name> (` — a (nested)
     // function definition — as opposed to a var decl (`type name = / ;`) or a
     // call (`name(...)`, no leading type)? Consumes nothing.
-    bool looksLikeFunctionDef() const {
-        int o = 0;
-        if (isTypeStart(peekKind(o))) {
-            o++;
-        } else if (peekKind(o) == token::Kind::kColonColon
-                   || peekKind(o) == token::Kind::kIdentifier) {
-            if (peekKind(o) == token::Kind::kColonColon) o++;
-            if (peekKind(o) != token::Kind::kIdentifier) return false;
-            o++;
-            while (peekKind(o) == token::Kind::kColon
-                   && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+    // The operator tokens that may follow `op` to form an operator-method name.
+    // The two-token `[]` (index) is recognized separately by its bracket shape.
+    static bool isOperatorSymbolKind(token::Kind k) {
+        return k == token::Kind::kEquals
+            || k == token::Kind::kArrowLeft   || k == token::Kind::kArrowBoth
+            || k == token::Kind::kPlus         || k == token::Kind::kMinus
+            || k == token::Kind::kStar         || k == token::Kind::kSlash
+            || k == token::Kind::kPercent
+            || k == token::Kind::kBitAnd       || k == token::Kind::kBitOr
+            || k == token::Kind::kBitXor       || k == token::Kind::kBitNot
+            || k == token::Kind::kLShift       || k == token::Kind::kRShift
+            || k == token::Kind::kAnd          || k == token::Kind::kOr
+            || k == token::Kind::kNot          || k == token::Kind::kXorXor
+            || k == token::Kind::kEqEq         || k == token::Kind::kNotEq
+            || k == token::Kind::kLt           || k == token::Kind::kGt
+            || k == token::Kind::kLtEq         || k == token::Kind::kGtEq
+            || k == token::Kind::kPlusEq       || k == token::Kind::kMinusEq
+            || k == token::Kind::kStarEq       || k == token::Kind::kSlashEq
+            || k == token::Kind::kPercentEq
+            || k == token::Kind::kBitAndEq     || k == token::Kind::kBitOrEq
+            || k == token::Kind::kBitXorEq
+            || k == token::Kind::kLShiftEq     || k == token::Kind::kRShiftEq
+            || k == token::Kind::kAndEq        || k == token::Kind::kOrEq
+            || k == token::Kind::kXorXorEq;
+    }
+
+    static bool isCompoundAssignSym(std::string const& s) {
+        return s == "+=" || s == "-=" || s == "*=" || s == "/=" || s == "%="
+            || s == "&=" || s == "|=" || s == "^=" || s == "<<=" || s == ">>="
+            || s == "&&=" || s == "||=" || s == "^^=";
+    }
+    static bool isComparisonSym(std::string const& s) {
+        return s == "==" || s == "!=" || s == "<" || s == ">"
+            || s == "<=" || s == ">=";
+    }
+    static std::string operatorArityText(std::string const& sym) {
+        if (sym == "+" || sym == "-") return "0, 1, or 2 parameters";
+        if (sym == "~" || sym == "!") return "0 or 1 parameters";
+        if (sym == "^")               return "0 or 2 parameters";
+        if (sym == "=" || sym == "<--" || sym == "<-->" || sym == "[]"
+            || isCompoundAssignSym(sym) || isComparisonSym(sym))
+            return "exactly 1 parameter";
+        return "exactly 2 parameters";
+    }
+
+    // Consume `op<sym>` — the `op` keyword is the current token — and return the
+    // method name ("op+", "op<--", "op[]", …). Returns "" on error (reported).
+    std::string parseOperatorName() {
+        advance();   // op
+        if (peek().kind == token::Kind::kLBracket) {
+            advance();   // [
+            if (peek().kind != token::Kind::kRBracket) {
+                error("Expected ']' to complete the 'op[]' operator name.");
+                return "";
+            }
+            advance();   // ]
+            return "op[]";
+        }
+        if (isOperatorSymbolKind(peek().kind)) {
+            std::string name = "op" + peek().text;
+            advance();
+            return name;
+        }
+        error("Expected an operator symbol after 'op'.");
+        return "";
+    }
+
+    // Enforce the SYNTACTIC operator-signature rules: arity, no default parameter
+    // values, and no misplaced `mutable`. `node.params` holds the EXPLICIT parameters
+    // only (the implicit `_$recv` is spliced in after parseFunctionDef returns), so
+    // params.size() is the operator's arity. Type-dependent rules (built-in return,
+    // `Type^` reference return, the same-class swap parameter, primitive/const-pointer
+    // parameters, no naked operators) are enforced later, where types are resolved.
+    bool validateOperatorSignature(parse::Node& node, int name_tok) {
+        std::string const& name = node.name;         // "op<sym>"
+        std::string sym = name.substr(2);
+        size_t arity = node.params.size();
+
+        for (auto const& p : node.params) {
+            if (!p->children.empty()) {              // children[0] is a default value
+                errorAt(p->name_tok,
+                        "An operator parameter may not have a default value.");
+                return false;
+            }
+        }
+
+        // Allowed arity per operator (explicit parameters; receiver implicit).
+        bool arity_ok;
+        if (sym == "+" || sym == "-") {
+            arity_ok = (arity <= 2);
+        } else if (sym == "~" || sym == "!") {
+            arity_ok = (arity == 0 || arity == 1);
+        } else if (sym == "^") {
+            arity_ok = (arity == 0 || arity == 2);   // deref (0) or binary xor (2)
+        } else if (sym == "=" || sym == "<--" || sym == "<-->" || sym == "[]"
+                   || isCompoundAssignSym(sym) || isComparisonSym(sym)) {
+            arity_ok = (arity == 1);
         } else {
+            arity_ok = (arity == 2);                 // the remaining binary operators
+        }
+        if (!arity_ok) {
+            errorAt(name_tok, "The '" + name + "' operator takes "
+                    + operatorArityText(sym) + ", not "
+                    + std::to_string(arity) + ".");
             return false;
         }
-        // A pointer/iterator return-type suffix: `T^` / `T^^` (reference) or
-        // `T[]` (iterator). Without this a method/function returning a pointer
-        // (`Self^ me()`) is not recognized as a function def.
-        if (peekKind(o) == token::Kind::kBitXor
-            || peekKind(o) == token::Kind::kXorXor) o++;
-        else if (peekKind(o) == token::Kind::kLBracket
-            && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
-        if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
-        o++;
-        // A QUALIFIED method name (`int Class:m(`, `void A:B:m(`) — the external
-        // out-of-line form. Consume the `:segment` chain after the first name segment
-        // so the shape reaches parseFunctionDef (which parses the qualifier itself).
-        while (peekKind(o) == token::Kind::kColon
-               && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+
+        // `mutable` is a move/swap-only qualifier; every other operator forbids it.
+        if (sym != "<--" && sym != "<-->") {
+            for (auto const& p : node.params) {
+                if (p->is_mutable) {
+                    errorAt(p->name_tok, "The '" + name
+                            + "' operator parameter may not be 'mutable'.");
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool looksLikeFunctionDef() const {
+        int o = 0;
+        // An operator method may omit the return type (`op+(...)`); when a return
+        // type is present it is scanned exactly as for a named function, and the
+        // name slot then holds `op<sym>` instead of an identifier.
+        if (peekKind(o) != token::Kind::kOp) {
+            if (isTypeStart(peekKind(o))) {
+                o++;
+            } else if (peekKind(o) == token::Kind::kColonColon
+                       || peekKind(o) == token::Kind::kIdentifier) {
+                if (peekKind(o) == token::Kind::kColonColon) o++;
+                if (peekKind(o) != token::Kind::kIdentifier) return false;
+                o++;
+                while (peekKind(o) == token::Kind::kColon
+                       && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+            } else {
+                return false;
+            }
+            // A pointer/iterator return-type suffix: `T^` / `T^^` (reference) or
+            // `T[]` (iterator). Without this a method/function returning a pointer
+            // (`Self^ me()`) is not recognized as a function def.
+            if (peekKind(o) == token::Kind::kBitXor
+                || peekKind(o) == token::Kind::kXorXor) o++;
+            else if (peekKind(o) == token::Kind::kLBracket
+                && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+        }
+        if (peekKind(o) == token::Kind::kOp) {
+            // `op<sym>`: `op` plus one operator token, or the two-token `[]`. An
+            // `op`-led shape with no return type reaches here with o == 0.
+            o++;
+            if (peekKind(o) == token::Kind::kLBracket
+                && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+            else if (isOperatorSymbolKind(peekKind(o))) o++;
+            else return false;
+        } else {
+            if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
+            o++;
+            // A QUALIFIED method name (`int Class:m(`, `void A:B:m(`) — the external
+            // out-of-line form. Consume the `:segment` chain after the first name
+            // segment so the shape reaches parseFunctionDef (which parses the
+            // qualifier itself).
+            while (peekKind(o) == token::Kind::kColon
+                   && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+        }
         if (peekKind(o) != token::Kind::kLParen) return false;
         // `Type name (` is shared with a variable CONSTRUCTION `Type name(args);`.
         // Scan to the matching `)` and look past it: a `{` body is always a
@@ -3431,19 +3567,38 @@ struct Parser {
     std::unique_ptr<parse::Node> parseFunctionDef() {
         int fn_file = peek().file_id;
         int fn_tok = pos;
+        // An operator method (`op<sym>(...)`) may omit the return type; a leading
+        // `op` means there is no return-type declarator to parse.
+        bool is_op = (peek().kind == token::Kind::kOp);
         Declarator d;
-        if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
-                             /*allow_qualified=*/false, nullptr, d)) {
-            return nullptr;
+        if (!is_op) {
+            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                 /*allow_qualified=*/false, nullptr, d)) {
+                return nullptr;
+            }
         }
         std::string ret_type = std::move(d.type);
-        if (peek().kind != token::Kind::kIdentifier) {
-            error("Expected function name.");
-            return nullptr;
+        std::string name;
+        int name_tok;
+        if (peek().kind == token::Kind::kOp) {
+            is_op = true;                       // `Ret op<sym>` — return type parsed above
+            name_tok = pos;
+            name = parseOperatorName();
+            if (name.empty()) return nullptr;
+        } else {
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected function name.");
+                return nullptr;
+            }
+            name = peek().text;
+            name_tok = pos;
+            advance();
         }
-        std::string name = peek().text;
-        int name_tok = pos;
-        advance();
+        // An operator that "produces self" writes no return type; it mutates the
+        // receiver and returns nothing at the ABI level, so it lowers as `void`.
+        // (Operators that yield a value — comparison, unary arity-0, index/deref —
+        // spell their return type, so it is already set.)
+        if (is_op && ret_type.empty()) ret_type = "void";
         // A QUALIFIED head `Ret Class:method(...)` (or `A:B:m`) defines a member OUT OF
         // LINE: the leading segments are the qualifier (the target class / namespace),
         // the last is the member name. resolve routes it into that frame — for a class
@@ -3477,6 +3632,8 @@ struct Parser {
         if (d.any_dim_expr) node->dim_exprs = std::move(d.dim_exprs);
 
         if (!parseParamList(node.get())) return nullptr;
+
+        if (is_op && !validateOperatorSignature(*node, name_tok)) return nullptr;
 
         // A PURE virtual: `virtual T m(...) = delete;` — no body. Only valid on a virtual
         // method (resolve enforces that + rejects it on a free function); parse just

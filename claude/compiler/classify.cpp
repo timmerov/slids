@@ -593,6 +593,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 // A CONSTRUCTION receiver (`Class(a).m()`) is fine in either: desugar lifts it to a
 // `_$cret` temp (liftSretCallExprs) whose address is passed as `_$recv`.
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
+bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
+                           std::string const& opname, std::size_t nUserParams);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
 
@@ -629,6 +631,84 @@ bool rejectAbstractInstantiation(parse::Tree const& tree, widen::TypeRef cls,
     return true;
 }
 
+// A user operator method's name is "op" + an operator symbol; a normal identifier
+// method ("optimize") has an alphanumeric/underscore character after "op".
+bool isOperatorName(std::string const& name) {
+    if (name.size() <= 2 || name[0] != 'o' || name[1] != 'p') return false;
+    char c = name[2];
+    bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+              || (c >= '0' && c <= '9') || c == '_';
+    return !ident;
+}
+
+// Type-dependent operator-signature rules (stage 1b), checked once resolve has typed
+// the signature — the parser already enforced the syntactic ones (arity, no default
+// parameter values, no misplaced `mutable`). `fn` is a class method: params[0] is the
+// `_$recv` receiver, params[1..] the user parameters. Rules (canon lines 126-134 +
+// the per-catalog return types): comparison and arity-0 unary return a built-in;
+// index and deref return a reference; every other operator produces self (returns
+// void); a move POINTER parameter and the swap parameter must be `mutable`, and the
+// swap parameter is a reference to this same class. (The "a parameter must be a
+// primitive or a reference, never a class by value" rule is already enforced for
+// EVERY function parameter by classifyFunctionSignature, so it isn't repeated here.)
+void validateOperatorSignatureTypes(parse::Node& fn, diagnostic::Sink& diag) {
+    std::string const& name = fn.name;
+    std::string sym = name.substr(2);
+    std::vector<parse::Node*> uparams;
+    for (std::size_t i = 1; i < fn.params.size(); i++)
+        if (fn.params[i]) uparams.push_back(fn.params[i].get());
+    std::size_t n = uparams.size();
+    widen::TypeRef ret = fn.return_type;
+    widen::TypeRef vd = widen::intern("void");
+
+    bool isCmp = (sym == "==" || sym == "!=" || sym == "<" || sym == ">"
+               || sym == "<=" || sym == ">=");
+    bool isArity0Unary = (sym == "+" || sym == "-" || sym == "~" || sym == "!") && n == 0;
+    bool isDeref = (sym == "^" && n == 0);
+    bool isIndex = (sym == "[]");
+
+    // Return type by category.
+    if (isCmp || isArity0Unary) {
+        if (!(isNumericType(ret) || isPtrLikeType(ret))) {
+            diagnostic::report(diag, {fn.file_id, fn.name_tok,
+                "The '" + name + "' operator must return a built-in type "
+                "(bool, an integer, a float, or a pointer).", {}});
+        }
+    } else if (isIndex || isDeref) {
+        if (!isReference(ret)) {
+            diagnostic::report(diag, {fn.file_id, fn.name_tok,
+                "The '" + name + "' operator must return a reference '^'.", {}});
+        }
+    } else if (ret != vd) {
+        diagnostic::report(diag, {fn.file_id, fn.name_tok,
+            "The '" + name + "' operator produces self and must not have a "
+            "return type.", {}});
+    }
+
+    // Move / swap mutability (the type-dependent half of the `mutable` rule).
+    widen::TypeRef selfCls = fn.params.empty() ? widen::kNoType
+                           : pointeeType(fn.params[0]->return_type);
+    if (sym == "<--" && n == 1) {
+        parse::Node* p = uparams[0];
+        if (isReference(p->return_type) && !p->is_mutable) {
+            diagnostic::report(diag, {p->file_id, p->name_tok,
+                "A move operator's pointer parameter must be 'mutable'.", {}});
+        }
+    } else if (sym == "<-->" && n == 1) {
+        parse::Node* p = uparams[0];
+        bool same = isReference(p->return_type) && selfCls != widen::kNoType
+            && widen::deepStrip(pointeeType(p->return_type)) == widen::deepStrip(selfCls);
+        if (!same) {
+            diagnostic::report(diag, {p->file_id, p->name_tok,
+                "A swap operator's parameter must be a reference to the same "
+                "class.", {}});
+        } else if (!p->is_mutable) {
+            diagnostic::report(diag, {p->file_id, p->name_tok,
+                "A swap operator's parameter must be 'mutable'.", {}});
+        }
+    }
+}
+
 // Type-check a SCOPE's member bodies — one uniform recursion over any declaration
 // scope (program, namespace, or class). A member function (method, ctor, dtor, or
 // free function) gets its body typed; a const member's init is inferred + checked;
@@ -656,6 +736,16 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
     for (auto& m : node.children) {
         if (!m) continue;
         if (m->kind == parse::Kind::kFunctionDef) {
+            if (isOperatorName(m->name)) {
+                // No naked operators: an operator is a class method. Inside a class,
+                // validate its type-dependent signature; anywhere else, reject it.
+                if (node.kind == parse::Kind::kClassDef) {
+                    validateOperatorSignatureTypes(*m, diag);
+                } else {
+                    diagnostic::report(diag, {m->file_id, m->name_tok,
+                        "An operator can only be defined as a method of a class.", {}});
+                }
+            }
             classifyFunctionBody(tree, *m, diag);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             for (auto& init : m->children) {
@@ -791,9 +881,24 @@ widen::TypeRef autoRefPointee(widen::TypeRef param, parse::Node const& arg) {
     return widen::get(widen::strip(param)).pointee;
 }
 
+// Overload-ranking cost scale. A CONVERSION contributes one unit (kConvUnit); on top
+// of that a widening adds a small residual equal to the target's byte width, so among
+// equal-count integer widenings the NARROWEST target wins (canon: "types are converted
+// ... smallest widening wins"). The unit dwarfs any realistic summed residual (params
+// are few, widths <= 8 bytes), so conversion COUNT stays the primary key and prior
+// count-based overload resolution is unchanged — only previously-ambiguous equal-count
+// widening ties now resolve to the smallest target.
+constexpr int kConvUnit = 256;
+int widenResidual(widen::TypeRef param) {
+    long long sz = widen::typeByteSize(widen::strip(param));
+    if (sz < 0) sz = 0;
+    if (sz > kConvUnit - 1) sz = kConvUnit - 1;
+    return static_cast<int>(sz);
+}
+
 // Conversion cost of argument `a` to parameter type `param` for overload ranking:
-// 0 = exact (same class), 1 = a widening (literal flex, or within-family widen),
-// -1 = not convertible (narrowing / cross-family / un-typeable).
+// 0 = exact (same class), a CONVERSION = kConvUnit (+ widenResidual for a numeric
+// widening), -1 = not convertible (narrowing / cross-family / un-typeable).
 int argConvertCost(parse::Node const& a, widen::TypeRef param) {
     widen::TypeRef at = widen::strip(a.inferred_type);   // see through one alias layer
     // A non-primitive value auto-promotes to a reference param: viable when the
@@ -804,7 +909,7 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
         widen::TypeRef pointee = autoRefPointee(param, a);
         if (pointee != widen::kNoType) {
             if (sameClass(at, widen::strip(pointee))) return 0;
-            if (shapesAndLeavesMatch(widen::strip(pointee), at)) return 1;
+            if (shapesAndLeavesMatch(widen::strip(pointee), at)) return kConvUnit;
             return -1;
         }
     }
@@ -817,12 +922,14 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
     }
     if (sameClass(at, param)) return 0;
     if (literalFlexes(a)) {
-        return literalFitsContext(a, param) ? 1 : -1;   // weak literal flexes into param
+        // weak literal flexes into param; smallest fitting target wins (residual)
+        return literalFitsContext(a, param) ? kConvUnit + widenResidual(param) : -1;
     }
     // A strong-const literal (and any non-literal) ranks as a typed value: exact, a
     // within-family widen, else not viable — so a narrowing arg is rejected.
     widen::TypeRef out;
-    if (widen::commonType(at, param, out) && sameClass(out, param)) return 1;
+    if (widen::commonType(at, param, out) && sameClass(out, param))
+        return kConvUnit + widenResidual(param);   // within-family widen; narrowest wins
     return -1;
 }
 
@@ -1043,6 +1150,31 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     if (isArrayType(pointee)) base.inferred_type = pointee;
                 }
             }
+            // Stage 4: a class base indexed dispatches to op[], which returns a
+            // reference; the deref of that reference is the resulting lvalue —
+            // `obj[i]` -> `(obj.op[](i))^` (canon 107-111). Works in read and write
+            // position (a deref is an lvalue).
+            if (widen::form(widen::strip(base.inferred_type)) == widen::Type::Form::kSlid
+                && classHasOperatorArity(tree, base.inferred_type, "op[]", 1)) {
+                auto call = std::make_unique<parse::Node>();
+                call->kind = parse::Kind::kMethodCallStmt;
+                call->name = "op[]";
+                call->name_tok = e.tok;
+                call->file_id = e.file_id;
+                call->tok = e.tok;
+                call->resolved_entry_id = -1;
+                call->children.push_back(std::move(e.children[0]));
+                call->children.push_back(std::move(e.children[1]));
+                inferMethodCall(tree, *call, diag);
+                widen::TypeRef refT = call->inferred_type;
+                e.kind = parse::Kind::kDerefExpr;
+                e.name.clear();
+                e.resolved_entry_id = -1;
+                e.children.clear();
+                e.children.push_back(std::move(call));
+                e.inferred_type = pointeeType(refT);
+                return;
+            }
             std::string bt = widen::spellOrEmpty(base.inferred_type);
             // A tuple slot read. Slots are heterogeneous, so the result type
             // depends on a STATIC index — the index must be a compile-time
@@ -1182,6 +1314,28 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.children.size() == 1 && "kDerefExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
+            // Stage 4: a class operand dereferenced dispatches to op^() (arity 0),
+            // which returns a reference; its deref is the resulting lvalue —
+            // `obj^` -> `(obj.op^())^` (canon 116-119). This node stays a kDerefExpr;
+            // its child becomes the op^ call.
+            if (widen::form(widen::strip(operand.inferred_type)) == widen::Type::Form::kSlid
+                && classHasOperatorArity(tree, operand.inferred_type, "op^", 0)) {
+                auto opNode = std::move(e.children[0]);
+                auto call = std::make_unique<parse::Node>();
+                call->kind = parse::Kind::kMethodCallStmt;
+                call->name = "op^";
+                call->name_tok = e.tok;
+                call->file_id = e.file_id;
+                call->tok = e.tok;
+                call->resolved_entry_id = -1;
+                call->children.push_back(std::move(opNode));
+                inferMethodCall(tree, *call, diag);
+                widen::TypeRef refT = call->inferred_type;
+                e.children.clear();
+                e.children.push_back(std::move(call));
+                e.inferred_type = pointeeType(refT);
+                return;
+            }
             std::string ot = widen::spellOrEmpty(operand.inferred_type);
             if (!ot.empty() && !isPtrLikeType(operand.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
@@ -1643,6 +1797,27 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             inferExpr(tree, lhs, widen::kNoType, diag);
             inferExpr(tree, rhs, widen::kNoType, diag);
             widen::TypeRef lref = lhs.inferred_type, rref = rhs.inferred_type;
+
+            // Stage 4: a class LHS compared (== != < > <= >=) dispatches to its
+            // comparison operator, which returns a built-in — `a == b` -> `a.op==(b)`
+            // (canon 87-88). Rewrite this node in place to the method-call expression;
+            // inferMethodCall stamps its built-in return as this node's type.
+            if ((op == "==" || op == "!=" || op == "<" || op == ">"
+                 || op == "<=" || op == ">=")
+                && widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
+                && classHasOperatorArity(tree, lref, "op" + op, 1)) {
+                auto lnode = std::move(e.children[0]);
+                auto rnode = std::move(e.children[1]);
+                e.kind = parse::Kind::kMethodCallStmt;
+                e.name = "op" + op;
+                e.name_tok = e.tok;
+                e.resolved_entry_id = -1;
+                e.children.clear();
+                e.children.push_back(std::move(lnode));
+                e.children.push_back(std::move(rnode));
+                inferMethodCall(tree, e, diag);
+                return;
+            }
 
             // Aggregate op aggregate (array and/or tuple): one element-wise path,
             // matching shape. A mixed array/tuple result is a TUPLE; both-array
@@ -3102,6 +3277,241 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     }
 }
 
+bool isArithBitBinaryOp(std::string const& op) {
+    return op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
+        || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>";
+}
+
+// True if `cls` (or a base) defines a method `opname` taking exactly `nUserParams`
+// user parameters (i.e. param_types.size() == nUserParams + 1, the receiver first).
+bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
+                           std::string const& opname, std::size_t nUserParams) {
+    for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
+        if (fr < 0) continue;
+        for (parse::Entry const& e : tree.entries)
+            if (e.kind == parse::EntryKind::kFunction && e.defined
+                && e.owner_ns_frame == fr && e.name == opname
+                && e.param_types.size() == nUserParams + 1)
+                return true;
+    }
+    return false;
+}
+
+// True if entry `eid` is read anywhere in the expression `n` (an ident bound to it).
+bool referencesEntry(parse::Node const& n, int eid) {
+    if (n.kind == parse::Kind::kIdentExpr && n.resolved_entry_id == eid) return true;
+    for (auto const& c : n.children)
+        if (c && referencesEntry(*c, eid)) return true;
+    return false;
+}
+
+// Silent probe: the best-matching single-parameter operator `opname` in `cls` (or
+// its base chain) for the argument `rhs`, or -1 if none / ambiguous. Mirrors
+// pickOverload's cost ranking but emits NO diagnostics — a miss means "use the
+// default class copy/move/swap", not an error. `rhs` must already be inferred.
+int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& rhs,
+                      std::string const& opname) {
+    int best = -1, best_cost = 1 << 30;
+    bool tie = false;
+    for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
+        if (fr < 0) continue;
+        bool any_here = false;
+        for (std::size_t id = 0; id < tree.entries.size(); id++) {
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind != parse::EntryKind::kFunction || !e.defined
+                || e.owner_ns_frame != fr || e.name != opname)
+                continue;
+            any_here = true;
+            if (e.param_types.size() != 2) continue;   // [_$recv, one user param]
+            int c = argConvertCost(rhs, widen::strip(e.param_types[1]));
+            if (c < 0) continue;
+            if (c < best_cost) { best_cost = c; best = (int)id; tie = false; }
+            else if (c == best_cost) tie = true;
+        }
+        if (any_here) break;   // most-derived frame with the name shadows bases
+    }
+    return tie ? -1 : best;
+}
+
+// Rewrite an assignment-form statement `lvalue = rhs` (a bare-name kAssignStmt) into
+// the method call `lvalue.opname(rhs)` IN PLACE, then resolve it via inferMethodCall.
+// Reuses the whole method-call path (resolution here, lowerMethodCall in desugar) so
+// a user assignment operator needs no bespoke lowering. `s.name`/`resolved_entry_id`
+// name the lvalue variable; `s.children[0]` is the rhs.
+void rewriteAssignToOperatorCall(parse::Tree& tree, parse::Node& s,
+                                 widen::TypeRef lref, std::string const& opname,
+                                 diagnostic::Sink& diag) {
+    auto recv = std::make_unique<parse::Node>();
+    recv->kind = parse::Kind::kIdentExpr;
+    recv->name = s.name;
+    recv->name_tok = s.name_tok;
+    recv->resolved_entry_id = s.resolved_entry_id;
+    recv->inferred_type = lref;
+    recv->file_id = s.file_id;
+    recv->tok = s.tok;
+
+    std::unique_ptr<parse::Node> rhs = std::move(s.children[0]);
+    s.kind = parse::Kind::kMethodCallStmt;
+    s.name = opname;
+    s.name_tok = s.tok;
+    s.resolved_entry_id = -1;
+    s.children.clear();
+    s.children.push_back(std::move(recv));
+    s.children.push_back(std::move(rhs));
+    inferMethodCall(tree, s, diag);
+}
+
+// Rewrite a statement whose lhs is already an EXPRESSION child (kMoveStmt / kSwapStmt
+// hold children [lhs, rhs] — exactly the method-call shape) into `lhs.opname(rhs)`.
+void rewriteExprLhsToOperatorCall(parse::Tree& tree, parse::Node& s,
+                                  std::string const& opname, diagnostic::Sink& diag) {
+    s.kind = parse::Kind::kMethodCallStmt;
+    s.name = opname;
+    s.name_tok = s.tok;
+    s.resolved_entry_id = -1;
+    inferMethodCall(tree, s, diag);
+}
+
+// Consume a left-associative arith/bitwise chain, returning the HEAD binary node and
+// filling `fuses` in APPLICATION order (inner-to-outer): each is (op, right-operand).
+// `((b+c)+d)+e` -> head=(b+c), fuses=[(+,d),(+,e)].
+std::unique_ptr<parse::Node> flattenLeftChain(
+    std::unique_ptr<parse::Node> node,
+    std::vector<std::pair<std::string, std::unique_ptr<parse::Node>>>& fuses) {
+    if (node->children.size() == 2 && node->children[0]
+        && node->children[0]->kind == parse::Kind::kBinaryExpr
+        && isArithBitBinaryOp(node->children[0]->text)) {
+        std::string op = node->text;
+        auto right = std::move(node->children[1]);
+        auto head = flattenLeftChain(std::move(node->children[0]), fuses);
+        fuses.emplace_back(std::move(op), std::move(right));
+        return head;
+    }
+    return node;
+}
+
+// Build and type (via inferMethodCall) the statement `recv.opname(args...)`.
+std::unique_ptr<parse::Node> makeOpCallStmt(
+    parse::Tree& tree, std::string const& recvName, int recvEid, widen::TypeRef recvType,
+    std::string const& opname, std::vector<std::unique_ptr<parse::Node>> args,
+    int file, int tok, diagnostic::Sink& diag) {
+    auto call = std::make_unique<parse::Node>();
+    call->kind = parse::Kind::kMethodCallStmt;
+    call->name = opname;
+    call->name_tok = tok;
+    call->file_id = file;
+    call->tok = tok;
+    call->resolved_entry_id = -1;
+    auto recv = std::make_unique<parse::Node>();
+    recv->kind = parse::Kind::kIdentExpr;
+    recv->name = recvName;
+    recv->name_tok = tok;
+    recv->resolved_entry_id = recvEid;
+    recv->inferred_type = recvType;
+    recv->file_id = file;
+    recv->tok = tok;
+    call->children.push_back(std::move(recv));
+    for (auto& a : args) call->children.push_back(std::move(a));
+    inferMethodCall(tree, *call, diag);
+    return call;
+}
+
+// Lower `a = X op Y [op Z ...]` — a class lvalue assigned an arith/bitwise binary
+// chain, with `a` NOT among the operands — into the FUSE sequence (canon 70-80):
+//   a.opHEAD(X, Y);  a.opOP1=(Z);  a.opOP2=(W);  ...
+// The lvalue IS the accumulator (elided — no temp), so the head builds it via the
+// 2-arg op and each further operand fuses via the compound op. The head + all but the
+// LAST statement go to `prelude`; the last becomes `s`. Returns true iff handled;
+// otherwise `s` is untouched (caller falls through to the normal path / error).
+bool tryLowerBinaryChain(parse::Tree& tree, parse::Node& s, widen::TypeRef lref,
+                         std::vector<std::unique_ptr<parse::Node>>* prelude,
+                         diagnostic::Sink& diag) {
+    if (s.children.empty() || !s.children[0]
+        || s.children[0]->kind != parse::Kind::kBinaryExpr
+        || !isArithBitBinaryOp(s.children[0]->text))
+        return false;
+
+    // Non-destructive inspection: head op + step ops + operand leaves.
+    parse::Node* h = s.children[0].get();
+    std::vector<std::string> stepOps;
+    std::vector<parse::Node*> operands;
+    while (h->children.size() == 2 && h->children[0] && h->children[1]
+           && h->children[0]->kind == parse::Kind::kBinaryExpr
+           && isArithBitBinaryOp(h->children[0]->text)) {
+        stepOps.push_back(h->text);
+        operands.push_back(h->children[1].get());
+        h = h->children[0].get();
+    }
+    if (h->children.size() != 2 || !h->children[0] || !h->children[1]) return false;
+    std::string headOp = h->text;
+    operands.push_back(h->children[0].get());
+    operands.push_back(h->children[1].get());
+    // Only a flat chain of SIMPLE operands (a nested binary/unary operand — a
+    // non-left-assoc or mixed shape — is left to a later slice).
+    for (parse::Node* o : operands)
+        if (o->kind == parse::Kind::kBinaryExpr || o->kind == parse::Kind::kUnaryExpr)
+            return false;
+    // The operators must exist: the 2-arg head op, and each step's compound op.
+    if (!classHasOperatorArity(tree, lref, "op" + headOp, 2)) return false;
+    for (std::string const& op : stepOps)
+        if (!classHasOperatorArity(tree, lref, "op" + op + "=", 1)) return false;
+    // `a` must not alias the operands — else it can't be the in-place accumulator
+    // (a temp would be needed; left to a later slice).
+    if (referencesEntry(*s.children[0], s.resolved_entry_id)) return false;
+    // A multi-step chain needs the prelude to splice its leading statements.
+    if (!stepOps.empty() && !prelude) return false;
+
+    // Destructive build.
+    std::vector<std::pair<std::string, std::unique_ptr<parse::Node>>> fuses;
+    std::unique_ptr<parse::Node> head =
+        flattenLeftChain(std::move(s.children[0]), fuses);
+    auto head_left = std::move(head->children[0]);
+    auto head_right = std::move(head->children[1]);
+
+    std::string recvName = s.name;
+    int recvEid = s.resolved_entry_id;
+    int file = s.file_id, tok = s.tok;
+    std::size_t total = 1 + fuses.size();
+    std::size_t emitted = 0;
+    auto emit = [&](std::string const& opname,
+                    std::vector<std::unique_ptr<parse::Node>> args) {
+        emitted++;
+        if (emitted < total) {
+            prelude->push_back(makeOpCallStmt(tree, recvName, recvEid, lref, opname,
+                                              std::move(args), file, tok, diag));
+            return;
+        }
+        // The LAST statement is written onto `s` in place.
+        auto recv = std::make_unique<parse::Node>();
+        recv->kind = parse::Kind::kIdentExpr;
+        recv->name = recvName;
+        recv->name_tok = tok;
+        recv->resolved_entry_id = recvEid;
+        recv->inferred_type = lref;
+        recv->file_id = file;
+        recv->tok = tok;
+        s.kind = parse::Kind::kMethodCallStmt;
+        s.name = opname;
+        s.name_tok = tok;
+        s.resolved_entry_id = -1;
+        s.children.clear();
+        s.children.push_back(std::move(recv));
+        for (auto& a : args) s.children.push_back(std::move(a));
+        inferMethodCall(tree, s, diag);
+    };
+
+    std::vector<std::unique_ptr<parse::Node>> headArgs;
+    headArgs.push_back(std::move(head_left));
+    headArgs.push_back(std::move(head_right));
+    emit("op" + headOp, std::move(headArgs));
+    for (auto& fuse : fuses) {
+        std::vector<std::unique_ptr<parse::Node>> a;
+        a.push_back(std::move(fuse.second));
+        emit("op" + fuse.first + "=", std::move(a));
+    }
+    return true;
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr) {
@@ -3317,8 +3727,27 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 lref = parse::entryType(tree, s.resolved_entry_id);
                 lvalue_type = widen::spellOrEmpty(lref);
             }
+            // Stage 3: a class lvalue assigned an arith/bitwise binary CHAIN dispatches
+            // to the class's operators — `a = X op Y op Z` fuses into `a` as the
+            // accumulator (a.opHEAD(X,Y); a.opOP=(Z); …). Intercepted BEFORE the infer
+            // loop, which would otherwise reject the class binary ("operator not
+            // defined"). Handles depth-1 too; leaves `s` untouched when it can't lower.
+            if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
+                && tryLowerBinaryChain(tree, s, lref, prelude, diag)) {
+                return;
+            }
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, lref, diag);
+            }
+            // A class lvalue with a matching user `op=` dispatches to it (canon: the
+            // synthesized default copy applies only when NO matching operator exists).
+            // Rewrite `a = rhs` to `a.op=(rhs)` and resolve through the method-call
+            // path; desugar lowers it like any call.
+            if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
+                && !s.children.empty() && s.children[0]
+                && findClassOperator(tree, lref, *s.children[0], "op=") >= 0) {
+                rewriteAssignToOperatorCall(tree, s, lref, "op=", diag);
+                return;
             }
             // The rhs obeys the assignment relation against the lvalue type.
             if (!s.children.empty() && s.children[0]) {
@@ -3353,6 +3782,24 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             parse::Node& rhs = *rhs_ptr;
             std::string lvalue_type = widen::spellOrEmpty(s.return_type);
+
+            // A class lvalue with a matching user compound operator (`op+=`, …)
+            // dispatches to it: `a += b` -> `a.op+=(b)`. The bare-name form maps to
+            // rewriteAssignToOperatorCall (receiver from s.name); the complex-lvalue
+            // form already holds children [lvalue, rhs]. With no matching operator we
+            // fall through to the numeric path below, which rejects arithmetic on a
+            // class as before.
+            if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
+                inferExpr(tree, rhs, widen::kNoType, diag);
+                std::string opname = "op" + op + "=";
+                if (findClassOperator(tree, s.return_type, rhs, opname) >= 0) {
+                    if (s.children.size() == 2)
+                        rewriteExprLhsToOperatorCall(tree, s, opname, diag);
+                    else
+                        rewriteAssignToOperatorCall(tree, s, s.return_type, opname, diag);
+                    return;
+                }
+            }
 
             // A reference admits no compound arithmetic/bitwise assignment.
             if (isReference(s.return_type)) {
@@ -3508,6 +3955,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     "Cannot move a value onto itself.", {}});
                 return;
             }
+            // A class lhs with a matching user `op<--` dispatches to it (else the
+            // default field move applies). Children are already [receiver, arg].
+            if (widen::form(widen::strip(lhs.inferred_type)) == widen::Type::Form::kSlid
+                && findClassOperator(tree, lhs.inferred_type, *s.children[1], "op<--") >= 0) {
+                rewriteExprLhsToOperatorCall(tree, s, "op<--", diag);
+                return;
+            }
             // The COPY half of the move obeys the assignment relation.
             checkValueAssign(tree, lhs.inferred_type, *s.children[1], diag);
             return;
@@ -3525,6 +3979,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (isSameLvalue(a, b)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "Cannot swap a value with itself.", {}});
+                return;
+            }
+            // A class operand with a matching user `op<-->` dispatches to it (else the
+            // default field swap applies). Children are already [receiver, arg].
+            if (widen::form(widen::strip(a.inferred_type)) == widen::Type::Form::kSlid
+                && findClassOperator(tree, a.inferred_type, b, "op<-->") >= 0) {
+                rewriteExprLhsToOperatorCall(tree, s, "op<-->", diag);
                 return;
             }
             // Both-non-kNoType guard is cascade suppression: a kNoType operand
