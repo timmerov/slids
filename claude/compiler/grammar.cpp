@@ -581,7 +581,10 @@ struct Parser {
             else if (k == token::Kind::kRParen) depth--;
             o++;
         }
-        return peekKind(o) == token::Kind::kEquals;
+        token::Kind after = peekKind(o);
+        return after == token::Kind::kEquals       // copy destructure
+            || after == token::Kind::kArrowLeft    // move destructure
+            || after == token::Kind::kArrowBoth;   // swap destructure
     }
 
     // Pure lookahead at parsePrimary's LParen branch — the outer `(` is already
@@ -1531,11 +1534,14 @@ struct Parser {
         node->return_type_seg_toks = std::move(d.type_seg_toks);
         node->is_const = is_const;
         if (peek().kind == token::Kind::kEquals
-            || peek().kind == token::Kind::kArrowLeft) {
-            // `<--` is a default-move-init: the same copy as `=`, then desugar nulls the
-            // init's pointer leaves. (`<-->` swap needs two existing values, so
-            // it is not a declaration form.)
+            || peek().kind == token::Kind::kArrowLeft
+            || peek().kind == token::Kind::kArrowBoth) {
+            // `<--` is a default-move-init (the same copy as `=`, then desugar nulls the
+            // init's pointer leaves). `<-->` is a swap-init: classify default-constructs
+            // the fresh var then swaps it with the rhs (the fresh default flows back into
+            // the source — "weird but allowed"). The rhs must be an existing lvalue.
             node->default_move_init = (peek().kind == token::Kind::kArrowLeft);
+            node->default_swap_init = (peek().kind == token::Kind::kArrowBoth);
             advance();
             auto init = parseExpr();
             if (!init) return nullptr;
@@ -3015,7 +3021,15 @@ struct Parser {
         auto node = newNodeAt(parse::Kind::kDestructureStmt, peek().file_id, lp);
         node->children.push_back(nullptr);   // [0] = rhs, filled below
         if (!parseDestructureSlots(node.get())) return nullptr;
-        if (!expect(token::Kind::kEquals, "=")) return nullptr;
+        // `=` copy, `<--` per-slot move, `<-->` per-slot swap. classify desugars the
+        // move/swap forms into per-slot kMoveStmt/kSwapStmt against the source.
+        if (peek().kind == token::Kind::kArrowLeft) {
+            node->default_move_init = true; advance();
+        } else if (peek().kind == token::Kind::kArrowBoth) {
+            node->default_swap_init = true; advance();
+        } else if (!expect(token::Kind::kEquals, "=")) {
+            return nullptr;
+        }
         auto rhs = parseExpr();
         if (!rhs) return nullptr;
         node->children[0] = std::move(rhs);

@@ -129,7 +129,7 @@ desugar through deref:
 
 When no overload matches exactly, types are converted
 by calling the target type's op=. Integer types may be
-widened to match. Smallest widening wins.
+widened to match.
 
 operators signatures are restricted.
 most operators have no return type.
@@ -453,14 +453,23 @@ OpDefs(
 }
 
 /* ---- stage 5: convert fallback. When no op= matches the arg EXACTLY, the integer
-   arg is widened to a matching overload; the SMALLEST widening wins (canon 130-132).
-   int8 widens to the narrower int32 overload, not int64. ---- */
+   arg WIDENS into a matching op=. Widening is flat-cost, so a single wider overload
+   dispatches with no ambiguity (there is no smallest-widening-wins tiebreak — an arg
+   that widened to two overloads equally would be "Ambiguous", see overload_*.sl). ---- */
 Widen(
-    int which_
+    int64 which_
 ) {
-    op=(int32 a)  { which_ = 32; }
-    op=(int64 a)  { which_ = 64; }
+    op=(int64 a)  { which_ = a + 1000; }   // a narrower int WIDENS to int64 -> op= (convert)
 }
+
+/* a user op=(Copy^) copy operator, distinguishable from the default (+100), to prove
+   decl-init dispatches it for a SAME-TYPE lvalue source — and ELIDES a class rvalue. */
+Copy(
+    int v_
+) {
+    op=(Copy^ o)  { v_ = o^.v_ + 100; }
+}
+Copy mkCopy() { Copy c(7); return c; }
 
 int32 main() {
 
@@ -578,12 +587,58 @@ int32 main() {
     int oj = oh^;                 // (oh.op^())^ -> 7
     __println("oj = " + oj);      // oj = 7
 
-    /* ---- stage 5: convert fallback — int8 has no exact op=; the narrower int32
-       overload wins over int64 (smallest widening). ---- */
+    /* ---- convert fallback: int8 has no exact op=; it WIDENS to the op=(int64) overload
+       (widening is flat-cost, so a single overload dispatches with no ambiguity). ---- */
     Widen wc(0);
-    int8 wb = 1;
-    wc = wb;                      // wc.op=(int32) chosen over op=(int64)
-    __println("wc = " + wc.which_);   // wc = 32
+    int8 wb = 7;
+    wc = wb;                      // int8 widens to int64 -> wc.op=(int64); which_ = 7+1000
+    __println("wc = " + wc.which_);   // wc = 1007
+
+    /* ---- decl-init op= (fresh var): `Widen wd = 5` is default-construct THEN wd.op=(int64)
+       (5 widens) -> which_ = 5+1000, NOT construction (which_ would be 5). Proves the
+       operator is dispatched at the declaration site, same as the existing-var path. ---- */
+    Widen wd = 5;
+    __println("wd = " + wd.which_);   // wd = 1005
+
+    /* ---- decl-init op= — SAME-TYPE source dispatches the user op=(Copy^) (+100, so
+       distinct from a default copy), and a NAMED convertible lvalue widens into op=
+       (vs wd's literal). Both prove default-construct-then-op= at the declaration. ---- */
+    Copy cb(5);
+    Copy ca = cb;                 // same-type lvalue -> ca.op=(Copy^); v_ = 5+100
+    __println("ca = " + ca.v_);   // ca = 105
+    int16 wn = 9;
+    Widen we = wn;                // named int16 lvalue widens -> we.op=(int64); which_ = 9+1000
+    __println("we = " + we.which_);   // we = 1009
+
+    /* ---- value-category guard: a class RVALUE decl-init ELIDES; op= must NOT run (else
+       v_ would be +100). Covers a function-return rvalue and a construction rvalue. ---- */
+    Copy cd = mkCopy();           // function-return rvalue -> elide; v_ = 7 (not 107)
+    __println("cd = " + cd.v_);   // cd = 7
+    Copy ce = Copy(11);           // construction rvalue -> elide; v_ = 11 (not 111)
+    __println("ce = " + ce.v_);   // ce = 11
+
+    /* ---- decl-init MOVE / SWAP (fresh var). `<--` dispatches op<-- (default-construct
+       then move); `<-->` default-constructs then op<--> (the fresh default flows back
+       into the source — "weird but allowed"). The `=` copy vs `<--` move split is by the
+       init operator; a class RVALUE source on `=` elides/moves instead (not shown). ---- */
+    OpDefs omsrc(77);
+    OpDefs omv <-- omsrc;             // omv.op<--(OpDefs^) -> omv.v_ = 77
+    __println("omv = " + omv.v_);     // omv = 77
+    OpDefs ossrc(88);
+    OpDefs osw <--> ossrc;            // default-construct osw(0); osw.op<-->(ossrc)
+    __println("osw = " + osw.v_ + " ossrc = " + ossrc.v_);   // osw = 88 ossrc = 0
+
+    /* ---- destructure MOVE / SWAP: each slot binds via op<-- / op<--> against the
+       source (declaring slots default-construct first; reusing slots exchange). ---- */
+    (OpDefs, OpDefs) dsrc = (11, 22);
+    (da, db) <-- dsrc;                // da.op<--(dsrc[0])=11, db.op<--(dsrc[1])=22
+    __println("da = " + da.v_ + " db = " + db.v_);   // da = 11 db = 22
+    (OpDefs, OpDefs) ssrc = (33, 44);
+    OpDefs sa(1);
+    OpDefs sb(2);
+    (sa, sb) <--> ssrc;              // per-slot swap: sa<->ssrc[0], sb<->ssrc[1]
+    __println("sa = " + sa.v_ + " sb = " + sb.v_
+            + " s0 = " + ssrc[0].v_ + " s1 = " + ssrc[1].v_);   // sa=33 sb=44 s0=1 s1=2
 
     return 0;
 }

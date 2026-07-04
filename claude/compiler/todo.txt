@@ -233,6 +233,20 @@ BLOCKED FEATURES
 
 REACH GOALS
 
+  * move rhs lvalue-ness is only required when the rhs contains a pointer type.
+    int x <-- 7; makes sense because move primitive is copy.
+    int^ p <-- ^x; fails because rhs is an rvalue. but that's overly restrictive.
+    move could set rhs pointer types to nullptr iff they are lvalues.
+    leave them alone if they're not.
+    in other words, move <-- could be used anywhere assignment = can be used.
+    move has the additional feature of clearing a moved pointer.
+
+  * decide if smallest widening wins when matching overloaded functions.
+    void fn(int32) {}
+    void fn(int64) {}
+    int16 x = 7; fn(x);
+    or if the matching is ambiguous.
+
   * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
     compile error today (canon nested.sl says "needs to be revisited"):
       - DEEP NESTING — a nested function may not contain a further nested

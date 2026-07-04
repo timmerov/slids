@@ -45,6 +45,25 @@ a 42 98
 ctor z
 z 42 98
 z nullptr nullptr
+od = 13
+od = 50
+od = 1
+of = 50
+og = 13
+oh = 113
+eq = true
+oi = 113
+oj = 7
+wc = 1007
+wd = 1005
+ca = 105
+we = 1009
+cd = 7
+ce = 11
+omv = 77
+osw = 88 ossrc = 0
+da = 11 db = 22
+sa = 33 sb = 44 s0 = 1 s1 = 2
 dtor z
 dtor b
 dtor a

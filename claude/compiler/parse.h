@@ -263,6 +263,9 @@ struct Node {
                                  // ancestor's method (skips vtable dispatch).
     bool default_move_init = false;      // kVarDeclStmt: initialized with `<--` (a move),
                                  // so desugar nulls the init's pointer leaves
+    bool default_swap_init = false;      // kVarDeclStmt: initialized with `<-->` (a swap);
+                                 // classify default-constructs then re-dispatches as a
+                                 // kSwapStmt (never reaches desugar as a var-decl)
     bool quiet_diag = false;     // kStringifyType inside a `#x` desugar: the same
                                  // operand is also resolved by the sibling `^x`, so
                                  // suppress THIS arm's undefined-operand diagnostic

@@ -881,24 +881,12 @@ widen::TypeRef autoRefPointee(widen::TypeRef param, parse::Node const& arg) {
     return widen::get(widen::strip(param)).pointee;
 }
 
-// Overload-ranking cost scale. A CONVERSION contributes one unit (kConvUnit); on top
-// of that a widening adds a small residual equal to the target's byte width, so among
-// equal-count integer widenings the NARROWEST target wins (canon: "types are converted
-// ... smallest widening wins"). The unit dwarfs any realistic summed residual (params
-// are few, widths <= 8 bytes), so conversion COUNT stays the primary key and prior
-// count-based overload resolution is unchanged — only previously-ambiguous equal-count
-// widening ties now resolve to the smallest target.
-constexpr int kConvUnit = 256;
-int widenResidual(widen::TypeRef param) {
-    long long sz = widen::typeByteSize(widen::strip(param));
-    if (sz < 0) sz = 0;
-    if (sz > kConvUnit - 1) sz = kConvUnit - 1;
-    return static_cast<int>(sz);
-}
-
 // Conversion cost of argument `a` to parameter type `param` for overload ranking:
-// 0 = exact (same class), a CONVERSION = kConvUnit (+ widenResidual for a numeric
-// widening), -1 = not convertible (narrowing / cross-family / un-typeable).
+// 0 = exact (same class), 1 = a widening (literal flex, or within-family widen),
+// -1 = not convertible (narrowing / cross-family / un-typeable). Widening is FLAT
+// (all widenings cost 1), so two overloads a value widens to equally (int16 -> int32
+// vs int64) TIE and pickOverload reports "Ambiguous call" — canon (overload_fn.sl /
+// overload_cls.sl). There is no smallest-widening-wins tiebreak.
 int argConvertCost(parse::Node const& a, widen::TypeRef param) {
     widen::TypeRef at = widen::strip(a.inferred_type);   // see through one alias layer
     // A non-primitive value auto-promotes to a reference param: viable when the
@@ -909,7 +897,7 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
         widen::TypeRef pointee = autoRefPointee(param, a);
         if (pointee != widen::kNoType) {
             if (sameClass(at, widen::strip(pointee))) return 0;
-            if (shapesAndLeavesMatch(widen::strip(pointee), at)) return kConvUnit;
+            if (shapesAndLeavesMatch(widen::strip(pointee), at)) return 1;
             return -1;
         }
     }
@@ -922,14 +910,12 @@ int argConvertCost(parse::Node const& a, widen::TypeRef param) {
     }
     if (sameClass(at, param)) return 0;
     if (literalFlexes(a)) {
-        // weak literal flexes into param; smallest fitting target wins (residual)
-        return literalFitsContext(a, param) ? kConvUnit + widenResidual(param) : -1;
+        return literalFitsContext(a, param) ? 1 : -1;   // weak literal flexes into param
     }
     // A strong-const literal (and any non-literal) ranks as a typed value: exact, a
     // within-family widen, else not viable — so a narrowing arg is rejected.
     widen::TypeRef out;
-    if (widen::commonType(at, param, out) && sameClass(out, param))
-        return kConvUnit + widenResidual(param);   // within-family widen; narrowest wins
+    if (widen::commonType(at, param, out) && sameClass(out, param)) return 1;
     return -1;
 }
 
@@ -3157,6 +3143,130 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude);
 
+// SLICE 3 — desugar a MOVE (`<--`) / SWAP (`<-->`) destructure into per-slot
+// kMoveStmt / kSwapStmt against the source, reusing the whole move/swap path (op<-- /
+// op<--> dispatch AND the default source-nulling / field-exchange). The source must be
+// a bare lvalue: the per-slot statements reference it DIRECTLY (`src[i]`), so a move
+// nulls the REAL source (a copy-to-temp would null a throwaway) and a swap exchanges
+// with it. A declaring slot (`int a`) emits a no-init decl (default-construct) ahead of
+// its move/swap. FLAT only — a nested sub-pattern is rejected for now.
+void desugarDestructureMoveSwap(parse::Tree& tree, parse::Node& s,
+                                widen::TypeRef fn_return_type, diagnostic::Sink& diag,
+                                std::vector<std::unique_ptr<parse::Node>>& prelude) {
+    parse::Node& rhs = *s.children[0];
+    if (rhs.kind != parse::Kind::kIdentExpr) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "A move/swap destructure requires a named (lvalue) source.", {}});
+        return;
+    }
+    inferExpr(tree, rhs, widen::kNoType, diag);
+    std::vector<widen::TypeRef> slots = destructureSlots(rhs.inferred_type);
+    std::size_t ntargets = s.children.size() - 1;
+    if (slots.empty()) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "The right side of a destructure must be a tuple or array; got '"
+            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+        return;
+    }
+    if (ntargets != slots.size()) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "Destructure has " + std::to_string(ntargets) + " target(s) but the source '"
+            + widen::spellOrEmpty(rhs.inferred_type) + "' has "
+            + std::to_string(slots.size()) + " slot(s).", {}});
+        return;
+    }
+    parse::Kind stmtKind = s.default_swap_init
+        ? parse::Kind::kSwapStmt : parse::Kind::kMoveStmt;
+    std::string srcName = rhs.name;
+    int srcId = rhs.resolved_entry_id;
+    widen::TypeRef srcType = rhs.inferred_type;
+    int f = s.file_id, tk = s.tok;
+    std::vector<std::unique_ptr<parse::Node>> pending;
+    for (std::size_t i = 0; i < ntargets; i++) {
+        parse::Node* slot = s.children[i + 1].get();
+        if (!slot) continue;   // discard slot
+        if (slot->kind == parse::Kind::kDestructureStmt) {
+            diagnostic::report(diag, {slot->file_id, slot->tok,
+                "A nested move/swap destructure is not yet supported.", {}});
+            return;
+        }
+        widen::TypeRef slot_ty = slots[i];
+        std::string tname = slot->name;
+        int tid = slot->resolved_entry_id;
+        if (slot->kind == parse::Kind::kVarDeclStmt) {
+            // Declaring slot: fix its (maybe inferred) type + register, then a no-init
+            // decl that allocates + default-constructs it before the move/swap.
+            if (slot->return_type == widen::kNoType) {
+                slot->return_type = slot_ty;
+                if (tid >= 0) tree.entries[tid].slids_type = slot_ty;
+            }
+            slot_ty = slot->return_type;
+            auto decl = std::make_unique<parse::Node>();
+            decl->kind = parse::Kind::kVarDeclStmt;
+            decl->name = tname;
+            decl->name_tok = slot->name_tok;
+            decl->resolved_entry_id = tid;
+            decl->return_type = slot_ty;
+            decl->file_id = slot->file_id;
+            decl->tok = slot->tok;
+            pending.push_back(std::move(decl));
+        } else {
+            slot_ty = parse::entryType(tree, tid);
+        }
+        auto tgt = std::make_unique<parse::Node>();
+        tgt->kind = parse::Kind::kIdentExpr;
+        tgt->name = tname;
+        tgt->name_tok = slot->name_tok;
+        tgt->resolved_entry_id = tid;
+        tgt->inferred_type = slot_ty;
+        tgt->file_id = slot->file_id;
+        tgt->tok = slot->tok;
+        auto srcIdent = std::make_unique<parse::Node>();
+        srcIdent->kind = parse::Kind::kIdentExpr;
+        srcIdent->name = srcName;
+        srcIdent->resolved_entry_id = srcId;
+        srcIdent->inferred_type = srcType;
+        srcIdent->file_id = f;
+        srcIdent->tok = tk;
+        auto lit = std::make_unique<parse::Node>();
+        lit->kind = parse::Kind::kIntLiteral;
+        lit->text = std::to_string(i);
+        lit->file_id = f;
+        lit->tok = tk;
+        auto idx = std::make_unique<parse::Node>();
+        idx->kind = parse::Kind::kIndexExpr;
+        idx->file_id = f;
+        idx->tok = tk;
+        idx->children.push_back(std::move(srcIdent));
+        idx->children.push_back(std::move(lit));
+        auto mv = std::make_unique<parse::Node>();
+        mv->kind = stmtKind;
+        mv->file_id = f;
+        mv->tok = tk;
+        mv->children.push_back(std::move(tgt));
+        mv->children.push_back(std::move(idx));
+        pending.push_back(std::move(mv));
+    }
+    if (pending.empty()) {   // all slots discarded — nothing to bind
+        s.kind = parse::Kind::kBlockStmt;
+        s.children.clear();
+        return;
+    }
+    // The last pending stmt (always a move/swap) becomes `s`; the rest splice ahead.
+    for (std::size_t k = 0; k + 1 < pending.size(); k++) {
+        classifyStmt(tree, *pending[k], fn_return_type, diag, &prelude);
+        prelude.push_back(std::move(pending[k]));
+    }
+    auto last = std::move(pending.back());
+    s.kind = last->kind;
+    s.name = last->name;
+    s.resolved_entry_id = last->resolved_entry_id;
+    s.default_move_init = false;
+    s.default_swap_init = false;
+    s.children = std::move(last->children);
+    classifyStmt(tree, s, fn_return_type, diag, &prelude);
+}
+
 // Type-infer a statement LIST, splicing any prelude statements a member emits in
 // front of the statement that produced them. A class-from-rvalue-aggregate init
 // spills its source to a temp local here (see kVarDeclStmt) so the spread sees an
@@ -3517,12 +3627,105 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                   std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
+            // DECL-INIT swap (`Class a <--> rhs`): default-construct `a` (spliced as a
+            // prelude), then rewrite THIS statement into an existing-var swap `a <--> rhs`
+            // — which the kSwapStmt handler dispatches to a user op<--> or the default
+            // field swap. Net (canon "weird but allowed"): a takes rhs's value, rhs resets
+            // to the fresh default. Only a class carries a swap operator; a non-class
+            // swap-init is rejected. Needs a prelude to splice the default-construct into.
+            if (s.default_swap_init && prelude && !s.children.empty() && s.children[0]) {
+                auto itc = tree.classes.find(widen::strip(s.return_type));
+                if (widen::form(widen::strip(s.return_type)) != widen::Type::Form::kSlid
+                    || itc == tree.classes.end()) {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "Swap-initialization requires a class type.", {}});
+                    return;
+                }
+                std::string aname = s.name;
+                int aid = s.resolved_entry_id;
+                widen::TypeRef atype = s.return_type;
+                auto dc = std::make_unique<parse::Node>();
+                dc->kind = parse::Kind::kVarDeclStmt;
+                dc->name = aname;
+                dc->name_tok = s.name_tok;
+                dc->resolved_entry_id = aid;
+                dc->return_type = atype;
+                dc->file_id = s.file_id;
+                dc->tok = s.tok;
+                classifyClassInit(tree, *dc, itc->second, diag);
+                prelude->push_back(std::move(dc));
+                auto a_ident = std::make_unique<parse::Node>();
+                a_ident->kind = parse::Kind::kIdentExpr;
+                a_ident->name = aname;
+                a_ident->name_tok = s.name_tok;
+                a_ident->resolved_entry_id = aid;
+                a_ident->inferred_type = atype;
+                a_ident->file_id = s.file_id;
+                a_ident->tok = s.tok;
+                auto rhs = std::move(s.children[0]);
+                s.kind = parse::Kind::kSwapStmt;
+                s.name.clear();
+                s.resolved_entry_id = -1;
+                s.default_swap_init = false;
+                s.children.clear();
+                s.children.push_back(std::move(a_ident));
+                s.children.push_back(std::move(rhs));
+                classifyStmt(tree, s, fn_return_type, diag, prelude);
+                return;
+            }
             // A class-typed local is constructed: normalize the init (slot /
             // default / zero) into a typed construction tuple. The pointer /
             // array / strong-const init rules below don't apply.
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 auto it = tree.classes.find(widen::strip(s.return_type));
                 if (it != tree.classes.end()) {
+                    // DECL-INIT operator dispatch (slices 1-2). A class var DECLARED with a
+                    // bare `= expr` (copy) or `<-- expr` (move) initializer probes for a
+                    // USER op= / op<-- matching the rhs; when one exists the fresh var is
+                    // default-constructed (spliced as a prelude) and THIS statement becomes
+                    // `name.op=(rhs)` / `name.op<--(rhs)` (canon "construct THEN op"),
+                    // shadowing the default copy/move classifyClassInit + codegen do.
+                    // Reuses the existing-var rewrite (stage 2); desugar lowers the call —
+                    // no new codegen. VALUE-CATEGORY: a class RVALUE source (a call / op
+                    // result — not a named lvalue) elides/moves (or, for `<--`, is rejected)
+                    // through the EXISTING return/move machinery, so the operator copy/move
+                    // applies only to a class LVALUE or a primitive; a class rvalue skips
+                    // the probe. EXCLUDED (fall through unchanged): a kTupleExpr init (a
+                    // `(args)` construction OR a `= (tuple)` — indistinguishable in the AST,
+                    // so tuple-op= is deferred); a `= Class(args)` construction BUILD; and
+                    // any context with no prelude to splice the default-construct into.
+                    if (prelude && !s.children.empty() && s.children[0]
+                        && s.children[0]->kind != parse::Kind::kTupleExpr
+                        && !(s.children[0]->kind == parse::Kind::kCallExpr
+                             && s.children[0]->is_construction)) {
+                        inferExpr(tree, *s.children[0], widen::kNoType, diag);
+                        parse::Kind rk = s.children[0]->kind;
+                        bool rhs_lvalue = rk == parse::Kind::kIdentExpr
+                                       || rk == parse::Kind::kFieldExpr
+                                       || rk == parse::Kind::kIndexExpr
+                                       || rk == parse::Kind::kDerefExpr;
+                        bool rhs_class =
+                            widen::form(widen::strip(s.children[0]->inferred_type))
+                                == widen::Type::Form::kSlid;
+                        std::string opname = s.default_move_init ? "op<--" : "op=";
+                        if (!(rhs_class && !rhs_lvalue)
+                            && findClassOperator(tree, s.return_type, *s.children[0],
+                                                 opname) >= 0) {
+                            auto dc = std::make_unique<parse::Node>();
+                            dc->kind = parse::Kind::kVarDeclStmt;
+                            dc->name = s.name;
+                            dc->name_tok = s.name_tok;
+                            dc->resolved_entry_id = s.resolved_entry_id;
+                            dc->return_type = s.return_type;
+                            dc->file_id = s.file_id;
+                            dc->tok = s.tok;
+                            classifyClassInit(tree, *dc, it->second, diag);
+                            prelude->push_back(std::move(dc));
+                            rewriteAssignToOperatorCall(tree, s, s.return_type, opname,
+                                                        diag);
+                            return;
+                        }
+                    }
                     // `Class y = Class(args)` is a BUILD, identical to `Class y(args)`
                     // / `Class y = (args)` — NOT a same-type whole-object copy. Replace
                     // the construction rhs with a tuple of its RAW ctor args (still
@@ -4002,6 +4205,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kDestructureStmt: {
+            // A MOVE (`<--`) / SWAP (`<-->`) destructure desugars to per-slot move/swap
+            // against the source (reusing op dispatch + source-nulling); the `=` form
+            // below is the whole-value copy bind.
+            if ((s.default_move_init || s.default_swap_init) && prelude) {
+                desugarDestructureMoveSwap(tree, s, fn_return_type, diag, *prelude);
+                return;
+            }
             // children[0] = rhs (a TUPLE or ARRAY — a homogeneous tuple), [1..] =
             // declarator / nested slots. Shape + per-slot checks recurse for nested.
             parse::Node& rhs = *s.children[0];

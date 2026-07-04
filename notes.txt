@@ -1,7 +1,5 @@
 
 agenda:
-  - Decl-init op= (Class a = b where a is fresh) — the ctor sequence (default-construct then op=) isn't wired; only
-  existing-variable assignment is. Class a = expr still goes through construction.
   - op= onto a field/deref/index target (obj.f = x, a kStoreStmt) — unchanged; though compound obj.f += x is wired.
   - Ambiguous op overloads are treated as no-match rather than an error.
 
@@ -36,6 +34,17 @@ agenda:
   - I left it unfixed — it's outside operator-overloading scope, and a resolve fix at the tail of a long session is exactly
   the kind of change I shouldn't make speculatively. A clean fix would extend that self-rewrite to descend a subscript/field
   chain to its base ident before resolveName. It's documented in memory for when you want it.
+
+  - User op<-- for the =-class-rvalue implicit move (class rvalues currently take the existing default move/elide — wiring a
+  user op<-- into that return/move path is separate).
+  - Primitive swap-init; = (tuple) op=; kStoreStmt-target op=.
+
+  - Nested destructure move/swap (((a,b),c) <--) → clean "not yet supported" error.
+  - User op<-- for the =-class-rvalue implicit move (class rvalues take the existing default move/elide).
+  - = (tuple) op=, kStoreStmt-target op=, primitive swap-init.
+
+  Class a = mk() elides today (verified). If elision ever fails it falls back to the default move, not a user op<-- — wiring
+  the user move operator into that implicit-move path is separate. In practice elision covers it, so it rarely bites.
 
 
 things to do before commits:
