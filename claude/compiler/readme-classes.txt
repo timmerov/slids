@@ -1,4 +1,4 @@
-compiler_v2 — CLASSES (companion to readme.txt)
+compiler — CLASSES (companion to readme.txt)
 
 Per-stage current-state notes for the CLASS cluster, spun out of readme.txt to keep
 the map file navigable. Covers: class definition + ctor/dtor; new / delete / sizeof
@@ -40,7 +40,7 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     RE-INTERNS the handle (internSlid by name+def_id, slots excluded from structKey, so
     every reference updates). An inferred field is always PRIMITIVE (a const-expr default
     can't be a class), so the resolve needs-ctor/dtor fixpoint that ran on the kNoType
-    slot stays correct — no re-run. Canon test_v2/class/field.sl; [[project_inferred_field_types]].
+    slot stays correct — no re-run. Canon test/class/field.sl; [[project_inferred_field_types]].
   * `.field` is a kFieldExpr (grammar postfix `.name`); classify types it via the
     ClassInfo; desugar lowers it to a kIndexExpr over the field's slot index, so it
     never reaches codegen (slot access by name). `^field` address-of walks
@@ -82,7 +82,7 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     store/move/swap operand, a re-assignment `w = Class(...)`, a method-call VALUE
     `Class(...).method()` — is rejected cleanly (codegen's is_construction guard at
     emitExpr/emitCall, and the parser's "method call in an expression" error), never
-    miscompiled. Detail: test_v2/class/nameless.sl.
+    miscompiled. Detail: test/class/nameless.sl.
   * BARE CLASS NAME = DEFAULT CONSTRUCTION: a class name with NO parens is `Class()`
     (a zero-arg default construction). In a VALUE position resolve rewrites a bare
     kIdentExpr that resolves to a kClass into a zero-arg construction kCallExpr
@@ -99,7 +99,7 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     name is never silently CALLED, but a value name is a cheap "use it" no-op.
     No new codegen — construction reuses the zero-arg machinery, the read the expr-stmt path.
     Canon: `NoInitClass;` / `(NoInitClass, 7)` / `NoInitClass a[2] = (NoInitClass,
-    NoInitClass)` in test_v2/class/nameless.sl.
+    NoInitClass)` in test/class/nameless.sl.
   * INIT FROM A TUPLE-LIKE VALUE: a class also initializes from any aggregate VALUE
     source — an array / tuple variable or constant, a sub-array row, a function
     return, an op result — spread across the fields BY SLOT (a class IS a named
@@ -113,7 +113,7 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     with the class type), codegen does a whole-value store (+ emitNullLeaves for the
     move) and STILL runs the ctor, so a copied/moved object is constructed exactly
     once and balances its dtor. Default only (no user op=/op<- yet); canon
-    test_v2/class/operator.sl.
+    test/class/operator.sl.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field
@@ -164,7 +164,7 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     class is padded — an empty tuple is not. Without it a 0-byte empty class makes
     array/`new[]` elements and tuple slots ALIAS (stride 0 / both at offset 0); a
     plain pair of stack locals only differed by incidental frame layout. Canon
-    test_v2/class/empty.sl.
+    test/class/empty.sl.
   * NEW T / NEW T(args) — a class is sized by `call @<Name>__$sizeof()` (not the
     typeByteSize literal). `new T(args)`: grammar parses the trailing `(args)` onto
     kNewExpr children[2] (distinct from the leading `new(addr)` placement and `[n]`);
@@ -332,7 +332,7 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     name as a STATEMENT gets the SAME message (`fn;` -> `Function call is missing parameter
     list '()'.`, in resolveCallTarget); `cls.method;` is `Expected '='` at grammar. (A bare
     VALUE name as a statement is NOT an error — it is a discarded read; see BARE CLASS NAME
-    above.) Canon test_v2/class/method.sl + test_v2/function/call.sl. The `self` KEYWORD is an
+    above.) Canon test/class/method.sl + test/function/call.sl. The `self` KEYWORD is an
     address-aliased LOCAL of the class type whose storage IS `_$recv`'s target:
     `self`, `self.field`, `self.m()`, and `^self` (= `_$recv`, its own address) all
     flow through ordinary local machinery — resolve registers it in
@@ -356,7 +356,7 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     OPERAND (`##type(field)` -> the field's type) and an ADDRESS-OF operand (`^field`
     -> `^self.field`, using the `self` keyword so the addr-of walk descends to a
     resolvable base). So a bare field works as a value, a store target, a `##type`
-    operand, and under `^`. Canon test_v2/class/field.sl.
+    operand, and under `^`. Canon test/class/field.sl.
   * METHOD / FUNCTION PARITY — methods get OVERLOADING + DEFAULT PARAMS + INFER-PARAM-
     TYPE-FROM-DEFAULT (the three callable features free functions already had) through
     ONE shared overload engine. pickOverload(cands, args, recv_offset) is factored out
@@ -375,7 +375,7 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     param_types; inferMethodCall gathers only DEFINED candidates). Distinct overloads get
     distinct symbols via methodSymbol (mirrors functionSymbol's entry-id mangle). A
     CONSTRUCTOR has no overload analog — `_()` is nullary (a hook over tuple-initialized
-    fields), not a signature-bearing callable. Canon test_v2/class/overload_cls.sl +
+    fields), not a signature-bearing callable. Canon test/class/overload_cls.sl +
     method.sl; detail plan-method-parity.txt; [[project_method_function_parity]].
   * NAME COLLISIONS + TYPE-NAME DIAGNOSTICS. A class name collides with ANY
     same-name entry (another class, an alias / enum / namespace, a const, a
@@ -504,7 +504,7 @@ SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
   DEFERRED: a derived static shadowing a SAME-NAMED base static is bare-ambiguous
   (qualify to pick) — see todo "OPENED-SCOPE NAME AMBIGUITY". VIRTUAL classes are now
   landed and compose with inheritance (see VIRTUAL CLASSES below); re-open is landed too
-  (see RE-OPENING CLASSES below). Canon test_v2/class/inheritance.sl
+  (see RE-OPENING CLASSES below). Canon test/class/inheritance.sl
   (Stages 1-5; positives incl. synthesized ctor/dtor, field shadowing, transitive sizeof +
   single heap derived; negatives: implicit downcast, unrelated/sibling cast, off-chain
   qualifier, cycle + direct self-inheritance, name hiding).
@@ -524,7 +524,7 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   class from a scope that isn't its own) is a SEPARATE, not-yet-landed feature — REFINEMENTS:
   a scoped zero-field derived class ($T) that USURPS the base's name in the scope and only
   LOOKS like re-opening (rides the landed inheritance + a free offset-0 cast; motivated by
-  giving a generic like `sort<T>` a method the element type lacks). Canon test_v2/class/refine.sl.
+  giving a generic like `sort<T>` a method the element type lacks). Canon test/class/refine.sl.
 
   INCOMPLETE CLASSES (landed; single-file). A class whose field tuple ends with a trailing
   `...` is INCOMPLETE (grammar sets Node.is_incomplete; parseParamList, class field lists
@@ -538,7 +538,7 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   UNTOUCHED: once interned it is an ordinary class (construction, field access, sizeof reuse
   existing paths; no privacy single-file; defaults optional on every field; an empty completed
   class is 1 byte). A COMPLETE class rejects a field-bearing re-open (above) and cannot be
-  re-opened as incomplete. Canon test_v2/class/incomplete.sl. Multi-file (future) rides the same
+  re-opened as incomplete. Canon test/class/incomplete.sl. Multi-file (future) rides the same
   model: a TU that never sees the close keeps the type open -> size deferred to link-time
   __$sizeof().
 
@@ -601,14 +601,14 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   non-existent member of a CLASS is instead read as INHERITANCE — the empty-field derived
   `Class : New()` — see the empty-parens disambiguation above.) OUT OF SCOPE for
   re-open proper: `global` vars, `...` incomplete classes, and the cross-scope run-time variant
-  (REFINEMENTS, above). Canon test_v2/class/reopen.sl.
+  (REFINEMENTS, above). Canon test/class/reopen.sl.
 
 
 VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
 
   A class with >=1 `virtual` member is a virtual class: it carries a vtable pointer for
   runtime dispatch. Composes with single inheritance (the `_$base` slot-0 subobject) and
-  re-open. Canon test_v2/class/virtual.sl.
+  re-open. Canon test/class/virtual.sl.
 
   LAYOUT — vptr at OFFSET 0 (C++ ABI). A ROOT virtual class gets a hidden `_$vptr` as its
   unnamed FIRST field (parse::hasVptr, field_names[0] == "_$vptr"); a DERIVED virtual class

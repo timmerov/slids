@@ -154,11 +154,23 @@ struct GlobalVar {
 struct GlobalGroup {
     std::string touch_symbol;
     std::string sentinel_symbol;
+    // The SYNTHESIZED group ctor/dtor thunks codegen emits (named from touch_symbol).
+    // The touch thunk registers dtor_symbol then calls ctor_symbol. dtor_symbol is ""
+    // when the group needs no teardown (no class member, no user dtor).
     std::string ctor_symbol;
     std::string dtor_symbol;
-    // >=0: a COMPOUND global (array / tuple / class) whose ctor/dtor are SYNTHESIZED by
-    // codegen — construct/destruct this global's `@symbol` in place, rather than the
-    // ctor/dtor being user-written functions. Keyed by the global's id (into `globals`).
+    // A NAMED or ANON group's compound members, in declaration order (keys into
+    // `globals`). The ctor thunk constructs each in order then calls user_ctor_symbol;
+    // the dtor thunk calls user_dtor_symbol then destructs each in REVERSE. Empty for a
+    // bare compound global (see synth_global_id).
+    std::vector<int> member_ids;
+    // The user-written group `_()`/`~()` (empty if the group has no such hook), called
+    // after member construction / before member destruction.
+    std::string user_ctor_symbol;
+    std::string user_dtor_symbol;
+    // >=0: a lone COMPOUND global (array / tuple / class) NOT in a group, whose ctor/dtor
+    // are SYNTHESIZED to construct/destruct this global's `@symbol` in place. Keyed by the
+    // global's id (into `globals`). Mutually exclusive with member_ids.
     int synth_global_id = -1;
 };
 

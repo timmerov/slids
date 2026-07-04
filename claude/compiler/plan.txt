@@ -1,4 +1,4 @@
-compiler_v2 — PLAN (the main quest)
+compiler — PLAN (the main quest)
 
 Feature implementation order. Items are open or LANDED; updated as we make
 progress. Outstanding bugs / reach goals / deferred side-quests live in
@@ -38,7 +38,7 @@ Phase 0 — foundations (LANDED)
     int/uint/float/char/bool all flow lex→numeric; item 5 of the migration —
     widen check-fn attribution for uint/char literal-fit — still open)
   * constfold stage — between resolve and classify (spec in
-    test_v2/constfold/fold.sl). LANDED: post-order walker; nominal_type on every
+    test/constfold/fold.sl). LANDED: post-order walker; nominal_type on every
     literal; unary fold; binary fold across all op families (int arith/bitwise
     with rule-6 overflow-to-uint64, int shifts, int comparisons, float
     arith/shift/comparison); named-constant iterative substitution + capture
@@ -77,7 +77,7 @@ Phase 1 — expression core (LANDED)
     deleted). AGGREGATE operands (`++tuple`/`--arr`, nested, array-of-iterators) ride
     this same path with no new lowering — kBumpExpr leaf-walks (emitAggBump) and reuses
     the per-leaf scalar/iterator step (emitLeafBump); classify gates with isIncDecable.
-    Canon: test_v2/expression/ppid.sl.                                      LANDED
+    Canon: test/expression/ppid.sl.                                      LANDED
   * call-as-expression — kCallExpr via parsePostfix on a bare ident; shared
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
     as-expr rejected                                                   LANDED
@@ -96,7 +96,7 @@ Phase 2 — declarations + flow (LANDED)
     BACK entry.slids_type (the one deliberate classify symbol-table mutation,
     assert-guarded). Aug-assign on an inferred var fixed: classify's kAugAssignStmt
     arm RE-READS entryType into s.return_type (resolve cached it empty before the
-    inferred decl was stamped). Canon: test_v2/assign/infer.sl.
+    inferred decl was stamped). Canon: test/assign/infer.sl.
     The for-loop typeless/reuse loop var (Session-4 remainder + the v1 chess-sample
     reuse fix) is now WIRED IN on this mechanism (see the flow item below).
     Definite assignment LANDED: a local read before
@@ -104,10 +104,10 @@ Phase 2 — declarations + flow (LANDED)
     initialized. Unused-local sweep LANDED: a body-declared local never read
     errors ("Unused local variable" if never written, else "set but never
     used"); consts + params exempt. Straight-line only — control-flow joins
-    attach per-construct as the branches below land. Canon: test_v2/expression/vardecl.sl.
+    attach per-construct as the branches below land. Canon: test/expression/vardecl.sl.
   * flow constructs (blocks, if/else, while, for, switch, labeled break/
     continue) — a 6-session track in plan-flow.txt (the join model + per-construct
-    landing stages; tests in test_v2/flow/). Decisions locked: switch clauses do
+    landing stages; tests in test/flow/). Decisions locked: switch clauses do
     NOT implicitly fall through — a clause exits at its `{ }` body unless a trailing
     `continue;` carries it into the next clause (no `case` keyword, no `break`;
     switch transparent to break/continue — canon in switch.sl/slids_reference.md),
@@ -317,8 +317,8 @@ Phase 4 — types beyond primitives
     [`++array` / `--tuple`] also LANDED — NOT the arith path: codegen's kBumpExpr
     leaf-walks [emitAggBump] and applies the same per-leaf scalar/iterator bump
     [emitLeafBump], classify gates with isIncDecable; no new lowering, works in every
-    PPID position [see plan PPID row + test_v2/expression/ppid.sl]. Coverage:
-    test_v2/tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
+    PPID position [see plan PPID row + test/expression/ppid.sl]. Coverage:
+    test/tuple/anon.sl, tuple/array.sl, tuple/combined.sl.)
   * aggregate COPY / MOVE / RETURN by slot (cross-form + leaf-widen) LANDED
     (an array IS a homogeneous tuple, so a copy is performed BY SLOT, iteratively
     and recursively, down to scalar leaves. classify::checkAggregateShapeMatch is
@@ -337,7 +337,7 @@ Phase 4 — types beyond primitives
     Convert [the residual call-arg / const-decl seam] is form-agnostic too; the four
     flatten HACKS [emitArrayFromTupleValue / emitTupleFromArrayValue /
     emitTupleLeafStores / emitArrayElemStores] DELETED. Coverage:
-    test_v2/tuple/anon.sl, tuple/array.sl, tuple/combined.sl [cross-form + leaf-widen
+    test/tuple/anon.sl, tuple/array.sl, tuple/combined.sl [cross-form + leaf-widen
     copy/move/return, pointer-leaf move null, cross-form narrow + count negatives].)
   * tuple / array INIT with a CLASS slot / element by slot          LANDED
     (a class as a tuple slot or array element — `(Point,Point) t = (0,(3,4))`,
@@ -351,7 +351,7 @@ Phase 4 — types beyond primitives
     [a tuple of hook classes `(Class,Class) tuple('a','b')` runs ctors a,b / dtors b,a;
     canon tuple/combined.sl].
     This is [[project_aggregate_return_roadmap]] step 2 [tuple of classes].
-    Coverage: test_v2/tuple/combined.sl.)
+    Coverage: test/tuple/combined.sl.)
   * non-primitive RETURN via sret (+ RVO / NRVO)                   LANDED
     ([[project_aggregate_return_roadmap]] step 3.) A function returning a class /
     array / tuple is emitted `void @fn(ptr %sret.in, ...)` and CONSTRUCTS its result
@@ -381,7 +381,7 @@ Phase 4 — types beyond primitives
     accumuland) — the value-position temp is materialized + stacksave-bracketed; and
     a tuple LITERAL returned as an array [`return (1,2,3)` for int[3]] builds an
     `[N x T]` value via emitExpr->emitArrayLiteralValue [an array has no `.slots`].
-    Coverage: test_v2/function/return_fn.sl. (Return-unnamed-temporary
+    Coverage: test/function/return_fn.sl. (Return-unnamed-temporary
     `return Class(7)` LANDED — see Phase 5 "NAMELESS class objects".))
   * for-array (`for (var : arr)`)                                  LANDED
     (DESUGAR-stage lowering to kForLongStmt: resolve UNDERSTANDS it
@@ -399,7 +399,7 @@ Phase 4 — types beyond primitives
     addr-of-through-deref]; literal/rvalue spills to `_$ftmp`, variable in place.
     Homogeneous only; by value / by ref [a non-primitive element forces by-ref; a
     by-ref var's pointee must match the element]; typeless local + inferred-ref
-    deref dispatch via classify guard. test_v2/flow/fortuple.sl.)
+    deref dispatch via classify guard. test/flow/fortuple.sl.)
   * pointer casting (`<Type^> ptr`)                                LANDED
     (kCastExpr — a prefix-unary reinterpret cast [a leading `<` is unambiguous;
     operand is another unary so casts chain right-to-left; target on return_type,
@@ -412,7 +412,7 @@ Phase 4 — types beyond primitives
     two unrelated non-buffer pointers must chain through `void^`; only `intptr`
     bridges pointer<->integer. `void[]`/`void[N]` rejected — void has no stride, a
     void pointer must be `void^`. Codegen: ptr<->ptr no-op, ptr<->intptr ptrtoint/
-    inttoptr; convert asserts on an ungated ptr->scalar. test_v2/pointer/cast.sl.
+    inttoptr; convert asserts on an ungated ptr->scalar. test/pointer/cast.sl.
     CONST-CAST SURFACE LANDED (syntax, NO enforcement): `const T^` (deep, outer
     const) / `(const T)^` (shallow, const pointee) targets; the `<const>` /
     `<mutable>` qualifier-only casts [target derived from the operand in classify
@@ -453,7 +453,7 @@ Phase 4 — types beyond primitives
     emitConvertWalk [FORM-AGNOSTIC: recurse on the DST slots, extractvalue the
     source slot by index (identical for array/struct), insertvalue into the result,
     leaf bottoms out at convertExplicit]. codegen arm mirrors the cast [emit operand ->
-    emitConvertWalk -> flex into dest]. test_v2/assign/typeconv.sl. DEFERRED
+    emitConvertWalk -> flex into dest]. test/assign/typeconv.sl. DEFERRED
     to Phase 5: a CLASS target `(String = "...")` / `(Class = Type^)` [class
     assignment-conversion] and a USER-NAMED TOP-LEVEL target [the tuple-led
     `((Foo)=v)` works today via single-slot tuple-collapse + alias transparency,
@@ -471,7 +471,7 @@ Phase 4 — types beyond primitives
     A CLASS operand [Phase 5] rewrites to a CALL of a per-class `<Name>__$sizeof()`
     helper [LLVM owns the layout: `getelementptr null,1`/`ptrtoint`, v1's design] —
     a runtime intptr, NOT foldable [can't init a const]; void / an unregistered slid
-    still errors "Cannot take sizeof of 'X'." test_v2/misc/sizeof.sl.
+    still errors "Cannot take sizeof of 'X'." test/misc/sizeof.sl.
     A value operand is UNEVALUATED — sizeof reads only its type, so an
     uninitialized local needs no definite assignment [an "unevaluated context"
     mode threaded through resolveExpr suppresses use-before-init but keeps the
@@ -485,7 +485,7 @@ Phase 4 — types beyond primitives
     only). classify: element
     must be statically sized [widen::typeByteSize >= 0; void/slid -> "Cannot
     allocate"], array size integer-class, placement addr buffer-class, delete
-    operand a pointer. malloc/free declared in the preamble. test_v2/pointer/new.sl.
+    operand a pointer. malloc/free declared in the preamble. test/pointer/new.sl.
     CLASS new/delete LANDED [Phase 5]: a class is sized by `call @<Name>__$sizeof()`;
     `new T(args)` parses ctor args [children[2]] -> constructClass + emitConstructHooks
     [runs the ctor]; `new T[n]` field-inits each element + the new[]/delete[] COUNT
@@ -508,7 +508,7 @@ Phase 4 — types beyond primitives
     tuple (1-D + multi-dim init/assign, element-wise, widening). FOR-TUPLE
     `for (v:tuple)` (homogeneous; in-place for vars, spill for literals; by
     value/ref). `#x` 5-tuple (`(##file,##line,##type,##name,^x)`). Tests:
-    test_v2/expression/tuple.sl, pointer/array.sl, flow/fortuple.sl, misc/macros.sl.
+    test/expression/tuple.sl, pointer/array.sl, flow/fortuple.sl, misc/macros.sl.
     STILL OPEN here: arrays-OF-tuples + sub-array assign + array-from-tuple-VALUE
     (todo.txt); the `new (` placement-vs-tuple-type seam (deferred with `new
     T(value)`); for-tuple over non-primitive elements (Phase 5) + by-ref-to-const
@@ -537,7 +537,7 @@ Phase 4 — types beyond primitives
     resolve/classify validate. The
     OVERLOADABLE class `op<--`/`op<-->` + destructor-balance + class fields +
     whole-array move/swap is the Phase 5 / reach-goal piece.
-    test_v2/expression/moveswap.sl.
+    test/expression/moveswap.sl.
   * COMPLEX-LVALUE ASSIGNMENT FAMILY (`arr[i] += v`, `p^ %= 2`, …) — LANDED.
     The augmented-assign family (`+= -= *= /= %= <<= >>= &= |= ^=` + logical
     `&&= ||= ^^=`) now applies to EVERY lvalue, not just bare names — array element,
@@ -556,7 +556,7 @@ Phase 4 — types beyond primitives
     in-place aggregate, may-set like arrays — isInPlaceAggregate). Negatives reject a
     reference / non-primitive (sub-array) / bitwise-on-float / narrowing leaf.
     (`++`/`--` on a complex lvalue — statement AND expression — is the PPID entry
-    above, not this aug-assign path.) test_v2/assign/lvalue.sl.
+    above, not this aug-assign path.) test/assign/lvalue.sl.
   * type aliases — LANDED (value form `alias Name = type;`, file + function
     scope, transparent; resolveTypeRef substitutes the chain; desugar drops
     kAliasDecl; an alias TARGET may be a pointer type `alias IntPtr = int^;`. An
@@ -630,9 +630,9 @@ Phase 4 — types beyond primitives
     method signature naming a later class) FIXED by the global NAME-before-TYPES split; a
     namespace now also accepts member aliases (uniform vocabulary). resolve runs NAME
     (names only) -> TYPES (resolveScopeTypes resolves alias targets + field types + sigs,
-    recursing with frames open) -> cycle + needs-fixpoint -> BODY. Canon: test_v2/misc/namespace.sl
+    recursing with frames open) -> cycle + needs-fixpoint -> BODY. Canon: test/misc/namespace.sl
     (class-in-namespace, forward refs,
-    lifecycle, heap, array, local), test_v2/class/namespace_cls.sl
+    lifecycle, heap, array, local), test/class/namespace_cls.sl
     (namespace-in-class, `Class:Ns:Inner`).
   * enums — LANDED. `enum [type] [Name] ( m1 [= v], ... )`, type-first (default
     int), optional name. Lowered at RESOLVE: named → a kNamespace whose
@@ -650,7 +650,7 @@ Phase 4 — types beyond primitives
     stored value takes its DECLARED type's literal kind (tryCaptureConst →
     literalKindForType), so char/bool consts and `enum char`/`enum bool` members
     print as their declared type rather than the int-folded initializer. Canon:
-    test_v2/constfold/enum.sl. Deferred enum items (reach-goal drop-qualifier,
+    test/constfold/enum.sl. Deferred enum items (reach-goal drop-qualifier,
     reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
     arithmetic result stays char when the folded value fits 0..255, else promotes
     to int (constfold's narrowCharKind, all arith operators; ##type folds its
@@ -659,7 +659,7 @@ Phase 4 — types beyond primitives
     honored, else a no-width slot (char/int/uint/float) when a no-width operand
     contributed it, else the canonical width; two width-named operands stay width
     (so `int+int8`->int, `int+int32`->int32, `int8+uint8`->int16). Canon:
-    test_v2/constfold/constant.sl (kSS, kWP1-5, kChFit/kChBig/...).
+    test/constfold/constant.sl (kSS, kWP1-5, kChFit/kChBig/...).
 
 Phase 5 — classes
   * class definitions (fields, ctor, dtor) — LANDED. A class is a named tuple
@@ -712,14 +712,14 @@ Phase 5 — classes
     VALUE name (local/param/const) becomes a discarded READ that "uses" it (marks
     read_locals — no unused warning); a FUNCTION name is a call missing its `()`
     ("Function call is missing parameter list '()'."); a namespace/type is "not a
-    statement". Detail: readme-classes.txt "CONSTRUCTION" + test_v2/class/nameless.sl,
-    test_v2/function/call.sl.
+    statement". Detail: readme-classes.txt "CONSTRUCTION" + test/class/nameless.sl,
+    test/function/call.sl.
   * inferred field types (`Foo(x = 1, y = 3.14)`) — LANDED. A typeless field infers
     its type from its default. resolve DEFERS (registers a kNoType layout slot; a
     typeless field with no default errors); a classify pre-pass (classifyClassSignature)
     folds the default + infers + RE-INTERNS the kSlid slot (name+def_id key) before any
     body/construction reads it. An inferred field is always primitive, so the resolve
-    needs-fixpoint stays correct. Canon test_v2/class/field.sl;
+    needs-fixpoint stays correct. Canon test/class/field.sl;
     [[project_inferred_field_types]].
   * destructor balance invariant — LANDED. Reverse-order teardown on every exit
     (block / return / break / continue) via a DtorScope chain threaded through
@@ -740,7 +740,7 @@ Phase 5 — classes
     (stride 1), and tuple slots (offsets 0/1) occupy distinct storage and sizeof is 1
     (C++'s empty-class rule). Also a ptr->intptr fix: `^lvalue` into an `intptr`
     lvalue now emits `ptrtoint` (kAddrOfExpr honors dest_type via widen::convert),
-    not a raw `store i64 <ptr>`. Canon test_v2/class/empty.sl.
+    not a raw `store i64 <ptr>`. Canon test/class/empty.sl.
   * class as a NAMESPACE — LANDED. A kClass entry; the body holds member
     aliases/consts/enums, methods, nested classes, AND nested namespaces; qualified
     `Class:member`; alias-to-class transparency (`alias Time = Space; Time:Count`);
@@ -788,7 +788,7 @@ Phase 5 — classes
     method FORWARD DECL is satisfied by a same-(exact-scope)-signature definition
     (orphan check matches owner_ns_frame + parent_frame_id + param_types; inferMethodCall
     gathers only DEFINED candidates) — full decl+def parity. Detail: plan-method-
-    parity.txt; canon test_v2/class/overload_cls.sl + method.sl. Constructors have NO overload analog — `_()` is nullary (a hook
+    parity.txt; canon test/class/overload_cls.sl + method.sl. Constructors have NO overload analog — `_()` is nullary (a hook
     over tuple-initialized fields, not a signature-bearing callable); the `Class(args)`
     "args" are field initializers. The adjacent overloadable construct is post-
     construction assignment (`op=`), under operator overloading — not a ctor feature.
@@ -814,7 +814,7 @@ Phase 5 — classes
     member's alias_label). The `#x` 5-tuple LANDED (`(##file, ##line, ##type(x),
     ##name(x), ^x)`, desugars in grammar parseUnary); aliased-FUNCTION
     `##type(Fn)` waits on function aliases (todo.txt).
-    Canon: test_v2/misc/macros.sl, alias.sl, constfold/enum.sl.
+    Canon: test/misc/macros.sl, alias.sl, constfold/enum.sl.
 
 Phase 6 — const correctness
   Threads through phases 3-5; land after classes have the bones.
@@ -849,7 +849,7 @@ Phase 6 — const correctness
     const (`const x = rhs`) is the same split decided in CLASSIFY: constfold defers
     the unfoldable case, classify infers the rhs type and routes a non-scalar one to
     the same kLocalVar + deepConst path (a leftover typeless scalar errors; the
-    runtime-scalar const variable is a todo). Canon: test_v2/misc/mutable.sl,
+    runtime-scalar const variable is a todo). Canon: test/misc/mutable.sl,
     assign/infer.sl.
 
   ENFORCEMENT — STILL THIS PHASE (none landed; const is transparent for now, so
@@ -877,7 +877,7 @@ Phase 6 — const correctness
 Phase 7 — class advanced
   * hoisted classes (file-scope hoist across reopens) — LANDED (see Phase 5 "HOISTED
     classes"; a nested class introduced/re-opened via a class re-open is reachable — the
-    RE-OPENING entry below + test_v2/class/reopen.sl Host:Nested / Bag:Item).
+    RE-OPENING entry below + test/class/reopen.sl Host:Nested / Bag:Item).
   * SINGLE INHERITANCE (`Base : Derived(fields){body}`) — LANDED (non-virtual). The
     base is an UNNAMED FIRST FIELD: grammar injects `_$base : Base` at slot 0, so
     layout, FLAT construction (base fields splice in: `Derived d = (b0,b1,own...)`,
@@ -893,7 +893,7 @@ Phase 7 — class advanced
     no-ops; classify ptrBaseUpcastOk/ptrBaseCastOk); unrelated/sibling casts rejected.
     The slot-0 `_$base` decode is centralized in parse:: (baseTypeOf / classBaseType /
     classAndBaseFrames); resolve + classify delegate every base-chain step to it. Canon
-    test_v2/class/inheritance.sl (Stages 1-5; synthesized ctor/dtor + field shadowing +
+    test/class/inheritance.sl (Stages 1-5; synthesized ctor/dtor + field shadowing +
     transitive sizeof/heap positives; cast/cycle/self-inheritance/hiding negatives).
     DEFERRED: a derived STATIC shadowing a same-named base static is bare-ambiguous
     (qualify to disambiguate) — see todo "OPENED-SCOPE NAME AMBIGUITY".
@@ -921,7 +921,7 @@ Phase 7 — class advanced
     virtual shadowing, no NEW virtual in a re-open. A qualified call is a STATIC
     bypass — all four spellings (Base:m() / Self:m() / Base:self.m() / Self:self.m(),
     inherited methods included via selfOrBaseDepth + classAndBaseFrames); only bare
-    self.m() dispatches. MI is not supported. Canon test_v2/class/virtual.sl.
+    self.m() dispatches. MI is not supported. Canon test/class/virtual.sl.
     [[project_virtual_classes]]
   * RE-OPENING CLASSES + THE EXTERNAL FORM — LANDED (non-virtual). A class re-opens to
     add members after its primary def, as a BLOCK (`Class() {}`, EMPTY field list) or the
@@ -959,7 +959,7 @@ Phase 7 — class advanced
     intermediate resolve passes skip a qualified leaf). A qualified MUTABLE var is rejected
     ("Only constants, aliases, and enums may be defined by qualified name"). Chained
     (`C1:Ns1:C2:Ns2:C3:m`) + external-ns merge both work. The cross-scope run-time variant is
-    split into REFINEMENTS below. Canon test_v2/class/reopen.sl (Stages A-F: block/method/
+    split into REFINEMENTS below. Canon test/class/reopen.sl (Stages A-F: block/method/
     namespace/hoisted-reopen/chained + const/alias/enum in file/namespace/class/function scope;
     field-add / redefine / leak / bad-path / refine-reject negatives). [[project_reopen_classes]]
   * INCOMPLETE CLASSES — LANDED (single-file). A class whose field tuple ends with a trailing
@@ -974,9 +974,9 @@ Phase 7 — class advanced
     privacy single-file; optional defaults; empty completed class = 1 byte). Negatives:
     add-field-to-complete, re-incomplete-a-complete, leading/mid-list `...`, dup-field-across-
     openings, typeless-no-default appended. Multi-file (Phase 8) rides the same model: a
-    never-closed TU keeps the type open -> link-time __$sizeof(). Canon test_v2/class/
+    never-closed TU keeps the type open -> link-time __$sizeof(). Canon test/class/
     incomplete.sl. [[project_incomplete_classes]]
-  * REFINEMENTS (run-time-scope re-open) — PLANNED (stub test_v2/class/refine.sl). Re-opening
+  * REFINEMENTS (run-time-scope re-open) — PLANNED (stub test/class/refine.sl). Re-opening
     a class from a scope that ISN'T its own is an ILLUSION: it desugars to an anonymous
     zero-field DERIVED class ($T : T) that USURPS the base's name within that lexical scope,
     and existing base instances are cast into it (`(<T:$T^> ^x)^.m()`). Both the block form
@@ -1004,10 +1004,14 @@ Phase 8 — namespaces + cross-TU
     class / function) and every TYPE (scalar / array / tuple / class, incl. aggregates
     containing classes): the short/bare form, named + anonymous groups, static + lazy
     ctor/dtor with a runtime LIFO dtor registry, the `global;` scope statement + its
-    region-flow errors, and function-internal scoped statics. Rides the existing
-    scope/SymTab machinery + the one lazy-group mechanism; the only globals-specific
-    code is the `explodeAnonGlobalGroups` bridge (dissolves an anon group into bare
-    members) and the compound-global lazy marking. Phase 8 adds only the CROSS-TU
+    region-flow errors, and function-internal scoped statics. A GROUP is the lazy unit —
+    its compound MEMBERS construct as one on first touch of any member (declaration
+    order), then the user `_()`; teardown is the user `~()` then members reversed. Holds
+    for all four forms (named/anon x with/without hooks); a hook-bearing group must
+    declare a member. Rides the existing scope/SymTab machinery + the one lazy-group
+    mechanism; the only globals-specific code is the `explodeAnonGlobalGroups` bridge
+    (dissolves an anon group into bare members) and desugar's `finalizeGroup` /
+    `needsSynth` group-lazy marking. Phase 8 adds only the CROSS-TU
     piece: a global declared in a `.slh` header is visible to all linked files (a `.sl`
     global stays file-local) — deferred with the rest of .slh propagation.
 

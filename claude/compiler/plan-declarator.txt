@@ -1,4 +1,4 @@
-compiler_v2 — UNIFIED DECLARATOR (design + STATUS: LANDED)
+compiler — UNIFIED DECLARATOR (design + STATUS: LANDED)
 
 A single declarator parser for every site that consumes a type. Replaces the
 split between parseType (the type spelling, gated by reject_array_dims, now
@@ -21,7 +21,7 @@ deviations from the design below, both intentional:
      shared primitive) but keep SEPARATE per-slot loops — one composes a spelling
      string, the other builds parse nodes — rather than one literal
      `parseDeclaratorList` routine.
-Tests: test_v2/assign/vardecl.sl (named-slot / dim-on-name negatives, typed-no-name
+Tests: test/assign/vardecl.sl (named-slot / dim-on-name negatives, typed-no-name
 discard, composed nameless slot types), typeconv.sl (conv-target named slot).
 
 

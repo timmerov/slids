@@ -3180,6 +3180,35 @@ void collectNestedFunctions(ast::Node const& s,
     }
 }
 
+// Construct one global in place: store its initializer (an array filled from a tuple
+// literal needs the element walk; any other value stores whole) THEN run the lifecycle
+// ctor hooks. Mirrors the local class/aggregate decl path; shared by the lone-compound
+// global thunk and the group ctor thunk so every global constructs identically.
+void emitGlobalConstruct(ast::GlobalVar const& gv, strings::Pool& pool,
+                         std::ostream& out, diagnostic::Sink& diag) {
+    std::string addr = "@" + gv.symbol;
+    if (gv.init) {
+        SymTab gsyms;
+        seedGlobalSyms(gsyms);
+        if (widen::form(widen::strip(gv.type)) == widen::Type::Form::kArray
+            && gv.init->kind == ast::Kind::kTupleExpr) {
+            emitArrayFromTuple(addr, gv.type, *gv.init, gsyms, pool, out, diag);
+        } else {
+            std::ostringstream b;
+            std::string v = emitExpr(*gv.init, gsyms, pool, b, diag, gv.type);
+            out << b.str()
+                << "  store " << llvmForRef(gv.type) << " " << v
+                << ", ptr " << addr << "\n";
+        }
+    }
+    emitConstructHooks(addr, gv.type, out);
+}
+
+// Destruct one global in place (reverse-order field/base dtor chain).
+void emitGlobalDestruct(ast::GlobalVar const& gv, std::ostream& out) {
+    emitDestructHooks("@" + gv.symbol, gv.type, out);
+}
+
 }  // namespace
 
 void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
@@ -3208,21 +3237,25 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // to its folded static constant (a literal init emits no instructions). Register
     // them in g_globals so use sites load/store through the symbol.
     g_globals.clear();
-    // A COMPOUND global (array/tuple/class) has zero-init storage; its synthesized ctor
-    // thunk (emitted below) initializes/constructs it in place on first touch.
-    std::set<int> synth_globals;
-    for (ast::GlobalGroup const& g : tree.global_groups)
-        if (g.synth_global_id >= 0) synth_globals.insert(g.synth_global_id);
+    // A gated global (touch_symbol set — a lone compound global or any group member)
+    // has zero-init storage; its synthesized ctor thunk (emitted below) constructs it in
+    // place on first touch. Only a STATIC global (no gate) emits a folded constant init.
     for (auto const& [id, gv] : tree.globals) {
         g_globals[id] = &gv;
         std::string llty = llvmForRef(gv.type);
         std::string init = "zeroinitializer";
-        if (gv.init && !synth_globals.count(id)) {
+        if (gv.init && gv.touch_symbol.empty()) {
             SymTab no_syms;
             std::ostringstream scratch;
             init = emitExpr(*gv.init, no_syms, pool, scratch, diag, gv.type);
+            // BACKSTOP assert, not a user diagnostic: a non-constant static-global init is
+            // already rejected upstream with a caret ("Initializer ... is not a constant
+            // expression" — pinned by the global.sl negative). A non-empty scratch here
+            // means only a compiler bug let a runtime expr reach a static global, so an
+            // unattributed abort is correct. (A GATED global's init is constructed in its
+            // thunk, so it never takes this branch.)
             assert(scratch.str().empty()
-                && "global initializer must fold to a pure constant");
+                && "static global initializer must fold to a pure constant");
         }
         body << "@" << gv.symbol << " = internal global " << llty << " "
              << init << "\n";
@@ -3278,43 +3311,26 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                  << "done:\n"
                  << "  ret void\n}\n\n";
         }
-        // Synthesized ctor/dtor thunk BODIES for COMPOUND globals: construct/destruct
-        // `@symbol` in place. The generic touch thunk above already gates them and
-        // registers the dtor. A no-ctor-hook type with an initializer stores its value;
-        // a class-containing type is default-constructed via the lifecycle hooks (a
-        // class initializer with args is a later stage — it default-constructs).
+        // Synthesized ctor/dtor thunk BODIES. The generic touch thunk above already
+        // gates each group and registers its dtor. A group constructs its members in
+        // declaration order THEN runs the user `_()`; on teardown it runs the user `~()`
+        // THEN destructs its members in REVERSE. A lone compound global is the
+        // degenerate one-member group (synth_global_id), constructed identically.
         for (ast::GlobalGroup const& g : tree.global_groups) {
-            if (g.synth_global_id < 0) continue;
-            ast::GlobalVar const& gv = tree.globals.at(g.synth_global_id);
-            std::string addr = "@" + gv.symbol;
+            std::vector<int> members = g.member_ids;
+            if (g.synth_global_id >= 0) members = { g.synth_global_id };
             body << "define void @" << g.ctor_symbol << "() {\nentry:\n";
-            // Mirror a local class/aggregate decl: store the initializer (the field-
-            // default tuple for a class, or the array/tuple init value) THEN fire the
-            // lifecycle ctors. For a pure-scalar aggregate the store stands alone
-            // (emitConstructHooks is a no-op); for a class the store seeds field
-            // defaults and the hooks run the ctors.
-            if (gv.init) {
-                SymTab gsyms;
-                seedGlobalSyms(gsyms);
-                // An ARRAY filled from a tuple literal needs the tuple->array element
-                // walk (their LLVM types differ); a tuple/scalar/class value stores
-                // whole. Mirrors the local class/aggregate decl path in emitStmt.
-                if (widen::form(widen::strip(gv.type)) == widen::Type::Form::kArray
-                    && gv.init->kind == ast::Kind::kTupleExpr) {
-                    emitArrayFromTuple(addr, gv.type, *gv.init, gsyms, pool, body, diag);
-                } else {
-                    std::ostringstream b;
-                    std::string v = emitExpr(*gv.init, gsyms, pool, b, diag, gv.type);
-                    body << b.str()
-                         << "  store " << llvmForRef(gv.type) << " " << v
-                         << ", ptr " << addr << "\n";
-                }
-            }
-            emitConstructHooks(addr, gv.type, body);
+            for (int id : members)
+                emitGlobalConstruct(tree.globals.at(id), pool, body, diag);
+            if (!g.user_ctor_symbol.empty())
+                body << "  call void @" << g.user_ctor_symbol << "()\n";
             body << "  ret void\n}\n\n";
             if (!g.dtor_symbol.empty()) {
                 body << "define void @" << g.dtor_symbol << "() {\nentry:\n";
-                emitDestructHooks(addr, gv.type, body);
+                if (!g.user_dtor_symbol.empty())
+                    body << "  call void @" << g.user_dtor_symbol << "()\n";
+                for (auto it = members.rbegin(); it != members.rend(); ++it)
+                    emitGlobalDestruct(tree.globals.at(*it), body);
                 body << "  ret void\n}\n\n";
             }
         }

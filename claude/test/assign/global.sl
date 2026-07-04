@@ -194,6 +194,14 @@ for normal usage, global management is invisible.
 
 notes:
 
+i use the phrase "statically allocated" to mean as viewed
+by the author.
+the actual implementation is up to the compiler.
+global variables that don't need special handling may be
+initialized before main.
+global variables that do need speical handling because
+they are a class with a ctor/dtor must be lazy allocated.
+
 globals declared in a .sl source file are local to the file.
 globals declared in a .slh header file are visible to all other
 linked files.
@@ -300,6 +308,26 @@ defaults, then fires the ctors on first touch) and, for a class-containing type,
 registry). Scalars keep their static constant init. Construction with args is ordinary
 field-fill (there are no separate ctor parameters), so `global Widget w = Widget(42)`
 works exactly like the local form. Exercised below (`grid_`, `combo_`, `w_`).
+
+CLASS-TYPED MEMBERS IN A GROUP — a group (named or anon) whose members are BY-VALUE
+class values. The group's single first-touch gate constructs EVERY compound member (in
+declaration order) then runs the user `_()` if present; on teardown it runs the user
+`~()` then destructs the members in reverse. So touching ONE member constructs the WHOLE
+group as a unit — true even for a group with NO user ctor/dtor (a hook-less group is
+still one group with one shared gate). The synth group ctor/dtor thunks share the exact
+per-global construct/destruct path with the lone-compound case. All four forms are
+exercised below (`crate`/`bundle` named, two anon groups; with and without hooks). A
+foldable scalar member stays static; a class member always rides the gate.
+
+Deeper group-member coverage (`mix1`/`mix2` … `trio`): MIXED scalar+class members (a
+hook-less group leaves a foldable scalar static; a hook forces every member onto the
+gate); an INLINE array-of-class member and a NESTED class-field member (element-/field-
+wise construction); a non-class aggregate member (`aggregate && init`, a ctor with no
+dtor thunk); a NEVER-touched class group (the gate suppresses construction entirely);
+touching a NON-FIRST member (construction stays in declaration order); a user ctor/dtor
+that READS a member (members are live before the ctor / during the dtor); class-member
+groups nested in a namespace / class / function; cross-group nesting (LIFO teardown);
+and 1- and 3-member arity.
 
 Globals are now complete across every scope (file / namespace / class / function) and
 every type (scalar / array / tuple / class). Nothing is deferred.
@@ -464,6 +492,174 @@ void taggify() {
     __println("tag #" + count_);
 }
 
+/* CLASS-TYPED MEMBERS IN A GROUP — a group whose members are by-value class values.
+   On first touch of ANY member the WHOLE group constructs as a unit (members in
+   declaration order, then the user `_()` if present); teardown is the exact reverse
+   (user `~()` first, then members in reverse). All four group forms are exercised:
+   named/anon x with-hooks/without. Two distinct classes so each member's ctor/dtor
+   prints a distinguishable line. */
+Cog(int cn_ = 0) {
+    _() { __println("cog:ctor"); }
+    ~() { __println("cog:dtor"); }
+}
+Gear(int gn_ = 0) {
+    _() { __println("gear:ctor"); }
+    ~() { __println("gear:dtor"); }
+}
+
+/* (1) NAMED group WITH user ctor/dtor — construct c1_, g1_, then crate:ctor. */
+global crate(
+    Cog  c1_,
+    Gear g1_
+) {
+    _() { __println("crate:ctor"); }
+    ~() { __println("crate:dtor"); }
+}
+
+/* (2) NAMED group WITHOUT hooks — still ONE group: touching c2_ constructs c2_ AND
+   g2_ as a unit (no user hook to run after). */
+global bundle(
+    Cog  c2_,
+    Gear g2_
+) {
+}
+
+/* (3) ANON group WITH user ctor/dtor — members promote bare (c3_, g3_); construct
+   both then packa:ctor. */
+global (
+    Cog  c3_,
+    Gear g3_
+) {
+    _() { __println("packa:ctor"); }
+    ~() { __println("packa:dtor"); }
+}
+
+/* (4) ANON group WITHOUT hooks — members promote bare (c4_, g4_); a hook-less anon
+   group is STILL one group: touching c4_ constructs c4_ AND g4_. */
+global (
+    Cog  c4_,
+    Gear g4_
+) {
+}
+
+/* ===== deeper group-member coverage (gaps 1-7) ===== */
+
+/* A class whose field is itself a class — exercises NESTED member construction (the
+   field's ctor runs as part of constructing the outer class). */
+Nest(Cog inner_) {
+    _() { __println("nest:ctor"); }
+    ~() { __println("nest:dtor"); }
+}
+
+/* (1a) MIXED members, hook-less: a foldable scalar stays STATIC (ungated); the class
+   member is gated. Reading mn_ must NOT construct mc_. */
+global mix1(
+    int mn_ = 5,
+    Cog mc_
+) { }
+
+/* (1b) MIXED members, hook-bearing: the hook forces ALL members onto the gate, so the
+   scalar sn_ is gated too — touching it fires the whole group. */
+global mix2(
+    int sn_ = 3,
+    Cog sc_
+) {
+    _() { __println("mix2:ctor"); }
+    ~() { __println("mix2:dtor"); }
+}
+
+/* (2a) INLINE ARRAY-of-class member — every element constructs/destructs element-wise. */
+global arr1( Cog pack_[3] ) { }
+
+/* (2b) NESTED class member — nn_'s Cog field constructs, then Nest's body. */
+global nst1( Nest nn_ ) { }
+
+/* (2c) NON-class aggregate member (array with init) — gated by the `aggregate && init`
+   rule; a group ctor with NO dtor thunk (no class to destruct). */
+global arr2( int nums_[3] = (7, 8, 9) ) { }
+
+/* (3) NEVER-TOUCHED class-member group — the gate must suppress construction, so no
+   ctor/dtor runs. Declared, never accessed. */
+global dormant(
+    Cog dc_
+) {
+    _() { __println("dormant:ctor"); }
+    ~() { __println("dormant:dtor"); }
+}
+
+/* (4) touch order is by DECLARATION, not by which member is touched: touching the
+   SECOND member still constructs rc_ before rg_. */
+global rev1(
+    Cog  rc_,
+    Gear rg_
+) { }
+
+/* (5) the user ctor/dtor READS a member — proves members are fully constructed BEFORE
+   the ctor runs (and still live when the dtor runs). */
+global usem(
+    Cog uc_
+) {
+    _() { uc_.cn_ = 7; __println("usem:ctor cn=" + uc_.cn_); }
+    ~() { __println("usem:dtor"); }
+}
+
+/* (6a) a class-member NAMED group nested in a NAMESPACE — reached Ns:group:member. */
+Yard {
+    global crate2(
+        Cog  yc_,
+        Gear yg_
+    ) {
+        _() { __println("crate2:ctor"); }
+        ~() { __println("crate2:dtor"); }
+    }
+}
+
+/* (6b) a class-member group nested in a CLASS — reached Class:group:member (no instance
+   needed, like Bin:cap_). */
+Vault() {
+    global stash2(
+        Cog vc_
+    ) {
+        _() { __println("stash2:ctor"); }
+        ~() { __println("stash2:dtor"); }
+    }
+    _() {}
+    ~() {}
+}
+
+/* (6c) a class-member group inside a FUNCTION body — function-internal statics with a
+   shared lazy lifetime (ctor on first call, dtor at program exit). */
+void stow() {
+    global ( Cog fc_ ) {
+        _() { __println("stow:ctor"); }
+        ~() { __println("stow:dtor"); }
+    }
+    __println("stow fc=" + fc_.cn_);
+}
+
+/* (7a) CROSS-GROUP nesting with class members: chainA's ctor touches chainB, so chainB
+   builds mid-ctor and tears down FIRST (LIFO). */
+global chainA(
+    Cog ac_
+) {
+    _() { __println("chainA:ctor"); chainB:bc_.cn_ = 1; }
+    ~() { __println("chainA:dtor"); }
+}
+global chainB(
+    Cog bc_
+) {
+    _() { __println("chainB:ctor"); }
+    ~() { __println("chainB:dtor"); }
+}
+
+/* (7b) ARITY: a single-member group and a 3-member group (reverse-order teardown). */
+global solo( Cog sc1_ ) { }
+global trio(
+    Cog  t1_,
+    Gear t2_,
+    Cog  t3_
+) { }
+
 int32 main() {
     /* NEGATIVE (sits BEFORE `global;`, so uncommented it accesses a global outside
        the open scope — the explicit `global;` below suppresses the auto-insert). */
@@ -573,8 +769,77 @@ int32 main() {
     /* 3-level lazy chain: touching lvl1 constructs lvl1 -> lvl2 -> lvl3 */
     lvl1:q_ = 9;                             // lvl1:ctor, lvl2:ctor, lvl3:ctor
 
-    /* at exit, dtors run LIFO by construction order:
-       lvl3, lvl2, lvl1, tag, bin, tank, back, front, depot, widget */
+    /* CLASS MEMBERS IN A GROUP — touch ONE member; the whole group constructs as a
+       unit (members in declaration order), the user _() (if any) LAST. */
+    __println("c1=" + crate:c1_.cn_);        // cog:ctor, gear:ctor, crate:ctor, then 0
+    __println("c2=" + bundle:c2_.cn_);       // cog:ctor, gear:ctor, then 0
+    __println("c3=" + c3_.cn_);              // cog:ctor, gear:ctor, packa:ctor, then 0
+    __println("c4=" + c4_.cn_);              // cog:ctor, gear:ctor, then 0
+
+    /* --- gaps 1-7: deeper group-member coverage --- */
+
+    /* (1a) mixed hook-less: reading the STATIC scalar must NOT construct the class */
+    __println("mn=" + mix1:mn_);             // 5 (static — no cog:ctor here)
+    __println("mc=" + mix1:mc_.cn_);         // cog:ctor, then 0
+
+    /* (1b) mixed hook-bearing: the scalar is gated -> touching it fires the group */
+    __println("sn=" + mix2:sn_);             // cog:ctor, mix2:ctor, then 3
+
+    /* (2a) inline array-of-class member: all 3 elements construct */
+    __println("pack=" + arr1:pack_[1].cn_);  // cog:ctor x3, then 0
+
+    /* (2b) nested class member: the Cog field constructs, then the Nest body */
+    __println("nest=" + nst1:nn_.inner_.cn_);// cog:ctor, nest:ctor, then 0
+
+    /* (2c) non-class aggregate member (constructed on touch, no ctor print, no dtor) */
+    __println("nums=" + arr2:nums_[1]);      // 8
+
+    /* (4) touch the SECOND member -> still constructs rc_ before rg_ (decl order) */
+    __println("rev=" + rev1:rg_.gn_);        // cog:ctor, gear:ctor, then 0
+
+    /* (5) the user ctor reads its member (fully constructed before the ctor runs) */
+    __println("use=" + usem:uc_.cn_);        // cog:ctor, usem:ctor cn=7, then 7
+
+    /* (6a) class-member group in a namespace */
+    __println("y=" + Yard:crate2:yc_.cn_);   // cog:ctor, gear:ctor, crate2:ctor, then 0
+
+    /* (6b) class-member group in a class */
+    __println("v=" + Vault:stash2:vc_.cn_);  // cog:ctor, stash2:ctor, then 0
+
+    /* (6c) class-member group in a function: ctor on the FIRST call only */
+    stow();                                  // cog:ctor, stow:ctor, stow fc=0
+    stow();                                  // stow fc=0 (already constructed)
+
+    /* (7a) cross-group nesting: chainA's ctor builds chainB mid-ctor */
+    chainA:ac_.cn_ = 0;                      // cog:ctor(ac), chainA:ctor, cog:ctor(bc), chainB:ctor
+
+    /* (7b) arity: single-member and 3-member groups (touch the middle member) */
+    __println("solo=" + solo:sc1_.cn_);      // cog:ctor, then 0
+    __println("trio=" + trio:t2_.gn_);       // cog:ctor, gear:ctor, cog:ctor, then 0
+
+    /* (3) `dormant` is never touched -> no dormant:ctor / cog:ctor / dtor for it */
+
+    /* at exit, dtors run LIFO by construction order. Within a group, teardown is the
+       user ~() (if any) then members in REVERSE. The gap groups register last (in the
+       order touched: mix1, mix2, arr1, nst1, rev1, usem, crate2, stash2, stow, chainA,
+       chainB, solo, trio — arr2 has no dtor, dormant is never touched), so they tear
+       down first, in reverse:
+         trio:   cog:dtor, gear:dtor, cog:dtor
+         solo:   cog:dtor
+         chainB: chainB:dtor, cog:dtor
+         chainA: chainA:dtor, cog:dtor
+         stow:   stow:dtor, cog:dtor
+         stash2: stash2:dtor, cog:dtor
+         crate2: crate2:dtor, gear:dtor, cog:dtor
+         usem:   usem:dtor, cog:dtor
+         rev1:   gear:dtor, cog:dtor
+         nst1:   nest:dtor, cog:dtor
+         arr1:   cog:dtor x3
+         mix2:   mix2:dtor, cog:dtor
+         mix1:   cog:dtor
+       then the earlier groups:
+         anon4, packa, bundle, crate, lvl3, lvl2, lvl1, tag, bin, tank, back, front,
+         depot, widget */
     return 0;
 }
 
@@ -596,6 +861,14 @@ int32 main() {
 /* a global destructor without a matching constructor (the mirror direction). */
 //-EXPECT-ERROR: requires a matching constructor
 //global orphan(a_ = 0) { ~() {} }
+
+/* a hook-bearing group must declare a member — a memberless one has nothing to touch,
+   so its ctor/dtor could never run. Named and anon forms (anon falls the caret back to
+   the `global` keyword, name_tok being unset). */
+//-EXPECT-ERROR: must declare at least one member
+//global stranded() { _() {} ~() {} }
+//-EXPECT-ERROR: must declare at least one member
+//global ( ) { _() {} ~() {} }
 
 /* a global group ctor/dtor takes no parameters. */
 //-EXPECT-ERROR: takes no parameters

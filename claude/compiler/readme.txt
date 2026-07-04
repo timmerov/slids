@@ -1,4 +1,4 @@
-compiler_v2 — slids compiler rewrite, in-progress
+compiler — slids compiler rewrite, in-progress
 
 (Companion docs: plan.txt = the phase roadmap / main quest; todo.txt = open
 side-quests — bugs, reach goals, deferrals; readme-classes.txt = the CLASS-cluster
@@ -151,7 +151,7 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
   kAddrOfExpr arm routes its result through widen::convert(inferred_type, dest_type),
   so `^lvalue` into an `intptr` lvalue emits `ptrtoint` (ptr->ptr stays a no-op,
   kNoType is "no conversion"). Before this it returned the raw `ptr` and stored it
-  into an i64 slot — invalid IR (`store i64 <ptr>`); canon test_v2/class/empty.sl.
+  into an i64 slot — invalid IR (`store i64 <ptr>`); canon test/class/empty.sl.
 
   Construction (a class ctor at a decl / `new`) is a SEPARATE operation, not this
   matrix — class <- tuple as a ctor lives outside it. Swap (`<-->`) is also outside:
@@ -352,7 +352,7 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
   POD-aggregate returns ride the same sret ABI (behavior-neutral vs the old by-value
   return) and NRVO too (eliding the copy). Open follow-up (todo.txt): returning an
   unnamed temporary (`return Class(7)` — a front-end gap). Canon:
-  test_v2/function/return_fn.sl.
+  test/function/return_fn.sl.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
 
@@ -503,18 +503,35 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
 
   STATIC vs LAZY:
     * A scalar with a foldable constant init is STATICALLY allocated (`@sym = internal
-      global <ty> <const>`); constfold captures the literal.
+      global <ty> <const>`); constfold captures the literal. A global is static iff it
+      carries NO touch gate (`touch_symbol` empty — the sole codegen discriminator for
+      emitting a folded constant init vs zero-init storage).
     * A COMPOUND global (array / tuple / class, or any aggregate containing a class) is
       LAZY (the all-compound-lazy policy): zero-init storage + codegen SYNTHESIZES a
       ctor (fills the array/tuple init or the class construction-args + field-defaults,
       then fires the ctors on first touch) and, for a class-containing type, a dtor.
       classify runs a scope-level global through the SAME construction funnel as a local
       (classifyClassInit / classZeroValue), which types the aggregate init and builds
-      the class field-default tuple. A group WITH a user ctor/dtor is lazy the same way.
-    * FIRST-TOUCH gate + LIFO teardown: each lazy global/group has a sentinel bool + a
-      touch thunk (checks/sets the sentinel, REGISTERS the dtor with a runtime LIFO list
-      BEFORE running the ctor, so registration order == ctor-invocation order). Access
-      sites call the touch thunk; a never-touched group is neither built nor destroyed.
+      the class field-default tuple.
+    * A GROUP is the lazy unit — its compound MEMBERS are constructed as one on first
+      touch of ANY member. desugar's `finalizeGroup` builds a GlobalGroup carrying the
+      members in declaration order (`member_ids`) plus the user `_()`/`~()` symbols
+      (`user_ctor_symbol` / `user_dtor_symbol`); codegen's synthesized group ctor thunk
+      constructs each member in order THEN calls the user ctor, and the dtor thunk calls
+      the user dtor THEN destructs members in reverse. A lone compound global is the
+      degenerate one-member group (`synth_global_id`), built through the SAME per-global
+      helper (`emitGlobalConstruct` / `emitGlobalDestruct`). `needsSynth` decides which
+      members are gated: a foldable scalar stays static, a class/aggregate rides the gate
+      — but a group WITH a user hook forces EVERY member onto the gate (so any access
+      fires the ctor). A hook-less group still forms one shared gate around its compound
+      members; a hook-less ANON group gets a shared group id in `explodeAnonGlobalGroups`
+      so its members group too. A hook-bearing group MUST declare a member (grammar
+      rejects a memberless one — nothing would trigger its gate).
+    * FIRST-TOUCH gate + LIFO teardown: each lazy group has a sentinel bool + a touch
+      thunk (checks/sets the sentinel, REGISTERS the group dtor thunk with a runtime LIFO
+      list BEFORE running the ctor, so registration order == ctor-invocation order — each
+      group registers exactly ONE dtor thunk). Access sites call the touch thunk; a
+      never-touched group is neither built nor destroyed.
 
   THE `global;` SCOPE STATEMENT — a real scope-registered lifetime (a `DtorScope`
   entry): at its scope's exit the `__$global_dtor_all` registry walker runs. Auto-
@@ -1412,4 +1429,4 @@ PLUMBING
                      (v1-style). Color-gated on isatty + NO_COLOR. Messages
                      are sentence-shaped throughout: capital + period.
   Makefile        -std=c++17 -Wall -Wextra -Werror -Wswitch-enum.
-                  Builds to ../bin/slidsc. Objects in ../build/compiler_v2/.
+                  Builds to ../bin/slidsc. Objects in ../build/compiler/.

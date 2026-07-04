@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Drive positive tests for one subdirectory of test_v2/.
+# Drive positive tests for one subdirectory of test/.
 #
 # Usage: run_positives.sh <subdir-name> <sample> [<sample>...]
 #

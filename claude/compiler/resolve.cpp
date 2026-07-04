@@ -4836,8 +4836,16 @@ void explodeAnonGlobalGroups(parse::Node& scope, int& gid_counter) {
             if (m && m->kind == parse::Kind::kFunctionDef
                 && (m->name == "_$gctor" || m->name == "_$gdtor")) { lazy = true; break; }
         if (!lazy) {
-            for (auto& m : c->children)
-                if (m) flat.push_back(std::move(m));   // static: bare members only
+            // A hook-less anon group is still ONE group: its members share a gate so
+            // touching any compound member constructs them all. Tag members with a fresh
+            // gid (no ctor/dtor bodies, so no `$glazy` home is generated); desugar
+            // decides which are gated vs static, and drops a purely-scalar group.
+            int gid = gid_counter++;
+            for (auto& m : c->children) {
+                if (!m) continue;
+                if (m->kind == parse::Kind::kVarDeclStmt) m->global_group_id = gid;
+                flat.push_back(std::move(m));   // dissolve into enclosing scope
+            }
             continue;
         }
         int gid = gid_counter++;

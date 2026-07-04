@@ -2415,6 +2415,43 @@ void setGroupGateSymbols(ast::GlobalGroup& g, char const* prefix, int id) {
     g.touch_symbol = std::string(prefix) + "touch_" + std::to_string(id);
 }
 
+// Does a global need a SYNTHESIZED ctor (and maybe dtor)? A class-containing type
+// always does; a scalar aggregate does only when it has an initializer to store. A
+// plain foldable scalar stays a static `@`-global (initialized before main).
+bool needsSynth(widen::TypeRef type, bool has_init) {
+    widen::Type::Form f = widen::form(widen::strip(type));
+    bool aggregate = f == widen::Type::Form::kArray
+                     || f == widen::Type::Form::kTuple
+                     || f == widen::Type::Form::kSlid;
+    return widen::hasInPlaceClass(type) || (aggregate && has_init);
+}
+
+// Finalize a NAMED or ANON group after its members + user hooks are collected: keep
+// only the members that actually need the gate (a foldable scalar in a hook-less group
+// stays static; a hook forces ALL members onto the gate so any access fires the ctor),
+// wire the survivors to the group touch, and name the synth ctor/dtor thunks. Returns
+// false for an inert group (no gated member, no user hook) — the caller drops it.
+bool finalizeGroup(ast::GlobalGroup& g, ast::Tree& out) {
+    bool has_hook = !g.user_ctor_symbol.empty() || !g.user_dtor_symbol.empty();
+    bool need_dtor = !g.user_dtor_symbol.empty();
+    std::vector<int> gated;
+    for (int id : g.member_ids) {
+        // .at (not []) — every member_id was recordGlobal'd before being pushed, so a
+        // miss is a broken invariant that should abort LOUDLY, not silently synthesize
+        // an empty kNoType global that miscompiles downstream.
+        ast::GlobalVar& gv = out.globals.at(id);
+        if (!has_hook && !needsSynth(gv.type, (bool)gv.init)) continue;  // static scalar
+        gated.push_back(id);
+        gv.touch_symbol = g.touch_symbol;
+        if (widen::hasInPlaceClass(gv.type)) need_dtor = true;
+    }
+    g.member_ids = std::move(gated);
+    if (g.member_ids.empty() && !has_hook) return false;
+    g.ctor_symbol = g.touch_symbol + "_ctor";
+    g.dtor_symbol = need_dtor ? g.touch_symbol + "_dtor" : std::string();
+    return true;
+}
+
 // Walk scope containers, recording every global declaration into out.globals.
 // A global GROUP (an is_global namespace) with a `_$gctor` member is LAZY: record a
 // GlobalGroup (sentinel/touch/ctor/dtor symbols) and stamp each member's
@@ -2433,47 +2470,41 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
             ast::GlobalGroup& g = lazy_anon[gid];
             setGroupGateSymbols(g, "__ganon_", gid);
             std::string sym = functionSymbol(*n, in);
-            if (isGlobalCtorName(n->name)) g.ctor_symbol = sym;
-            else g.dtor_symbol = sym;
+            if (isGlobalCtorName(n->name)) g.user_ctor_symbol = sym;
+            else g.user_dtor_symbol = sym;
             collectGlobals(n->children, in, out, next_id, lazy_anon);
             continue;
         }
         if (n->kind == parse::Kind::kVarDeclStmt && n->is_global) {
             recordGlobal(*n, in, out, next_id);
-            // A dissolved LAZY anon member gates on the shared group's touch thunk.
+            // A dissolved anon member joins its group (in declaration order). Its
+            // gating (vs static) is decided in finalizeGroup, once the group's hooks
+            // are known — the ctor/dtor functions may be visited after this member.
             if (n->global_group_id >= 0 && n->resolved_entry_id >= 0) {
                 int gid = n->global_group_id;
                 ast::GlobalGroup& g = lazy_anon[gid];
                 setGroupGateSymbols(g, "__ganon_", gid);
-                out.globals[n->resolved_entry_id].touch_symbol = g.touch_symbol;
+                g.member_ids.push_back(n->resolved_entry_id);
             }
             continue;
         }
         if (n->kind == parse::Kind::kNamespaceDecl && n->is_global) {
-            parse::Node* ctor = nullptr;
-            parse::Node* dtor = nullptr;
+            // A named group is its own gate: construct every compound member on first
+            // touch of any member, then run the user `_()`; tear down in reverse. Class
+            // members ride the group gate whether or not the group has a user ctor/dtor.
+            ast::GlobalGroup g;
+            setGroupGateSymbols(g, "__global_", n->resolved_entry_id);
             for (auto const& m : n->children) {
                 if (!m || m->kind != parse::Kind::kFunctionDef) continue;
-                if (isGlobalCtorName(m->name)) ctor = m.get();
-                else if (isGlobalDtorName(m->name)) dtor = m.get();
-            }
-            std::string touch;
-            if (ctor) {
-                ast::GlobalGroup g;
-                int gid = n->resolved_entry_id;
-                setGroupGateSymbols(g, "__global_", gid);
-                g.ctor_symbol = functionSymbol(*ctor, in);
-                g.dtor_symbol = dtor ? functionSymbol(*dtor, in) : std::string();
-                touch = g.touch_symbol;
-                out.global_groups.push_back(std::move(g));
+                if (isGlobalCtorName(m->name)) g.user_ctor_symbol = functionSymbol(*m, in);
+                else if (isGlobalDtorName(m->name)) g.user_dtor_symbol = functionSymbol(*m, in);
             }
             for (auto const& m : n->children) {
-                if (m && m->kind == parse::Kind::kVarDeclStmt && m->is_global) {
-                    recordGlobal(*m, in, out, next_id);
-                    if (!touch.empty() && m->resolved_entry_id >= 0)
-                        out.globals[m->resolved_entry_id].touch_symbol = touch;
-                }
+                if (!(m && m->kind == parse::Kind::kVarDeclStmt && m->is_global)) continue;
+                recordGlobal(*m, in, out, next_id);
+                if (m->resolved_entry_id >= 0) g.member_ids.push_back(m->resolved_entry_id);
             }
+            if (finalizeGroup(g, out)) out.global_groups.push_back(std::move(g));
             continue;
         }
         if (n->kind == parse::Kind::kProgram
@@ -2496,25 +2527,22 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     buildVtables(in, out);
     std::map<int, ast::GlobalGroup> lazy_anon;
     collectGlobals(in.nodes, in, out, next_id, lazy_anon);
-    for (auto& [gid, g] : lazy_anon) out.global_groups.push_back(std::move(g));
-    // COMPOUND globals (array / tuple / class) are LAZY (the all-compound-lazy policy):
-    // zero-init storage + a SYNTHESIZED ctor/dtor that construct/destruct `@symbol` in
-    // place on first touch. A class-containing type needs both hooks; a scalar
-    // aggregate needs a ctor only when it has an initializer to store (a zero-init
-    // scalar array stays a static `zeroinitializer`). Codegen emits the thunk bodies.
+    for (auto& [gid, g] : lazy_anon)
+        if (finalizeGroup(g, out)) out.global_groups.push_back(std::move(g));
+    // Lone COMPOUND globals (array / tuple / class) NOT in any group are LAZY (the
+    // all-compound-lazy policy): zero-init storage + a SYNTHESIZED ctor/dtor that
+    // construct/destruct `@symbol` in place on first touch. A class-containing type
+    // needs both hooks; a scalar aggregate needs a ctor only when it has an initializer
+    // to store (a zero-init scalar array stays a static `zeroinitializer`).
     for (auto& [id, gv] : out.globals) {
-        if (!gv.touch_symbol.empty()) continue;      // already in a user / anon group
-        widen::Type::Form f = widen::form(widen::strip(gv.type));
-        bool aggregate = f == widen::Type::Form::kArray
-                         || f == widen::Type::Form::kTuple
-                         || f == widen::Type::Form::kSlid;
-        bool has_class = widen::hasInPlaceClass(gv.type);
-        if (!has_class && !(aggregate && gv.init)) continue;   // scalars / zero-init stay static
+        if (!gv.touch_symbol.empty()) continue;      // already in a group
+        if (!needsSynth(gv.type, (bool)gv.init)) continue;   // scalars / zero-init stay static
         ast::GlobalGroup g;
         g.synth_global_id = id;
         setGroupGateSymbols(g, "__cg_", id);
         g.ctor_symbol = "__cgctor_" + std::to_string(id);
-        g.dtor_symbol = has_class ? "__cgdtor_" + std::to_string(id) : std::string();
+        g.dtor_symbol = widen::hasInPlaceClass(gv.type)
+                            ? "__cgdtor_" + std::to_string(id) : std::string();
         gv.touch_symbol = g.touch_symbol;
         out.global_groups.push_back(std::move(g));
     }

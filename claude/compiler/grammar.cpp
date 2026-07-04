@@ -1693,6 +1693,20 @@ struct Parser {
                                  : "A global destructor requires a matching constructor.");
                 return nullptr;
             }
+            // A hook-bearing group needs a member: the ctor/dtor run on first TOUCH of a
+            // member, so a memberless one has no trigger and would silently never run.
+            // (ctor_def == dtor_def here, so ctor_def alone means both are present.)
+            if (ctor_def) {
+                bool has_member = false;
+                for (auto const& c : node->children)
+                    if (c && c->kind == parse::Kind::kVarDeclStmt) { has_member = true; break; }
+                if (!has_member) {
+                    errorAt(node->name_tok >= 0 ? node->name_tok : node->tok,
+                            "A global group with a constructor/destructor must declare "
+                            "at least one member.");
+                    return nullptr;
+                }
+            }
             return node;
         }
         auto d = parseVarDeclStmt();
