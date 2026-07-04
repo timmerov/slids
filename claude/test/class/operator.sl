@@ -128,8 +128,10 @@ most operators have no return type.
 exceptions are noted.
 the parameters for most operators are flexible - but
 must be primitive or pointer to const.
+opeartor parameters may not have default values.
 a move pointer parameter must be explicit mutable.
 the swap parameter must be explicit mutable.
+the parameters to all other operators may not be mutable.
 
 accepted signature templates and simple usage:
 
@@ -145,7 +147,7 @@ accepted signature templates and simple usage:
         op=(ConstType a);                       obj = a;
         op<--(Number x);                        obj <-- x;
         op<--(mutable Type^ a);                 obj <-- a;
-        op<-->(mutable Class^ c);               obj1 <-- obj2;
+        op<-->(mutable Class^ c);               obj1 <--> obj2;
 
         /* binary operation */
         op+(ConstType1 a, ConstType2 b);        obj = a + b;
@@ -186,8 +188,8 @@ accepted signature templates and simple usage:
         Primitive op>=(ConstType a);            b = (obj >= a);
 
         /* index, dereference */
-        Type^ op[](ConstType a);                x = obj[a];
-        Type^ op^();                            x = obj^;
+        Type^ op[](ConstType a);                obj[a] = obj[b];
+        Type^ op^();                            obj1^ = obj2^;
 
         /* unary */
         Primitive op+();                        b = +obj;
@@ -225,43 +227,100 @@ move/assign operator:
     call ctor
     call move/assign operator
 
-these two declarations follow the exact same code path:
-
-    Class cls(1,2,3);
-    Class cls = (1,2,3);
-
-*******************************************************
-timmer you are here:
-*******************************************************
-
-when op= lands, we want to be able to support:
-
-    op=( TupleType ) { ... }
-
-in which case, the assignment form must check for an overloaded op=
-where the parameter is a tuple that matches the expression type.
-if no match, then fall back to initialization.
-
-note to future self:
-
-apparently we have move-init aka var-decl-move.
-a's fields are move-copied to b.
-then b's ctor is called.
-huh.
-
-    Class a(1,2,3);
-    Class b <-- a;
-
-that only works if Class uses the default move operator.
-if Class overloads the move operator then we must construct first then move.
-otherwise the move operator would be called before the object is initialized.
-which would be bad.
 */
 
 /*
 claude says:
 
-tbd
+ — IMPLEMENTATION PLAN for landing user-defined operator overloading.
+(The spec above is canon. This section is my notes.)
+
+STATUS QUO (what exists vs what is missing)
+  * LANDED: the SYNTHESIZED default copy / move / swap — the per-field iterative+
+    recursive walk (nulls pointer/iterator leaves on move; see codegen.cpp move husk
+    ~2212). Exercised by the DefaultMove/Outer/Pair/Plain/Holder tests below.
+  * NOT LANDED: user-written `op<sym>(...)` overloads. The `op` keyword LEXES
+    (lex.cpp:329 -> token::kOp) but grammar.cpp NEVER consumes kOp, so an operator
+    method does not even PARSE today. And every operator EXPRESSION on a class operand
+    currently ERRORS in classify with "Operator 'X' is not defined on type 'Y'".
+  * FILE-LAYOUT NOTE: the real phases are grammar.cpp (parser), classify.cpp,
+    codegen.cpp — there is NO parser.cpp / codegen_expr.cpp / codegen_stmt.cpp (the
+    CLAUDE.md pipeline section names those; they are stale for v2).
+
+ARCHITECTURE (the one decision that matters)
+  Do NOT port v1/compiler/codegen_overload.cpp. v1 resolved operators by matching
+  type-name STRINGS in codegen (argBindsToParam(std::string,std::string)). v2 types in
+  classify on widen::TypeRef and codegen is string-free. So operator overloading is a
+  CLASSIFY-side desugar: rewrite each operator expression form into a method CALL
+  (self.op<sym>(args)) and resolve it with the EXISTING typed overload engine
+  `pickOverload` (classify.cpp:1839; recv_offset=1 for methods, as at classify.cpp:3079).
+  The smallest-widening-wins convert rule layers on pickOverload's existing widening.
+
+INTERNAL NAMING
+  Source `op<--` (move) / `op<-->` (swap) are the current spellings; keep the method
+  name as the source spelling (op<--, op<-->) — do NOT reintroduce v1's obsolete
+  op<- / op<-> shorthand. Copy is op=. op^ is OVERLOADED by arity: op^() = dereference,
+  op^(a,b) = binary xor.
+
+LOWERING CONTRACT (from the spec above — implement as classify rewrites)
+  assignment   Class lhs = rhs            -> lhs.op=(rhs)
+  move         Class lhs <-- rhs          -> lhs.op<--(rhs)         (+ null rhs if a ptr)
+  swap         Class lhs <--> rhs         -> lhs.op<-->(rhs)
+  binary FUSE  (fresh temp) temp OP rhs   -> temp.op OP= (rhs)      in place
+  binary FRESH temp = a OP b              -> temp.opOP(a, b)        (a,b passed in)
+  compound     lhs OP= rhs                -> lhs.opOP=(rhs)
+  comparison   x = (a == b)               -> x = a.op==(b)          (built-in result)
+  index        rhs[i]                     -> rhs.op[](i)^           (deref -> lvalue)
+  deref        rhs^                        -> rhs.op^()^             (deref -> lvalue)
+  unary arity1 temp = -operand            -> temp.op-(operand)      (returns self)
+  unary arity0 if (-a)                    -> a.op-()                (built-in result)
+  convert      no exact overload          -> target.op=(...) + integer widen, smallest wins
+  The FUSE-vs-FRESH split keys on "is the lhs a fresh temp" (v1: isFreshSlidTemp) — the
+  one subtle bit; index/deref lower THROUGH the existing `^`-deref lvalue machinery.
+
+SIGNATURE VALIDATION (v2 spec == v1 enforcement; port v1 rules into a classify/resolve
+pass — v1 did arity in the parser, but v2 has types resolved later, so do it post-resolve)
+  ARITY (explicit params, self implicit) — v1 parser.cpp:1267:
+    op= op<-- op<--> : 1 | op+ op- : 0,1,2 | op* op/ op% op& op| op<< op>> op&& op|| op^^ : 2
+    op^ : 0 (deref) or 2 (xor) | op~ op! : 0,1 | compound op+=..op^^= : 1
+    comparison op==..op>= : 1 | op[] : 1
+  NO DEFAULT PARAM VALUES on any operator (v1 parser.cpp:1283; spec line 131).
+  MUTABLE (v1 parser.cpp:1298): op<-- / op<--> REQUIRE `mutable` on a pointer param;
+    EVERY other operator FORBIDS `mutable` on any param (spec line 134).
+  SWAP: op<--> takes exactly one `SameClass^` param (v1 codegen.cpp:371).
+  RETURN TYPE: comparison ops and unary ARITY-0 (op+/-/~/! with 0 params) must return a
+    BUILT-IN / Primitive (bool/int/float/pointer), never a class/self (v1 codegen.cpp:379).
+    op[] and op^ must return a REFERENCE `Type^` — v2 SHOULD enforce this; v1 did NOT
+    (it only return-checks comparison + arity-0 unary). Every other operator has no
+    return (returns self).
+  Params must be Primitive or a (non-mutable) reference; a bare `Type^` IS the
+  non-mutable "pointer to const" — NOT a `const` keyword requirement (matches the v1
+  reference test, which uses bare `Overload^`/`Simple^`/`int` params throughout).
+
+DEFAULT-SYNTHESIS INTERACTION
+  A user op= / op<-- / op<--> SHADOWS the synthesized default (define-iff-not-defined,
+  spec 207). The two ctor sequences (spec 215-228): NO matching op -> copy/move fields
+  then ctor; matching op -> init fields, ctor, THEN call the op. Wire the
+  user-op lookup where the default class-assign dispatch lives (classify checkSlidAssign
+  classify.cpp:836/2059 — today it defers: "class target is deferred (no op= yet)"
+  classify.cpp:365).
+
+STAGING (each stage lands with a ported slice of v1/test/operators.sl into the body below)
+  1. PARSER: consume kOp + the full operator-symbol set (incl. [] as two tokens, the
+     <-- / <--> arrows, and the compound `=` combos) into an `op<sym>` method name.
+     Then the VALIDATION pass (arity / mutable / return / swap / no-defaults) — this
+     alone unlocks the whole negative catalog (v1 has ~90 negatives).
+  2. assignment / move / swap / compound (op= op<-- op<--> op+=..) — composes with the
+     existing default class-assign dispatch.
+  3. binary + unary (the FUSE-vs-FRESH split).
+  4. comparison (built-in return) + index/deref (through `^`).
+  5. convert fallback (target op= + smallest-widening).
+
+TEST PLAN
+  Port v1/test/operators.sl in the same stage order (Overload defines every op across
+  the Overload^/int/Simple^ param families; Comparison = non-bool return; MovePtr = move
+  nulls source; BadReturn / BadMutable = negatives). Keep the default-operator tests that
+  are already below. One //-EXPECT-ERROR per negative, matching the v2 messages.
 */
 
 DefaultMove(

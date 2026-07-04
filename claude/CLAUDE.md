@@ -80,14 +80,7 @@ Test nothing other than the test files in scope.
 .sl source → Lexer → Token stream → Parser → AST → Codegen → LLVM IR (.ll)
 ```
 
-- `main.cpp` — entry point; reads source, runs lexer → parser → codegen
-- `lexer.cpp` / `token.h` — tokenizer; handles keywords, literals, comments, line tracking
-- `parser.cpp` / `parser.h` — recursive descent parser; produces AST (`Expr`, `Stmt`, `SlidDef`, `FunctionDef`, etc.)
-- `codegen.cpp` — orchestrates IR emission; Phase 1: collect string constants + signatures; Phase 2: analyze nested function captures; Phase 3: emit LLVM IR
-- `codegen_expr.cpp` — expression codegen (binary/unary ops, calls, field access, allocation)
-- `codegen_stmt.cpp` — statement codegen (declarations, assignments, control flow, destructors)
-- `codegen_template.cpp` — template instantiation (function and class templates, expression cloning across TU)
-- `codegen_helpers.h` — type predicates and constant evaluation utilities
+see readme.txt.
 
 ## Language concepts
 
@@ -114,7 +107,7 @@ The codegen class tracks:
 
 Canonical helpers:
 - `emitConstructAt(stype, ptr, args, overrides)` / `emitConstructAtPtrs(...)` — initializes a slid in place. Recurses into slid-typed fields: with no arg → default-construct; with a same-type arg → `emitSlidAssign` copy; with a non-matching arg → recurse using that single arg as the field-slid's ctor input (e.g. `NestedMove(42, ...)` → `a_ = Move(42)`).
-- `emitSlidAssign(slid, dst, src, is_move)` — per-field copy/move dispatcher. For embedded slid fields, looks up `op<-` (move) or `op=` (copy) taking `Type^` and calls it if defined; otherwise recurses default. Pointer/iterator fields: load + store; if `is_move`, store null at source. Inline arrays of slids/pointers are walked element-wise with the same dispatch.
+- `emitSlidAssign(slid, dst, src, is_move)` — per-field copy/move dispatcher. For embedded slid fields, looks up `op<--` (move) or `op=` (copy) taking `Type^` and calls it if defined; otherwise recurses default. Pointer/iterator fields: load + store; if `is_move`, store null at source. Inline arrays of slids/pointers are walked element-wise with the same dispatch.
 
 Template support:
 - `template_funcs_` / `template_slids_` — template definitions indexed by base name
