@@ -26,6 +26,20 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
+  * TUPLE/ARRAY-OF-CLASS INLINE LITERAL — extra copy + late temp destruction.
+    Initializing an aggregate of class VALUES from an inline literal —
+    `(Tracked, Tracked) t = (Tracked(1), Tracked(2));` — materializes each element as a
+    temporary and then COPY-constructs it into the destination slot (no RVO into the
+    aggregate: 4 ctors where 2 would do), AND the element temporaries are destroyed at
+    BLOCK exit rather than at the initializing statement's seam. It is BALANCED (every
+    ctor has a matching dtor — no leak / double-free), so this is a lifetime / efficiency
+    bug, not a crash. Contrast a FUNCTION-returned tuple-of-class (sret), which move-
+    constructs into the slot and destroys the source husks promptly — the clean shape.
+    Root is in emitExpr's tuple-literal-of-class lowering, NOT the declarator construct
+    funnel. Observed while adding the destructure-into-class-slots coverage test
+    (tuple/destructure.sl), which sidesteps it by using a tuple-returning function as the
+    destructure source.
+
 
 UNBLOCKED FEATURES
 
@@ -350,17 +364,3 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     parseType recurses one frame per `(` layer, so a pathological depth is a theoretical
     parser-stack DoS. Same 1-tuple-collapse root as UNIT ARRAY WITH A NON-SCALAR ELEMENT
     above. Pinned by vardecl.sl (`((((int)))) grp`). Low priority; harmless today.
-
-  * TUPLE/ARRAY-OF-CLASS INLINE LITERAL — extra copy + late temp destruction.
-    Initializing an aggregate of class VALUES from an inline literal —
-    `(Tracked, Tracked) t = (Tracked(1), Tracked(2));` — materializes each element as a
-    temporary and then COPY-constructs it into the destination slot (no RVO into the
-    aggregate: 4 ctors where 2 would do), AND the element temporaries are destroyed at
-    BLOCK exit rather than at the initializing statement's seam. It is BALANCED (every
-    ctor has a matching dtor — no leak / double-free), so this is a lifetime / efficiency
-    bug, not a crash. Contrast a FUNCTION-returned tuple-of-class (sret), which move-
-    constructs into the slot and destroys the source husks promptly — the clean shape.
-    Root is in emitExpr's tuple-literal-of-class lowering, NOT the declarator construct
-    funnel. Observed while adding the destructure-into-class-slots coverage test
-    (tuple/destructure.sl), which sidesteps it by using a tuple-returning function as the
-    destructure source.
