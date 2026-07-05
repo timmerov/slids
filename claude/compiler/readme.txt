@@ -141,8 +141,12 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     typed pointer falls under `ptr` and is rejected.
   * recurse — the aggregate x aggregate block: match slot/element count, then each
     element/slot pair RE-ENTERS this matrix. Self-similar to any depth.
-  * op=    — the class row delegates wholly to the class assignment operator. Not
-    landed, so every class-target cell is an ERROR until op= is defined/synthesized.
+  * op=    — the class row dispatches the class's assignment operator: a matching
+    user `op=` (classify rewrites the assign / store / field / deref / index target
+    to a method call) or, absent one, the default same-type copy / move; a source with
+    no match is an error. LANDED (operator overloading + the declarator dispatch funnel).
+    A `class <- tuple` as a ctor is CONSTRUCTION (below), not this cell; `op=(tuple)` is
+    deferred.
   * error  — everything else.
 
   intptr-as-source falls in the integer column, so `pointer <- intptr` is an error

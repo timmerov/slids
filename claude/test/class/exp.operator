@@ -64,6 +64,10 @@ omv = 77
 osw = 88 ossrc = 0
 da = 11 db = 22
 sa = 33 sb = 44 s0 = 1 s1 = 2
+dca = 11 dcb = 22
+sf = 31
+sd = 41
+si = 51
 dtor z
 dtor b
 dtor a

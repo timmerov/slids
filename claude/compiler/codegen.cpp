@@ -2000,39 +2000,123 @@ void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
 // const decl) — go through emitImplicitAggregateConvert, which is itself
 // form-agnostic (array == homogeneous tuple).
 
-// The TypeRef of a tuple/array's i-th destructure element (a tuple slot, or the
-// array's (sub-)element type). agg_type is guaranteed a tuple or array by classify.
-widen::TypeRef destructureElem(widen::TypeRef agg_type, std::size_t i) {
-    widen::TypeRef s = widen::strip(agg_type);
-    if (widen::form(s) == widen::Type::Form::kTuple) return widen::get(s).slots[i];
-    widen::Type const& at = widen::get(s);   // array
-    return (at.dims.size() <= 1) ? at.elem
-        : widen::internArray(at.elem,
-              std::vector<int>(at.dims.begin() + 1, at.dims.end()));
+// ── The declarator codegen funnel ──────────────────────────────────────────
+// A binding site initializes storage from an optional initializer and, for a
+// class (or an aggregate containing one), pairs a constructor with a registered
+// destructor. These helpers are that funnel: every CONSTRUCTION site (local
+// var-decl, sret return slot, global) routes through emitConstructAt, so ctor and
+// dtor registration can never diverge into a leak or an orphan dtor — the
+// destructor-balance invariant, enforced structurally.
+
+// FILL storage at `addr` (llvm type `llty`, structured `type`) from the
+// initializer `init`. Emits only the value stores — NOT ctor hooks, NOT dtor
+// registration. `is_move` from an lvalue nulls the source's pointer leaves after
+// the copy (leaving it a valid moved-from husk); a move from an rvalue, or a
+// plain copy, just stores the value. This is the field-init shape shared by every
+// binding site: array<->tuple bridge, per-leaf aggregate widen, or whole-value copy.
+void emitInitFill(std::string const& addr, widen::TypeRef type,
+                  std::string const& llty, ast::Node const& init, bool is_move,
+                  SymTab const& syms, strings::Pool& pool, std::ostream& out,
+                  diagnostic::Sink& diag) {
+    widen::Type::Form dform = widen::form(widen::strip(type));
+    // An array filled from a tuple LITERAL flows through the array<->tuple bridge.
+    if (dform == widen::Type::Form::kArray
+        && init.kind == ast::Kind::kTupleExpr) {
+        emitArrayFromTuple(addr, type, init, syms, pool, out, diag);
+        return;
+    }
+    // Both sides aggregate but the leaf types differ: a per-leaf widening copy
+    // (classify validated the shape via checkAggregateShapeMatch). Otherwise a
+    // whole-value copy / scalar widen through emitExpr's implicit convert.
+    widen::Type::Form sform = widen::form(widen::strip(init.inferred_type));
+    bool agg_widen =
+        (dform == widen::Type::Form::kArray || dform == widen::Type::Form::kTuple)
+        && (sform == widen::Type::Form::kArray || sform == widen::Type::Form::kTuple)
+        && widen::deepStrip(type) != widen::deepStrip(init.inferred_type);
+    if (is_move && isAstLvalue(init)) {
+        // MOVE from an lvalue: compute the source address ONCE (a side-effecting
+        // index runs once), load at the SOURCE type, (widen?), store, then null
+        // the source's pointer leaves so it is left a valid moved-from husk.
+        std::string src = emitLvalueAddr(init, syms, pool, out, diag,
+                                         /*allow_partial=*/true);
+        std::string raw = newTmp("mv");
+        out << "  " << raw << " = load " << llvmForRef(init.inferred_type)
+            << ", ptr " << src << "\n";
+        std::string val;
+        if (agg_widen) {
+            val = emitImplicitAggregateConvert(raw, init.inferred_type, type,
+                                               init.file_id, init.tok, out, diag);
+        } else if (widen::deepStrip(init.inferred_type)
+                   != widen::deepStrip(type)) {
+            val = widen::convert(raw, init.inferred_type, type,
+                                 init.file_id, init.tok, out, diag);
+        } else {
+            val = raw;
+        }
+        out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
+        emitNullLeaves(src, init.inferred_type, out);
+        return;
+    }
+    // A copy (or a move from an RVALUE — no source storage to null).
+    std::string val;
+    if (agg_widen) {
+        val = emitExpr(init, syms, pool, out, diag, widen::kNoType);
+        val = emitImplicitAggregateConvert(val, init.inferred_type, type,
+                                           init.file_id, init.tok, out, diag);
+    } else {
+        val = emitExpr(init, syms, pool, out, diag, type);
+    }
+    out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
 }
 
-// Bind a destructure's slots from the aggregate value `agg` (type agg_type): extract
-// each element and store it to the slot's alloca; a NESTED slot extracts the
-// sub-aggregate and recurses; a null slot is discarded. The rhs was evaluated once
-// by the caller.
-void emitDestructure(ast::Node const& node, std::string const& agg,
-                     widen::TypeRef agg_type, SymTab& syms, std::ostream& out) {
-    std::string llty = llvmForRef(agg_type);
-    for (std::size_t i = 1; i < node.children.size(); i++) {
-        ast::Node const* tgt = node.children[i].get();
-        if (!tgt) continue;   // discard
-        std::string slot = newTmp("dslot");
-        out << "  " << slot << " = extractvalue " << llty << " " << agg
-            << ", " << (i - 1) << "\n";
-        if (tgt->kind == ast::Kind::kDestructureStmt) {
-            emitDestructure(*tgt, slot, destructureElem(agg_type, i - 1), syms, out);
-        } else {
-            auto it = syms.find(tgt->resolved_entry_id);
-            assert(it != syms.end() && "kDestructureStmt: target not in SymTab");
-            out << "  store " << it->second.llvm_type << " " << slot
-                << ", ptr " << it->second.alloca_name << "\n";
-        }
+// FINALIZE storage at `addr` as a constructed object of `type`: run the ctor
+// hooks (recursively — contained classes, then this class's own ctor, then the
+// vtable stamp) and register the destructor in `scope`, unless the caller owns
+// destruction (`register_dtor`=false: an sret return slot / NRVO local). This is
+// the SINGLE place construction hooks and dtor registration are paired — a class
+// defines both or neither, so one `typeNeedsHook` flag governs BOTH and they can
+// never diverge.
+void emitConstructed(std::string const& addr, widen::TypeRef type,
+                     bool register_dtor, DtorScope* scope, std::ostream& out) {
+    widen::TypeRef st = widen::strip(type);
+    if (!typeNeedsHook(st, /*ctor=*/true)) return;
+    assert(typeNeedsHook(st, /*ctor=*/false)
+           && "ctor/dtor hook need diverged — must be language-paired");
+    emitConstructHooks(addr, st, out);
+    if (register_dtor) {
+        assert(scope && "class instance constructed without a dtor scope — it "
+                        "would never be destroyed");
+        scope->objs.push_back({addr, st, ""});
     }
+}
+
+// CONSTRUCT a value into raw storage at `addr`: fill from `init` (nullptr =
+// default-construct — no field-init, ctor still runs), then finalize (hooks +
+// dtor registration). `sret_in_place` lets an exact-typed sret CALL initializer
+// construct its result DIRECTLY into `addr` (no temp, no move) — the callee's
+// ctor runs there, so only the dtor is registered. `register_dtor` is false when
+// the caller owns destruction (sret return slot / NRVO local, or a global whose
+// dtor runs through the global registry).
+void emitConstructAt(std::string const& addr, widen::TypeRef type,
+                     std::string const& llty, ast::Node const* init, bool is_move,
+                     bool sret_in_place, bool register_dtor, DtorScope* scope,
+                     SymTab const& syms, strings::Pool& pool, std::ostream& out,
+                     diagnostic::Sink& diag) {
+    if (sret_in_place && init && init->kind == ast::Kind::kCallExpr
+        && isSretReturn(type)
+        && widen::deepStrip(type) == widen::deepStrip(init->return_type)) {
+        // The callee constructs its result directly into `addr` — no temp, no
+        // extra ctor. Its dtor is registered here (unless the caller owns it).
+        emitCall(*init, syms, pool, out, diag, addr);
+        if (register_dtor && typeNeedsHook(widen::strip(type), /*ctor=*/true)) {
+            assert(scope && "sret call init without a dtor scope");
+            scope->objs.push_back({addr, widen::strip(type), ""});
+        }
+        return;
+    }
+    if (init)
+        emitInitFill(addr, type, llty, *init, is_move, syms, pool, out, diag);
+    emitConstructed(addr, type, register_dtor, scope, out);
 }
 
 void emitStmt(ast::Node const& stmt, SymTab& syms,
@@ -2054,137 +2138,21 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // The alloca + SymTab registration were HOISTED to the function entry
             // block by emitFunction (an alloca emitted here would re-allocate
             // stack on every pass through an enclosing loop — the v1 stack-
-            // overflow bug). Here we only emit the initializer store, if any.
+            // overflow bug). Here we only construct into that storage.
             auto it = syms.find(stmt.resolved_entry_id);
             assert(it != syms.end()
                 && "kVarDeclStmt: alloca not hoisted to entry block");
-            // sret CALL initializer (`Class x = fn()`). Phase B case 1 — BUILD IN
-            // PLACE: a new decl's ctor hasn't run, so when the types match exactly
-            // the callee constructs its result DIRECTLY into this local (no temp, no
-            // move). A hook local is then registered for destruction at scope exit. A
-            // non-exact (cross-form / leaf-widen) init has no exact slot to build
-            // into; it falls through to the generic convert path below (POD), and a
-            // hook leaf-widen call init doesn't arise (classify keeps a class init
-            // same-type).
-            if (!stmt.children.empty()
-                && stmt.children[0]->kind == ast::Kind::kCallExpr
-                && isSretReturn(it->second.slids_type)
-                && widen::deepStrip(it->second.slids_type)
-                       == widen::deepStrip(stmt.children[0]->return_type)) {
-                widen::TypeRef T = it->second.slids_type;
-                emitCall(*stmt.children[0], syms, pool, out, diag,
-                         it->second.alloca_name);
-                if (typeNeedsHook(T, /*ctor=*/true)) {
-                    assert(scope && "sret call init without a dtor scope");
-                    scope->objs.push_back({it->second.alloca_name, widen::strip(T), ""});
-                }
-                return;
-            }
-            // FIELD-INIT. Note this is an if/else CHAIN (no early return) so the
-            // lifecycle-hook block below ALWAYS runs after the init — an array of a
-            // hook class fills via emitArrayFromTuple, then still needs its
-            // elements' ctors fired.
-            if (!stmt.children.empty()) {
-                widen::Type::Form dform = widen::form(widen::strip(it->second.slids_type));
-                widen::Type::Form sform = widen::form(widen::strip(stmt.children[0]->inferred_type));
-                if (dform == widen::Type::Form::kArray
-                    && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
-                    emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
-                                       *stmt.children[0], syms, pool, out, diag);
-                } else {
-                    // A cross-form aggregate VALUE copy is lowered by slot in
-                    // desugar; what remains here is a same-shape leaf-widen copy
-                    // (or a const decl desugar skips) — load the source aggregate
-                    // and walk per-leaf with the form-agnostic implicit convert.
-                    // Shape already validated by classify::checkAggregateShapeMatch.
-                    bool agg_widen =
-                        (dform == widen::Type::Form::kArray
-                         || dform == widen::Type::Form::kTuple)
-                        && (sform == widen::Type::Form::kArray
-                            || sform == widen::Type::Form::kTuple)
-                        && widen::deepStrip(it->second.slids_type)
-                            != widen::deepStrip(stmt.children[0]->inferred_type);
-                    if (stmt.default_move_init && isAstLvalue(*stmt.children[0])) {
-                        // A MOVE-INIT (`T x <-- y`) from an lvalue: compute the source
-                        // address ONCE, then load + (widen?) + store + null its pointer
-                        // leaves through it, so a side-effecting source index runs once.
-                        // (desugar skips default_move_init, so a cross-form / leaf-widen
-                        // default-move-init reaches here too — the convert keeps it correct.)
-                        std::string src = emitLvalueAddr(*stmt.children[0], syms, pool,
-                                                         out, diag, /*allow_partial=*/true);
-                        std::string raw = newTmp("mv");
-                        out << "  " << raw << " = load "
-                            << llvmForRef(stmt.children[0]->inferred_type)
-                            << ", ptr " << src << "\n";
-                        std::string val;
-                        if (agg_widen) {
-                            val = emitImplicitAggregateConvert(
-                                raw, stmt.children[0]->inferred_type,
-                                it->second.slids_type, stmt.children[0]->file_id,
-                                stmt.children[0]->tok, out, diag);
-                        } else if (widen::deepStrip(stmt.children[0]->inferred_type)
-                                   != widen::deepStrip(it->second.slids_type)) {
-                            val = widen::convert(raw, stmt.children[0]->inferred_type,
-                                                 it->second.slids_type,
-                                                 stmt.children[0]->file_id,
-                                                 stmt.children[0]->tok, out, diag);
-                        } else {
-                            val = raw;
-                        }
-                        out << "  store " << it->second.llvm_type << " " << val
-                            << ", ptr " << it->second.alloca_name << "\n";
-                        emitNullLeaves(src, stmt.children[0]->inferred_type, out);
-                    } else {
-                        // A copy (or a default-move-init from an RVALUE — no leaves to null).
-                        std::string val;
-                        if (agg_widen) {
-                            val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                           widen::kNoType);
-                            val = emitImplicitAggregateConvert(
-                                val, stmt.children[0]->inferred_type,
-                                it->second.slids_type,
-                                stmt.children[0]->file_id, stmt.children[0]->tok,
-                                out, diag);
-                        } else {
-                            val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                                           it->second.slids_type);
-                        }
-                        out << "  store " << it->second.llvm_type << " " << val
-                            << ", ptr " << it->second.alloca_name << "\n";
-                    }
-                }
-            }
-            // Class lifecycle: every field is initialized before the constructor
-            // hook runs (the field-init above). Then register the instance so its
-            // destructor runs at scope exit, in reverse declaration order.
-            {
-                // Run construction hooks and register for destruction — for a
-                // class, OR an array / tuple containing one (typeNeedsHook recurses).
-                // ctor and dtor hooks are language-PAIRED (a class defines both or
-                // neither; a synthesized class runs both to drive its fields), so a
-                // SINGLE flag governs construction AND destructor registration —
-                // they can never diverge into a leak (built, not registered) or an
-                // orphan dtor (registered, never built).
-                widen::TypeRef st = widen::strip(it->second.slids_type);
-                bool needs_hooks = typeNeedsHook(st, /*ctor=*/true);
-                assert(needs_hooks == typeNeedsHook(st, /*ctor=*/false)
-                       && "ctor/dtor hook need diverged — must be language-paired");
-                if (needs_hooks) {
-                    // Every init runs the ctor after field-init — a fresh
-                    // construction (from values) AND a copy/move (from a same-type
-                    // whole value). So a copied/moved object is constructed exactly
-                    // once, balancing its destructor at scope exit.
-                    emitConstructHooks(it->second.alloca_name, st, out);
-                    // NRVO: the returned local IS the caller's slot (it->second
-                    // points at %sret.in) — construct it, but the CALLER owns its
-                    // destruction, so don't register it here.
-                    if (!stmt.nrvo) {
-                        assert(scope && "class instance constructed without a dtor "
-                                        "scope — it would never be destroyed");
-                        scope->objs.push_back({it->second.alloca_name, st, ""});
-                    }
-                }
-            }
+            // Construct into the hoisted storage through the shared funnel: an sret
+            // CALL init builds in place; an array<->tuple / leaf-widen / whole-value
+            // init fills; then the ctor hooks run and the dtor is registered. NRVO:
+            // the returned local IS the caller's slot, so it is constructed but the
+            // CALLER owns its destruction (register_dtor=false).
+            ast::Node const* init =
+                stmt.children.empty() ? nullptr : stmt.children[0].get();
+            emitConstructAt(it->second.alloca_name, it->second.slids_type,
+                            it->second.llvm_type, init, stmt.default_move_init,
+                            /*sret_in_place=*/true, /*register_dtor=*/!stmt.nrvo,
+                            scope, syms, pool, out, diag);
             return;
         }
         case ast::Kind::kAssignStmt: {
@@ -2237,40 +2205,13 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
                 return;
             }
-            if (widen::form(widen::strip(it->second.slids_type))
-                    == widen::Type::Form::kArray
-                && stmt.children[0]->kind == ast::Kind::kTupleExpr) {
-                emitArrayFromTuple(it->second.alloca_name, it->second.slids_type,
-                                   *stmt.children[0], syms, pool, out, diag);
-                return;
-            }
-            // A cross-form aggregate VALUE assign is lowered by slot in desugar;
-            // what reaches here is a same-shape leaf-widen copy — handled by the
-            // form-agnostic implicit convert below (see the kVarDeclStmt arm).
-            widen::Type::Form a_dform =
-                widen::form(widen::strip(it->second.slids_type));
-            widen::Type::Form a_sform =
-                widen::form(widen::strip(stmt.children[0]->inferred_type));
-            bool a_agg_widen =
-                (a_dform == widen::Type::Form::kArray
-                 || a_dform == widen::Type::Form::kTuple)
-                && (a_sform == widen::Type::Form::kArray
-                    || a_sform == widen::Type::Form::kTuple)
-                && widen::deepStrip(it->second.slids_type)
-                    != widen::deepStrip(stmt.children[0]->inferred_type);
-            std::string val;
-            if (a_agg_widen) {
-                val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                               widen::kNoType);
-                val = emitImplicitAggregateConvert(
-                    val, stmt.children[0]->inferred_type, it->second.slids_type,
-                    stmt.children[0]->file_id, stmt.children[0]->tok, out, diag);
-            } else {
-                val = emitExpr(*stmt.children[0], syms, pool, out, diag,
-                               it->second.slids_type);
-            }
-            out << "  store " << it->second.llvm_type << " " << val
-                << ", ptr " << it->second.alloca_name << "\n";
+            // Fill the existing variable's storage through the shared funnel: an
+            // array<->tuple bridge, a per-leaf aggregate widen, or a whole-value copy
+            // (a cross-form aggregate assign is lowered by slot in desugar). The
+            // target is live storage, so no ctor hooks / dtor registration.
+            emitInitFill(it->second.alloca_name, it->second.slids_type,
+                         it->second.llvm_type, *stmt.children[0], /*is_move=*/false,
+                         syms, pool, out, diag);
             return;
         }
         case ast::Kind::kStoreStmt: {
@@ -2296,77 +2237,29 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                 ptr_expr.inferred_type);
             }
             ast::Node const& rhs = *stmt.children[1];
-            // A SUB-ARRAY store target (a partial array index is array-typed): fill
-            // the slice from a tuple LITERAL via the array<->tuple bridge — `addr`
-            // is the slice's pointer. A tuple VALUE source is lowered by slot in
-            // desugar; an array-value source falls through to the whole-value store.
-            if (widen::form(widen::strip(elem)) == widen::Type::Form::kArray) {
-                if (rhs.kind == ast::Kind::kTupleExpr) {
-                    emitArrayFromTuple(addr, elem, rhs, syms, pool, out, diag);
-                    return;
-                }
-            }
-            // Per-element implicit widening when both sides are aggregate but
-            // elem/slot types differ (classify validated shape via
-            // checkAggregateShapeMatch). Same shape as kVarDeclStmt/kAssignStmt.
-            widen::Type::Form st_dform = widen::form(widen::strip(elem));
-            widen::Type::Form st_sform =
-                widen::form(widen::strip(rhs.inferred_type));
-            bool st_agg_widen =
-                (st_dform == widen::Type::Form::kArray
-                 || st_dform == widen::Type::Form::kTuple)
-                && (st_sform == widen::Type::Form::kArray
-                    || st_sform == widen::Type::Form::kTuple)
-                && widen::deepStrip(elem)
-                    != widen::deepStrip(rhs.inferred_type);
-            std::string val;
-            if (st_agg_widen) {
-                val = emitExpr(rhs, syms, pool, out, diag, widen::kNoType);
-                val = emitImplicitAggregateConvert(
-                    val, rhs.inferred_type, elem, rhs.file_id, rhs.tok, out, diag);
-            } else {
-                val = emitExpr(rhs, syms, pool, out, diag, elem);
-            }
-            std::string llty = llvmForRef(elem);
-            out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
+            // Fill the computed destination through the shared funnel: a tuple LITERAL
+            // into an array slice bridges via array<->tuple; an aggregate leaf-widen
+            // walks per-leaf; anything else stores whole. The target is live storage
+            // (an existing element / pointee), so no ctor hooks / dtor registration.
+            emitInitFill(addr, elem, llvmForRef(elem), rhs, /*is_move=*/false,
+                         syms, pool, out, diag);
             return;
         }
         case ast::Kind::kMoveStmt: {
-            // `a <-- b;` — copy b into a (widen / pointer-cast via emitExpr+store,
-            // exactly an assignment), then null every addressable pointer leaf of
-            // b so the source is left valid. An rvalue source has no leaves.
+            // `a <-- b;` — move b into the lvalue a: copy the value in, then null b's
+            // pointer leaves so the source is left a valid moved-from husk (an rvalue
+            // source has none). This is the SAME fill as a declarator move-init; the
+            // live target's storage already exists, so no ctor hooks / dtor
+            // registration. (A cross-form / leaf-widen aggregate move is lowered by
+            // slot in desugar, so what reaches emitInitFill is a same-type / scalar
+            // move.)
             assert(stmt.children.size() == 2 && "kMoveStmt needs lhs + rhs");
             ast::Node const& lhs = *stmt.children[0];
             ast::Node const& rhs = *stmt.children[1];
             std::string dst = emitLvalueAddr(lhs, syms, pool, out, diag,
                                              /*allow_partial=*/true);
-            std::string llty = llvmForRef(lhs.inferred_type);
-            // A cross-form / leaf-widen aggregate move is lowered BY SLOT in desugar
-            // (lowerAggCopyStmt); what reaches here is a SAME-type whole-value move.
-            if (isAstLvalue(rhs)) {
-                // Compute the source address ONCE, then LOAD the value AND null its
-                // pointer leaves through it — a side-effecting source index
-                // (`a <-- g[bump()]`) runs once. Aggregate moves here are same-type
-                // (cross-form / leaf-widen are desugared), but a SCALAR move may widen,
-                // so load at the SOURCE type and convert.
-                std::string src = emitLvalueAddr(rhs, syms, pool, out, diag,
-                                                 /*allow_partial=*/true);
-                std::string raw = newTmp("mv");
-                out << "  " << raw << " = load " << llvmForRef(rhs.inferred_type)
-                    << ", ptr " << src << "\n";
-                std::string val =
-                    widen::deepStrip(rhs.inferred_type)
-                        == widen::deepStrip(lhs.inferred_type)
-                    ? raw
-                    : widen::convert(raw, rhs.inferred_type, lhs.inferred_type,
-                                     rhs.file_id, rhs.tok, out, diag);
-                out << "  store " << llty << " " << val << ", ptr " << dst << "\n";
-                emitNullLeaves(src, rhs.inferred_type, out);
-            } else {
-                // An rvalue source has no storage to null — evaluate once.
-                std::string val = emitExpr(rhs, syms, pool, out, diag, lhs.inferred_type);
-                out << "  store " << llty << " " << val << ", ptr " << dst << "\n";
-            }
+            emitInitFill(dst, lhs.inferred_type, llvmForRef(lhs.inferred_type),
+                         rhs, /*is_move=*/true, syms, pool, out, diag);
             return;
         }
         case ast::Kind::kSwapStmt: {
@@ -2390,15 +2283,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             out << "  store " << ll << " " << va << ", ptr " << addr_b << "\n";
             return;
         }
-        case ast::Kind::kDestructureStmt: {
-            // (a, (b,c), ) = tuple. Evaluate the rhs aggregate ONCE, then bind each
-            // slot (recursing into nested slots, discarding null ones).
-            ast::Node const& rhs = *stmt.children[0];
-            std::string agg = emitExpr(rhs, syms, pool, out, diag,
-                                       rhs.inferred_type);
-            emitDestructure(stmt, agg, rhs.inferred_type, syms, out);
-            return;
-        }
+        case ast::Kind::kDestructureStmt:
+            // classify desugars every destructure — copy / move / swap — to per-slot
+            // declarator statements (kVarDeclStmt + kAssignStmt / kMoveStmt / kSwapStmt)
+            // via desugarDestructure, so each slot binds through the SAME construct /
+            // assign path as any other declarator. A kDestructureStmt therefore never
+            // reaches codegen.
+            assert(false && "kDestructureStmt desugared away in classify");
+            __builtin_unreachable();
         case ast::Kind::kDeleteStmt: {
             // delete <ptr>; — free the pointer (running the dtor / per-element dtors
             // for a hook pointee), then null the operand back IFF it is an lvalue.
@@ -2581,33 +2473,16 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                         && "sret return not exact-typed — desugar lowers non-exact");
                     (void)rvt;
                 }
-                // RETURN-OF-CALL: forward our slot to the callee, which constructs
-                // its result DIRECTLY into %sret.in — no temp, no extra ctor.
-                if (rv.kind == ast::Kind::kCallExpr) {
-                    emitCall(rv, syms, pool, out, diag, "%sret.in");
-                    emitUnwindDtors(scope, nullptr, out);
-                    out << "  ret void\n";
-                    return;
-                }
-                // sret FALLBACK: CONSTRUCT the result into the caller's slot
-                // %sret.in by default-move-init (field-move the value in, then run
-                // the slot's ctor), so the slot is constructed exactly once and the
-                // ctor sees the returned values. The slot is NOT dtor-registered —
-                // the caller owns it. A NAMED-local source is left a moved-from husk
-                // and destroyed by the unwind below (the function-fallback's extra
-                // object; Phase C NRVO will elide it).
-                if (isAstLvalue(rv)) {
-                    std::string src = emitLvalueAddr(rv, syms, pool, out, diag,
-                                                     /*allow_partial=*/true);
-                    std::string raw = newTmp("rv");
-                    out << "  " << raw << " = load " << llty << ", ptr " << src << "\n";
-                    out << "  store " << llty << " " << raw << ", ptr %sret.in\n";
-                    emitNullLeaves(src, fn_return_type, out);
-                } else {
-                    std::string val = emitExpr(rv, syms, pool, out, diag, fn_return_type);
-                    out << "  store " << llty << " " << val << ", ptr %sret.in\n";
-                }
-                emitConstructHooks("%sret.in", widen::strip(fn_return_type), out);
+                // Construct the result into the caller's slot %sret.in through the
+                // shared funnel: a RETURN-OF-CALL forwards the slot so the callee
+                // builds its result DIRECTLY into it (no temp, no extra ctor);
+                // otherwise the value is default-move-init'd in and the ctor runs, so
+                // the slot is constructed exactly once. The slot is NOT dtor-registered
+                // — the caller owns it. A NAMED-local move source is left a moved-from
+                // husk, destroyed by the unwind below (Phase C NRVO will elide it).
+                emitConstructAt("%sret.in", fn_return_type, llty, &rv,
+                                /*is_move=*/true, /*sret_in_place=*/true,
+                                /*register_dtor=*/false, scope, syms, pool, out, diag);
                 emitUnwindDtors(scope, nullptr, out);
                 out << "  ret void\n";
                 return;
@@ -3187,21 +3062,16 @@ void collectNestedFunctions(ast::Node const& s,
 void emitGlobalConstruct(ast::GlobalVar const& gv, strings::Pool& pool,
                          std::ostream& out, diagnostic::Sink& diag) {
     std::string addr = "@" + gv.symbol;
-    if (gv.init) {
-        SymTab gsyms;
-        seedGlobalSyms(gsyms);
-        if (widen::form(widen::strip(gv.type)) == widen::Type::Form::kArray
-            && gv.init->kind == ast::Kind::kTupleExpr) {
-            emitArrayFromTuple(addr, gv.type, *gv.init, gsyms, pool, out, diag);
-        } else {
-            std::ostringstream b;
-            std::string v = emitExpr(*gv.init, gsyms, pool, b, diag, gv.type);
-            out << b.str()
-                << "  store " << llvmForRef(gv.type) << " " << v
-                << ", ptr " << addr << "\n";
-        }
-    }
-    emitConstructHooks(addr, gv.type, out);
+    SymTab gsyms;
+    seedGlobalSyms(gsyms);
+    // A global constructs through the shared funnel: fill from its init (null →
+    // default-construct) then run ctor hooks. Its dtor runs through the global
+    // registry (emitGlobalDestruct), not a DtorScope, so register_dtor is false;
+    // and a global's init is always stored/filled, never sret-built-in-place.
+    emitConstructAt(addr, gv.type, llvmForRef(gv.type),
+                    gv.init ? gv.init.get() : nullptr, /*is_move=*/false,
+                    /*sret_in_place=*/false, /*register_dtor=*/false,
+                    /*scope=*/nullptr, gsyms, pool, out, diag);
 }
 
 // Destruct one global in place (reverse-order field/base dtor chain).

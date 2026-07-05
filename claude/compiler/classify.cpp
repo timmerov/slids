@@ -3143,84 +3143,89 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude);
 
-// SLICE 3 — desugar a MOVE (`<--`) / SWAP (`<-->`) destructure into per-slot
-// kMoveStmt / kSwapStmt against the source, reusing the whole move/swap path (op<-- /
-// op<--> dispatch AND the default source-nulling / field-exchange). The source must be
-// a bare lvalue: the per-slot statements reference it DIRECTLY (`src[i]`), so a move
-// nulls the REAL source (a copy-to-temp would null a throwaway) and a swap exchanges
-// with it. A declaring slot (`int a`) emits a no-init decl (default-construct) ahead of
-// its move/swap. FLAT only — a nested sub-pattern is rejected for now.
-void desugarDestructureMoveSwap(parse::Tree& tree, parse::Node& s,
-                                widen::TypeRef fn_return_type, diagnostic::Sink& diag,
-                                std::vector<std::unique_ptr<parse::Node>>& prelude) {
-    parse::Node& rhs = *s.children[0];
-    if (rhs.kind != parse::Kind::kIdentExpr) {
-        diagnostic::report(diag, {s.file_id, s.tok,
-            "A move/swap destructure requires a named (lvalue) source.", {}});
-        return;
+// Desugar EVERY destructure — COPY (`=`) / MOVE (`<--`) / SWAP (`<-->`) — into per-slot
+// statements against the source, so each slot binds through the ORDINARY assignment path
+// (dispatching a user op= / op<-- / op<-->, or the default when none). Applies BY SLOT,
+// iteratively AND recursively:
+//   (a, b)      = src   ->   a = src[0];   b = src[1];        (per-slot kStoreStmt)
+//   ((a,b), c)  = src   ->   (a,b) = src[0];  c = src[1];     (nested recurses)
+// COPY uses kStoreStmt (which dispatches op= like any store) and, because indexing a
+// value repeatedly would re-run a side-effecting / rvalue source, SPILLS a non-bare-ident
+// source into a temp local first (evaluated once; also aliasing-safe). MOVE/SWAP need to
+// null / exchange the source IN PLACE, so they REQUIRE a bare-lvalue source and stay FLAT
+// (nested move/swap deferred). A declaring slot (`int a`) emits a no-init decl (default-
+// construct) ahead of its per-slot statement.
+void desugarDestructure(parse::Tree& tree, parse::Node& s,
+                        widen::TypeRef fn_return_type, diagnostic::Sink& diag,
+                        std::vector<std::unique_ptr<parse::Node>>& prelude) {
+    bool is_move = s.default_move_init;
+    bool is_swap = s.default_swap_init;
+    bool is_copy = !is_move && !is_swap;
+    parse::Kind stmtKind = is_swap ? parse::Kind::kSwapStmt
+                         : is_move ? parse::Kind::kMoveStmt
+                                   : parse::Kind::kStoreStmt;
+    int f = s.file_id, tk = s.tok;
+
+    parse::Node& rhs0 = *s.children[0];
+    inferExpr(tree, rhs0, widen::kNoType, diag);
+    widen::TypeRef srcType = rhs0.inferred_type;
+    std::string srcName;
+    int srcId;
+    if (!is_copy) {
+        if (rhs0.kind != parse::Kind::kIdentExpr) {
+            diagnostic::report(diag, {s.file_id, s.tok,
+                "A move/swap destructure requires a named (lvalue) source.", {}});
+            return;
+        }
+        srcName = rhs0.name;
+        srcId = rhs0.resolved_entry_id;
+    } else if (rhs0.kind == parse::Kind::kIdentExpr) {
+        srcName = rhs0.name;               // a bare local — index it in place
+        srcId = rhs0.resolved_entry_id;
+    } else {
+        // Spill a non-bare-ident COPY source to a temp local (evaluated once), then index
+        // the temp — same idiom as the class-init `_$cinit` spill. A bare entry is enough
+        // (resolve is done; the id just needs to sit below desugar's minted-id range).
+        parse::Entry e;
+        e.kind = parse::EntryKind::kLocalVar;
+        e.name = "_$dsrc";
+        e.slids_type = srcType;
+        e.file_id = f;
+        e.tok = tk;
+        srcId = static_cast<int>(tree.entries.size());
+        srcName = "_$dsrc";
+        tree.entries.push_back(std::move(e));
+        auto spill = std::make_unique<parse::Node>();
+        spill->kind = parse::Kind::kVarDeclStmt;
+        spill->name = "_$dsrc";
+        spill->resolved_entry_id = srcId;
+        spill->return_type = srcType;
+        spill->file_id = f;
+        spill->tok = tk;
+        spill->name_tok = tk;
+        spill->children.push_back(std::move(s.children[0]));
+        classifyStmt(tree, *spill, fn_return_type, diag, &prelude);
+        prelude.push_back(std::move(spill));
     }
-    inferExpr(tree, rhs, widen::kNoType, diag);
-    std::vector<widen::TypeRef> slots = destructureSlots(rhs.inferred_type);
+
+    std::vector<widen::TypeRef> slots = destructureSlots(srcType);
     std::size_t ntargets = s.children.size() - 1;
     if (slots.empty()) {
         diagnostic::report(diag, {s.file_id, s.tok,
             "The right side of a destructure must be a tuple or array; got '"
-            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+            + widen::spellOrEmpty(srcType) + "'.", {}});
         return;
     }
     if (ntargets != slots.size()) {
         diagnostic::report(diag, {s.file_id, s.tok,
             "Destructure has " + std::to_string(ntargets) + " target(s) but the source '"
-            + widen::spellOrEmpty(rhs.inferred_type) + "' has "
+            + widen::spellOrEmpty(srcType) + "' has "
             + std::to_string(slots.size()) + " slot(s).", {}});
         return;
     }
-    parse::Kind stmtKind = s.default_swap_init
-        ? parse::Kind::kSwapStmt : parse::Kind::kMoveStmt;
-    std::string srcName = rhs.name;
-    int srcId = rhs.resolved_entry_id;
-    widen::TypeRef srcType = rhs.inferred_type;
-    int f = s.file_id, tk = s.tok;
-    std::vector<std::unique_ptr<parse::Node>> pending;
-    for (std::size_t i = 0; i < ntargets; i++) {
-        parse::Node* slot = s.children[i + 1].get();
-        if (!slot) continue;   // discard slot
-        if (slot->kind == parse::Kind::kDestructureStmt) {
-            diagnostic::report(diag, {slot->file_id, slot->tok,
-                "A nested move/swap destructure is not yet supported.", {}});
-            return;
-        }
-        widen::TypeRef slot_ty = slots[i];
-        std::string tname = slot->name;
-        int tid = slot->resolved_entry_id;
-        if (slot->kind == parse::Kind::kVarDeclStmt) {
-            // Declaring slot: fix its (maybe inferred) type + register, then a no-init
-            // decl that allocates + default-constructs it before the move/swap.
-            if (slot->return_type == widen::kNoType) {
-                slot->return_type = slot_ty;
-                if (tid >= 0) tree.entries[tid].slids_type = slot_ty;
-            }
-            slot_ty = slot->return_type;
-            auto decl = std::make_unique<parse::Node>();
-            decl->kind = parse::Kind::kVarDeclStmt;
-            decl->name = tname;
-            decl->name_tok = slot->name_tok;
-            decl->resolved_entry_id = tid;
-            decl->return_type = slot_ty;
-            decl->file_id = slot->file_id;
-            decl->tok = slot->tok;
-            pending.push_back(std::move(decl));
-        } else {
-            slot_ty = parse::entryType(tree, tid);
-        }
-        auto tgt = std::make_unique<parse::Node>();
-        tgt->kind = parse::Kind::kIdentExpr;
-        tgt->name = tname;
-        tgt->name_tok = slot->name_tok;
-        tgt->resolved_entry_id = tid;
-        tgt->inferred_type = slot_ty;
-        tgt->file_id = slot->file_id;
-        tgt->tok = slot->tok;
+
+    // `src[i]` — the source indexed at slot i (bare local or spilled temp).
+    auto makeSrcIndex = [&](std::size_t i) {
         auto srcIdent = std::make_unique<parse::Node>();
         srcIdent->kind = parse::Kind::kIdentExpr;
         srcIdent->name = srcName;
@@ -3239,20 +3244,90 @@ void desugarDestructureMoveSwap(parse::Tree& tree, parse::Node& s,
         idx->tok = tk;
         idx->children.push_back(std::move(srcIdent));
         idx->children.push_back(std::move(lit));
-        auto mv = std::make_unique<parse::Node>();
-        mv->kind = stmtKind;
-        mv->file_id = f;
-        mv->tok = tk;
-        mv->children.push_back(std::move(tgt));
-        mv->children.push_back(std::move(idx));
-        pending.push_back(std::move(mv));
+        return idx;
+    };
+
+    std::vector<std::unique_ptr<parse::Node>> pending;
+    for (std::size_t i = 0; i < ntargets; i++) {
+        parse::Node* slot = s.children[i + 1].get();
+        if (!slot) continue;   // discard slot
+        if (slot->kind == parse::Kind::kDestructureStmt) {
+            if (!is_copy) {
+                diagnostic::report(diag, {slot->file_id, slot->tok,
+                    "A nested move/swap destructure is not yet supported.", {}});
+                return;
+            }
+            // Nested COPY: recurse with `src[i]` as the sub-source. The nested slot holds
+            // its sub-slots in children[1..]; children[0] is the (unused) rhs placeholder
+            // — set it to src[i] and re-classify as a copy destructure (recurses here).
+            auto sub = std::move(s.children[i + 1]);
+            if (sub->children.empty()) sub->children.push_back(nullptr);
+            sub->children[0] = makeSrcIndex(i);
+            pending.push_back(std::move(sub));
+            continue;
+        }
+        widen::TypeRef slot_ty = slots[i];
+        std::string tname = slot->name;
+        int tid = slot->resolved_entry_id;
+        if (slot->kind == parse::Kind::kVarDeclStmt) {
+            // Declaring slot: fix its (maybe inferred) type + register, then a no-init
+            // decl that allocates + default-constructs it before the per-slot statement.
+            if (slot->return_type == widen::kNoType) {
+                slot->return_type = slot_ty;
+                if (tid >= 0) tree.entries[tid].slids_type = slot_ty;
+            }
+            slot_ty = slot->return_type;
+            auto decl = std::make_unique<parse::Node>();
+            decl->kind = parse::Kind::kVarDeclStmt;
+            decl->name = tname;
+            decl->name_tok = slot->name_tok;
+            decl->resolved_entry_id = tid;
+            decl->return_type = slot_ty;
+            decl->file_id = slot->file_id;
+            decl->tok = slot->tok;
+            pending.push_back(std::move(decl));
+        } else {
+            slot_ty = parse::entryType(tree, tid);
+        }
+        if (is_copy) {
+            // COPY: a bare-name assignment `tname = src[i]`. kAssignStmt dispatches the
+            // slot type's op= (or stores a primitive) — kStoreStmt is deref/index-only, so
+            // a NAMED slot must go through kAssignStmt (target in name, rhs in child 0).
+            auto as = std::make_unique<parse::Node>();
+            as->kind = parse::Kind::kAssignStmt;
+            as->name = tname;
+            as->name_tok = slot->name_tok;
+            as->resolved_entry_id = tid;
+            as->file_id = f;
+            as->tok = tk;
+            as->children.push_back(makeSrcIndex(i));
+            pending.push_back(std::move(as));
+        } else {
+            // MOVE / SWAP: children [target-ident, src[i]] — the kMoveStmt / kSwapStmt shape.
+            auto tgt = std::make_unique<parse::Node>();
+            tgt->kind = parse::Kind::kIdentExpr;
+            tgt->name = tname;
+            tgt->name_tok = slot->name_tok;
+            tgt->resolved_entry_id = tid;
+            tgt->inferred_type = slot_ty;
+            tgt->file_id = slot->file_id;
+            tgt->tok = slot->tok;
+            auto st = std::make_unique<parse::Node>();
+            st->kind = stmtKind;
+            st->file_id = f;
+            st->tok = tk;
+            st->children.push_back(std::move(tgt));
+            st->children.push_back(makeSrcIndex(i));
+            pending.push_back(std::move(st));
+        }
     }
     if (pending.empty()) {   // all slots discarded — nothing to bind
         s.kind = parse::Kind::kBlockStmt;
         s.children.clear();
         return;
     }
-    // The last pending stmt (always a move/swap) becomes `s`; the rest splice ahead.
+    // The last pending stmt becomes `s`; the rest splice ahead. Re-classifying `s`
+    // finishes it (a per-slot store/move/swap, a decl, or a nested destructure).
     for (std::size_t k = 0; k + 1 < pending.size(); k++) {
         classifyStmt(tree, *pending[k], fn_return_type, diag, &prelude);
         prelude.push_back(std::move(pending[k]));
@@ -3261,8 +3336,9 @@ void desugarDestructureMoveSwap(parse::Tree& tree, parse::Node& s,
     s.kind = last->kind;
     s.name = last->name;
     s.resolved_entry_id = last->resolved_entry_id;
-    s.default_move_init = false;
-    s.default_swap_init = false;
+    s.return_type = last->return_type;
+    s.default_move_init = last->default_move_init;
+    s.default_swap_init = last->default_swap_init;
     s.children = std::move(last->children);
     classifyStmt(tree, s, fn_return_type, diag, &prelude);
 }
@@ -3480,6 +3556,28 @@ void rewriteExprLhsToOperatorCall(parse::Tree& tree, parse::Node& s,
     s.name_tok = s.tok;
     s.resolved_entry_id = -1;
     inferMethodCall(tree, s, diag);
+}
+
+// THE ONE GUARD deciding whether a class assignment/init statement dispatches to a user
+// operator. Every assignment-form site (kAssignStmt, kStoreStmt, kMoveStmt, kSwapStmt,
+// kAugAssignStmt) routes through here so NONE can silently skip the check — that scatter
+// is exactly how the kStoreStmt op= hole got in. `clsType` = the lvalue's type; `rhs` =
+// the source (for the overload probe); `opname` = the operator to look for. Picks the
+// rewrite by lvalue shape: a BARE-NAME target (lvalue in s.name; kAssignStmt / bare-name
+// kAugAssignStmt) -> rewriteAssignToOperatorCall; a target already held as an EXPRESSION
+// child ([lhs, rhs]; kStoreStmt / kMoveStmt / kSwapStmt / complex kAugAssignStmt) ->
+// rewriteExprLhsToOperatorCall. `rhs` must already be inferred (findClassOperator ranks by
+// rhs.inferred_type). Returns true iff it rewrote `s` into a method call.
+// NOTE: kVarDeclStmt decl-init does NOT route here — it needs a default-construct prelude
+// and a value-category guard around the same primitives (findClassOperator + rewrite).
+bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsType,
+                        parse::Node& rhs, std::string const& opname, bool expr_lhs,
+                        diagnostic::Sink& diag) {
+    if (widen::form(widen::strip(clsType)) != widen::Type::Form::kSlid) return false;
+    if (findClassOperator(tree, clsType, rhs, opname) < 0) return false;
+    if (expr_lhs) rewriteExprLhsToOperatorCall(tree, s, opname, diag);
+    else          rewriteAssignToOperatorCall(tree, s, clsType, opname, diag);
+    return true;
 }
 
 // Consume a left-associative arith/bitwise chain, returning the HEAD binary node and
@@ -3944,12 +4042,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             // A class lvalue with a matching user `op=` dispatches to it (canon: the
             // synthesized default copy applies only when NO matching operator exists).
-            // Rewrite `a = rhs` to `a.op=(rhs)` and resolve through the method-call
-            // path; desugar lowers it like any call.
-            if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
-                && !s.children.empty() && s.children[0]
-                && findClassOperator(tree, lref, *s.children[0], "op=") >= 0) {
-                rewriteAssignToOperatorCall(tree, s, lref, "op=", diag);
+            // Rewrite `a = rhs` to `a.op=(rhs)` and resolve through the method-call path.
+            if (!s.children.empty() && s.children[0]
+                && dispatchAssignInit(tree, s, lref, *s.children[0], "op=",
+                                      /*expr_lhs=*/false, diag)) {
                 return;
             }
             // The rhs obeys the assignment relation against the lvalue type.
@@ -3995,11 +4091,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 inferExpr(tree, rhs, widen::kNoType, diag);
                 std::string opname = "op" + op + "=";
-                if (findClassOperator(tree, s.return_type, rhs, opname) >= 0) {
-                    if (s.children.size() == 2)
-                        rewriteExprLhsToOperatorCall(tree, s, opname, diag);
-                    else
-                        rewriteAssignToOperatorCall(tree, s, s.return_type, opname, diag);
+                if (dispatchAssignInit(tree, s, s.return_type, rhs, opname,
+                                       /*expr_lhs=*/s.children.size() == 2, diag)) {
                     return;
                 }
             }
@@ -4134,6 +4227,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& lvalue = *s.children[0];
             inferExpr(tree, lvalue, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
+            // A class store target with a matching user `op=` dispatches to it — the same
+            // rule kAssignStmt applies to a bare-name target, now for a complex lvalue
+            // (`obj.f = x` / `p^ = x` / `arr[i] = x`). Mirrors kMoveStmt / kSwapStmt.
+            if (dispatchAssignInit(tree, s, lvalue.inferred_type, *s.children[1], "op=",
+                                   /*expr_lhs=*/true, diag)) {
+                return;
+            }
             // The stored rhs obeys the assignment relation against the pointee /
             // element type (a SUB-ARRAY target like `grid[1] = (7,8)` takes a
             // tuple/array source element-wise; a pointer-typed slot obeys the
@@ -4160,9 +4260,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             // A class lhs with a matching user `op<--` dispatches to it (else the
             // default field move applies). Children are already [receiver, arg].
-            if (widen::form(widen::strip(lhs.inferred_type)) == widen::Type::Form::kSlid
-                && findClassOperator(tree, lhs.inferred_type, *s.children[1], "op<--") >= 0) {
-                rewriteExprLhsToOperatorCall(tree, s, "op<--", diag);
+            if (dispatchAssignInit(tree, s, lhs.inferred_type, *s.children[1], "op<--",
+                                   /*expr_lhs=*/true, diag)) {
                 return;
             }
             // The COPY half of the move obeys the assignment relation.
@@ -4186,9 +4285,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             // A class operand with a matching user `op<-->` dispatches to it (else the
             // default field swap applies). Children are already [receiver, arg].
-            if (widen::form(widen::strip(a.inferred_type)) == widen::Type::Form::kSlid
-                && findClassOperator(tree, a.inferred_type, b, "op<-->") >= 0) {
-                rewriteExprLhsToOperatorCall(tree, s, "op<-->", diag);
+            if (dispatchAssignInit(tree, s, a.inferred_type, b, "op<-->",
+                                   /*expr_lhs=*/true, diag)) {
                 return;
             }
             // Both-non-kNoType guard is cascade suppression: a kNoType operand
@@ -4205,15 +4303,16 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             return;
         }
         case parse::Kind::kDestructureStmt: {
-            // A MOVE (`<--`) / SWAP (`<-->`) destructure desugars to per-slot move/swap
-            // against the source (reusing op dispatch + source-nulling); the `=` form
-            // below is the whole-value copy bind.
-            if ((s.default_move_init || s.default_swap_init) && prelude) {
-                desugarDestructureMoveSwap(tree, s, fn_return_type, diag, *prelude);
+            // Every destructure — copy `=`, move `<--`, swap `<-->` — desugars to per-slot
+            // statements against the source, so each slot binds through the ordinary
+            // assignment path (dispatching a user op= / op<-- / op<-->). By slot,
+            // recursively. Needs a prelude to splice the per-slot statements ahead.
+            if (prelude) {
+                desugarDestructure(tree, s, fn_return_type, diag, *prelude);
                 return;
             }
-            // children[0] = rhs (a TUPLE or ARRAY — a homogeneous tuple), [1..] =
-            // declarator / nested slots. Shape + per-slot checks recurse for nested.
+            // No prelude (defensive): fall back to whole-value type-check only. children[0]
+            // = rhs (a TUPLE or ARRAY), [1..] = declarator / nested slots.
             parse::Node& rhs = *s.children[0];
             inferExpr(tree, rhs, widen::kNoType, diag);
             std::vector<widen::TypeRef> slots = destructureSlots(rhs.inferred_type);

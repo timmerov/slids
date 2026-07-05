@@ -322,23 +322,78 @@ void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
     if (!reported) requireKnownType(tree, type_ref, file_id, tok, diag);
 }
 
-// Register `alias Name = Type;` as a kAlias entry in the current frame.
-void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
-    int existing = parse::findInFrame(tree, parse::currentFrameId(tree), s.name);
-    if (existing >= 0) {
-        parse::Entry const& prev = tree.entries[existing];
-        diagnostic::report(diag, {s.file_id, s.name_tok,
-            "Duplicate declaration of '" + s.name + "'.",
+// The entry a declarator registers: name + resolved type + kind + flags.
+struct DeclInfo {
+    std::string name;
+    int file_id = 0;
+    int name_tok = 0;
+    widen::TypeRef type = widen::kNoType;   // kNoType -> classify/constfold infers later
+    parse::EntryKind kind = parse::EntryKind::kLocalVar;
+    std::string alias_label;                // ##type label when a named type erased
+    bool track_body_local = true;           // add to the unused-local sweep list
+};
+enum class BindMode { Declare, DeclareOrReuse };
+enum class ConflictScope { SameFrame, AnyScope };
+
+// THE funnel every in-body declarator routes through — one place owns the declare-vs-reuse
+// decision, the dup-check + "Duplicate declaration" diagnostic, the addEntry, and the
+// body-local tracking, so the logic cannot drift between sites (it did: the for shapes
+// silently shadowed).
+//   mode  DeclareOrReuse : a TYPELESS binding REUSES a visible LOCAL (sets *reused);
+//         Declare        : always a fresh declaration (typed slots, plain / typed decls).
+//   scope SameFrame      : only a SAME-FRAME entry conflicts — an enclosing one is a legal
+//                          shadow (plain decls, destructure slots, aliases).
+//         AnyScope       : a same-frame entry OR any visible NON-LOCAL (const / fn / class /
+//                          enum / ns / alias) conflicts; an enclosing LOCAL is a legal
+//                          shadow (typed) or reuse (typeless). For-vars, which must NOT
+//                          silently shadow a non-local.
+// Returns the entry id (reused or fresh) or -1 on a conflict error.
+int registerDeclarator(parse::Tree& tree, DeclInfo const& d, BindMode mode,
+                       ConflictScope scope, bool& reused, diagnostic::Sink& diag) {
+    reused = false;
+    int existing = resolveName(tree, d.name);
+    bool existing_local = existing >= 0
+        && tree.entries[existing].kind == parse::EntryKind::kLocalVar;
+    if (mode == BindMode::DeclareOrReuse && existing_local) {
+        reused = true;
+        return existing;
+    }
+    int conflict = parse::findInFrame(tree, parse::currentFrameId(tree), d.name);
+    if (conflict < 0 && scope == ConflictScope::AnyScope
+        && existing >= 0 && !existing_local) {
+        conflict = existing;   // a visible NON-LOCAL up the chain — no silent shadow
+    }
+    if (conflict >= 0) {
+        parse::Entry const& prev = tree.entries[conflict];
+        diagnostic::report(diag, {d.file_id, d.name_tok,
+            "Duplicate declaration of '" + d.name + "'.",
             {{prev.file_id, prev.tok, "first declared here"}}});
-        return;
+        return -1;
     }
     parse::Entry e;
-    e.kind = parse::EntryKind::kAlias;
-    e.name = s.name;
-    e.slids_type = s.return_type;   // target spelling; resolved at use
-    e.file_id = s.file_id;
-    e.tok = s.name_tok;
-    s.resolved_entry_id = parse::addEntry(tree, std::move(e));
+    e.kind = d.kind;
+    e.name = d.name;
+    e.slids_type = d.type;
+    if (!d.alias_label.empty()) e.alias_label = d.alias_label;
+    e.file_id = d.file_id;
+    e.tok = d.name_tok;
+    int id = parse::addEntry(tree, std::move(e));
+    if (d.track_body_local) tree.body_locals.push_back(id);
+    return id;
+}
+
+// Register `alias Name = Type;` as a kAlias entry in the current frame.
+void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    bool reused;
+    DeclInfo d;
+    d.name = s.name;
+    d.file_id = s.file_id;
+    d.name_tok = s.name_tok;
+    d.type = s.return_type;              // target spelling; resolved at use
+    d.kind = parse::EntryKind::kAlias;
+    d.track_body_local = false;
+    s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare,
+                                             ConflictScope::SameFrame, reused, diag);
 }
 
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
@@ -2059,6 +2114,27 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s,
 // counter + the per-iteration element binding (by ref `v = ^arr[i]`, by value
 // `v = arr[i]`, or typeless by value reusing/declaring v). The node is re-tagged
 // kForArrayStmt; s.children stay [loop-var decl, array ident, body].
+
+// Bind a for-loop variable through registerDeclarator: a for-var must not silently shadow
+// (ConflictScope::AnyScope), a typeless one REUSES a visible local (DeclareOrReuse). The
+// loop frame is already pushed, so resolveName sees the enclosing scope where a shadowed
+// const lives. `infer_type` types a freshly-declared typeless var (the element type, or
+// kNoType when classify infers it). Sets the loop-var node and flags a reuse as a store.
+void bindForVar(parse::Tree& tree, parse::Node& var_decl, widen::TypeRef infer_type,
+                diagnostic::Sink& diag) {
+    bool typeless = (var_decl.return_type == widen::kNoType);
+    DeclInfo d;
+    d.name = var_decl.name;
+    d.file_id = var_decl.file_id;
+    d.name_tok = var_decl.name_tok;
+    d.type = typeless ? infer_type : var_decl.return_type;
+    bool reused = false;
+    var_decl.resolved_entry_id = registerDeclarator(
+        tree, d, typeless ? BindMode::DeclareOrReuse : BindMode::Declare,
+        ConflictScope::AnyScope, reused, diag);
+    if (reused) var_decl.kind = parse::Kind::kAssignStmt;
+}
+
 Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
                               diagnostic::Sink& diag) {
     parse::Node& arr_ref = *s.children[1];
@@ -2145,34 +2221,8 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     std::vector<int> saved_body_locals = std::move(tree.body_locals);
     tree.body_locals.clear();
     std::set<int> entry_set = tree.initialized_locals;   // S (possibly-zero body)
-    if (var_decl.return_type != widen::kNoType) {
-        // Typed: a fresh per-iteration local (by value or by ref), as declared.
-        parse::Entry e;
-        e.kind = parse::EntryKind::kLocalVar;
-        e.name = var_decl.name;
-        e.slids_type = var_decl.return_type;
-        e.file_id = vfile; e.tok = vtok;
-        var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
-        tree.body_locals.push_back(var_decl.resolved_entry_id);
-    } else {
-        // Typeless by value: REUSE an enclosing local (the binding becomes a
-        // store — flag it kAssignStmt for desugar) or declare a fresh inferred
-        // one typed as the element.
-        int existing = resolveName(tree, var_decl.name);
-        if (existing >= 0
-            && tree.entries[existing].kind == parse::EntryKind::kLocalVar) {
-            var_decl.resolved_entry_id = existing;
-            var_decl.kind = parse::Kind::kAssignStmt;
-        } else {
-            parse::Entry e;
-            e.kind = parse::EntryKind::kLocalVar;
-            e.name = var_decl.name;
-            e.slids_type = elemRef;
-            e.file_id = vfile; e.tok = vtok;
-            var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
-            tree.body_locals.push_back(var_decl.resolved_entry_id);
-        }
-    }
+    // Bind the loop var through the shared registrar (typeless declares as the element).
+    bindForVar(tree, var_decl, elemRef, diag);
     // The loop var is (re)bound at the top of every iteration, so the body sees
     // it initialized; whether it is READ is left to the body (an unused loop var
     // is swept like any other).
@@ -2289,33 +2339,9 @@ Completion understandForTuple(parse::Tree& tree, parse::Node& s,
     std::vector<int> saved_body_locals = std::move(tree.body_locals);
     tree.body_locals.clear();
     std::set<int> entry_set = tree.initialized_locals;   // S (possibly-zero body)
-    if (var_decl.return_type != widen::kNoType) {
-        // Typed: a fresh per-iteration local (by value or by ref), as declared.
-        parse::Entry e;
-        e.kind = parse::EntryKind::kLocalVar;
-        e.name = var_decl.name;
-        e.slids_type = var_decl.return_type;
-        e.file_id = vfile; e.tok = vtok;
-        var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
-        tree.body_locals.push_back(var_decl.resolved_entry_id);
-    } else {
-        // Typeless by value: REUSE an enclosing local (flag kAssignStmt for
-        // desugar) or declare a fresh one whose element type classify infers.
-        int existing = resolveName(tree, var_decl.name);
-        if (existing >= 0
-            && tree.entries[existing].kind == parse::EntryKind::kLocalVar) {
-            var_decl.resolved_entry_id = existing;
-            var_decl.kind = parse::Kind::kAssignStmt;
-        } else {
-            parse::Entry e;
-            e.kind = parse::EntryKind::kLocalVar;
-            e.name = var_decl.name;
-            e.slids_type = widen::kNoType;   // classify infers from slot 0
-            e.file_id = vfile; e.tok = vtok;
-            var_decl.resolved_entry_id = parse::addEntry(tree, std::move(e));
-            tree.body_locals.push_back(var_decl.resolved_entry_id);
-        }
-    }
+    // Bind the loop var through the shared registrar (typeless tuple slot type is
+    // classify-inferred from slot 0, so infer_type is kNoType).
+    bindForVar(tree, var_decl, widen::kNoType, diag);
     if (var_decl.resolved_entry_id >= 0) {
         tree.initialized_locals.insert(var_decl.resolved_entry_id);
     }
@@ -2490,53 +2516,24 @@ void resolveDestructureSlots(parse::Tree& tree, parse::Node& node,
             continue;
         }
         seen.emplace(slot->name, std::make_pair(slot->file_id, slot->name_tok));
-        if (slot->return_type != widen::kNoType) {
+        // A typed slot DECLARES (dup-errors same-frame); a typeless slot REUSES a visible
+        // local, dup-errors a same-frame non-local, else declare-inferred — both through
+        // the shared registrar (SameFrame: an enclosing name is a legal shadow).
+        DeclInfo d;
+        d.name = slot->name;
+        d.file_id = slot->file_id;
+        d.name_tok = slot->name_tok;
+        bool typed = (slot->return_type != widen::kNoType);
+        if (typed) {
             resolveDeclType(tree, slot->return_type, slot->file_id,
                             slot->tok, diag);   // caret the TYPE, not the name
-            int dup = parse::findInFrame(tree, parse::currentFrameId(tree),
-                                         slot->name);
-            if (dup >= 0) {
-                parse::Entry const& prev = tree.entries[dup];
-                diagnostic::report(diag, {slot->file_id, slot->name_tok,
-                    "Duplicate declaration of '" + slot->name + "'.",
-                    {{prev.file_id, prev.tok, "first declared here"}}});
-            } else {
-                parse::Entry e;
-                e.kind = parse::EntryKind::kLocalVar;
-                e.name = slot->name;
-                e.slids_type = slot->return_type;
-                e.file_id = slot->file_id;
-                e.tok = slot->name_tok;
-                slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
-                tree.body_locals.push_back(slot->resolved_entry_id);
-            }
-        } else {
-            int existing = resolveName(tree, slot->name);
-            if (existing >= 0 && tree.entries[existing].kind
-                                     == parse::EntryKind::kLocalVar) {
-                slot->resolved_entry_id = existing;
-                slot->kind = parse::Kind::kAssignStmt;   // reuse -> a store
-            } else if (int dup = parse::findInFrame(
-                           tree, parse::currentFrameId(tree), slot->name);
-                       dup >= 0) {
-                // A same-frame entry that is NOT a reusable local (const /
-                // function / class / namespace / alias) is a duplicate, same
-                // as the typed-slot path — not a silent shadow.
-                parse::Entry const& prev = tree.entries[dup];
-                diagnostic::report(diag, {slot->file_id, slot->name_tok,
-                    "Duplicate declaration of '" + slot->name + "'.",
-                    {{prev.file_id, prev.tok, "first declared here"}}});
-            } else {
-                parse::Entry e;
-                e.kind = parse::EntryKind::kLocalVar;
-                e.name = slot->name;
-                e.slids_type = widen::kNoType;   // classify stamps it from the slot
-                e.file_id = slot->file_id;
-                e.tok = slot->name_tok;
-                slot->resolved_entry_id = parse::addEntry(tree, std::move(e));
-                tree.body_locals.push_back(slot->resolved_entry_id);
-            }
-        }
+            d.type = slot->return_type;
+        }   // else kNoType — classify stamps it from the slot
+        bool reused = false;
+        slot->resolved_entry_id = registerDeclarator(
+            tree, d, typed ? BindMode::Declare : BindMode::DeclareOrReuse,
+            ConflictScope::SameFrame, reused, diag);
+        if (reused) slot->kind = parse::Kind::kAssignStmt;   // reuse -> a store
         if (slot->resolved_entry_id >= 0)
             tree.initialized_locals.insert(slot->resolved_entry_id);
     }
@@ -2566,45 +2563,34 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     resolveDeclType(tree, s.return_type, s.file_id, s.tok, diag,
                                     &s.return_type_seg_toks);
                 }
-                int existing = parse::findInFrame(tree, parse::currentFrameId(tree), s.name);
-                if (existing >= 0) {
-                    parse::Entry const& prev = tree.entries[existing];
-                    diagnostic::report(diag, {s.file_id, s.name_tok,
-                        "Duplicate declaration of '" + s.name + "'.",
-                        {{prev.file_id, prev.tok, "first declared here"}}});
-                } else {
-                    // A const whose type isn't a foldable scalar is a not-mutable
-                    // VARIABLE, not a substituted constant (see constNeedsStorage):
-                    // route it to a local with a deep-const-qualified type. const is
-                    // not yet enforced (Phase 6).
-                    bool needs_storage = constNeedsStorage(s.return_type);
-                    bool as_const = s.is_const && !needs_storage;
-                    // A block-scope `global` is a scoped STATIC: kGlobalVar (one
-                    // persistent storage cell, static-initialized) registered in this
-                    // body/block frame, so it is reached bare here and is invisible
-                    // outside — and, being static, is exempt from the unused-local
-                    // sweep and definite-assignment tracking below.
-                    parse::Entry e;
-                    e.kind = s.is_global   ? parse::EntryKind::kGlobalVar
-                             : as_const    ? parse::EntryKind::kConst
-                                           : parse::EntryKind::kLocalVar;
-                    e.name = s.name;
-                    // A named type (alias / enum / qualified) erased to a different
-                    // underlying — keep the as-declared spelling as the ##type label.
-                    // Compare BEFORE the const-wrap so the wrap isn't read as erasure.
-                    if (declared != widen::spellOrEmpty(s.return_type)) e.alias_label = declared;
-                    if (s.is_const && needs_storage) s.return_type = widen::deepConst(s.return_type);
-                    e.slids_type = s.return_type;
-                    e.file_id = s.file_id;
-                    e.tok = s.name_tok;   // caret at the ident, not at 'const'/type
-                    s.resolved_entry_id = parse::addEntry(tree, std::move(e));
-                    // Track body-declared locals for the unused sweep. A substituted
-                    // const is folded away and never "unused"; a const VARIABLE is a
-                    // real local and IS swept.
-                    if (!as_const && !s.is_global) {
-                        tree.body_locals.push_back(s.resolved_entry_id);
-                    }
-                }
+                // A const whose type isn't a foldable scalar is a not-mutable VARIABLE,
+                // not a substituted constant (constNeedsStorage) — a local with a deep-
+                // const type. A block-scope `global` is a scoped STATIC (kGlobalVar): one
+                // persistent cell, static-initialized, exempt from the unused/DA tracking.
+                // const is not yet enforced (Phase 6). The dup-check + addEntry funnel
+                // through registerDeclarator; the kind / alias-label / body-tracking are
+                // this site's specifics, passed in.
+                bool needs_storage = constNeedsStorage(s.return_type);
+                bool as_const = s.is_const && !needs_storage;
+                DeclInfo d;
+                d.name = s.name;
+                d.file_id = s.file_id;
+                d.name_tok = s.name_tok;   // caret at the ident, not at 'const'/type
+                d.kind = s.is_global ? parse::EntryKind::kGlobalVar
+                       : as_const    ? parse::EntryKind::kConst
+                                     : parse::EntryKind::kLocalVar;
+                // A named type (alias / enum / qualified) erased to a different underlying
+                // — keep the as-declared spelling as the ##type label. Compare BEFORE the
+                // const-wrap so the wrap isn't read as erasure.
+                if (declared != widen::spellOrEmpty(s.return_type)) d.alias_label = declared;
+                if (s.is_const && needs_storage) s.return_type = widen::deepConst(s.return_type);
+                d.type = s.return_type;
+                // A substituted const folds away (never swept); a scoped-global static is
+                // tracked separately — only a real local goes on the body-sweep list.
+                d.track_body_local = !as_const && !s.is_global;
+                bool reused = false;
+                s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare,
+                                                         ConflictScope::SameFrame, reused, diag);
             }
             // Resolve the initializer (if any) BEFORE marking the local
             // initialized, so a self-reference reads as uninitialized
@@ -2655,14 +2641,14 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // A reassign (target already a local) and a wrong-kind target (const /
             // function / ...) both fall through to resolveAssignTarget below.
             if (!isQualified(s) && resolveName(tree, s.name) < 0) {
-                parse::Entry e;
-                e.kind = parse::EntryKind::kLocalVar;
-                e.name = s.name;
-                e.slids_type = widen::kNoType;   // classify stamps it from the rhs
-                e.file_id = s.file_id;
-                e.tok = s.name_tok;
-                s.resolved_entry_id = parse::addEntry(tree, std::move(e));
-                tree.body_locals.push_back(s.resolved_entry_id);
+                DeclInfo d;
+                d.name = s.name;
+                d.file_id = s.file_id;
+                d.name_tok = s.name_tok;
+                d.type = widen::kNoType;   // classify stamps it from the rhs
+                bool reused = false;       // unresolved above -> always a fresh declare
+                s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare,
+                                                         ConflictScope::SameFrame, reused, diag);
                 s.kind = parse::Kind::kVarDeclStmt;   // alloca + classify infer
                 // rhs BEFORE marking initialized, so `x = x` reads x uninitialized.
                 for (auto& ch : s.children) {

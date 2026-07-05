@@ -232,6 +232,12 @@ Class pickBad(bool b) { Class a(1); Class b2(2); if (b) { return a; } return b2;
 Class pickGood2(bool b) { if (b) { Class p(1); return p; } else { Class q(2); return q; } }
 // overlap via an OUTER local alive during the inner-else local — both fall back.
 Class pickBad2(bool b) { Class a(1); if (b) { return a; } else { Class b2(2); return b2; } }
+// CALL-INIT local that is NRVO-returned: x is both call-initialized (sret build-in-place —
+// mkClass builds straight into x's storage) AND nrvo (single disjoint return), so x aliases
+// the CALLER's slot and mkClass builds all the way through it — ONE ctor, no move, and the
+// CALLER owns the SINGLE dtor. This frame must NOT register x for destruction (it doesn't
+// own it); a regression that did would dtor the object twice.
+Class mkFromCall() { Class x = mkClass(); return x; }
 
 int32 main() {
 
@@ -334,6 +340,15 @@ int32 main() {
         __println("g2= " + g2.id_);                             // 1
         Class bd2 = pickBad2(false);                           // outer-alive -> fallback
         __println("bd2= " + bd2.id_);                           // 2
+    }
+
+    /* CALL-INIT local NRVO-returned (mkFromCall): mkClass builds through mkFromCall's
+       aliased slot straight into nc — exactly ONE ctor 7, and nc owns the ONE dtor 7 at
+       block exit. (A frame that double-registered the nrvo slot would print dtor 7 twice.) */
+    __println("-- nrvo call-init --");
+    {
+        Class nc = mkFromCall();
+        __println("nc= " + nc.id_);                            // 7
     }
 
     /* NESTED inline calls — idOf(bump(^a)): the inner call is lifted, the result

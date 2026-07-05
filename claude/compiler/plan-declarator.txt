@@ -1,4 +1,303 @@
-compiler — UNIFIED DECLARATOR (design + STATUS: LANDED)
+compiler — UNIFIED DECLARATOR — ALL STAGES (design + STATUS)
+
+A declarator binds a NAME to a TYPE with an optional INITIALIZER — where the
+initializer is an assignment-like operation: copy `=`, move `<--`, swap `<-->`,
+or compound `OP=`. The design goal is that this ONE concept funnels through ONE
+path PER STAGE (parse -> resolve -> classify -> desugar -> codegen), instead of
+being re-implemented per binding site / per statement-kind.
+
+DONE — all five stages now funnel: parse (parseDeclarator), resolve (resolveDeclType
++ registerDeclarator), classify (dispatchAssignInit + desugarDestructure), desugar
+(lowerAggCopyStmt), codegen (emitInitFill / emitConstructed / emitConstructAt). The
+scatter that made behavior drift between sites and made "we missed a cell" bugs recur
+(the kStoreStmt op= hole was the canonical example) is gone — each stage has ONE path.
+The rest of this file is the design of record + the per-stage landing notes.
+
+
+STATUS BY STAGE
+
+  parse     LANDED. parseDeclarator(NamePolicy) — see PARSE STAGE (LANDED) at the
+            bottom; the original, unchanged design. Every type/binding site
+            funnels through it. This section is the model the other stages copy.
+  resolve   LANDED (Slice B). Type half COAGULATED (resolveDeclType, resolve.cpp:315);
+            name-registration half now FUNNELED through ONE registerDeclarator
+            (resolve.cpp, before registerAlias) — it owns the declare-vs-reuse decision,
+            the dup-check + "Duplicate declaration" diagnostic, the addEntry, and the
+            body-local tracking. Parameterized by BindMode {Declare, DeclareOrReuse} and
+            ConflictScope {SameFrame, AnyScope}; entry KIND / alias-label / body-tracking
+            are passed via a DeclInfo, so const/global/typeless specifics stay caller-side.
+            ROUTED (6 in-body binding sites): registerAlias, var-decl main pass,
+            inferred-init assign, destructure slots (typed + typeless), for-array +
+            for-tuple (via bindForVar). NOT routed, by design (not declare-vs-reuse
+            decisions): the const forward-decl PRE-PASS (intentionally DEFERS dup to the
+            main pass), `self` (reserved receiver, no dup-check), and params / class
+            members (signature-/NAMES-time). for-ranged + for-long reject via resolveStmt.
+  classify  LANDED (Slice A). The 5 assignment-form sites (kAssignStmt, kStoreStmt,
+            kMoveStmt, kSwapStmt, kAugAssignStmt) route through ONE funnel
+            dispatchAssignInit (hole 1 CLOSED). And destructure — copy/move/swap —
+            desugars per-slot via ONE desugarDestructure (was ...MoveSwap): copy
+            emits per-slot kAssignStmt (dispatches op=), spills an rvalue source once,
+            recurses for nested; hole 2 CLOSED. kVarDeclStmt decl-init stays a
+            specialized caller. NOTE: routing destructure copy through per-slot
+            assignment changed 4 destructure NEGATIVE messages (all still reject) —
+            see KNOWN HOLES #2.
+  desugar   LANDED (as-is). lowerAggCopyStmt (desugar.cpp:1666) is the ONE cross-form
+            copy/move lowerer, dispatching all 5 stmt-kinds (return / var-decl / assign /
+            store / move); construction-stmt + aug-assign are rewritten INTO kVarDeclStmt
+            to reuse it. It bails (returns empty) for whole-value / same-type / move
+            cases — which now land on the ONE codegen funnel below, not on duplicated
+            arms. The originally-planned "extend it to absorb the same-type/move bails"
+            is SUPERSEDED: doing so would move clean whole-value stores into desugar as
+            AST rewrites — churn, no convergence. One funnel PER STAGE is satisfied.
+  codegen   LANDED (Slice C). The construct/assign funnel exists: emitInitFill (the
+            shared field-init fill), emitConstructed (the SINGLE hooks+dtor-registration
+            pairing), emitConstructAt (construct = fill + finalize, with sret-build-in-
+            place). Construct sites (var-decl / sret return slot / global) route through
+            emitConstructAt; live-storage assign sites (kAssignStmt tail / kStoreStmt /
+            kMoveStmt) share emitInitFill (no hooks/register). kSwapStmt stays (an
+            exchange, not a fill); kAssignStmt keeps its two sret cases (incl. the husk
+            teardown). Dead emitDestructure / destructureElem / kDestructureStmt arm
+            REMOVED (classify desugars destructure to per-slot declarators, so it never
+            reached codegen). Suite 71/71 positives, 4 pre-existing negative msg-shifts;
+            .ll behavior-identical (only an SSA rename in return_fn + the macros
+            timestamp). See CLAUDE.md "declarator codegen funnel" for the landed spec.
+
+
+NEW SCOPE (this revision): CODE CLEANUP of the declarator paths in the NON-PARSE
+stages. Converge the per-site duplication into ONE funnel per stage. This is a
+REFACTOR — preserve behavior — with the known holes closing as a CONSEQUENCE of
+the funnel, not as a separate feature push. Do NOT re-litigate the parse design;
+it is the reference realization.
+
+
+======================================================================
+THE PRINCIPLE, ALL STAGES
+======================================================================
+
+A binding SITE is one of: local var-decl, function parameter, for-loop variable,
+destructure slot, tuple-type slot, return value, and the assignment-form targets
+(bare-name `x = e`, complex-lvalue `obj.f = e` / `p^ = e` / `arr[i] = e`), plus
+the move / swap / compound forms of each. At every stage these are DIFFERENT
+parse-node kinds, but they are the SAME declarator concept and must share:
+
+  parse     ONE parser        parseDeclarator(NamePolicy)            (LANDED)
+  resolve   ONE type resolver resolveDeclType                        (LANDED)
+            ONE registrar     registerDeclarator                     (LANDED) name +
+                              declare-vs-reuse + dup-check + DA-seed
+  classify  ONE init dispatch dispatchAssignInit                     (LANDED) copy/move/
+                              swap/compound operator dispatch
+  desugar   ONE copy lowerer  lowerAggCopyStmt                       (LANDED) cross-form
+                              aggregate copy/move across all binding kinds
+  codegen   ONE fill + finalize emitInitFill / emitConstructed /     (LANDED) fill +
+                              emitConstructAt — fill init, run hooks,
+                              register dtor, for every binding site
+
+(Names above are the working names; if the code lands different spellings, update
+this doc to match — this file is the plan-of-record and must not drift again.)
+
+
+SITE x OPERATOR MATRIX  (classify: does the site dispatch the USER operator?)
+
+  site (statement-kind)          op=      op<--    op<-->   compound
+  ---------------------------    ----     -----    ------   --------
+  decl-init   (kVarDeclStmt)      yes*     yes*     yes*     n/a
+  local =     (kAssignStmt)       yes      n/a      n/a      n/a
+  complex =   (kStoreStmt)        yes      n/a      n/a      n/a   (Slice A: was HOLE)
+  move        (kMoveStmt)         n/a      yes      n/a      n/a
+  swap        (kSwapStmt)         n/a      n/a      yes      n/a
+  compound    (kAugAssignStmt)    n/a      n/a      n/a      yes
+  destructure copy                yes      n/a      n/a      n/a   (per-slot kAssignStmt)
+  destructure move/swap           n/a      yes      yes      n/a
+
+  The 5 assignment-form sites (all but decl-init and destructure) now route through
+  the ONE funnel dispatchAssignInit; the guard `form==kSlid && findClassOperator>=0
+  -> rewrite*` exists in ONE place, so a new site cannot skip it. (* decl-init is a
+  specialized caller of the same primitives — it wraps them in a default-construct
+  prelude + value-category guard, so it stays out of the funnel by design.)
+
+
+======================================================================
+PER-STAGE CLEANUP TARGETS  (audit evidence — file:line as of this audit)
+======================================================================
+
+RULING (for-vars, from the user): a for-var must ERROR on a name conflict, for ALL for
+shapes — it must NOT silently shadow. A typeless for-var still REUSES a visible local
+(that is a reuse, not a shadow); any visible NON-LOCAL (const / fn / class / enum / ns /
+alias) is a conflict. LANDED for for-array + for-tuple via registerForVar; for-ranged +
+for-long already reject through resolveStmt (assign-to-const / dup-decl).
+
+RULING (Slice C rationale, from the user): ctor/dtor are ALWAYS balanced; the way to make
+unbalance impossible is to route every construct/destruct through the SAME path — so
+emitConstructAt OWNS dtor registration and no emit site can forget it.
+
+RESOLVE — converge name registration  [DONE]
+  Coagulated already: resolveDeclType (315) — the type half; keep as-is.
+  Slice B LANDED: registerDeclarator (resolve.cpp, before registerAlias) — THE funnel.
+  Signature:
+    int registerDeclarator(tree, DeclInfo const& d, BindMode, ConflictScope, bool& reused, diag)
+  DeclInfo { name, file_id, name_tok, type(kNoType=infer), kind, alias_label, track_body_local }.
+  BindMode: DeclareOrReuse (typeless reuses a visible LOCAL, sets reused) | Declare (fresh).
+  ConflictScope: SameFrame (enclosing name is a legal shadow) | AnyScope (a visible NON-LOCAL
+  conflicts; for-vars — no silent shadow). Owns dup-check + diagnostic + addEntry + body_locals.
+  Routed 6 sites: registerAlias (Declare/SameFrame, kAlias, no track); var-decl main pass
+  (Declare/SameFrame, computed kind + alias_label + track); inferred-init (Declare/SameFrame,
+  kNoType); destructure slots (typed Declare / typeless DeclareOrReuse, SameFrame);
+  for-array + for-tuple via bindForVar (AnyScope, typeless DeclareOrReuse). bindForVar wraps
+  the funnel for the two element-iterating shapes.
+  NOT routed (structurally distinct — not declare-vs-reuse): const forward-decl pre-pass
+  (DEFERS dup to the main pass by design), self (reserved receiver), params / class members.
+  Verified: full behavior preserved — const-variable / substituted-const / global-static /
+  alias-label / reuse / declare-inferred all correct; dup conflicts ERROR at every shape;
+  suite 71/71; goldens unchanged.
+  Cross-bolted: name-registration is hand-rolled at every site (each builds a
+  parse::Entry + calls the bare list-append addEntry + re-does its own dup-check
+  + DA-seed):
+    local var-decl        resolveStmt              2547-2635
+    inferred-init assign  kAssignStmt              2657-2672  (flips to varDecl)
+    parameters            resolveFunctionBody      3650-3674
+    self receiver         resolveFunctionBody      3692-3703
+    for-array loop var    understandForArray       2148-2181
+    for-tuple loop var    understandForTuple       2292-2321  (near-verbatim copy)
+    C-style for-init      resolveStmt (for)        ~3050-3112
+    destructure slots     resolveDestructureSlots  2474-2543
+  The declare-vs-reuse rule (PARSE STAGE, DESTRUCTURE SLOTS, below) is copy-pasted
+  4x and they DISAGREE: only the destructure path enforces the same-frame-non-local
+  dup-decl error (2513-2538); the for-var paths silently declare/shadow. That drift
+  IS the bug this cleanup removes.
+  TARGET: registerDeclarator(frame, name, type, kind, flags) — the single funnel
+  all sites call; the declare-vs-reuse decision lives in it once; parameters and
+  locals build the same Entry the same way.
+
+CLASSIFY — converge init/assignment dispatch
+  Coagulated already (keep): findClassOperator (3422), rewriteAssignToOperatorCall
+  (3451), rewriteExprLhsToOperatorCall (3476), checkValueAssign (2934),
+  classifyClassInit (default copy/move), classifyDestructureSlots (3096).
+  Cross-bolted: the dispatch guard is inlined 5x:
+    kVarDeclStmt      3711  (op= / op<--; op<--> via rewrite-to-kSwapStmt)
+    kAssignStmt       3951  (op=)
+    kAugAssignStmt    3998  (compound; handles bare AND complex lvalue)
+    kMoveStmt         4164  (op<--; bare AND complex lvalue)
+    kSwapStmt         4190  (op<-->)
+    kStoreStmt        4129  ABSENT — only inferExpr + checkValueAssign(4141). HOLE.
+  TARGET: dispatchAssignInit(stmt, lvalueType, rhs, opname) — one funnel that
+  every assignment/init handler calls; kStoreStmt joins it and the op= hole closes.
+  Also route the destructure COPY form through per-slot dispatch (suspected 2nd
+  hole: classifyDestructureSlots type-checks but never dispatches per-slot op=,
+  whereas the move/swap form gets it free via desugarDestructureMoveSwap).
+
+DESUGAR — extend the one funnel that already exists
+  Coagulated: lowerAggCopyStmt (1666) dispatches kReturnStmt/kVarDeclStmt/
+  kAssignStmt/kStoreStmt/kMoveStmt onto a shared spillSource -> emitAggCopyLeaves
+  -> per-slot store (+ emitAggNullLeaves for moves). Construction-stmt (449-465)
+  and tryDesugarAugAssign (127) deliberately rewrite INTO kVarDeclStmt / a `_$lv`
+  ref var-decl to reuse the one path — keep this pattern.
+  lowerAggCopyStmt fires for cross-form / leaf-widen aggregates; same-type copies and
+  default_move_init bail (1726, 1735) — those now land on the ONE codegen funnel below,
+  which handles them uniformly, so the bail is NOT to a duplicated arm.
+  DONE (as-is): lowerAggCopyStmt IS the one lowerer for the cases that need AST-level
+  slot rewriting. The earlier "extend it to absorb the same-type/move bails" target is
+  DROPPED — with the codegen funnel in place, moving whole-value stores into desugar as
+  AST rewrites is churn, not convergence. One path PER STAGE is met.
+
+CODEGEN — the funnel (LANDED, Slice C)
+  Leaf primitives (reused): emitConstructHooks (1818), emitDestructHooks (1858),
+  emitNullLeaves (1181), emitArrayFromTuple (1974), emitImplicitAggregateConvert (1087).
+  BUILT — the funnel (codegen.cpp, just before emitStmt):
+    emitInitFill(addr, type, llty, init, is_move, ...)  — FILL storage from an init:
+      array<->tuple bridge / per-leaf aggregate widen / move-from-lvalue (null source
+      leaves) / whole-value copy. Stores only; no hooks, no registration. It does NOT
+      dispatch per-field op= / op<-- — classify already rewrote a user operator to a
+      method call, so codegen fills whole-value.
+    emitConstructed(addr, type, register_dtor, scope)   — FINALIZE raw storage: run ctor
+      hooks + register the dtor (unless the caller owns it). The SINGLE hooks+register
+      pairing — one typeNeedsHook flag governs both, so they cannot diverge.
+    emitConstructAt(addr, type, llty, init, is_move, sret_in_place, register_dtor, scope)
+      — CONSTRUCT into raw storage: sret-build-in-place for an exact-typed call init,
+      else emitInitFill + emitConstructed. init==nullptr default-constructs.
+  ROUTED: construct sites (var-decl / sret return slot / global) -> emitConstructAt;
+  live-storage assign sites (kAssignStmt tail / kStoreStmt / kMoveStmt) share emitInitFill
+  (no hooks/register). kSwapStmt stays (an exchange, not a fill). kAssignStmt keeps its
+  two sret cases (POD build-in-place + the hook husk-teardown). PARAMS are NOT routed and
+  need no dtor — a param is a primitive (by value) or a pointer (by pointer), so it never
+  owns a slid instance; there is nothing to register.
+  REMOVED as dead: emitDestructure + destructureElem + the kDestructureStmt emitStmt arm
+  (now an assert-unreachable) — classify desugars every destructure to per-slot declarator
+  statements, so a kDestructureStmt never reaches codegen.
+  Spellings differ from the working names above: emitConstructAtPtrs / emitSlidAssign were
+  NOT needed (per-field op dispatch is a classify concern; codegen fills whole-value).
+  CLAUDE.md "declarator codegen funnel" is the reconciled spec.
+
+
+======================================================================
+KNOWN HOLES  (close as a consequence of the funnels; do not one-off patch)
+======================================================================
+
+  1. kStoreStmt op= — CLOSED (Slice A). `obj.f = x` / `p^ = x` / `arr[i] = x` on a
+     class with a user op= now dispatches via dispatchAssignInit (converting AND
+     same-type sources). Canon: test/class/operator.sl sf/sd/si. Default copy (no
+     user op=) and primitive stores unaffected.
+  2. destructure COPY op= — CLOSED. `(a,b) = src` now desugars to `a = src[0];
+     b = src[1]` (per-slot kAssignStmt via desugarDestructure), so each slot dispatches
+     op= (or stores a primitive), by slot AND recursively (nested), with a one-time
+     spill of an rvalue source. Canon: test/class/operator.sl dca/dcb. CONSEQUENCE —
+     a mismatched slot is now an ASSIGNMENT/narrowing rejection, not a bespoke
+     destructure error, so 4 test/tuple/destructure.sl negatives changed message (all
+     STILL reject): neg_arity ("but the source" vs "but the tuple"); neg_reuse /
+     neg_typemis ("Cannot implicitly narrow" vs "but slot 0 is 'int'"); neg_nested
+     ("right side must be a tuple; got 'int'" vs the nested-specific message).
+     neg_nottuple still matches. CANON UPDATED: the 4 EXPECT-ERROR substrings were
+     re-pointed to the per-slot messages (tuple negatives now 50/50). The
+     strict-type-equality COMMENTS stayed as-is — per-slot narrowing IS the "must match
+     its element's type" check they describe, so they remain accurate.
+  3. declare-vs-reuse drift — CLOSED (Slice B). ONE registerDeclarator now owns the
+     decision for all 6 in-body binding sites; the logic exists in exactly one place
+     and cannot drift. for shapes error on a non-local conflict (no silent shadow).
+  4. dtor registration is var-decl-only — CLOSED (Slice C). emitConstructed is the ONE
+     hooks+dtor-registration pairing, and every construct site routes through it, so
+     registration can't be forgotten. The other cases named here turned out to be
+     NON-bugs: destructure slots register via their desugared per-slot kVarDeclStmt (a
+     construct site); store/move targets are LIVE storage (already-constructed lvalues —
+     assignment overwrites, it does not re-register); and a param never owns a slid (a
+     primitive by value or a pointer by pointer), so it needs no dtor.
+  5. CLAUDE.md / code mismatch — CLOSED (Slice C). The funnel is emitInitFill /
+     emitConstructed / emitConstructAt (NOT the emitConstructAtPtrs / emitSlidAssign
+     spellings the doc named — those weren't needed). CLAUDE.md "declarator codegen
+     funnel" now describes the landed helpers.
+
+
+======================================================================
+STATUS LEDGER  (update as cleanup lands — keep this honest)
+======================================================================
+
+  [x] parse     parseDeclarator(NamePolicy) — LANDED
+  [x] resolve   resolveDeclType (type half) — LANDED
+  [x] resolve   registerDeclarator — LANDED (Slice B). THE funnel; 6 in-body binding
+                sites routed (alias / var-decl / inferred-init / destructure / for-array /
+                for-tuple). Closes hole 3. const-pre-pass / self / params stay separate
+                by design (not declare-vs-reuse). Suite 71/71, behavior preserved.
+  [x] classify  dispatchAssignInit — LANDED (Slice A); 5 assign-form sites routed
+                (hole 1). desugarDestructure — copy/move/swap per-slot, recursive
+                (hole 2). Both holes CLOSED. (4 destructure negative MESSAGES shifted by
+                per-slot desugaring; the EXPECT-ERROR substrings were re-pointed — tuple
+                negatives 50/50.)
+  [x] desugar   lowerAggCopyStmt — LANDED (as-is); THE cross-form copy/move lowerer for
+                the 5 stmt-kinds. The "extend to same-type/move bails" target is DROPPED:
+                those bail to the codegen funnel, which handles them uniformly (no
+                duplicated arm to converge).
+  [x] codegen   emitInitFill / emitConstructed / emitConstructAt — LANDED (Slice C).
+                Construct sites (var-decl / sret return / global) + live-storage assign
+                sites (assign / store / move) routed; kSwapStmt stays; dead destructure
+                codegen removed. Closes holes 4, 5. Suite 71/71 positives; .ll behavior-
+                identical (SSA rename in return_fn + macros timestamp only). Landed
+                spellings, not emitConstructAtPtrs / emitSlidAssign (not needed).
+  Tests: existing declarator negatives/positives in test/assign/vardecl.sl +
+  typeconv.sl; operator dispatch canon in test/class/operator.sl (add kStoreStmt
+  op= + destructure-copy op= cases when hole 1/2 close).
+
+
+======================================================================
+PARSE STAGE (LANDED) — the original unified-declarator design
+======================================================================
 
 A single declarator parser for every site that consumes a type. Replaces the
 split between parseType (the type spelling, gated by reject_array_dims, now

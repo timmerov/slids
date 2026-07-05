@@ -46,11 +46,14 @@ BLOCKED FEATURES
     is filled by a plain struct copy of the source element AND then the field's ctor
     runs (copy-then-ctor), rather than the field being placed via the class's copy
     assignment. It compiles, the values are right, and ctors/dtors balance, but the
-    copy doesn't go through the per-field assignment dispatch (emitSlidAssign) the
-    way the tuple-LITERAL element path does (`Pair p = (f(), g())`). Harmless for a
-    class with the default copy; revisit when assignment-operator semantics for the
-    aggregate-spread path are defined. Lowering lives in classify::classifyClassInit
-    (the per-field spread) and classifyStmt (an rvalue source is spilled to a temp).
+    copy doesn't dispatch a per-field `op=` the way the tuple-LITERAL element path does
+    (`Pair p = (f(), g())`). (Per-field op= dispatch is a CLASSIFY concern — it rewrites
+    a user operator to a method call; codegen's declarator funnel fills whole-value, so
+    there is no codegen per-field assignment hook to route this through — an earlier note
+    here named a non-existent `emitSlidAssign`.) Harmless for a class with the default
+    copy; revisit when assignment-operator semantics for the aggregate-spread path are
+    defined. Lowering lives in classify::classifyClassInit (the per-field spread) and
+    classifyStmt (an rvalue source is spilled to a temp).
 
   * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` LANDED for
     primitives, tuples, and arrays (lockstep recursive walk; see
@@ -347,3 +350,17 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     parseType recurses one frame per `(` layer, so a pathological depth is a theoretical
     parser-stack DoS. Same 1-tuple-collapse root as UNIT ARRAY WITH A NON-SCALAR ELEMENT
     above. Pinned by vardecl.sl (`((((int)))) grp`). Low priority; harmless today.
+
+  * TUPLE/ARRAY-OF-CLASS INLINE LITERAL — extra copy + late temp destruction.
+    Initializing an aggregate of class VALUES from an inline literal —
+    `(Tracked, Tracked) t = (Tracked(1), Tracked(2));` — materializes each element as a
+    temporary and then COPY-constructs it into the destination slot (no RVO into the
+    aggregate: 4 ctors where 2 would do), AND the element temporaries are destroyed at
+    BLOCK exit rather than at the initializing statement's seam. It is BALANCED (every
+    ctor has a matching dtor — no leak / double-free), so this is a lifetime / efficiency
+    bug, not a crash. Contrast a FUNCTION-returned tuple-of-class (sret), which move-
+    constructs into the slot and destroys the source husks promptly — the clean shape.
+    Root is in emitExpr's tuple-literal-of-class lowering, NOT the declarator construct
+    funnel. Observed while adding the destructure-into-class-slots coverage test
+    (tuple/destructure.sl), which sidesteps it by using a tuple-returning function as the
+    destructure source.

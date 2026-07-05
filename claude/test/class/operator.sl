@@ -471,6 +471,12 @@ Copy(
 }
 Copy mkCopy() { Copy c(7); return c; }
 
+/* a container with a class-typed field, to exercise op= onto a field STORE target
+   (a complex lvalue). Without op= dispatch, `box.b_ = 31` would fail int -> OpDefs. */
+Box(
+    OpDefs b_
+) { }
+
 int32 main() {
 
     int a = 42;
@@ -639,6 +645,26 @@ int32 main() {
     (sa, sb) <--> ssrc;              // per-slot swap: sa<->ssrc[0], sb<->ssrc[1]
     __println("sa = " + sa.v_ + " sb = " + sb.v_
             + " s0 = " + ssrc[0].v_ + " s1 = " + ssrc[1].v_);   // sa=33 sb=44 s0=1 s1=2
+
+    /* ---- destructure COPY dispatches per-slot op=, same by-slot rule as move/swap:
+       `(a, b) = src` -> `a = src[0]; b = src[1]`. A CONVERTING source (int -> OpDefs via
+       op=(int)) proves the dispatch — without it, int -> OpDefs would not convert. ---- */
+    (int, int) dcs = (11, 22);
+    (OpDefs dca, OpDefs dcb) = dcs;   // dca.op=(11), dcb.op=(22)
+    __println("dca = " + dca.v_ + " dcb = " + dcb.v_);   // dca = 11 dcb = 22
+
+    /* ---- op= onto a COMPLEX lvalue (field / deref / index) dispatches the target
+       type's user op=, same rule as a bare-name target (shared dispatchAssignInit
+       funnel). Without dispatch each would fail to convert int -> OpDefs. ---- */
+    Box sbox;
+    sbox.b_ = 31;                 // field store  -> sbox.b_.op=(int) -> v_ = 31
+    __println("sf = " + sbox.b_.v_);   // sf = 31
+    OpDefs^ sbp = ^sbox.b_;
+    sbp^ = 41;                    // deref store  -> op=(int) -> v_ = 41
+    __println("sd = " + sbox.b_.v_);   // sd = 41
+    OpDefs sarr[2];
+    sarr[1] = 51;                 // index store  -> op=(int) -> v_ = 51
+    __println("si = " + sarr[1].v_);   // si = 51
 
     return 0;
 }

@@ -288,3 +288,15 @@ negatives — one //-block uncommented per run.
 //    }
 //    return 0;
 //}
+
+/* a for-var must NOT silently shadow a same-name non-local (const / function / class):
+   the name conflict is a duplicate declaration. A typeless for-var still REUSES a same-
+   name LOCAL — that is reuse, not a shadow — so only a non-local collides. */
+//-EXPECT-ERROR: Duplicate declaration of 'c'
+//int neg_var_shadows_const() {
+//    const c = 5;
+//    for (c : (1, 2, 3)) {
+//        __println("" + c);
+//    }
+//    return 0;
+//}

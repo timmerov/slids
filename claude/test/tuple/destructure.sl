@@ -45,6 +45,17 @@ rule (the parse-level disambiguation of a tuple-type decl from a destructure).
     return (11, 22);
 }
 
+// a class with lifecycle hooks, to destructure into CLASS slots: each typed slot
+// declares a fresh instance the funnel must default-construct (ctor hook) AND register
+// for destruction, then copy its element into.
+Tracked(int id_ = -1) {
+    _() { __println("Tracked ctor " + id_); }
+    ~() { __println("Tracked dtor " + id_); }
+}
+(Tracked, Tracked) makeTracked() {    // tuple-of-class source for the destructure
+    return (Tracked(1), Tracked(2));
+}
+
 int32 main() {
 
     /* untyped slots REUSE existing variables (a store). */
@@ -125,12 +136,20 @@ int32 main() {
     (mr0, mr1) = md;
     __println("rows: " + mr0[0] + " " + mr0[1] + " " + mr1[0] + " " + mr1[1]);   // 1 2 3 4
 
+    /* destructure into CLASS slots — each typed slot declares a fresh instance,
+       default-constructs it (funnel: ctor hook + dtor registration), then copies its
+       element in; the source instances and the slots all balance their dtors. */
+    {
+        (Tracked ct0, Tracked ct1) = makeTracked();
+        __println("class: ct0= " + ct0.id_ + " ct1= " + ct1.id_);   // 1 2
+    }
+
     return 0;
 }
 
 /* a REUSED variable whose type doesn't match its tuple element is rejected too
    (the same check as a typed slot, on the existing variable's type). */
-//-EXPECT-ERROR: but slot 0 is 'int'
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
 //int32 neg_reuse_mismatch() {
 //    int8 rm = 0;
 //    (rm, ) = (100, 200);
@@ -147,7 +166,7 @@ int32 main() {
 //}
 
 /* a NESTED slot needs a tuple/array element to match against. */
-//-EXPECT-ERROR: A nested destructure target needs a tuple or array element
+//-EXPECT-ERROR: The right side of a destructure must be a tuple or array; got 'int'
 //int32 neg_nested_scalar() {
 //    ((int a, int b), int c) = (1, 3);   // slot 0 is nested but element 0 is a scalar
 //    return a + b + c;
@@ -164,7 +183,7 @@ int32 main() {
 //}
 
 /* arity must match (including discards). */
-//-EXPECT-ERROR: Destructure has 2 target(s) but the tuple
+//-EXPECT-ERROR: Destructure has 2 target(s) but the source
 //int32 neg_arity() {
 //    int p = 0; int q = 0;
 //    (p, q) = (1, 2, 3);
@@ -172,7 +191,7 @@ int32 main() {
 //}
 
 /* a typed slot or a reused variable must match its tuple element's type. */
-//-EXPECT-ERROR: but slot 0 is 'int'
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
 //int32 neg_type_mismatch() {
 //    (int8 p, int q) = (1, 2);
 //    return p + q;

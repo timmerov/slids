@@ -90,6 +90,10 @@ dtor 1
 dtor 2
 dtor 1
 dtor 3
+-- nrvo call-init --
+ctor 7
+nc= 7
+dtor 7
 -- nested inline --
 ctor 1
 ctor 2
