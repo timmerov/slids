@@ -61,6 +61,15 @@ desugars to:
         ref = _$iter#;
         /*body*/
     }
+
+for the purposes of shadowing variables, there are 3 scopes counting the
+enclosing scope:
+normal local variable shadowing rules for scopes apply to these scopes.
+
+    |--enclosing---------------|
+    { for (var : tuple) {body} }
+                        |body|
+          |--loop-var--------|
 */
 
 /*
@@ -122,7 +131,7 @@ int32 main() {
     /* inferred reference */
     tpl2 = (88,89,90);
     ref2 = ^tpl2;
-    __print("tpl1 = ( ");
+    __print("tpl2 = ( ");
     for (x : ref2^) {
         __print(x+" ");
     }
@@ -289,10 +298,11 @@ negatives — one //-block uncommented per run.
 //    return 0;
 //}
 
-/* a for-var must NOT silently shadow a same-name non-local (const / function / class):
-   the name conflict is a duplicate declaration. A typeless for-var still REUSES a same-
-   name LOCAL — that is reuse, not a shadow — so only a non-local collides. */
-//-EXPECT-ERROR: Duplicate declaration of 'c'
+/* a typeless for-var REUSES a same-name binding; reusing a non-assignable one (a const)
+   is the same error an assignment to it raises — one rule for `x = e`, `for (x : ...)`,
+   and destructure slots. A same-name LOCAL is reused (a store); only a non-assignable
+   target rejects. */
+//-EXPECT-ERROR: Cannot assign to constant 'c'.
 //int neg_var_shadows_const() {
 //    const c = 5;
 //    for (c : (1, 2, 3)) {

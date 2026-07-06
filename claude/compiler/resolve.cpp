@@ -322,6 +322,24 @@ void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
     if (!reported) requireKnownType(tree, type_ref, file_id, tok, diag);
 }
 
+// The ONE place an entry's KIND is named for a diagnostic ("Cannot assign to <noun>
+// 'x'"). A named enum is a kNamespace whose slids_type carries the underlying type; a
+// plain namespace's is kNoType — so an enum reads "enum", not "namespace". Shared by
+// registerDeclarator (reuse-reject), resolveAssignTarget, and resolveCallTarget.
+char const* entryKindNoun(parse::Entry const& e) {
+    switch (e.kind) {
+        case parse::EntryKind::kAlias:     return "type";
+        case parse::EntryKind::kConst:     return "constant";
+        case parse::EntryKind::kFunction:  return "function";
+        case parse::EntryKind::kClass:     return "class";
+        case parse::EntryKind::kNamespace:
+            return e.slids_type != widen::kNoType ? "enum" : "namespace";
+        case parse::EntryKind::kLocalVar:
+        case parse::EntryKind::kGlobalVar: return "variable";
+    }
+    return "variable";
+}
+
 // The entry a declarator registers: name + resolved type + kind + flags.
 struct DeclInfo {
     std::string name;
@@ -333,36 +351,42 @@ struct DeclInfo {
     bool track_body_local = true;           // add to the unused-local sweep list
 };
 enum class BindMode { Declare, DeclareOrReuse };
-enum class ConflictScope { SameFrame, AnyScope };
 
 // THE funnel every in-body declarator routes through — one place owns the declare-vs-reuse
-// decision, the dup-check + "Duplicate declaration" diagnostic, the addEntry, and the
-// body-local tracking, so the logic cannot drift between sites (it did: the for shapes
-// silently shadowed).
-//   mode  DeclareOrReuse : a TYPELESS binding REUSES a visible LOCAL (sets *reused);
-//         Declare        : always a fresh declaration (typed slots, plain / typed decls).
-//   scope SameFrame      : only a SAME-FRAME entry conflicts — an enclosing one is a legal
-//                          shadow (plain decls, destructure slots, aliases).
-//         AnyScope       : a same-frame entry OR any visible NON-LOCAL (const / fn / class /
-//                          enum / ns / alias) conflicts; an enclosing LOCAL is a legal
-//                          shadow (typed) or reuse (typeless). For-vars, which must NOT
-//                          silently shadow a non-local.
-// Returns the entry id (reused or fresh) or -1 on a conflict error.
+// decision, the dup-check + diagnostic, the addEntry, and the body-local tracking, so the
+// logic cannot drift between sites.
+//   mode DeclareOrReuse : a TYPELESS binding. If the name already resolves in scope it is a
+//        REUSE (assignment semantics): an assignable variable is reused (sets *reused); a
+//        non-assignable target (const / fn / class / enum / namespace / type) is REJECTED
+//        exactly as an assignment to it would be — one rule for `x = e`, `for (x ...)`, and
+//        destructure slots. Unresolved -> a fresh declaration.
+//        Declare : always a fresh declaration (typed slots, plain / typed decls).
+// Conflict is by NORMAL lexical scoping: only a SAME-FRAME entry collides ("Duplicate
+// declaration"); an enclosing entry is a legal shadow. A TYPED decl may shadow an enclosing
+// const / fn / class; a TYPELESS binding reuses/rejects it per the mode above.
+// Returns the entry id (reused or fresh) or -1 on a reuse-reject / conflict error.
 int registerDeclarator(parse::Tree& tree, DeclInfo const& d, BindMode mode,
-                       ConflictScope scope, bool& reused, diagnostic::Sink& diag) {
+                       bool& reused, diagnostic::Sink& diag) {
     reused = false;
-    int existing = resolveName(tree, d.name);
-    bool existing_local = existing >= 0
-        && tree.entries[existing].kind == parse::EntryKind::kLocalVar;
-    if (mode == BindMode::DeclareOrReuse && existing_local) {
-        reused = true;
-        return existing;
+    if (mode == BindMode::DeclareOrReuse) {
+        int existing = resolveName(tree, d.name);
+        if (existing >= 0) {
+            parse::Entry const& prev = tree.entries[existing];
+            if (prev.kind == parse::EntryKind::kLocalVar
+                || prev.kind == parse::EntryKind::kGlobalVar) {
+                reused = true;   // reuse an assignable variable (a store)
+                return existing;
+            }
+            // A typeless binding to a non-assignable name is the same error an
+            // assignment to it would raise (uses the shared entryKindNoun wording).
+            std::string what = entryKindNoun(prev);
+            diagnostic::report(diag, {d.file_id, d.name_tok,
+                "Cannot assign to " + what + " '" + d.name + "'.",
+                {{prev.file_id, prev.tok, what + " declared here"}}});
+            return -1;
+        }
     }
     int conflict = parse::findInFrame(tree, parse::currentFrameId(tree), d.name);
-    if (conflict < 0 && scope == ConflictScope::AnyScope
-        && existing >= 0 && !existing_local) {
-        conflict = existing;   // a visible NON-LOCAL up the chain — no silent shadow
-    }
     if (conflict >= 0) {
         parse::Entry const& prev = tree.entries[conflict];
         diagnostic::report(diag, {d.file_id, d.name_tok,
@@ -392,8 +416,7 @@ void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     d.type = s.return_type;              // target spelling; resolved at use
     d.kind = parse::EntryKind::kAlias;
     d.track_body_local = false;
-    s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare,
-                                             ConflictScope::SameFrame, reused, diag);
+    s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare, reused, diag);
 }
 
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
@@ -1874,20 +1897,15 @@ bool resolveAssignTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& di
     }
     parse::Entry const& entry = tree.entries[id];
     // Allowlist: a local variable (incl. a param) or a GLOBAL variable is an
-    // assignable lvalue. Every other kind rejects — an explicit arm per kind, no
-    // silent default (a fall-through used to set resolved_entry_id and crash codegen
-    // with no alloca). "variable" is unreachable here (kLocalVar/kGlobalVar are the
-    // accepted cases); it mirrors resolveCallTarget's `what` so the wording matches.
+    // assignable lvalue. Every other kind rejects — the kind is named by the shared
+    // entryKindNoun (class -> "class", enum -> "enum", ...), matching the funnel's
+    // reuse-reject and resolveCallTarget word-for-word.
     if (entry.kind != parse::EntryKind::kLocalVar
         && entry.kind != parse::EntryKind::kGlobalVar) {
-        char const* what = entry.kind == parse::EntryKind::kAlias ? "type"
-                         : entry.kind == parse::EntryKind::kConst ? "constant"
-                         : entry.kind == parse::EntryKind::kNamespace ? "namespace"
-                         : entry.kind == parse::EntryKind::kFunction ? "function"
-                         : "variable";
+        std::string what = entryKindNoun(entry);
         diagnostic::report(diag, {s.file_id, s.name_tok,
-            "Cannot assign to " + std::string(what) + " '" + s.name + "'.",
-            {{entry.file_id, entry.tok, std::string(what) + " declared here"}}});
+            "Cannot assign to " + what + " '" + s.name + "'.",
+            {{entry.file_id, entry.tok, what + " declared here"}}});
         return false;
     }
     if (entry.kind == parse::EntryKind::kLocalVar)
@@ -1939,13 +1957,10 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         return false;
     }
     if (entry.kind != parse::EntryKind::kFunction) {
-        char const* what = entry.kind == parse::EntryKind::kAlias ? "type"
-                         : entry.kind == parse::EntryKind::kConst ? "constant"
-                         : entry.kind == parse::EntryKind::kNamespace ? "namespace"
-                         : "variable";
+        std::string what = entryKindNoun(entry);
         diagnostic::report(diag, {s.file_id, s.name_tok,
             "'" + s.name + "' is a " + what + ", not a function.",
-            {{entry.file_id, entry.tok, std::string(what) + " declared here"}}});
+            {{entry.file_id, entry.tok, what + " declared here"}}});
         return false;
     }
     s.resolved_entry_id = id;
@@ -2115,11 +2130,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s,
 // `v = arr[i]`, or typeless by value reusing/declaring v). The node is re-tagged
 // kForArrayStmt; s.children stay [loop-var decl, array ident, body].
 
-// Bind a for-loop variable through registerDeclarator: a for-var must not silently shadow
-// (ConflictScope::AnyScope), a typeless one REUSES a visible local (DeclareOrReuse). The
-// loop frame is already pushed, so resolveName sees the enclosing scope where a shadowed
-// const lives. `infer_type` types a freshly-declared typeless var (the element type, or
-// kNoType when classify infers it). Sets the loop-var node and flags a reuse as a store.
+// Bind a for-loop variable through registerDeclarator: normal lexical scoping (a for-var
+// may shadow an enclosing const / fn / class), a typeless one REUSES a visible local
+// (DeclareOrReuse). The loop frame is already pushed, so the for-var lives in its own
+// scope and an enclosing same-name entry is a legal shadow. `infer_type` types a freshly-
+// declared typeless var (the element type, or kNoType when classify infers it). Sets the
+// loop-var node and flags a reuse as a store.
 void bindForVar(parse::Tree& tree, parse::Node& var_decl, widen::TypeRef infer_type,
                 diagnostic::Sink& diag) {
     bool typeless = (var_decl.return_type == widen::kNoType);
@@ -2131,7 +2147,7 @@ void bindForVar(parse::Tree& tree, parse::Node& var_decl, widen::TypeRef infer_t
     bool reused = false;
     var_decl.resolved_entry_id = registerDeclarator(
         tree, d, typeless ? BindMode::DeclareOrReuse : BindMode::Declare,
-        ConflictScope::AnyScope, reused, diag);
+        reused, diag);
     if (reused) var_decl.kind = parse::Kind::kAssignStmt;
 }
 
@@ -2532,7 +2548,7 @@ void resolveDestructureSlots(parse::Tree& tree, parse::Node& node,
         bool reused = false;
         slot->resolved_entry_id = registerDeclarator(
             tree, d, typed ? BindMode::Declare : BindMode::DeclareOrReuse,
-            ConflictScope::SameFrame, reused, diag);
+            reused, diag);
         if (reused) slot->kind = parse::Kind::kAssignStmt;   // reuse -> a store
         if (slot->resolved_entry_id >= 0)
             tree.initialized_locals.insert(slot->resolved_entry_id);
@@ -2590,7 +2606,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 d.track_body_local = !as_const && !s.is_global;
                 bool reused = false;
                 s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare,
-                                                         ConflictScope::SameFrame, reused, diag);
+                                                         reused, diag);
             }
             // Resolve the initializer (if any) BEFORE marking the local
             // initialized, so a self-reference reads as uninitialized
@@ -2636,26 +2652,33 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     resolveExpr(tree, *s.children[1], diag);
                 return Completion::Normal;
             }
-            // Inferred-init: a typeless assign to an UNDECLARED bare name declares
-            // a fresh local whose type classify infers from the rhs (write-back).
-            // A reassign (target already a local) and a wrong-kind target (const /
-            // function / ...) both fall through to resolveAssignTarget below.
-            if (!isQualified(s) && resolveName(tree, s.name) < 0) {
+            // Inferred-init / reassign: a typeless bare-name assign. The declare-vs-reuse
+            // decision goes through the ONE funnel: an UNDECLARED name declares a fresh
+            // local (type inferred from the rhs); an existing assignable variable reuses it
+            // (falls through to the assignment path below for capture / DA); a non-assignable
+            // target (const / class / enum / ...) is rejected there — the same wording an
+            // explicit assignment to it raises.
+            if (!isQualified(s)) {
                 DeclInfo d;
                 d.name = s.name;
                 d.file_id = s.file_id;
                 d.name_tok = s.name_tok;
                 d.type = widen::kNoType;   // classify stamps it from the rhs
-                bool reused = false;       // unresolved above -> always a fresh declare
-                s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare,
-                                                         ConflictScope::SameFrame, reused, diag);
-                s.kind = parse::Kind::kVarDeclStmt;   // alloca + classify infer
-                // rhs BEFORE marking initialized, so `x = x` reads x uninitialized.
-                for (auto& ch : s.children) {
-                    if (ch) resolveExpr(tree, *ch, diag);
+                bool reused = false;
+                int id = registerDeclarator(tree, d, BindMode::DeclareOrReuse,
+                                            reused, diag);
+                if (id < 0) return Completion::Normal;   // non-assignable reuse rejected
+                if (!reused) {
+                    s.resolved_entry_id = id;
+                    s.kind = parse::Kind::kVarDeclStmt;   // fresh: alloca + classify infer
+                    // rhs BEFORE marking initialized, so `x = x` reads x uninitialized.
+                    for (auto& ch : s.children) {
+                        if (ch) resolveExpr(tree, *ch, diag);
+                    }
+                    tree.initialized_locals.insert(s.resolved_entry_id);
+                    return Completion::Normal;
                 }
-                tree.initialized_locals.insert(s.resolved_entry_id);
-                return Completion::Normal;
+                // an existing assignable variable -> the assignment path below.
             }
             resolveAssignTarget(tree, s, diag);
             // rhs BEFORE marking, so `x = x;` with x uninitialized still fires.
@@ -3034,15 +3057,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             for (std::size_t i = 3; i < s.children.size(); i++) {
                 if (!s.children[i]) continue;
                 parse::Node& d = *s.children[i];
-                // A typeless varlist decl (no explicit type) either REUSES an
-                // enclosing local of the same name or declares a fresh inferred
-                // local. WITH an initializer, both route through the kAssignStmt
-                // path: an in-scope name reassigns it (reuse — no fresh alloca,
-                // observable after); an unknown name becomes a fresh inferred-init
-                // local (classify types it from the rhs). WITHOUT an initializer
-                // there is nothing to infer, so the name must already be a
-                // reassignable local — reuse it as the loop var (a no-op slot);
-                // otherwise it is an error.
+                // A typeless varlist decl (no explicit type). WITH an initializer it
+                // routes through the kAssignStmt path — an in-scope assignable name is
+                // reused (observable after), an unknown name becomes a fresh inferred-init
+                // local (classify types it from the rhs), and a non-assignable target is
+                // rejected — all by the ONE funnel. WITHOUT an initializer there is no type
+                // to infer: a bare name is not a valid declaration.
                 if (d.kind == parse::Kind::kVarDeclStmt && !d.is_const
                     && d.return_type == widen::kNoType && !isQualified(d)) {
                     if (!d.children.empty()) {
@@ -3050,49 +3070,26 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                         resolveStmt(tree, d, diag);
                         continue;
                     }
+                    // Typeless AND no initializer — a structural error, independent of what
+                    // the name resolves to (`int x; for (x)` is an error even though x is in
+                    // scope: a varlist slot may not be a bare "touch"). Canon: flow/forlong.sl.
+                    diagnostic::report(diag, {d.file_id, d.name_tok,
+                        "A variable declaration needs an explicit type or an initializer.",
+                        {}});
+                    // Resolve an existing name / drop a placeholder so cond/update/body
+                    // reads don't cascade; main bails after resolve, so this is inert.
                     int existing = resolveName(tree, d.name);
                     if (existing >= 0) {
-                        parse::Entry const& prev = tree.entries[existing];
-                        if (prev.kind == parse::EntryKind::kLocalVar) {
-                            d.kind = parse::Kind::kBlockStmt;   // no-op reuse slot
-                            d.children.clear();
-                            continue;
-                        }
-                        // The name resolves but is not a reassignable local, so it
-                        // cannot be reused as a loop variable (mirrors
-                        // resolveAssignTarget's wrong-kind wording). The name still
-                        // resolves, so the cond/update/body reads don't cascade.
-                        char const* what =
-                              prev.kind == parse::EntryKind::kAlias     ? "type"
-                            : prev.kind == parse::EntryKind::kConst     ? "constant"
-                            : prev.kind == parse::EntryKind::kNamespace ? "namespace"
-                            : prev.kind == parse::EntryKind::kFunction  ? "function"
-                            : "variable";
-                        diagnostic::report(diag, {d.file_id, d.name_tok,
-                            "Cannot use " + std::string(what) + " '" + d.name
-                                + "' as a loop variable.",
-                            {{prev.file_id, prev.tok,
-                              std::string(what) + " declared here"}}});
-                        d.kind = parse::Kind::kBlockStmt;   // neutralize the slot
-                        d.children.clear();
-                        continue;
+                        d.resolved_entry_id = existing;
+                    } else {
+                        parse::Entry e;
+                        e.kind = parse::EntryKind::kLocalVar;
+                        e.name = d.name;
+                        e.file_id = d.file_id;
+                        e.tok = d.name_tok;
+                        d.resolved_entry_id = parse::addEntry(tree, std::move(e));
+                        tree.initialized_locals.insert(d.resolved_entry_id);
                     }
-                    // Truly undeclared typeless name with no initializer: nothing
-                    // to infer from.
-                    diagnostic::report(diag, {d.file_id, d.name_tok,
-                        "Cannot infer the type of '" + d.name
-                            + "'; it has no initializer.", {}});
-                    // Register a placeholder local so the cond/update/body reads
-                    // of this name resolve (suppressing cascade "unresolved" /
-                    // "uninitialized" errors); main bails after resolve, so the
-                    // empty type is never consumed downstream.
-                    parse::Entry e;
-                    e.kind = parse::EntryKind::kLocalVar;
-                    e.name = d.name;
-                    e.file_id = d.file_id;
-                    e.tok = d.name_tok;
-                    d.resolved_entry_id = parse::addEntry(tree, std::move(e));
-                    tree.initialized_locals.insert(d.resolved_entry_id);
                     d.kind = parse::Kind::kBlockStmt;   // neutralize the slot
                     d.children.clear();
                     continue;

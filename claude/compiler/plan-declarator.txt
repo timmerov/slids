@@ -23,15 +23,18 @@ STATUS BY STAGE
             name-registration half now FUNNELED through ONE registerDeclarator
             (resolve.cpp, before registerAlias) — it owns the declare-vs-reuse decision,
             the dup-check + "Duplicate declaration" diagnostic, the addEntry, and the
-            body-local tracking. Parameterized by BindMode {Declare, DeclareOrReuse} and
-            ConflictScope {SameFrame, AnyScope}; entry KIND / alias-label / body-tracking
-            are passed via a DeclInfo, so const/global/typeless specifics stay caller-side.
+            body-local tracking. Parameterized by BindMode {Declare, DeclareOrReuse};
+            conflict is by NORMAL lexical scoping (same-frame only — an enclosing entry is
+            a legal shadow), one rule for every site (the ConflictScope {SameFrame,AnyScope}
+            knob is GONE — for-vars use the same same-frame rule as plain decls). entry KIND
+            / alias-label / body-tracking are passed via a DeclInfo, so const/global/typeless
+            specifics stay caller-side.
             ROUTED (6 in-body binding sites): registerAlias, var-decl main pass,
             inferred-init assign, destructure slots (typed + typeless), for-array +
             for-tuple (via bindForVar). NOT routed, by design (not declare-vs-reuse
             decisions): the const forward-decl PRE-PASS (intentionally DEFERS dup to the
             main pass), `self` (reserved receiver, no dup-check), and params / class
-            members (signature-/NAMES-time). for-ranged + for-long reject via resolveStmt.
+            members (signature-/NAMES-time). for-ranged + for-long register via resolveStmt.
   classify  LANDED (Slice A). The 5 assignment-form sites (kAssignStmt, kStoreStmt,
             kMoveStmt, kSwapStmt, kAugAssignStmt) route through ONE funnel
             dispatchAssignInit (hole 1 CLOSED). And destructure — copy/move/swap —
@@ -120,11 +123,25 @@ SITE x OPERATOR MATRIX  (classify: does the site dispatch the USER operator?)
 PER-STAGE CLEANUP TARGETS  (audit evidence — file:line as of this audit)
 ======================================================================
 
-RULING (for-vars, from the user): a for-var must ERROR on a name conflict, for ALL for
-shapes — it must NOT silently shadow. A typeless for-var still REUSES a visible local
-(that is a reuse, not a shadow); any visible NON-LOCAL (const / fn / class / enum / ns /
-alias) is a conflict. LANDED for for-array + for-tuple via registerForVar; for-ranged +
-for-long already reject through resolveStmt (assign-to-const / dup-decl).
+RULING (for-vars + all declarations, from the user — REVISED): every VARIABLE DECLARATION
+behaves the same way everywhere, incl. shadow checks — one funnel, no per-site surprises.
+All four for shapes obey NORMAL LEXICAL SCOPING (short-for scopes: enclosing > loop-var >
+body; long-for adds a sibling update scope), so a TYPED decl may shadow an enclosing
+same-name entry — local OR non-local (const / fn / class) — legally; only a same-frame
+collision (two names in one varlist) is a "Duplicate declaration". A TYPELESS binding needs
+a type source (an initializer / iterable): if the name already resolves it is a REUSE — an
+assignable variable is reused, a non-assignable one (const / class / enum / fn) is REJECTED
+"Cannot assign to <noun> '<x>'." exactly as an assignment would be (so `for (c : t)` with a
+const `c` == `c = ...`; canon fortuple.sl neg_var_shadows_const, tuple/destructure.sl
+neg_dup_const); unresolved -> a fresh inferred local. A TYPELESS binding with NO type source
+(a bare `for (x)`) is a structural error "A variable declaration needs an explicit type or
+an initializer." regardless of what the name resolves to (`int x; for (x)` still errors — a
+varlist slot may not be a bare "touch"). Canon: flow/for{long,array,tuple,range}.sl (the
+`for (x)` reuse-without-init form + its neg_typeless_const/function tests were REMOVED as
+wrong interpretation; the top-of-file comment is canon). LANDED: bindForVar (array + tuple)
++ the long-for varlist + inferred-init all route the typeless decision through registerDeclarator;
+the AnyScope conflict-mode + the existing_local reuse gate + the hand-rolled long-for-no-init
+branch are all gone.
 
 RULING (Slice C rationale, from the user): ctor/dtor are ALWAYS balanced; the way to make
 unbalance impossible is to route every construct/destruct through the SAME path — so
@@ -134,16 +151,32 @@ RESOLVE — converge name registration  [DONE]
   Coagulated already: resolveDeclType (315) — the type half; keep as-is.
   Slice B LANDED: registerDeclarator (resolve.cpp, before registerAlias) — THE funnel.
   Signature:
-    int registerDeclarator(tree, DeclInfo const& d, BindMode, ConflictScope, bool& reused, diag)
+    int registerDeclarator(tree, DeclInfo const& d, BindMode, bool& reused, diag)
   DeclInfo { name, file_id, name_tok, type(kNoType=infer), kind, alias_label, track_body_local }.
-  BindMode: DeclareOrReuse (typeless reuses a visible LOCAL, sets reused) | Declare (fresh).
-  ConflictScope: SameFrame (enclosing name is a legal shadow) | AnyScope (a visible NON-LOCAL
-  conflicts; for-vars — no silent shadow). Owns dup-check + diagnostic + addEntry + body_locals.
-  Routed 6 sites: registerAlias (Declare/SameFrame, kAlias, no track); var-decl main pass
-  (Declare/SameFrame, computed kind + alias_label + track); inferred-init (Declare/SameFrame,
-  kNoType); destructure slots (typed Declare / typeless DeclareOrReuse, SameFrame);
-  for-array + for-tuple via bindForVar (AnyScope, typeless DeclareOrReuse). bindForVar wraps
-  the funnel for the two element-iterating shapes.
+  BindMode: DeclareOrReuse (a TYPELESS binding — if the name already resolves in scope it is a
+  REUSE: an assignable variable is reused [sets reused], a non-assignable target [const / fn /
+  class / enum / namespace / type] is REJECTED "Cannot assign to <noun> '<x>'." exactly as an
+  assignment to it would be; unresolved -> a fresh declaration) | Declare (always fresh).
+  Conflict is by NORMAL lexical scoping: same-frame only — an enclosing name (local OR
+  non-local) is a legal shadow. Owns reuse-vs-declare + the reuse-reject + dup-check +
+  diagnostic + addEntry + body_locals.
+  (The former ConflictScope {SameFrame,AnyScope} knob is REMOVED — for-vars now use the same
+  same-frame rule as every other site. The reuse gate is now `existing` [any assignable
+  variable], NOT `existing_local` — so a typeless bind to an in-scope const/class/enum
+  rejects like an assignment instead of silently shadowing. The reject noun comes from the
+  ONE entryKindNoun helper [class->"class", enum->"enum", ...], shared with resolveAssignTarget
+  + resolveCallTarget.)
+  UNIFICATION: every typeless binding — `x = e`, `for (x : it)`, `for (x = e)`, a destructure
+  slot — makes its declare-vs-reuse-vs-reject decision in this ONE call. inferred-init (`x = e`)
+  now routes through it too (an assignable reuse falls through to the assignment path for
+  capture/DA). A TYPELESS binding with NO type source (a bare `for (x)` varlist slot) is a
+  structural error "A variable declaration needs an explicit type or an initializer."
+  (the hand-rolled long-for-no-init reuse/const/infer branch is DELETED). Canon:
+  flow/for{long,array,tuple,range}.sl, tuple/destructure.sl.
+  Routed 6 sites: registerAlias (Declare, kAlias, no track); var-decl main pass (Declare,
+  computed kind + alias_label + track); inferred-init (DeclareOrReuse, kNoType); destructure
+  slots (typed Declare / typeless DeclareOrReuse); for-array + for-tuple via bindForVar
+  (typeless DeclareOrReuse). bindForVar wraps the funnel for the two element-iterating shapes.
   NOT routed (structurally distinct — not declare-vs-reuse): const forward-decl pre-pass
   (DEFERS dup to the main pass by design), self (reserved receiver), params / class members.
   Verified: full behavior preserved — const-variable / substituted-const / global-static /
@@ -158,7 +191,7 @@ RESOLVE — converge name registration  [DONE]
     self receiver         resolveFunctionBody      3692-3703
     for-array loop var    understandForArray       2148-2181
     for-tuple loop var    understandForTuple       2292-2321  (near-verbatim copy)
-    C-style for-init      resolveStmt (for)        ~3050-3112
+    long-for varlist      resolveStmt (for)        ~3050-3112
     destructure slots     resolveDestructureSlots  2474-2543
   The declare-vs-reuse rule (PARSE STAGE, DESTRUCTURE SLOTS, below) is copy-pasted
   4x and they DISAGREE: only the destructure path enforces the same-frame-non-local
@@ -251,7 +284,8 @@ KNOWN HOLES  (close as a consequence of the funnels; do not one-off patch)
      its element's type" check they describe, so they remain accurate.
   3. declare-vs-reuse drift — CLOSED (Slice B). ONE registerDeclarator now owns the
      decision for all 6 in-body binding sites; the logic exists in exactly one place
-     and cannot drift. for shapes error on a non-local conflict (no silent shadow).
+     and cannot drift. All four for shapes obey NORMAL lexical scoping (same-frame
+     conflict only; an enclosing name is a legal shadow) — one spec, no per-shape knob.
   4. dtor registration is var-decl-only — CLOSED (Slice C). emitConstructed is the ONE
      hooks+dtor-registration pairing, and every construct site routes through it, so
      registration can't be forgotten. The other cases named here turned out to be
@@ -274,7 +308,9 @@ STATUS LEDGER  (update as cleanup lands — keep this honest)
   [x] resolve   registerDeclarator — LANDED (Slice B). THE funnel; 6 in-body binding
                 sites routed (alias / var-decl / inferred-init / destructure / for-array /
                 for-tuple). Closes hole 3. const-pre-pass / self / params stay separate
-                by design (not declare-vs-reuse). Suite 71/71, behavior preserved.
+                by design (not declare-vs-reuse). All for shapes use NORMAL lexical
+                scoping (the ConflictScope/AnyScope knob is removed — for-vars conflict
+                same-frame only, like every other site).
   [x] classify  dispatchAssignInit — LANDED (Slice A); 5 assign-form sites routed
                 (hole 1). desugarDestructure — copy/move/swap per-slot, recursive
                 (hole 2). Both holes CLOSED. (4 destructure negative MESSAGES shifted by

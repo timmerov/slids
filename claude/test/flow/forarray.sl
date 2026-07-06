@@ -46,9 +46,18 @@ the examples desugar to the following:
     ) {
         ++_$idx#;
     } {
-        x = arr[_$idx#],
+        x = arr[_$idx#];
         /*body*/
     }
+
+for the purposes of shadowing variables, there are 3 scopes counting the
+enclosing scope:
+normal local variable shadowing rules for scopes apply to these scopes.
+
+    |--enclosing---------------|
+    { for (var : array) {body} }
+                        |body|
+          |--loop-var--------|
 
 note:
 the compiler inserts instructions at the start of the loop body.

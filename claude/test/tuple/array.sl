@@ -659,15 +659,3 @@ int32 main() {
 //    a &= (1.0, 1.0);
 //    return 0;
 //}
-
-/* a for-array var must NOT silently shadow a same-name non-local — the name conflict is a
-   duplicate declaration, INCLUDING a typed loop var (a fresh typed binding still collides). */
-//-EXPECT-ERROR: Duplicate declaration of 'c'
-//int neg_forvar_shadows_const() {
-//    const c = 5;
-//    int arr[3] = (7, 8, 9);
-//    for (int c : arr) {
-//        __println("" + c);
-//    }
-//    return 0;
-//}

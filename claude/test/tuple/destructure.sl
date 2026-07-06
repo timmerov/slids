@@ -213,9 +213,9 @@ int32 main() {
 //    return a;
 //}
 
-/* a TYPELESS slot whose name collides with a same-frame NON-LOCAL entry (a const —
-   not a reusable variable) is a duplicate, not a silent shadow. */
-//-EXPECT-ERROR: Duplicate declaration of 'cc'
+/* a TYPELESS slot REUSES a same-name binding; reusing a non-assignable one (a const)
+   is the same error an assignment to it raises — the slot desugars to `cc = src[0]`. */
+//-EXPECT-ERROR: Cannot assign to constant 'cc'.
 //int32 neg_dup_const() {
 //    const int cc = 5;
 //    int z = 0;

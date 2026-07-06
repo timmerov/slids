@@ -1,5 +1,53 @@
 
 agenda:
+
+ One real deviation: parseAllocElementType (grammar.cpp:2069, used by new at :898) is a second, hand-rolled
+  type parser. It re-implements parseType's primitive and qualified-ident branches so it can stop before the
+  [ in new T[n]. It's genuine duplication, it's a type position, and the plan never accounts for it (it's not
+  in "THE 10 SITES"). Cleanest convergence candidate: fold it into parseType with a flag that suppresses
+  trailing-[ consumption.
+
+   Residual scatter (worth converging): the C-style for (kForLongStmt) typeless-no-initializer branch
+  (resolve.cpp:3053-3095) is a 7th declare-vs-reuse decision — it hand-rolls the "existing local → reuse /
+  non-local → conflict" logic and does a raw addEntry (3094), outside the funnel. It's error-recovery only
+  (main bails), so not a live bug, but it directly contradicts the plan's "exactly one place, cannot drift."
+
+  Potential behavior gap (needs your call, not just a refactor): a typed C-style for var (for(int X=0; ...)
+  where X is an enclosing const/fn/class) falls to the plain var-decl path (resolve.cpp:3100 →
+  registerDeclarator Declare/SameFrame). Because the for-scope frame is pushed first, the enclosing non-local
+  isn't in-frame, so it's declared fresh — a silent shadow. The plan's RULING says "no silent shadow for ALL
+  for shapes." Either the RULING is too broad (a C-style for is conventionally its own scope — shadowing is
+  normal) or this shape should also use AnyScope. This is an intent decision.
+
+  Minor / doc drift: params re-implement a near-identical dup-check + Entry build (defensible —
+  signature-time, not declare-vs-reuse); the funnel does not own "DA-seed" (plan line 86 wrong — DA seeding
+  is still per-site); bindForVar in code vs registerForVar in plan lines 126/275; for-array/for-tuple
+  declared types call resolveTypeRef directly, bypassing resolveDeclType (2159, 2327).
+
+  One structural seam: decl-init copy/move (classify.cpp:3795-3826) does not call dispatchAssignInit — it
+  re-implements the findClassOperator>=0 → rewriteAssignToOperatorCall core inline, because it must splice a
+  default-construct prelude between the probe and the rewrite (the funnel fuses them atomically). Justified
+  and documented, but it's the one place a future op-dispatch change could diverge from the 5 sites.
+  (decl-init swap does route, via kSwapStmt — the matrix's "stays out by design" under-describes this; only
+  copy/move is truly out.)
+
+  One structural seam: decl-init copy/move (classify.cpp:3795-3826) does not call dispatchAssignInit — it
+  re-implements the findClassOperator>=0 → rewriteAssignToOperatorCall core inline, because it must splice a
+  default-construct prelude between the probe and the rewrite (the funnel fuses them atomically). Justified
+  and documented, but it's the one place a future op-dispatch change could diverge from the 5 sites.
+  (decl-init swap does route, via kSwapStmt — the matrix's "stays out by design" under-describes this; only
+  copy/move is truly out.)
+
+   But "every construct site routes through emitConstructed" is literally true only for scope-dtor'd sites.
+  Three construct outside it:
+  - kSeqExpr _$cret temp (codegen.cpp:1643-1672) — full construct+destruct by hand, duplicating
+  emitConstructAt/emitConstructed's own sret-vs-fill branch. Clearest residual scatter in codegen; a change
+  to the construct sequence wouldn't reach it. Convergence candidate.
+  - kNewExpr heap (1534, 1561) — ctor hooks by hand; defensible as a separate heap/delete mechanism (no scope
+  dtor).
+  - husk teardown (2181-2207) — the plan does disclose this one.
+
+
   - op= onto a field/deref/index target (obj.f = x, a kStoreStmt) — unchanged; though compound obj.f += x is wired.
   - Ambiguous op overloads are treated as no-match rather than an error.
 

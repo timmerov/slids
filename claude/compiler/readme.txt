@@ -875,13 +875,16 @@ STAGE FILES (.h / .cpp pairs)
             (long-form `for (varlist) (cond) {update} {body}`; the canonical for
             node — other for shapes desugar to it) opens ONE for-scope holding the
             varlist, with the update and body as sibling nested blocks (3 frames;
-            the body may shadow a for-var). A TYPELESS varlist decl (empty
-            return_type) is intercepted: WITH an init it becomes a kAssignStmt
-            (reuse an enclosing local, else fresh inferred-init); with NO init it
-            reuses an in-scope local as a no-op slot, errors "Cannot use <kind>
-            '<x>' as a loop variable." if the name resolves to a non-local, or
-            "Cannot infer the type of '<x>'; it has no initializer." (+ placeholder
-            entry to stop a read cascade) if undeclared. Resolved body-then-update
+            the body may shadow a for-var — normal lexical scoping, one rule for
+            all four for shapes). A TYPELESS varlist decl (empty return_type) needs
+            an initializer: WITH one it becomes a kAssignStmt routed through the ONE
+            declarator funnel (registerDeclarator DeclareOrReuse — reuse an in-scope
+            assignable variable, else a fresh inferred-init local; a non-assignable
+            target rejects "Cannot assign to <noun> '<x>'." exactly as an assignment
+            would); with NO init it is a structural error "A variable declaration
+            needs an explicit type or an initializer." — independent of what the name
+            resolves to (`int x; for (x)` still errors; a varlist slot may not be a
+            bare touch). Resolved body-then-update
             (execution order): cond reads from the post-varlist set S'; the body
             resolves from S' (break/continue target the for); the update is checked
             against body-out ∩ continue_accum (so it sees body-assigned vars but not

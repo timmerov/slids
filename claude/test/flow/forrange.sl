@@ -51,6 +51,15 @@ desugars to:
 
 start, end, step are evaluated once at the start of the loop.
 
+for the purposes of shadowing variables, there are 3 scopes counting the
+enclosing scope:
+normal local variable shadowing rules for scopes apply to these scopes.
+
+    |--enclosing---------------|
+    { for (var : range) {body} }
+                        |body|
+          |--loop-var--------|
+
 notes:
 does cmp == make any sense?
 does op % & | ^ && || ^^ make any sense?

@@ -8,7 +8,7 @@ parentheses and curly brackets around the clauses are required.
 any of the clauses may be empty.
 
 varlist is a comma separated tuple of variable declarations.
-variable types may be inferred (when that lands) from the initializer.
+variable types may be inferred from the initializer.
 initializers are optional for typed variables.
 fresh variables in the var list are allocated once, outside the
 update and body code blocks.
@@ -73,6 +73,20 @@ in other words, there are 3 scope frames: for, update, body.
         int x = 42;
         __println("prints 42: " + x);
     }
+
+clarification: there are 4 scopes counting the enclosing scope.
+normal local variable shadowing rules for scopes apply to these scopes.
+
+    |--enclosing------------------------|
+    { for (init) (cond) {update} {body} }
+                        |update| |body|
+          |--for/init/loop-vars-------|
+
+note:
+    int x; for (x) (cond) {update} {body}
+this is a compile error because the bare naked x is not a valid variable declaration.
+it must have a type or an initializer.
+
 */
 
 /*
@@ -329,17 +343,6 @@ int for_reuse(int n) {
     return x;
 }
 
-/* a typeless loop var with NO initializer reuses the enclosing local without
-   re-initializing it (a no-op slot); `x` keeps its current value as the loop
-   starts. body-then-update sees x = 0..n-1. */
-int for_noinit_reuse(int n) {
-    int x = 0;
-    int s = 0;
-    for (x) (x < n) { ++x; } {
-        s = s + x;
-    }
-    return s;
-}
 
 /* a mixed varlist: a typeless var (inferred) beside an explicitly-typed one. */
 int for_typeless_mixed(int n) {
@@ -447,7 +450,6 @@ int32 main() {
     __println("for_update_local(6) = " + for_update_local(6));              // 6
     __println("for_typeless(5) = " + for_typeless(5));                      // 10
     __println("for_reuse(4) = " + for_reuse(4));                            // 4
-    __println("for_noinit_reuse(4) = " + for_noinit_reuse(4));              // 6
     __println("for_typeless_mixed(10) = " + for_typeless_mixed(10));        // 5
     __println("for_two_typeless(10) = " + for_two_typeless(10));            // 5
     __println("for_typeless_shadow(3) = " + for_typeless_shadow(3));        // 126
@@ -572,36 +574,27 @@ negatives — one //-block uncommented per run.
 //    return 0;
 //}
 
-/* a typeless for-var with no initializer and no enclosing local to reuse has no
-   type to infer. */
-//-EXPECT-ERROR: Cannot infer the type of 'k'; it has no initializer.
-//int neg_typeless_undeclared(int n) {
+/* a bare naked name in the varlist is not a valid declaration — it has neither a
+   type nor an initializer, so there is nothing to infer. Structural: the error
+   fires regardless of what the name would otherwise resolve to. */
+//-EXPECT-ERROR: A variable declaration needs an explicit type or an initializer.
+//int neg_noinit_undeclared(int n) {
 //    for (k) (k < n) { ++k; } {
 //        __println(k);
 //    }
 //    return 0;
 //}
 
-/* a typeless no-init for-var whose name resolves to a constant cannot be reused
-   as a loop variable. */
-//-EXPECT-ERROR: Cannot use constant 'c' as a loop variable.
-//int neg_typeless_const(int n) {
-//    const int c = 5;
-//    for (c) (n > 0) { } {
-//        __println(c);
+/* the same error even when the name IS an enclosing local — `for (x)` cannot mean
+   "reuse x without an initializer"; a varlist slot may not be a bare touch. */
+//-EXPECT-ERROR: A variable declaration needs an explicit type or an initializer.
+//int neg_noinit_local(int n) {
+//    int x = 0;
+//    for (x) (x < n) { ++x; } {
+//        __println(x);
 //    }
 //    return 0;
 //}
-
-/* likewise a function name. */
-//-EXPECT-ERROR: Cannot use function 'g' as a loop variable.
-//int neg_typeless_function(int n) {
-//    for (g) (n > 0) { } {
-//        n = n - 1;
-//    }
-//    return 0;
-//}
-//int g() { return 1; }
 
 /* a typeless WITH-init for-var that reuses a constant is an assignment to a
    const. */

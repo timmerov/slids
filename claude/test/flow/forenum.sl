@@ -19,6 +19,16 @@ desugars to:
         body
     }
 
+
+for the purposes of shadowing variables, there are 3 scopes counting the
+enclosing scope:
+normal local variable shadowing rules for scopes apply to these scopes.
+
+    |--enclosing--------------|
+    { for (var : enum) {body} }
+                       |body|
+          |--loop-var-------|
+
 note:
 the range is over the *first* enum defined
 to the *last* enum defined.
