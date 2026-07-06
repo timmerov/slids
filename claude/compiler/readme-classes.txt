@@ -112,8 +112,12 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     COPY, or a MOVE for `<--`: classifyClassInit short-circuits it (deepStrip equality
     with the class type), codegen does a whole-value store (+ emitNullLeaves for the
     move) and STILL runs the ctor, so a copied/moved object is constructed exactly
-    once and balances its dtor. Default only (no user op=/op<- yet); canon
-    test/class/operator.sl.
+    once and balances its dtor. A user `op=` / `op<--` now WINS over this default
+    (the "eliding exception": classify rewrites the statement to a method call, so
+    the author's operator runs INSTEAD of the copy/move elision — even from a call
+    rvalue, which the funnel spills to a temp); the whole-value default applies only
+    when NO user operator matches. canon test/class/operator.sl +
+    test/function/return_fn.sl.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field

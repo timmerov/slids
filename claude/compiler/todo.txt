@@ -40,7 +40,6 @@ BUGS
     (tuple/destructure.sl), which sidesteps it by using a tuple-returning function as the
     destructure source.
 
-
 UNBLOCKED FEATURES
 
 
@@ -149,8 +148,9 @@ BLOCKED FEATURES
       - no write through a const reference (every assign-family site);
       - const-overload matcher (match-key strips const);
       - method-level const + a const receiver `_$recv`;
-      - `mutable` REQUIRED on a move/swap operator param (`op<--`/`op<-->`) — also
-        blocked on operator overloading existing (Phase 5+; op<-- does not parse).
+      - `mutable` REQUIRED on a move/swap operator param (`op<--`/`op<-->`) — the
+        operators parse + dispatch now; only the mutable-on-the-param REQUIREMENT
+        (enforcement) waits on this const-enforcement work.
     cast.sl's const-correctness lines + the deep-const local forms in mutable.sl
     stay syntax-only until this lands.
 
@@ -249,14 +249,6 @@ BLOCKED FEATURES
 
 
 REACH GOALS
-
-  * move rhs lvalue-ness is only required when the rhs contains a pointer type.
-    int x <-- 7; makes sense because move primitive is copy.
-    int^ p <-- ^x; fails because rhs is an rvalue. but that's overly restrictive.
-    move could set rhs pointer types to nullptr iff they are lvalues.
-    leave them alone if they're not.
-    in other words, move <-- could be used anywhere assignment = can be used.
-    move has the additional feature of clearing a moved pointer.
 
   * decide if smallest widening wins when matching overloaded functions.
     void fn(int32) {}

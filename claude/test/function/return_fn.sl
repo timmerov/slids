@@ -131,6 +131,19 @@ the only difference is how the call site handles the returned value.
 such a function used in an expression is writing to a newly created temporary variable.
 it's equivalent to call site case 1.
 
+eliding exception:
+the author explicitly defines either the assignment or move operator,
+and the assignment or move operator is used in the statement, then the
+overloaded operator should be used instead of eliding.
+
+    Class(int a) {
+        op=(Class^ rhs);
+        op<--(mutable Class^ rhs);
+    }
+    Class fn() { return Class(); }
+    cls = fn();
+    cls <-- fn();
+
 notes:
 
 nit: the types need to match almost-exactly.
@@ -239,6 +252,19 @@ Class pickBad2(bool b) { Class a(1); if (b) { return a; } else { Class b2(2); re
 // own it); a regression that did would dtor the object twice.
 Class mkFromCall() { Class x = mkClass(); return x; }
 
+// ELIDING EXCEPTION (header canon above): a class that DEFINES op= / op<-- and is
+// initialized / assigned with `=` / `<--` runs the OPERATOR instead of eliding — even
+// from a call rvalue where RVO/NRVO could otherwise elide the copy. Op prints ctor/dtor
+// (the un-elided temp keeps the balance visible) plus copy/move (the operator fired);
+// op= adds 100, op<-- adds 200, so mkOp()'s 7 becomes 107 (copy) / 207 (move).
+Op(int v_) {
+    _()                    { __println("ctor " + v_); }
+    ~()                    { __println("dtor " + v_); }
+    op=(Op^ rhs)           { v_ = rhs^.v_ + 100; __println("copy"); }
+    op<--(mutable Op^ rhs) { v_ = rhs^.v_ + 200; rhs^.v_ = 0; __println("move"); }
+}
+Op mkOp() { Op o(7); return o; }
+
 int32 main() {
 
     /* POD aggregate — decl (build a new local), existing var, and inline use. */
@@ -269,6 +295,42 @@ int32 main() {
         Class y(1);
         y = mkClass();
         __println("y= " + y.id_);                               // 7
+    }
+    /* ELIDING EXCEPTION — a class defining op= / op<-- runs the OPERATOR (not RVO/NRVO
+       elision) when `=` / `<--` is used, from a call rvalue, across the full matrix:
+       {copy, move} x {typed decl-init, inferred decl-init, existing var}. Each fires
+       the operator (7 -> 107 copy / 207 move); the un-elided temp stays balanced. */
+    __println("-- elide typed decl copy --");
+    {
+        Op cd = mkOp();                                         // typed decl -> op=
+        __println("cd= " + cd.v_);                              // 107
+    }
+    __println("-- elide inferred decl copy --");
+    {
+        ce = mkOp();                                            // inferred decl -> op=
+        __println("ce= " + ce.v_);                              // 107
+    }
+    __println("-- elide existing copy --");
+    {
+        Op ex(1);
+        ex = mkOp();                                            // existing var -> op=
+        __println("ex= " + ex.v_);                              // 107
+    }
+    __println("-- elide typed decl move --");
+    {
+        Op cm <-- mkOp();                                       // typed decl -> op<--
+        __println("cm= " + cm.v_);                              // 207
+    }
+    __println("-- elide inferred decl move --");
+    {
+        cn <-- mkOp();                                          // inferred decl -> op<--
+        __println("cn= " + cn.v_);                              // 207
+    }
+    __println("-- elide existing move --");
+    {
+        Op em(1);
+        em <-- mkOp();                                          // existing var -> op<--
+        __println("em= " + em.v_);                              // 207
     }
     /* INLINE use — a hook call in an expression position (an argument) is lifted to
        a temp decl by desugar, so it constructs + is destroyed cleanly. */
@@ -432,4 +494,21 @@ int32 main() {
 //    Class a(1);
 //    a <-- mkClass();
 //    return a.id_;
+//}
+
+/* ELIDING-EXCEPTION BOUNDARY — the construct-then-operator path is decl-init ONLY.
+   Constructing a class as an assign / move RHS into an EXISTING variable is a clean
+   error (declare a fresh variable instead), NOT the segfault a regression would
+   reintroduce by spilling an unbuildable rvalue. */
+//-EXPECT-ERROR: Constructing a class in this position is not yet supported
+//int neg_copy_construct_existing() {
+//    Op x(1);
+//    x = Op(11);
+//    return x.v_;
+//}
+//-EXPECT-ERROR: Constructing a class in this position is not yet supported
+//int neg_move_construct_existing() {
+//    Op x(1);
+//    x <-- Op(11);
+//    return x.v_;
 //}

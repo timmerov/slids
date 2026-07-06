@@ -2555,6 +2555,46 @@ void resolveDestructureSlots(parse::Tree& tree, parse::Node& node,
     }
 }
 
+// A bare-name UNDECLARED target of `<--` / `<-->` is an inferred move/swap-INIT,
+// symmetric to `cls = e` (copy): declare a fresh inferred local through the SAME funnel
+// (registerDeclarator DeclareOrReuse), flip the stmt to a kVarDeclStmt with
+// default_move_init / default_swap_init, and resolve its source — so classify's inferred
+// decl-init dispatch runs op<-- (or default-constructs-then-swaps), exactly like the typed
+// `Class cls <-- e` form. Returns true iff it handled the stmt. A bare FIELD or an existing
+// variable returns false -> the normal move/swap path (a store / a reuse). Mirrors the
+// kAssignStmt inferred-init promotion so all four init shapes declare-if-fresh alike.
+bool tryInferredMoveSwapInit(parse::Tree& tree, parse::Node& s, bool swap,
+                             diagnostic::Sink& diag) {
+    parse::Node* lhs = s.children.empty() ? nullptr : s.children[0].get();
+    if (!lhs || lhs->kind != parse::Kind::kIdentExpr) return false;
+    if (resolveName(tree, lhs->name) >= 0 || isMethodField(tree, lhs->name))
+        return false;   // an existing variable / a bare field -> the normal path
+    DeclInfo d;
+    d.name = lhs->name;
+    d.file_id = lhs->file_id;
+    d.name_tok = lhs->name_tok;
+    d.type = widen::kNoType;   // classify stamps it from the source
+    bool reused = false;
+    int id = registerDeclarator(tree, d, BindMode::DeclareOrReuse, reused, diag);
+    if (id < 0) return true;   // non-assignable reuse rejected (diagnostic reported)
+    // resolveName<0 above guarantees a fresh declare (never a reuse); the source is
+    // children[1] for both forms (move [target, rhs] / swap [target, other]).
+    std::string nm = lhs->name;
+    int nt = lhs->name_tok;
+    auto src = s.children.size() > 1 ? std::move(s.children[1]) : nullptr;
+    s.kind = parse::Kind::kVarDeclStmt;
+    s.name = nm;
+    s.name_tok = nt;
+    s.resolved_entry_id = id;
+    if (swap) s.default_swap_init = true;
+    else      s.default_move_init = true;
+    s.children.clear();
+    s.children.push_back(std::move(src));
+    if (s.children[0]) resolveExpr(tree, *s.children[0], diag);
+    tree.initialized_locals.insert(id);
+    return true;
+}
+
 Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
@@ -2754,7 +2794,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // `a <-- b;` — a is a WRITE destination (need not be pre-initialized);
             // b is a READ (the copy reads it; pointer leaves are then nulled but b
             // stays initialized and valid). rhs FIRST so `x <-- x` reads x before
-            // the write. classify checks copy compatibility.
+            // the write. classify checks copy compatibility. A bare UNDECLARED target
+            // is an inferred move-INIT (declare fresh), symmetric to `cls = e`.
+            if (tryInferredMoveSwapInit(tree, s, /*swap=*/false, diag))
+                return Completion::Normal;
             if (s.children[1]) resolveExpr(tree, *s.children[1], diag);
             resolveMoveSwapLvalue(tree, *s.children[0], /*read=*/false,
                                   "A move target", diag);
@@ -2762,6 +2805,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kSwapStmt:
             // `a <--> b;` — both operands are READ and WRITTEN (exchanged), so
             // both must already be initialized lvalues. classify checks same-type.
+            // A bare UNDECLARED target is an inferred swap-INIT (declare fresh +
+            // default_swap_init), symmetric to `cls = e`.
+            if (tryInferredMoveSwapInit(tree, s, /*swap=*/true, diag))
+                return Completion::Normal;
             resolveMoveSwapLvalue(tree, *s.children[0], /*read=*/true,
                                   "A swap operand", diag);
             resolveMoveSwapLvalue(tree, *s.children[1], /*read=*/true,

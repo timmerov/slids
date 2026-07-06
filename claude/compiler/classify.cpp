@@ -3558,23 +3558,110 @@ void rewriteExprLhsToOperatorCall(parse::Tree& tree, parse::Node& s,
     inferMethodCall(tree, s, diag);
 }
 
-// THE ONE GUARD deciding whether a class assignment/init statement dispatches to a user
-// operator. Every assignment-form site (kAssignStmt, kStoreStmt, kMoveStmt, kSwapStmt,
-// kAugAssignStmt) routes through here so NONE can silently skip the check — that scatter
-// is exactly how the kStoreStmt op= hole got in. `clsType` = the lvalue's type; `rhs` =
-// the source (for the overload probe); `opname` = the operator to look for. Picks the
-// rewrite by lvalue shape: a BARE-NAME target (lvalue in s.name; kAssignStmt / bare-name
-// kAugAssignStmt) -> rewriteAssignToOperatorCall; a target already held as an EXPRESSION
-// child ([lhs, rhs]; kStoreStmt / kMoveStmt / kSwapStmt / complex kAugAssignStmt) ->
-// rewriteExprLhsToOperatorCall. `rhs` must already be inferred (findClassOperator ranks by
-// rhs.inferred_type). Returns true iff it rewrote `s` into a method call.
-// NOTE: kVarDeclStmt decl-init does NOT route here — it needs a default-construct prelude
-// and a value-category guard around the same primitives (findClassOperator + rewrite).
+// THE ONE FUNNEL binding a value into a target when the target's class defines a matching
+// user operator. EVERY binding site routes here so none can silently skip the check (that
+// scatter is how the kStoreStmt op= hole got in): the 5 live-storage assignment forms
+// (kAssignStmt, kStoreStmt, kMoveStmt, kSwapStmt, kAugAssignStmt) AND both decl-init shapes
+// (typed `Class x = e`, inferred `x = e`). `clsType` = the target's type; `rhs` = the
+// source (for the overload probe); `opname` = the operator; `expr_lhs` = the target is an
+// EXPRESSION child ([lhs, rhs], idx 1) vs a BARE NAME (in s.name, rhs idx 0). Returns true
+// iff it rewrote `s` into the operator method call (else the caller does the default
+// copy/move/elide). `rhs` must already be inferred (findClassOperator ranks by its type).
+//
+// Two knobs let a DECL target share the funnel (the old "decl-init can't route here" seam):
+//  * a class RVALUE source (a call / op / construction result) has no address for the
+//    operator's `Class^` param, so it is materialized into a `_$cinit` temp built by the
+//    DEFAULT copy/elision (classifyClassInit — NOT the operator, so no recursion), and the
+//    source child is replaced by a bare ident to it. A construction source is restructured
+//    to its ctor-arg tuple first (field-init, not a raw-ctor copy codegen can't emit). Both
+//    need a `prelude` to splice the temp into; a named lvalue / primitive source is untouched.
+//  * `needs_construct` (a FRESH decl target) splices a default-construct of the target into
+//    the prelude BEFORE the rewrite reads s.name — so the fresh var is constructed THEN op'd.
 bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsType,
                         parse::Node& rhs, std::string const& opname, bool expr_lhs,
-                        diagnostic::Sink& diag) {
+                        diagnostic::Sink& diag,
+                        std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr,
+                        bool needs_construct = false) {
     if (widen::form(widen::strip(clsType)) != widen::Type::Form::kSlid) return false;
     if (findClassOperator(tree, clsType, rhs, opname) < 0) return false;
+    // Materialize a class RVALUE source into a `_$cinit` temp so the operator takes its
+    // address (a named lvalue / primitive is used in place).
+    int idx = expr_lhs ? 1 : 0;
+    // A CONSTRUCTION source can only be materialized into a FRESH decl target; a live-
+    // storage assign RHS that is a construction is unsupported — bail so the caller reports
+    // the clean "construct in this position is not yet supported" error (as with a class
+    // that has no operator), rather than spilling an unbuildable rvalue.
+    if (!needs_construct && idx < static_cast<int>(s.children.size()) && s.children[idx]
+        && s.children[idx]->kind == parse::Kind::kCallExpr
+        && s.children[idx]->is_construction) {
+        return false;
+    }
+    if (prelude && idx < static_cast<int>(s.children.size()) && s.children[idx]) {
+        parse::Kind rk = s.children[idx]->kind;
+        bool rhs_lvalue = rk == parse::Kind::kIdentExpr
+                       || rk == parse::Kind::kFieldExpr
+                       || rk == parse::Kind::kIndexExpr
+                       || rk == parse::Kind::kDerefExpr;
+        auto srcIt = tree.classes.find(widen::strip(s.children[idx]->inferred_type));
+        if (!rhs_lvalue && srcIt != tree.classes.end()) {
+            if (s.children[idx]->kind == parse::Kind::kCallExpr
+                && s.children[idx]->is_construction) {
+                auto ctor = std::move(s.children[idx]);
+                auto tup = std::make_unique<parse::Node>();
+                tup->kind = parse::Kind::kTupleExpr;
+                tup->file_id = ctor->file_id;
+                tup->tok = ctor->tok;
+                for (auto& a : ctor->children)
+                    if (a) tup->children.push_back(std::move(a));
+                s.children[idx] = std::move(tup);
+            }
+            int f = s.children[idx]->file_id, tk = s.children[idx]->tok;
+            parse::Entry e;
+            e.kind = parse::EntryKind::kLocalVar;
+            e.name = "_$cinit";
+            e.slids_type = srcIt->first;
+            e.file_id = f;
+            e.tok = tk;
+            int id = static_cast<int>(tree.entries.size());
+            tree.entries.push_back(std::move(e));
+            auto spill = std::make_unique<parse::Node>();
+            spill->kind = parse::Kind::kVarDeclStmt;
+            spill->name = "_$cinit";
+            spill->resolved_entry_id = id;
+            spill->return_type = srcIt->first;
+            spill->file_id = f;
+            spill->tok = tk;
+            spill->name_tok = tk;
+            spill->children.push_back(std::move(s.children[idx]));
+            classifyClassInit(tree, *spill, srcIt->second, diag);
+            prelude->push_back(std::move(spill));
+            auto ident = std::make_unique<parse::Node>();
+            ident->kind = parse::Kind::kIdentExpr;
+            ident->name = "_$cinit";
+            ident->resolved_entry_id = id;
+            ident->inferred_type = srcIt->first;
+            ident->file_id = f;
+            ident->tok = tk;
+            s.children[idx] = std::move(ident);
+        }
+    }
+    // A FRESH decl target is default-constructed before the operator runs (splice lands in
+    // the prelude, before this stmt becomes `name.op(...)`); live storage already exists.
+    if (needs_construct && prelude) {
+        auto itc = tree.classes.find(widen::strip(clsType));
+        if (itc != tree.classes.end()) {
+            auto dc = std::make_unique<parse::Node>();
+            dc->kind = parse::Kind::kVarDeclStmt;
+            dc->name = s.name;
+            dc->name_tok = s.name_tok;
+            dc->resolved_entry_id = s.resolved_entry_id;
+            dc->return_type = clsType;
+            dc->file_id = s.file_id;
+            dc->tok = s.tok;
+            classifyClassInit(tree, *dc, itc->second, diag);
+            prelude->push_back(std::move(dc));
+        }
+    }
     if (expr_lhs) rewriteExprLhsToOperatorCall(tree, s, opname, diag);
     else          rewriteAssignToOperatorCall(tree, s, clsType, opname, diag);
     return true;
@@ -3732,6 +3819,22 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // to the fresh default. Only a class carries a swap operator; a non-class
             // swap-init is rejected. Needs a prelude to splice the default-construct into.
             if (s.default_swap_init && prelude && !s.children.empty() && s.children[0]) {
+                // An INFERRED swap-init (`nw <--> ex`, typeless target) carries no declared
+                // type yet — infer it from the source (as the copy/move inferred path does)
+                // BEFORE the class-type check, so a class source is recognized rather than
+                // mis-rejected. A typed swap-init (`Class nw <--> ex`) already has its type.
+                if (s.return_type == widen::kNoType && s.resolved_entry_id >= 0
+                    && !s.is_const) {
+                    inferExpr(tree, *s.children[0], widen::kNoType, diag);
+                    parse::Node& rhs = *s.children[0];
+                    widen::TypeRef inferred =
+                        (isLiteralKind(rhs.kind) && rhs.strong_type != widen::kNoType)
+                            ? rhs.strong_type
+                            : rhs.inferred_type;
+                    s.return_type = inferred;
+                    tree.entries[s.resolved_entry_id].slids_type = inferred;
+                    tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
+                }
                 auto itc = tree.classes.find(widen::strip(s.return_type));
                 if (widen::form(widen::strip(s.return_type)) != widen::Type::Form::kSlid
                     || itc == tree.classes.end()) {
@@ -3777,52 +3880,35 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 auto it = tree.classes.find(widen::strip(s.return_type));
                 if (it != tree.classes.end()) {
-                    // DECL-INIT operator dispatch (slices 1-2). A class var DECLARED with a
-                    // bare `= expr` (copy) or `<-- expr` (move) initializer probes for a
-                    // USER op= / op<-- matching the rhs; when one exists the fresh var is
-                    // default-constructed (spliced as a prelude) and THIS statement becomes
-                    // `name.op=(rhs)` / `name.op<--(rhs)` (canon "construct THEN op"),
-                    // shadowing the default copy/move classifyClassInit + codegen do.
-                    // Reuses the existing-var rewrite (stage 2); desugar lowers the call —
-                    // no new codegen. VALUE-CATEGORY: a class RVALUE source (a call / op
-                    // result — not a named lvalue) elides/moves (or, for `<--`, is rejected)
-                    // through the EXISTING return/move machinery, so the operator copy/move
-                    // applies only to a class LVALUE or a primitive; a class rvalue skips
-                    // the probe. EXCLUDED (fall through unchanged): a kTupleExpr init (a
-                    // `(args)` construction OR a `= (tuple)` — indistinguishable in the AST,
-                    // so tuple-op= is deferred); a `= Class(args)` construction BUILD; and
-                    // any context with no prelude to splice the default-construct into.
+                    // DECL-INIT operator dispatch. A class var DECLARED with a bare `= expr`
+                    // (copy) or `<-- expr` (move) initializer routes through the ONE binding
+                    // funnel (dispatchAssignInit): when a user op= / op<-- matches the source
+                    // it default-constructs the fresh var (needs_construct) and rewrites THIS
+                    // statement into `name.op=(rhs)` (canon "construct THEN op"; the author's
+                    // operator wins over copy-elision, even for a class RVALUE source, which
+                    // the funnel spills to a temp). EXCLUDED (fall through to the construction
+                    // BUILD / elision below): a kTupleExpr init (a `(args)` construction OR
+                    // `= (tuple)` — tuple-op= deferred); no matching operator; or no prelude.
                     if (prelude && !s.children.empty() && s.children[0]
-                        && s.children[0]->kind != parse::Kind::kTupleExpr
-                        && !(s.children[0]->kind == parse::Kind::kCallExpr
-                             && s.children[0]->is_construction)) {
-                        inferExpr(tree, *s.children[0], widen::kNoType, diag);
-                        parse::Kind rk = s.children[0]->kind;
-                        bool rhs_lvalue = rk == parse::Kind::kIdentExpr
-                                       || rk == parse::Kind::kFieldExpr
-                                       || rk == parse::Kind::kIndexExpr
-                                       || rk == parse::Kind::kDerefExpr;
-                        bool rhs_class =
-                            widen::form(widen::strip(s.children[0]->inferred_type))
-                                == widen::Type::Form::kSlid;
-                        std::string opname = s.default_move_init ? "op<--" : "op=";
-                        if (!(rhs_class && !rhs_lvalue)
-                            && findClassOperator(tree, s.return_type, *s.children[0],
-                                                 opname) >= 0) {
-                            auto dc = std::make_unique<parse::Node>();
-                            dc->kind = parse::Kind::kVarDeclStmt;
-                            dc->name = s.name;
-                            dc->name_tok = s.name_tok;
-                            dc->resolved_entry_id = s.resolved_entry_id;
-                            dc->return_type = s.return_type;
-                            dc->file_id = s.file_id;
-                            dc->tok = s.tok;
-                            classifyClassInit(tree, *dc, it->second, diag);
-                            prelude->push_back(std::move(dc));
-                            rewriteAssignToOperatorCall(tree, s, s.return_type, opname,
-                                                        diag);
-                            return;
+                        && s.children[0]->kind != parse::Kind::kTupleExpr) {
+                        // Type the source for the operator probe. A CONSTRUCTION's type is
+                        // its class — read it from the resolved target; do NOT inferExpr a
+                        // construction here (that mis-processes it; the BUILD block below
+                        // owns constructions). Any other source is inferred normally.
+                        if (s.children[0]->kind == parse::Kind::kCallExpr
+                            && s.children[0]->is_construction) {
+                            if (s.children[0]->resolved_entry_id >= 0)
+                                s.children[0]->inferred_type =
+                                    tree.entries[s.children[0]->resolved_entry_id]
+                                        .slids_type;
+                        } else {
+                            inferExpr(tree, *s.children[0], widen::kNoType, diag);
                         }
+                        std::string opname = s.default_move_init ? "op<--" : "op=";
+                        if (dispatchAssignInit(tree, s, s.return_type, *s.children[0],
+                                               opname, /*expr_lhs=*/false, diag, prelude,
+                                               /*needs_construct=*/true))
+                            return;
                     }
                     // `Class y = Class(args)` is a BUILD, identical to `Class y(args)`
                     // / `Class y = (args)` — NOT a same-type whole-object copy. Replace
@@ -3947,6 +4033,21 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     tree.entries[s.resolved_entry_id].slids_type = inferred;
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
                 }
+                // INFERRED decl-init (`x = e`): the type is now known — if it is a class
+                // with a matching user op= / op<--, route through the SAME binding funnel as
+                // a typed decl-init (default-construct THEN operator; the funnel spills a
+                // class RVALUE source). The source was inferred just above.
+                if (prelude && !s.is_const && !s.is_global && !s.children.empty()
+                    && s.children[0]
+                    && s.children[0]->kind != parse::Kind::kTupleExpr
+                    && widen::form(widen::strip(s.return_type))
+                           == widen::Type::Form::kSlid) {
+                    std::string opname = s.default_move_init ? "op<--" : "op=";
+                    if (dispatchAssignInit(tree, s, s.return_type, *s.children[0], opname,
+                                           /*expr_lhs=*/false, diag, prelude,
+                                           /*needs_construct=*/true))
+                        return;
+                }
                 // A TYPELESS CONST that constfold could NOT fold (its entry
                 // slids_type is still unset) is resolved HERE: infer the rhs type;
                 // an AGGREGATE / pointer is a not-mutable VARIABLE (flip the entry
@@ -4045,7 +4146,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // Rewrite `a = rhs` to `a.op=(rhs)` and resolve through the method-call path.
             if (!s.children.empty() && s.children[0]
                 && dispatchAssignInit(tree, s, lref, *s.children[0], "op=",
-                                      /*expr_lhs=*/false, diag)) {
+                                      /*expr_lhs=*/false, diag, prelude,
+                                      /*needs_construct=*/false)) {
                 return;
             }
             // The rhs obeys the assignment relation against the lvalue type.
@@ -4092,7 +4194,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 inferExpr(tree, rhs, widen::kNoType, diag);
                 std::string opname = "op" + op + "=";
                 if (dispatchAssignInit(tree, s, s.return_type, rhs, opname,
-                                       /*expr_lhs=*/s.children.size() == 2, diag)) {
+                                       /*expr_lhs=*/s.children.size() == 2, diag,
+                                       prelude, /*needs_construct=*/false)) {
                     return;
                 }
             }
@@ -4231,7 +4334,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // rule kAssignStmt applies to a bare-name target, now for a complex lvalue
             // (`obj.f = x` / `p^ = x` / `arr[i] = x`). Mirrors kMoveStmt / kSwapStmt.
             if (dispatchAssignInit(tree, s, lvalue.inferred_type, *s.children[1], "op=",
-                                   /*expr_lhs=*/true, diag)) {
+                                   /*expr_lhs=*/true, diag, prelude,
+                                   /*needs_construct=*/false)) {
                 return;
             }
             // The stored rhs obeys the assignment relation against the pointee /
@@ -4261,7 +4365,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // A class lhs with a matching user `op<--` dispatches to it (else the
             // default field move applies). Children are already [receiver, arg].
             if (dispatchAssignInit(tree, s, lhs.inferred_type, *s.children[1], "op<--",
-                                   /*expr_lhs=*/true, diag)) {
+                                   /*expr_lhs=*/true, diag, prelude,
+                                   /*needs_construct=*/false)) {
                 return;
             }
             // The COPY half of the move obeys the assignment relation.
@@ -4286,7 +4391,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // A class operand with a matching user `op<-->` dispatches to it (else the
             // default field swap applies). Children are already [receiver, arg].
             if (dispatchAssignInit(tree, s, a.inferred_type, b, "op<-->",
-                                   /*expr_lhs=*/true, diag)) {
+                                   /*expr_lhs=*/true, diag, prelude,
+                                   /*needs_construct=*/false)) {
                 return;
             }
             // Both-non-kNoType guard is cascade suppression: a kNoType operand

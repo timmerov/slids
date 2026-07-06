@@ -21,6 +21,48 @@ ctor 7
 dtor 7
 y= 7
 dtor 7
+-- elide typed decl copy --
+ctor 7
+ctor 0
+copy
+cd= 107
+dtor 107
+dtor 7
+-- elide inferred decl copy --
+ctor 7
+ctor 0
+copy
+ce= 107
+dtor 107
+dtor 7
+-- elide existing copy --
+ctor 1
+ctor 7
+copy
+ex= 107
+dtor 7
+dtor 107
+-- elide typed decl move --
+ctor 7
+ctor 0
+move
+cm= 207
+dtor 207
+dtor 0
+-- elide inferred decl move --
+ctor 7
+ctor 0
+move
+cn= 207
+dtor 207
+dtor 0
+-- elide existing move --
+ctor 1
+ctor 7
+move
+em= 207
+dtor 0
+dtor 207
 -- inline arg --
 ctor 7
 arg= 7

@@ -116,11 +116,30 @@ SITE x OPERATOR MATRIX  (classify: does the site dispatch the USER operator?)
   destructure copy                yes      n/a      n/a      n/a   (per-slot kAssignStmt)
   destructure move/swap           n/a      yes      yes      n/a
 
-  The 5 assignment-form sites (all but decl-init and destructure) now route through
-  the ONE funnel dispatchAssignInit; the guard `form==kSlid && findClassOperator>=0
-  -> rewrite*` exists in ONE place, so a new site cannot skip it. (* decl-init is a
-  specialized caller of the same primitives — it wraps them in a default-construct
-  prelude + value-category guard, so it stays out of the funnel by design.)
+  EVERY binding site now routes through the ONE funnel dispatchAssignInit (UNIFIED
+  2026-07-05): the 5 assignment-form sites AND both decl-init shapes — typed `Class x=e`
+  and INFERRED `x=e` (`cls = create()`). The guard `form==kSlid && findClassOperator>=0
+  -> rewrite` exists in ONE place, so a new site cannot skip it. Two knobs let a DECL
+  target share it: `prelude` + `needs_construct`. On a match the funnel SPILLS a class
+  RVALUE source (call/op result) into a `_$cinit` temp built by the default elision so
+  the operator's `Class^` param gets an address (a construction source is spilled only
+  for a fresh decl; a live-assign construction bails to the clean "construct in this
+  position" error), and — if `needs_construct` — splices a default-construct of the
+  target before the rewrite. The old "decl-init stays out of the funnel by design
+  (default-construct prelude + value-category guard)" seam is GONE: a user op=/op<-- wins
+  over copy-elision even from an rvalue, and inferred `x=e` dispatches too. Side effect:
+  the pre-existing assign-from-call-rvalue segfault (`x = mkCopy()`) is closed.
+
+  DECLARE-IF-FRESH now covers ALL FOUR init shapes (2026-07-05). Copy `x=e` (kAssignStmt)
+  already promoted a bare undeclared target to a fresh inferred decl; MOVE `x <-- e` and
+  SWAP `x <--> e` did NOT — they resolved the target as an existing lvalue and errored
+  "Cannot assign to undeclared variable 'x'". Now resolve's `tryInferredMoveSwapInit`
+  (before resolveStmt) mirrors copy: a bare UNDECLARED, NON-field move/swap target declares
+  a fresh inferred local and flips the stmt to a kVarDeclStmt with default_move_init /
+  default_swap_init (a field or an existing var falls through to the normal move/swap).
+  classify already dispatches op<-- for the inferred move; the swap-init block now infers
+  its target type from the source before the class-type check. So `cls <-- create()`,
+  `x <-- y`, `nw <--> ex` all init-from-fresh, symmetric to `x = e`.
 
 
 ======================================================================

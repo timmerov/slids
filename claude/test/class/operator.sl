@@ -616,12 +616,14 @@ int32 main() {
     Widen we = wn;                // named int16 lvalue widens -> we.op=(int64); which_ = 9+1000
     __println("we = " + we.which_);   // we = 1009
 
-    /* ---- value-category guard: a class RVALUE decl-init ELIDES; op= must NOT run (else
-       v_ would be +100). Covers a function-return rvalue and a construction rvalue. ---- */
-    Copy cd = mkCopy();           // function-return rvalue -> elide; v_ = 7 (not 107)
-    __println("cd = " + cd.v_);   // cd = 7
-    Copy ce = Copy(11);           // construction rvalue -> elide; v_ = 11 (not 111)
-    __println("ce = " + ce.v_);   // ce = 11
+    /* ---- a user op= WINS over copy-elision: a class RVALUE decl-init is construct-then-
+       op='d, so the author's operator runs (+100) even when eliding would be cheaper. The
+       rvalue is materialized into a temp so op= takes its address. Covers a function-return
+       rvalue and a construction rvalue. ---- */
+    Copy cd = mkCopy();           // function-return rvalue -> construct + op=; v_ = 7+100
+    __println("cd = " + cd.v_);   // cd = 107
+    Copy ce = Copy(11);           // construction rvalue -> construct + op=; v_ = 11+100
+    __println("ce = " + ce.v_);   // ce = 111
 
     /* ---- decl-init MOVE / SWAP (fresh var). `<--` dispatches op<-- (default-construct
        then move); `<-->` default-constructs then op<--> (the fresh default flows back
