@@ -7,23 +7,6 @@ agenda:
   in "THE 10 SITES"). Cleanest convergence candidate: fold it into parseType with a flag that suppresses
   trailing-[ consumption.
 
-   Residual scatter (worth converging): the C-style for (kForLongStmt) typeless-no-initializer branch
-  (resolve.cpp:3053-3095) is a 7th declare-vs-reuse decision — it hand-rolls the "existing local → reuse /
-  non-local → conflict" logic and does a raw addEntry (3094), outside the funnel. It's error-recovery only
-  (main bails), so not a live bug, but it directly contradicts the plan's "exactly one place, cannot drift."
-
-  Potential behavior gap (needs your call, not just a refactor): a typed C-style for var (for(int X=0; ...)
-  where X is an enclosing const/fn/class) falls to the plain var-decl path (resolve.cpp:3100 →
-  registerDeclarator Declare/SameFrame). Because the for-scope frame is pushed first, the enclosing non-local
-  isn't in-frame, so it's declared fresh — a silent shadow. The plan's RULING says "no silent shadow for ALL
-  for shapes." Either the RULING is too broad (a C-style for is conventionally its own scope — shadowing is
-  normal) or this shape should also use AnyScope. This is an intent decision.
-
-  Minor / doc drift: params re-implement a near-identical dup-check + Entry build (defensible —
-  signature-time, not declare-vs-reuse); the funnel does not own "DA-seed" (plan line 86 wrong — DA seeding
-  is still per-site); bindForVar in code vs registerForVar in plan lines 126/275; for-array/for-tuple
-  declared types call resolveTypeRef directly, bypassing resolveDeclType (2159, 2327).
-
   One structural seam: decl-init copy/move (classify.cpp:3795-3826) does not call dispatchAssignInit — it
   re-implements the findClassOperator>=0 → rewriteAssignToOperatorCall core inline, because it must splice a
   default-construct prelude between the probe and the rewrite (the funnel fuses them atomically). Justified

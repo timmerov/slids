@@ -665,8 +665,45 @@ bool isKnownType(std::string const& t) {
 
 // Structured: a pointer / iterator / anyptr is 8; a fixed array is the product
 // of its dims times the element size (-1 if the element is unsized); a primitive
-// rounds its bit width up to whole bytes (bool -> 1); void / slid / tuple are not
-// statically sized (-1).
+// Natural byte alignment, matching LLVM's default (non-packed) struct layout so that
+// typeByteSize's tuple layout agrees with the emitted `{...}` struct. -1 = no static
+// alignment (void / slid / none, or a tuple containing one).
+static long long typeByteAlign(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kPointer:
+        case Type::Form::kIterator:
+        case Type::Form::kAnyptr:
+            return 8;
+        case Type::Form::kPrimitive: {
+            long long b = (t.bits + 7) / 8;   // i1/i8 -> 1, i32 -> 4, i64 -> 8
+            return b < 1 ? 1 : b;
+        }
+        case Type::Form::kArray:
+            return typeByteAlign(t.elem);
+        case Type::Form::kTuple: {
+            long long a = 1;
+            for (TypeRef f : t.slots) {
+                long long fa = typeByteAlign(f);
+                if (fa < 0) return -1;
+                if (fa > a) a = fa;
+            }
+            return a;
+        }
+        case Type::Form::kAlias:
+        case Type::Form::kConst:
+            return typeByteAlign(t.underlying);   // see through
+        case Type::Form::kVoid:
+        case Type::Form::kSlid:
+        case Type::Form::kNone:
+            return -1;
+    }
+    return -1;
+}
+
+// rounds its bit width up to whole bytes (bool -> 1); void / slid are not statically
+// sized (-1). A TUPLE is sized by laying its slots out with natural alignment/padding
+// (LLVM default struct layout) — so it IS statically sized, unless a slot is not.
 long long typeByteSize(TypeRef ref) {
     Type const& t = get(ref);
     switch (t.form) {
@@ -683,13 +720,24 @@ long long typeByteSize(TypeRef ref) {
             for (int d : t.dims) total *= d;
             return total;
         }
+        case Type::Form::kTuple: {
+            long long off = 0, align = 1;
+            for (TypeRef f : t.slots) {
+                long long fs = typeByteSize(f);
+                long long fa = typeByteAlign(f);
+                if (fs < 0 || fa < 0) return -1;
+                off = (off + fa - 1) / fa * fa;   // pad up to the field's alignment
+                off += fs;
+                if (fa > align) align = fa;
+            }
+            return (off + align - 1) / align * align;   // pad to the struct alignment
+        }
         case Type::Form::kAlias:
             return typeByteSize(t.underlying);   // see through
         case Type::Form::kConst:
             return typeByteSize(t.underlying);   // see through
         case Type::Form::kVoid:
         case Type::Form::kSlid:
-        case Type::Form::kTuple:
         case Type::Form::kNone:
             return -1;
     }

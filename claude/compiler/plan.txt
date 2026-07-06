@@ -468,8 +468,9 @@ Phase 4 — types beyond primitives
     (kSizeofExpr — a primary; grammar splits a TYPE operand [paren starts with a
     type keyword -> parseType onto return_type] from an EXPRESSION operand [resolve
     dispatches type-vs-value, like ##type]. Size = widen::typeByteSize: pointer/
-    iterator/nullptr 8, fixed array = total bytes [∏dims × elem], string literal =
-    content + null [NOT char[]=8], else primitive width. Folds to a STRONG `intptr`
+    iterator/nullptr 8, fixed array = total bytes [∏dims × elem], TUPLE = struct
+    layout [slots laid out with LLVM-default alignment/padding via typeByteAlign],
+    string literal = content + null [NOT char[]=8], else primitive width. Folds to a STRONG `intptr`
     literal — in CONSTFOLD for the statically-known operands [type / string /
     nullptr / address-of / plain ident] so it can initialize a const or feed a
     const expression, in CLASSIFY for the residual [deref / index / arithmetic].
@@ -487,10 +488,13 @@ Phase 4 — types beyond primitives
     (malloc n*sizeof(T), n a RUNTIME expr); `new(addr) T[n]` -> placement, no
     alloc, the result is addr (addr a buffer-class pointer void^/int8^/uint8^);
     `delete p` -> free(p) + store null (p any pointer lvalue; an rvalue is freed
-    only). classify: element
-    must be statically sized [widen::typeByteSize >= 0; void/slid -> "Cannot
-    allocate"], array size integer-class, placement addr buffer-class, delete
-    operand a pointer. malloc/free declared in the preamble. test/pointer/new.sl.
+    only). ELEMENT MAY BE ANY VARIABLE TYPE (the ONE parseType: primitive, pointer,
+    iterator, tuple, grouped `(const int)^`, alias, multi-dim). classify: element
+    must be statically sized [widen::typeByteSize >= 0 — primitive/pointer/array/
+    TUPLE (LLVM-default struct layout); a CLASS is runtime-sized via __$sizeof so it
+    IS allocatable; void / a tuple with a class slot -> "Cannot allocate"], array
+    size integer-class, placement addr buffer-class, delete operand a pointer. malloc/
+    free declared in the preamble. test/pointer/new.sl.
     CLASS new/delete LANDED [Phase 5]: a class is sized by `call @<Name>__$sizeof()`;
     `new T(args)` parses ctor args [children[2]] -> constructClass + emitConstructHooks
     [runs the ctor]; `new T[n]` field-inits each element + the new[]/delete[] COUNT
@@ -499,9 +503,12 @@ Phase 4 — types beyond primitives
     frees ptr-8] on ANY pointer expression — an lvalue [var / field / element / slot /
     deref] is nulled back, an rvalue [call return] is freed only [so a class dtor can
     `delete` a field it owns, RAII]; placement constructs at the buffer; explicit `lvalue.~()`
-    [kDtorCallStmt] runs the dtor with no free. Grammar TODO seam: `(` after `new` =
-    placement only while no type spelling starts with `(`; revisit when tuples /
-    `(const T)^` land.)
+    [kDtorCallStmt] runs the dtor with no free. PLACEMENT vs a `(`-led element type
+    (`new (int,int)`, `new (const int)^`) is disambiguated by newParenStartsPlacement:
+    the token AFTER the balanced `(...)` — a type-start => placement, else the `(...)`
+    is the element. MULTI-DIM `new T[n][d]...`: first `[n]` is the count, further `[d]`
+    dims are the element's trailing dims (parseNameDims-appended; a non-literal element
+    dim is rejected).)
   * anonymous tuples (`(T1, T2, ...)`) — LANDED (Form::kTuple + slots, NOT a
     string mechanism). kTupleExpr through all stages. Landed: construct +
     whole-copy + const-index read (runtime tuple index rejected); slot write
@@ -515,9 +522,9 @@ Phase 4 — types beyond primitives
     value/ref). `#x` 5-tuple (`(##file,##line,##type,##name,^x)`). Tests:
     test/expression/tuple.sl, pointer/array.sl, flow/fortuple.sl, misc/macros.sl.
     STILL OPEN here: arrays-OF-tuples + sub-array assign + array-from-tuple-VALUE
-    (todo.txt); the `new (` placement-vs-tuple-type seam (deferred with `new
-    T(value)`); for-tuple over non-primitive elements (Phase 5) + by-ref-to-const
-    enforcement (Phase 6).
+    (todo.txt); for-tuple over non-primitive elements (Phase 5) + by-ref-to-const
+    enforcement (Phase 6). (The `new (` placement-vs-tuple-type seam is now LANDED —
+    a `(`-led element type is disambiguated from placement; see memory mgmt above.)
   * move / swap on PRIMITIVES + POINTERS + TUPLES (`a <-- b`, `a <--> b`) — LANDED
     (kMoveStmt / kSwapStmt; see [[project_v2_move_swap]]). MOVE is a specialized
     assignment: the COPY obeys assignment rules (widen for values, implicit

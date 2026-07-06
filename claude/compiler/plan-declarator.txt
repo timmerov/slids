@@ -84,9 +84,13 @@ the move / swap / compound forms of each. At every stage these are DIFFERENT
 parse-node kinds, but they are the SAME declarator concept and must share:
 
   parse     ONE parser        parseDeclarator(NamePolicy)            (LANDED)
-  resolve   ONE type resolver resolveDeclType                        (LANDED)
+  resolve   ONE type resolver resolveDeclType                        (LANDED) [for-array
+                              / for-tuple loop-var types call the lower resolveTypeRef
+                              directly — no requireKnownType — to defer to the element-
+                              match diagnostic; a deliberate, documented exception]
             ONE registrar     registerDeclarator                     (LANDED) name +
-                              declare-vs-reuse + dup-check + DA-seed
+                              declare-vs-reuse + reuse-reject + dup-check + addEntry
+                              (DA-seeding stays PER-SITE — it depends on an initializer)
   classify  ONE init dispatch dispatchAssignInit                     (LANDED) copy/move/
                               swap/compound operator dispatch
   desugar   ONE copy lowerer  lowerAggCopyStmt                       (LANDED) cross-form
@@ -641,6 +645,35 @@ RHS, enum underlying (x2: primitive-led / ident-led), cast target, conversion
 target, sizeof operand — plus the internal tuple-slot recursion. Destructure
 (parseDestructureStmt) joins as a ListSlot site (each slot a declarator), no
 longer a list of parseExpr lvalues.
+
++ `new`'s ELEMENT TYPE (LANDED 2026-07-05): the 11th site. Was a hand-rolled
+parseAllocElementType (primitive / qualified-name only — a copy of parseType's base
+branches); now routes through parseType with a new TopDim::StopBeforeSized mode (the
+`reject_top_dim` bool became a 3-way enum TopDim{Consume, RejectToName, StopBeforeSized}).
+StopBeforeSized parses the full element type but STOPS the wrapper chain before a trailing
+top-level SIZED `[N]` — that `[` is `new T[n]`'s RUNTIME alloc count, not a type dim (an
+`[]` iterator + `^` wrappers are still consumed). parseAllocElementType DELETED. `new` now
+handles EVERY variable type; verified end-to-end. Three pieces:
+
+  1. Non-`(`-led types via StopBeforeSized: `int^`, `int[]`, `Vec3^`, `int^[n]`, ...
+
+  2. MULTI-DIM (`new int[n][2][2]` = n copies of int[2][2]): the FIRST `[n]` is the runtime
+     count; any FURTHER `[d]` dims are the ELEMENT type's trailing dims — parsed by the
+     existing parseNameDims and appended to the element spelling before intern (grammar.cpp,
+     right after the count parse). A const-EXPRESSION element dim is rejected for now
+     ("A 'new' element array dimension must be a constant.") — it would need node-level dim
+     folding; literal dims bake straight in. (The `new int[2][2][2]` shape.)
+
+  3. `(`-led types (tuple `(int,int)`, grouped `(const int)^`): disambiguated from placement
+     `new (addr) T` by newParenStartsPlacement() — decide by the token AFTER the balanced
+     `(...)`. A placement `(addr)` is always followed by an element type (starts with a
+     primitive kw / identifier / `::` / `const` / `(`); a `(`-led element type is followed
+     only by a suffix/terminator (`^ ^^ [] [N] ; , ) { EOF`). So a type-start after `)` =>
+     placement, else the `(...)` IS the element. No backtracking, no name resolution. Corner
+     (accepted): `new (Foo)(3)` reads as placement, not `new Foo(3)` — parens around a single
+     class name are noise. A tuple ELEMENT needs a static size, so widen::typeByteSize gained
+     a kTuple case (LLVM-default struct layout via a new file-local typeByteAlign) — which
+     also makes sizeof(tuple) report a real size + agrees with codegen's malloc size.
 
 
 IMPLEMENTATION NOTES

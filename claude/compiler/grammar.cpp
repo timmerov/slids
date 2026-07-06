@@ -181,19 +181,23 @@ struct Parser {
     // parseType is the internal core-type producer; every type site reaches it through
     // parseDeclarator (which owns the per-site policy), so these flags are no longer a
     // proxy for "is there a name" — NamePolicy is.
-    // reject_top_dim: reject a TOP-LEVEL sized array dim in the spelling (`int[3]`,
-    // `int^[3]`) — set by parseDeclarator from the NamePolicy (Required / BindSlot, where
-    // the size belongs on the NAME: `int x[3]`). An anonymous position (a Forbidden type
-    // site, a ListSlot tuple slot) passes false and accepts a top-level dim. A dim NESTED
-    // inside a pointer wrapper (`int[3]^`) or hidden behind an alias (`Vec3 x`) is never
-    // top-level, so it is always allowed.
+    // top_dim: how to treat a TOP-LEVEL sized array dim (`int[3]`, `int^[3]` — a sized dim
+    // NOT nested inside a pointer wrapper `int[3]^` / hidden behind an alias `Vec3`).
+    //   Consume         — bake it into the type (an anonymous Forbidden / ListSlot site).
+    //   RejectToName    — error: the size belongs on the NAME `int x[3]` (a named Required
+    //                     / BindSlot declarator).
+    //   StopBeforeSized — STOP the wrapper chain before it, leaving the `[` for the caller.
+    //                     Used by `new T[n]`, where the trailing sized dim is the RUNTIME
+    //                     alloc count, not a type dim. (An `[]` iterator + `^` wrappers are
+    //                     still consumed, so `new int^[n]` = n pointers.)
     // dim_sink (out): collects const-EXPRESSION array dims so constfold can fold + bake
     // them. A non-literal dim (`int[N]`) is parsed as an expression, spelled as a
     // provisional `[1]`, and pushed (a literal dim pushes a nullptr) — the sink aligns
     // 1:1 with every type-position array dim, in tree pre-order. parseDeclarator (the
     // sole entry) always supplies it; a null sink (defensive) rejects a non-literal dim.
+    enum class TopDim { Consume, RejectToName, StopBeforeSized };
     std::string parseType(std::vector<int>* seg_toks = nullptr,
-                          bool reject_top_dim = false,
+                          TopDim top_dim = TopDim::Consume,
                           std::vector<std::unique_ptr<parse::Node>>* dim_sink = nullptr) {
         // `mutable` is a PARAMETER qualifier only — parseParamList consumes it before
         // the type, so reaching it here means a non-parameter position (return type,
@@ -209,7 +213,7 @@ struct Parser {
         // suffix lands OUTSIDE the parens.
         if (peek().kind == token::Kind::kConst) {
             advance();   // const
-            std::string rest = parseType(seg_toks, reject_top_dim, dim_sink);
+            std::string rest = parseType(seg_toks, top_dim, dim_sink);
             if (rest.empty()) return "";
             return "const " + rest;
         }
@@ -319,6 +323,9 @@ struct Parser {
                 outermost_sized = false;
                 closeRun();
             } else if (peek().kind == token::Kind::kLBracket) {
+                // A SIZED dim `[N]` (the `[]` iterator was handled above). For `new T[n]`
+                // this `[` opens the runtime alloc COUNT, not a type dim — stop, leave it.
+                if (top_dim == TopDim::StopBeforeSized) break;
                 advance();   // [
                 std::vector<std::string> bracket_spell;
                 std::vector<std::unique_ptr<parse::Node>> bracket_expr;
@@ -357,7 +364,7 @@ struct Parser {
         // the OUTERMOST sized dim must be written on the name, not inline. A dim
         // NESTED inside a pointer/iterator wrapper (`int[3]^ v`) stays in the type —
         // only a top-level one (`int[3] v`, `int^[3] v`) is rejected.
-        if (reject_top_dim && outermost_sized) {
+        if (top_dim == TopDim::RejectToName && outermost_sized) {
             error("An array size belongs on the declared name; "
                   "write 'T name[N]', not 'T[N] name'.");
             return "";
@@ -464,9 +471,10 @@ struct Parser {
             // A named declarator (Required) or a destructure slot (BindSlot, which binds
             // a name) moves the top-level sized dim to the name; an anonymous Forbidden /
             // ListSlot site has no name to host it, so an inline top-level dim is allowed.
-            bool reject_top_dim = policy == NamePolicy::Required
-                || policy == NamePolicy::BindSlot;
-            d.type = parseType(&d.type_seg_toks, reject_top_dim, &type_dims);
+            TopDim top_dim = (policy == NamePolicy::Required
+                              || policy == NamePolicy::BindSlot)
+                ? TopDim::RejectToName : TopDim::Consume;
+            d.type = parseType(&d.type_seg_toks, top_dim, &type_dims);
             if (fatal) return false;
         } else {
             d.typeless = true;   // no core-type; the type is inferred
@@ -565,6 +573,35 @@ struct Parser {
         if (!any_caret && peekKind(o) == token::Kind::kLBracket
             && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
         return peekKind(o) == token::Kind::kIdentifier;
+    }
+
+    // After `new`, a leading `(` is ambiguous: a placement address `new (addr) T`, or a
+    // `(`-led ELEMENT type (a tuple `(int,int)`, a grouped `(const int)^`). Decide by what
+    // FOLLOWS the balanced `(...)`, never by classifying its contents (a bare `(Vec3)` is
+    // type-vs-expr-undecidable without name resolution). A placement `(addr)` is ALWAYS
+    // followed by an element type, which can only START with a primitive keyword, an
+    // identifier, `::`, `const`, or a nested `(`. A `(`-led element type is followed only
+    // by a suffix / terminator (`^ ^^ [] [N] ; , ) { EOF`). So a type-start after the `)`
+    // => placement; anything else => the `(...)` IS the element type. No backtracking.
+    // Corner: `new (Foo)(3)` reads as placement, not `new Foo(3)` — parens around a single
+    // class name are noise; write it without them.
+    bool newParenStartsPlacement() const {
+        if (peekKind(0) != token::Kind::kLParen) return false;
+        int o = 1, depth = 1;
+        while (depth > 0) {
+            token::Kind k = peekKind(o);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                return false;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen) depth--;
+            o++;
+        }
+        token::Kind after = peekKind(o);
+        return isTypeStart(after)
+            || after == token::Kind::kIdentifier
+            || after == token::Kind::kColonColon
+            || after == token::Kind::kConst
+            || after == token::Kind::kLParen;
     }
 
     // Pure lookahead: does a leading `(...)` form a tuple DESTRUCTURE assignment —
@@ -874,28 +911,34 @@ struct Parser {
             return inner;
         }
         if (t.kind == token::Kind::kNew) {
-            // new T            -> a single object (T^)
-            // new T[n]         -> an array of n objects (T[])
-            // new(addr) T[n]   -> placement: construct at addr, no allocation
-            // children[0] = array-size expr (or null), [1] = placement-addr (or
-            // null). Phase 4: primitives only — no constructor args yet (the
-            // `new T(value)` initializer form needs tuples).
+            // new T             -> a single object (T^)
+            // new T[n]          -> n objects (T[]); n is a RUNTIME count
+            // new T[n][d]...    -> n objects whose element is T[d]... (multi-dim: the
+            //                      FIRST dim is the count, the rest are the element's dims)
+            // new (addr) T[n]   -> placement: construct at addr, no allocation
+            // new T(args)       -> constructor args
+            // T may be ANY type — primitive, pointer, iterator, tuple, grouped (`(const
+            // int)^`), alias, or a composed chain. children[0] = count expr (or null),
+            // [1] = placement addr (or null), [2] = ctor args (or null).
             int new_file = t.file_id;
             int new_tok = pos;
             advance();   // new
             std::unique_ptr<parse::Node> addr;
-            // A `(` here is a placement address. TODO: once paren-led type
-            // spellings exist (anonymous tuples `(T1,T2)`, const-pointer
-            // `(const T)^`), this needs a placement-vs-type lookahead; today no
-            // type starts with `(`, so `(` unambiguously opens a placement addr.
-            if (peek().kind == token::Kind::kLParen) {
+            // A leading `(` is EITHER a placement address `new (addr) T` OR a `(`-led
+            // element type (`new (int,int)`, `new (const int)^`). newParenStartsPlacement
+            // decides by the token after the balanced `(...)` (see its comment).
+            if (peek().kind == token::Kind::kLParen && newParenStartsPlacement()) {
                 advance();   // (
                 addr = parseExpr();
                 if (!addr) return nullptr;
                 if (!expect(token::Kind::kRParen, ")")) return nullptr;
             }
             int elem_tok = pos;   // the element-type token, for "Cannot allocate"
-            std::string elem = parseAllocElementType();
+            // The element type is a FULL type via the ONE parser, stopping before the
+            // trailing `[n]` (the runtime alloc count, read below) — so `new` handles
+            // every variable type (`int^`, `int[]`, `(int,int)`, `(const int)^`, `Vec3^`,
+            // `int^[n]`, ...), not just a bare primitive / qualified name.
+            std::string elem = parseType(nullptr, TopDim::StopBeforeSized);
             if (elem.empty()) return nullptr;
             std::unique_ptr<parse::Node> size;
             if (peek().kind == token::Kind::kLBracket) {
@@ -903,6 +946,18 @@ struct Parser {
                 size = parseExpr();
                 if (!size) return nullptr;
                 if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+                // Any FURTHER `[d]` dims are the ELEMENT type's trailing dims:
+                // `new int[n][2][2]` = n copies of int[2][2]. Append them to the element
+                // spelling (the count `[n]` above stays a separate runtime expr).
+                if (peek().kind == token::Kind::kLBracket) {
+                    std::vector<std::unique_ptr<parse::Node>> elem_dims;
+                    bool any_dim_expr = false;
+                    if (!parseNameDims(elem, elem_dims, any_dim_expr)) return nullptr;
+                    if (any_dim_expr) {
+                        error("A 'new' element array dimension must be a constant.");
+                        return nullptr;
+                    }
+                }
             }
             // new T(args) -> constructor args (a kTupleExpr, like a class var-decl
             // init `Type name(args)`). The trailing `(args)` is distinct from the
@@ -2060,33 +2115,6 @@ struct Parser {
         node->children.push_back(std::move(operand));
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         return node;
-    }
-
-    // Parse the element type of a `new`: a primitive or (possibly qualified)
-    // identifier type name. Unlike parseType it does NOT consume a trailing `[`
-    // — that introduces the array-size expression (`new T[n]`), not an iterator
-    // suffix. Returns the spelling, or "" on error.
-    std::string parseAllocElementType() {
-        std::string type;
-        if (char const* name = primitiveNameFor(peek().kind)) {
-            type = name;
-            advance();
-        } else if (peek().kind == token::Kind::kIdentifier
-                   || peek().kind == token::Kind::kColonColon) {
-            std::vector<std::string> segs;
-            std::vector<int> toks;
-            bool global = false;
-            if (!parseQualifiedName(segs, toks, global)) return "";
-            if (global) type = "::";
-            for (std::size_t i = 0; i < segs.size(); ++i) {
-                if (i > 0) type += ":";
-                type += segs[i];
-            }
-        } else {
-            error("Expected a type after 'new'.");
-            return "";
-        }
-        return type;
     }
 
     std::unique_ptr<parse::Node> parseReturnStmt() {

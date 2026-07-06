@@ -669,11 +669,15 @@ STAGE FILES (.h / .cpp pairs)
             rides on return_type, else the operand is parsed as an expression for
             resolve to dispatch on; lowered to an intptr literal in constfold or
             classify), and new(...) (a kNewExpr — `new`, an optional `(addr)`
-            placement prefix [today a `(` always opens a placement address; no type
-            spelling starts with `(` yet — a TODO seam marks where the tuple /
-            const-pointer lookahead goes], the element type [parseAllocElementType:
-            a type WITHOUT a trailing `[`, which is the array size], an optional
-            `[n]` size; children[0]=size-or-null, [1]=addr-or-null)). `delete p;` is
+            placement prefix [newParenStartsPlacement disambiguates a `(`-led ELEMENT
+            type (tuple `(int,int)`, grouped `(const int)^`) from a placement address
+            by the token AFTER the balanced `(...)`: a type-start => placement, else
+            the `(...)` is the element], the element type [the ONE parseType with
+            TopDim::StopBeforeSized — ANY variable type, stopping before the trailing
+            sized `[n]` which is the runtime alloc count], an optional `[n]` count
+            [plus further `[d]` dims that are the element's trailing dims — multi-dim
+            `new int[n][2][2]`], an optional `(args)` ctor tuple; children[0]=count-or-
+            null, [1]=addr-or-null, [2]=ctor-args-or-null)). `delete p;` is
             a statement (kDeleteStmt). Stamps (file_id, tok)
             on every node for source
             attribution. No identifier resolution, no scope tracking,
@@ -1149,11 +1153,13 @@ STAGE FILES (.h / .cpp pairs)
             and the whole-value load/store at the operand's type exchanges/moves it
             (subject to swap's exact-type rule, so two slots of differing type
             reject). codegen-only — classify already types the partial index.
-            kNewExpr: a heap element must be sized — a primitive (compile-time
-            typeByteSize) OR a CLASS (runtime __$sizeof, so it IS allocatable); void
-            / unsized -> "Cannot allocate" (carets the element type, name_tok). An
-            array size must be integer-class; a placement address must be a
-            buffer-class pointer (isBufferClassPtr, the cast set void^/int8^/uint8^);
+            kNewExpr: a heap element must be sized — a primitive / pointer / array /
+            TUPLE (compile-time typeByteSize, the tuple laid out with LLVM-default
+            struct alignment) OR a CLASS (runtime __$sizeof, so it IS allocatable);
+            void / a tuple with a class slot / unsized -> "Cannot allocate" (carets
+            the element type, name_tok). An array size must be integer-class; a
+            placement address must be a buffer-class pointer (isBufferClassPtr, the
+            cast set void^/int8^/uint8^);
             `new T(args)` ctor args (children[2]) belong to a single class (rejected
             on a primitive / array). The result type is element + (array ? "[]" :
             "^"). kDeleteStmt's operand must be a pointer type. See
@@ -1376,12 +1382,14 @@ STAGE FILES (.h / .cpp pairs)
             — and asserts on any state classify should have caught. The result
             is then flexed into dest via widen::convert.
             kNewExpr: `new T` -> `call ptr @malloc(i64 sizeof(T))`; `new T[n]` ->
-            `mul i64 n, sizeof(T)` then malloc; placement (children[1]) -> the
-            address itself, no allocation (primitives construct nothing). An
-            assert guards an unsized element (classify gated it). kDeleteStmt:
-            load the pointer, `call void @free(ptr)`, store null back to its
-            alloca. malloc / free are declared in the module preamble next to
-            printf. No destructors run (Phase 5).
+            `mul i64 n, sizeof(T)` then malloc (sizeof(T) is typeByteSize — a
+            primitive / pointer / array / tuple; a CLASS uses its runtime __$sizeof);
+            placement (children[1]) -> the address itself, no allocation. An assert
+            guards an unsized element (classify gated it). A single class object is
+            constructed in place (field-init + ctor hook); delete of a class runs its
+            dtor — see readme-classes.txt. kDeleteStmt: load the pointer, `call void
+            @free(ptr)`, store null back to its alloca. malloc / free are declared in
+            the module preamble next to printf.
 
 PRODUCT FILES (.h / .cpp pairs)
 

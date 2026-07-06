@@ -28,10 +28,17 @@ claude says:
   null = single), [1] = the placement-address expr (or null = heap). yields T^
   (single) or T[] (array). the `new T(value)` initializer form needs tuples — not
   landed. a kDeleteStmt holds the pointer EXPRESSION in children[0].
-- placement vs type after `new (`: today a `(` always opens a placement address
-  (no type spelling starts with `(` yet); when anonymous tuples `(T1,T2)` or
-  const-pointer `(const T)^` land, this needs a placement-vs-type lookahead (a
-  TODO seam is marked at the grammar arm).
+- the element type is the ONE parseType, so it is ANY variable type — a pointer,
+  iterator, tuple, grouped `(const int)^`, alias, or multi-dim array.
+- placement vs a `(`-led ELEMENT type after `new (`: newParenStartsPlacement()
+  decides by the token AFTER the balanced `(...)` — a type-start (primitive / ident
+  / `::` / `const` / `(`) means placement (a placement addr is always followed by an
+  element type); anything else (`^ ^^ [] [N] ; , ) { EOF`) means the `(...)` IS the
+  element type (tuple `(int,int)`, grouped `(const int)^`). corner: `new (Foo)(3)`
+  reads as placement, not `new Foo(3)`.
+- MULTI-DIM `new T[n][d]...`: the first `[n]` is the runtime count, the further `[d]`
+  dims are the element's trailing dims (n copies of T[d]...); a non-literal element
+  dim is rejected (no dim folding in `new`).
 - classify: a heap element must be statically sized (widen::typeByteSize >= 0 —
   Phase 4 primitives; a slid -> "Cannot allocate"); an array size must be
   integer-class; a placement address must be a buffer-class pointer (void^ /
@@ -200,6 +207,63 @@ int32 main() {
         __println("non-variable delete ok");
     }
 
+    /* --- the element type may be ANY variable type, not just a primitive or a
+       class: a pointer, an array of pointers, a tuple, a grouped type, multi-dim. --- */
+
+    /* a POINTER element: new T^ heap-allocates a pointer. (`int^ ^` spells the
+       pointer-to-pointer result.) */
+    int pe_v = 5;
+    int^ ^ pe = new int^;
+    pe^ = ^pe_v;
+    __println("ptr elem= " + pe^^);                  // 5
+    delete pe;
+
+    /* an ARRAY of pointers: new T^[n] -> T^[]. */
+    int pa_a = 1;
+    int pa_b = 2;
+    int^[] parr = new int^[2];
+    parr[0] = ^pa_a;
+    parr[1] = ^pa_b;
+    int pa_sum = parr[0]^ + parr[1]^;
+    __println("ptr array= " + pa_sum);               // 3
+    delete parr;
+
+    /* a TUPLE element: new (T1,T2) -> (T1,T2)^ (disambiguated from placement). */
+    (int,int)^ tup = new (int,int);
+    tup^ = (10, 20);
+    (int tu0, int tu1) = tup^;
+    int tu_sum = tu0 + tu1;
+    __println("tuple single= " + tu_sum);            // 30
+    delete tup;
+
+    /* a padded TUPLE array: (int8,int) lays out as {i8, pad, i32} — the alloc size
+       is the LLVM-default struct size, so element addressing lands on the right
+       stride. */
+    (int8,int)[] tarr = new (int8,int)[3];
+    tarr[0] = (1, 100);
+    tarr[2] = (3, 300);
+    (int8 tp_a, int tp_b) = tarr[2];
+    int tp_sum = tp_a + tp_b;
+    __println("tuple array= " + tp_sum);             // 303
+    delete tarr;
+
+    /* a GROUPED type: new (const int)^ -> a pointer to const int. */
+    int cp_v = 7;
+    (const int)^ ^ cpp = new (const int)^;
+    cpp^ = ^cp_v;
+    int cp_r = cpp^^;
+    __println("const ptr= " + cp_r);                 // 7
+    delete cpp;
+
+    /* MULTI-DIM: new T[n][d]... — the FIRST dim is the runtime count, the rest are
+       the element's dims (n copies of int[2][2]). */
+    md = new int[2][2][2];
+    md[0][0][0] = 1;
+    md[1][1][1] = 8;
+    int md_sum = md[0][0][0] + md[1][1][1];
+    __println("multidim= " + md_sum);                // 9
+    delete md;
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: Cannot allocate 'void'
@@ -255,6 +319,19 @@ int32 main() {
     //-EXPECT-ERROR: A destructor call '.~()' requires a class object
     //int32 ni = 0;
     //ni.~();
+
+    /* a TUPLE element must be statically sized: a slot that is a class (runtime-sized
+       via __$sizeof) leaves the whole tuple unsized, so it is not allocatable. */
+    //-EXPECT-ERROR: Cannot allocate '(Simple, int)'
+    //ts = new (Simple, int);
+    //delete ts;
+
+    /* only the LEADING count dim may be dynamic; a trailing ELEMENT dim is a type dim
+       and must be a plain literal (a runtime / const-expression dim is not folded). */
+    //-EXPECT-ERROR: A 'new' element array dimension must be a constant
+    //int edn = 2;
+    //ed = new int[3][edn];
+    //delete ed;
 
     return 0;
 }

@@ -3076,19 +3076,24 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     diagnostic::report(diag, {d.file_id, d.name_tok,
                         "A variable declaration needs an explicit type or an initializer.",
                         {}});
-                    // Resolve an existing name / drop a placeholder so cond/update/body
-                    // reads don't cascade; main bails after resolve, so this is inert.
+                    // Resolve an existing name / register a placeholder through the ONE
+                    // funnel so cond/update/body reads don't cascade; main bails after
+                    // resolve, so this is inert (resolveName<0 => not in-frame either, so
+                    // the funnel's Declare path always fresh-declares, never conflicts).
                     int existing = resolveName(tree, d.name);
                     if (existing >= 0) {
                         d.resolved_entry_id = existing;
                     } else {
-                        parse::Entry e;
-                        e.kind = parse::EntryKind::kLocalVar;
-                        e.name = d.name;
-                        e.file_id = d.file_id;
-                        e.tok = d.name_tok;
-                        d.resolved_entry_id = parse::addEntry(tree, std::move(e));
-                        tree.initialized_locals.insert(d.resolved_entry_id);
+                        DeclInfo ph;
+                        ph.name = d.name;
+                        ph.file_id = d.file_id;
+                        ph.name_tok = d.name_tok;
+                        ph.track_body_local = false;   // error-recovery dummy, not swept
+                        bool reused = false;
+                        d.resolved_entry_id =
+                            registerDeclarator(tree, ph, BindMode::Declare, reused, diag);
+                        if (d.resolved_entry_id >= 0)
+                            tree.initialized_locals.insert(d.resolved_entry_id);
                     }
                     d.kind = parse::Kind::kBlockStmt;   // neutralize the slot
                     d.children.clear();

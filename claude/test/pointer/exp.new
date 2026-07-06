@@ -41,3 +41,9 @@ ea[0] null= true
 et[0] null= true
 deref delete, rr null= true
 non-variable delete ok
+ptr elem= 5
+ptr array= 3
+tuple single= 30
+tuple array= 303
+const ptr= 7
+multidim= 9
