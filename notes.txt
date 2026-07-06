@@ -3,12 +3,9 @@ agenda:
 
    But "every construct site routes through emitConstructed" is literally true only for scope-dtor'd sites.
   Three construct outside it:
-  - kSeqExpr _$cret temp (codegen.cpp:1643-1672) — full construct+destruct by hand, duplicating
-  emitConstructAt/emitConstructed's own sret-vs-fill branch. Clearest residual scatter in codegen; a change
-  to the construct sequence wouldn't reach it. Convergence candidate.
-  - kNewExpr heap (1534, 1561) — ctor hooks by hand; defensible as a separate heap/delete mechanism (no scope
+  2. kNewExpr heap (1534, 1561) — ctor hooks by hand; defensible as a separate heap/delete mechanism (no scope
   dtor).
-  - husk teardown (2181-2207) — the plan does disclose this one.
+  3. husk teardown (2181-2207) — the plan does disclose this one.
 
 
   - op= onto a field/deref/index target (obj.f = x, a kStoreStmt) — unchanged; though compound obj.f += x is wired.

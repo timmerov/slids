@@ -44,6 +44,12 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
                        std::ostream& out);
 bool typeNeedsHook(widen::TypeRef type, bool ctor);
 bool isSretReturn(widen::TypeRef t);
+struct DtorScope;
+void emitConstructAt(std::string const& addr, widen::TypeRef type,
+                     std::string const& llty, ast::Node const* init, bool is_move,
+                     bool sret_in_place, bool register_dtor, DtorScope* scope,
+                     SymTab const& syms, strings::Pool& pool, std::ostream& out,
+                     diagnostic::Sink& diag);
 bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
@@ -1645,15 +1651,17 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                         // construction TUPLE init field-inits then runs the ctor.
                         widen::TypeRef T = ch.return_type;
                         std::string addr = it->second.alloca_name;
-                        if (!ch.children.empty()
-                            && ch.children[0]->kind == ast::Kind::kCallExpr) {
-                            emitCall(*ch.children[0], syms, pool, out, diag, addr);
-                        } else if (!ch.children.empty()) {
-                            std::string v = emitExpr(*ch.children[0], syms, pool, out,
-                                                     diag, T);
-                            out << "  store " << it->second.llvm_type << " " << v
-                                << ", ptr " << addr << "\n";
-                            emitConstructHooks(addr, widen::strip(T), out);
+                        // Construct through the shared funnel: an sret CALL init
+                        // builds in place, a construction TUPLE init field-inits
+                        // then runs the ctor. register_dtor=false — this temp's
+                        // teardown is phrase-scoped (the seq_temps loop below),
+                        // not block-scoped, so the funnel registers no dtor.
+                        if (!ch.children.empty()) {
+                            emitConstructAt(addr, T, it->second.llvm_type,
+                                            ch.children[0].get(), /*is_move=*/false,
+                                            /*sret_in_place=*/true,
+                                            /*register_dtor=*/false, /*scope=*/nullptr,
+                                            syms, pool, out, diag);
                         }
                         seq_temps.push_back({addr, widen::strip(T)});
                     } else {
