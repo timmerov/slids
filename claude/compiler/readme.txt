@@ -1386,8 +1386,9 @@ STAGE FILES (.h / .cpp pairs)
             primitive / pointer / array / tuple; a CLASS uses its runtime __$sizeof);
             placement (children[1]) -> the address itself, no allocation. An assert
             guards an unsized element (classify gated it). A single class object is
-            constructed in place (field-init + ctor hook); delete of a class runs its
-            dtor — see readme-classes.txt. kDeleteStmt: load the pointer, `call void
+            constructed in place (field-init inline + a dispatch to the class's complete
+            ctor `@<Name>__$ctor`); delete of a class runs its complete dtor — see
+            readme-classes.txt. kDeleteStmt: load the pointer, `call void
             @free(ptr)`, store null back to its alloca. malloc / free are declared in
             the module preamble next to printf.
 

@@ -739,6 +739,15 @@ Phase 5 — classes
     + Itanium-recursive over class-typed fields (resolve needs-fixpoint +
     emitConstructHooks/emitDestructHooks). Deferred (todo): array/tuple-of-hook
     FIELD construction; the non-block-exit + loop-var tests.
+    * ctor/dtor INJECTION (complete-method model) — LANDED. The field/base recursion +
+    vtable stamp no longer inline at each site; each non-trivial class emits a COMPLETE
+    `@<Class>__$ctor(self)` / `@<Class>__$dtor(self)` (materialized in codegen run()) that
+    wraps the user body (emitted as `__$ctor__impl` / `__$dtor__impl`). Sites do value-init
+    inline then dispatch (emitConstructHooks/emitDestructHooks -> `call @<Class>__$ctor`);
+    aggregates walk to a class leaf; a trivial class emits no method (gated on typeNeedsHook).
+    The virtual complete dtor `__$vdtor` collapsed into `__$dtor` (vtable slot 0 points at it).
+    Behavior-preserving (same calls/order); value-init stays inline (visible layout only —
+    opaque cross-TU construction is a separate future param-ctor). See [[project_ctor_dtor_injection]].
   * new/delete/sizeof for classes + explicit `.~()` — LANDED. sizeof(Class) =
     `call @<Name>__$sizeof()` (LLVM owns the layout, v1's design); `new T(args)`
     constructs + runs the ctor; `new T[n]` field-inits + the new[]/delete[] count
@@ -914,14 +923,16 @@ Phase 7 — class advanced
     member) carries a vtable pointer at OFFSET 0 (C++ ABI): a ROOT gets a hidden
     `_$vptr` unnamed first field (parse::hasVptr), a DERIVED reuses the base's via
     `_$base` (mutually exclusive at slot 0). Each class emits `@<Class>__$vtable`
-    ([N x ptr]): slot 0 = the COMPLETE destructor `@<Class>__$vdtor`, methods at 1+
+    ([N x ptr]): slot 0 = the COMPLETE destructor `@<Class>__$dtor` (no separate
+    `__$vdtor` — it collapsed into the complete `__$dtor`), methods at 1+
     (base slots first, overrides reuse the slot, new virtuals append, overloaded
     virtuals each own a slot, a pure slot = `ptr null`). buildVtables (desugar) fills
     g_entry_slot + tree.vtables; a self./obj./ptr^ call loads the vptr, GEPs the slot,
     calls indirect (lowerMethodCall sets vtable_slot; codegen emitCall). The vptr is
-    stamped per-class at CONSTRUCTION (emitConstructHooks, before the ctor body) and
-    RE-STAMPED per-class during DESTRUCTION (emitDestructHooks, before each dtor body)
-    so a virtual call in a base ctor/dtor reaches the class being built/destroyed,
+    stamped per-class at CONSTRUCTION inside the complete `@<Class>__$ctor` (before the
+    user ctor body) and RE-STAMPED per-class during DESTRUCTION inside `@<Class>__$dtor`
+    (before the user dtor body) so a virtual call in a base ctor/dtor reaches the class
+    being built/destroyed,
     never a not-yet-built / torn-down derived override. A virtual class ALWAYS
     needs-ctor/dtor, so its vptr stamps even with no user ctor/dtor. A PURE virtual
     (`= delete`) is a bodyless dispatch target that makes its class ABSTRACT;

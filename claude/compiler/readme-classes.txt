@@ -127,12 +127,23 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     PAIR; FORWARD declarations (`_();`) allowed but must be defined; no author
     params. The kSlid type carries has_ctor/has_dtor (the explicit symbol exists)
     vs needs_ctor/needs_dtor (TRANSITIVE).
-  * CALL-IF-NEEDED + ITANIUM RECURSIVE DESCENT: a trivial class emits no calls.
-    needs_ctor/needs_dtor is transitive over the field graph (resolve fixpoint after
-    all classes register — a by-value field whose class needs hooks propagates up).
-    emitConstructHooks runs each class-typed field's hooks in declaration order then
-    the class's own ctor; emitDestructHooks runs the class's own dtor then field
-    dtors in REVERSE, to any depth. The unused-local sweep exempts a hook-bearing
+  * CALL-IF-NEEDED + ITANIUM RECURSIVE DESCENT (complete-method model): a trivial
+    class emits no method and no call. needs_ctor/needs_dtor is transitive over the
+    field graph (resolve fixpoint after all classes register — a by-value field whose
+    class needs hooks propagates up). Each NON-TRIVIAL class emits a COMPLETE
+    `@<Class>__$ctor(self)` / `@<Class>__$dtor(self)` (materialized once per class in
+    codegen run()): the ctor constructs each hook-carrying field (base at slot 0 first,
+    declaration order) then stamps the vtable then runs the user body; the dtor stamps,
+    runs the user body, then tears fields down in REVERSE. The user's `_()` / `~()`
+    statements are emitted separately as `@<Class>__$ctor__impl` / `__$dtor__impl` and
+    called by the complete method only when has_ctor / has_dtor (a synthesized-only
+    class runs just the field hooks + stamp). CONSTRUCTION / DESTRUCTION SITES do
+    value-init (the field-value stores) inline, then DISPATCH: emitConstructHooks /
+    emitDestructHooks route a class object to its complete method (`call @<Class>__$ctor`)
+    and inline aggregate (array / tuple) walks down to a class leaf — a tuple/array has
+    no method, so its hook-carrying slots/elements construct in place. The dispatch is
+    gated on typeNeedsHook (same predicate as the run() synthesis), so a trivial class
+    reached at any site emits nothing. The unused-local sweep exempts a hook-bearing
     class (the instance IS the use). [DEFERRED: an array-/tuple-of-hook-class field —
     the fixpoint + walkers descend only DIRECT kSlid fields.]
   * DESTRUCTOR-BALANCE INVARIANT: every instance destroyed once, in reverse
@@ -174,7 +185,8 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     kNewExpr children[2] (distinct from the leading `new(addr)` placement and `[n]`);
     classify routes it through constructClass (the same field-init tuple as a class
     var-decl); codegen mallocs, field-inits the construction tuple at the pointer,
-    then emitConstructHooks runs the ctor. PLACEMENT `new(addr) T(args)` reuses the
+    then emitConstructHooks dispatches the class's complete ctor `@<Name>__$ctor`.
+    PLACEMENT `new(addr) T(args)` reuses the
     same construct at the buffer address (no malloc).
   * NEW T[n] (the new[] COOKIE) — a class array always field-inits each element (the
     default value laid into the slot); a HOOK class additionally prepends an 8-byte
@@ -622,7 +634,9 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   skip it), and field access resolves by name over the shifted slots.
 
   VTABLE. Each virtual class emits `@<Class>__$vtable`, a `[N x ptr]` constant: SLOT 0 is the
-  COMPLETE destructor `@<Class>__$vdtor`, virtual methods occupy slots 1+. Slot map (desugar
+  COMPLETE destructor `@<Class>__$dtor` (the same complete dtor every scope/delete site calls;
+  there is no separate `__$vdtor` — it collapsed into `__$dtor`), virtual methods occupy slots
+  1+. Slot map (desugar
   buildVtables / vtableOf, memoized): base slots first (a stable index valid in every derived
   vtable), an override REUSES its base slot, a new virtual APPENDS, and OVERLOADED virtuals
   each take their own slot (overload resolution picks the slot at compile time, the vptr picks
@@ -637,11 +651,13 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   override wins at runtime even through a base pointer, and an inherited method resolves to
   the base slot. `delete` of a virtual pointer dispatches the destructor through slot 0.
 
-  VPTR STAMP — construction AND destruction, per class. emitConstructHooks stamps the vtable
-  at offset 0 BEFORE the ctor body, per class as the object builds up (base first) — so a
-  virtual call inside a base ctor dispatches to the class UNDER CONSTRUCTION, and the
-  most-derived vtable ends up installed. emitDestructHooks RE-STAMPS the vtable before EACH
-  class's dtor body, so as teardown walks toward the root the vptr "downgrades" and a virtual
+  VPTR STAMP — construction AND destruction, per class, inside the complete methods. The
+  complete `@<Class>__$ctor` stamps the vtable at offset 0 AFTER building the base/fields (so
+  each class's own ctor calls its base's complete ctor first, then overwrites with its own
+  stamp) and BEFORE the user ctor body — so a virtual call inside a base ctor dispatches to the
+  class UNDER CONSTRUCTION, and the most-derived vtable ends up installed. The complete
+  `@<Class>__$dtor` RE-STAMPS the vtable at entry, before the user dtor body and the reverse
+  field teardown, so as teardown walks toward the root the vptr "downgrades" and a virtual
   call inside a base dtor dispatches to the class UNDER DESTRUCTION — never to a more-derived
   override whose object part is already gone (the C++ rule; must be this way or a torn-down
   override runs). A virtual class ALWAYS needs-ctor/dtor (validateVirtualClass +

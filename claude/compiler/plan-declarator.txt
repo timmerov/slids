@@ -256,8 +256,10 @@ DESUGAR — extend the one funnel that already exists
   AST rewrites is churn, not convergence. One path PER STAGE is met.
 
 CODEGEN — the funnel (LANDED, Slice C)
-  Leaf primitives (reused): emitConstructHooks (1818), emitDestructHooks (1858),
-  emitNullLeaves (1181), emitArrayFromTuple (1974), emitImplicitAggregateConvert (1087).
+  Leaf primitives (reused): emitConstructHooks / emitDestructHooks (now DISPATCH into
+  the per-class complete `@<Class>__$ctor`/`__$dtor` — see [[project_ctor_dtor_injection]]),
+  emitNullLeaves, emitArrayFromTuple, emitImplicitAggregateConvert. (Line numbers drift;
+  grep the name.)
   BUILT — the funnel (codegen.cpp, just before emitStmt):
     emitInitFill(addr, type, llty, init, is_move, ...)  — FILL storage from an init:
       array<->tuple bridge / per-leaf aggregate widen / move-from-lvalue (null source
