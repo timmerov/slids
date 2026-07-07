@@ -110,14 +110,22 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     it is evaluated ONCE — spliced via classifyStmtList's prelude, classify's only
     statement-minting hook. A SAME-TYPE source is NOT spread — it is a whole-object
     COPY, or a MOVE for `<--`: classifyClassInit short-circuits it (deepStrip equality
-    with the class type), codegen does a whole-value store (+ emitNullLeaves for the
-    move) and STILL runs the ctor, so a copied/moved object is constructed exactly
-    once and balances its dtor. A user `op=` / `op<--` now WINS over this default
-    (the "eliding exception": classify rewrites the statement to a method call, so
-    the author's operator runs INSTEAD of the copy/move elision — even from a call
-    rvalue, which the funnel spills to a temp); the whole-value default applies only
-    when NO user operator matches. canon test/class/operator.sl +
-    test/function/return_fn.sl.
+    with the class type), codegen dispatches the transfer to the class's COPY / MOVE
+    FUNCTION and STILL runs the ctor, so a copied/moved object is constructed exactly
+    once and balances its dtor. COPY / MOVE AS FUNCTIONS (mirror of the ctor/dtor
+    complete-method model): every non-trivial class emits `@<Class>__$copy(dst,src)` /
+    `@<Class>__$move(dst,src)`. A user `op=(Self^)` / `op<--(Self^)` IS that symbol —
+    desugar's methodSymbol renames the same-type transfer operator to `__$copy` / `__$move`,
+    so its definition AND every call agree; a class WITHOUT one gets a SYNTHESIZED default
+    (whole-value store; move additionally nulls the source's pointer leaves — a valid
+    moved-from husk). Every whole-class transfer CALLS the function instead of inlining a
+    blit: the `=` form (a fresh `obj = fn()` husk, a whole-class copy from an lvalue) ->
+    `__$copy`; the `<--` form (the function-return fallback `ret^ <-- E`, `a <-- b`) ->
+    `__$move`. So a class ALWAYS has a same-type op= / op<-- (user or synthesized) and the
+    author's operator runs uniformly, INSTEAD of a raw copy/move — the old "eliding
+    exception" is now just "the call goes to the class's transfer function". A CROSS-TYPE
+    operator (`op=(Other^)` / `op<--(Other^)`, case 4) is a distinct method dispatched by
+    classify, NOT renamed. canon test/class/operator.sl + test/function/return_fn.sl.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field

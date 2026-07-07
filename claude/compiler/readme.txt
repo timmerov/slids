@@ -334,17 +334,21 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
       exact-typed returned local, so it NRVOs and the by-slot copy writes %sret.in.
     - return-OF-call (`return g()`): forward — emitCall(g, sret_dst=%sret.in), so g
       builds directly into our slot; no temp, no extra ctor.
-    - FALLBACK (a non-NRVO named local / rvalue): default-move-init %sret.in from the
-      value (field-move + ctor; a named-local source is nulled and dtor'd as a husk by
-      the scope unwind). A defensive assert checks the value is exact-typed (desugar
-      lowers any cross-form / leaf-widen return to an exact `_$ret` temp first).
+    - FALLBACK (a non-NRVO named local / rvalue): move-init %sret.in from the value —
+      a whole-class source calls the class's move function `@<Class>__$move` (the user
+      op<-- if defined, else the synthesized whole-value-move + source-null), then the
+      ctor runs; a named-local source is left a husk, dtor'd by the scope unwind. A
+      defensive assert checks the value is exact-typed (desugar lowers any cross-form /
+      leaf-widen return to an exact `_$ret` temp first).
   * CALLER side:
     - new decl, exact type (`Class x = fn()`): BUILD IN PLACE — emitCall(fn,
       sret_dst = the local's alloca); the local is constructed by the callee and
       registered for destruction (Phase-B case 1).
     - existing POD var, exact: OVERWRITE in place (case 2).
-    - existing hook var, or non-exact: temp + default-move(-assign) fallback (case 3),
-      the result temp reclaimed via stacksave/restore (no per-iteration stack growth).
+    - existing hook var, or non-exact: temp + assign fallback (case 3) — the `=` form
+      calls the target class's copy function `@<Class>__$copy` (user op= or synthesized
+      whole-value copy), the temp then destroyed; the result temp reclaimed via
+      stacksave/restore (no per-iteration stack growth).
     - discarded call (`fn();`): build a temp, destroy it (also stacksave-bracketed).
     - INLINE (expression) position (`g(mk())`, a nested call): desugar::liftSretCallList
       hoists the hook-returning call to a `_$cret = call;` temp decl (codegen's
@@ -1242,7 +1246,8 @@ STAGE FILES (.h / .cpp pairs)
             kMoveStmt and kReturnStmt lower here too: a cross-form / leaf-widen MOVE
             adds a per-leaf source null (emitAggNullLeaves), a RETURN materializes a
             `_$ret` temp of the return type and copies into it by slot — so codegen's
-            kMoveStmt / kReturnStmt only ever see a same-type whole-value op. Future
+            kMoveStmt / kReturnStmt only ever see a same-type whole-value op (a whole
+            CLASS one codegen then dispatches to `@<Class>__$copy` / `__$move`). Future
             rewrites (receiver shapes, more operator dispatch) slot in as their phases
             land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do

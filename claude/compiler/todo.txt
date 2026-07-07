@@ -46,17 +46,6 @@ BUGS
 
 UNBLOCKED FEATURES
 
-  * SYNTHESIZE DEFAULT ASSIGN/MOVE AS ACTUAL FUNCTION CALLS — not inlined. The
-    MECHANISM now exists: ctor/dtor INJECTION landed the complete-method model
-    (`@<Class>__$ctor` / `__$dtor` materialized per class, user body as `__$ctor__impl`,
-    sites dispatch via a call; [[project_ctor_dtor_injection]]). Copy/move (op= / op<--)
-    should follow the SAME shape — a materialized `@<Class>__$copy(dst,src)` /
-    `@<Class>__$move(dst,src)` (user op if defined, else a synthesized per-leaf
-    whole-value copy / move+null-source), called from every transfer site, so a class
-    ALWAYS has an op= / op<-- (no or-error for same-type) and cross-TU/opaque works.
-    Unlike ctor/dtor, copy/move are valueless (dst,src) so they factor COMPLETELY.
-    Accepted design (option A: materialize + call everywhere; canon return_fn.sl case 3/4).
-
   * implement class type conversion (Class=expr).
 
   * the spec for functions returning tuples, arrays, classes has changed.

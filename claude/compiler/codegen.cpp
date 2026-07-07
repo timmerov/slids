@@ -51,6 +51,14 @@ void emitClassCtorBody(std::string const& addr, widen::TypeRef cs, std::ostream&
 void emitClassDtorBody(std::string const& addr, widen::TypeRef cs, std::ostream& out);
 bool typeNeedsHook(widen::TypeRef type, bool ctor);
 bool isSretReturn(widen::TypeRef t);
+// A whole-value class MOVE through the class's move function @<Class>__$move — the user
+// op<--(Self^) if defined, else the synthesized default (whole-value copy + source-null).
+void emitMove(std::string const& dst, std::string const& src, widen::TypeRef cs,
+              std::ostream& out);
+// A whole-value class COPY (assignment) through @<Class>__$copy — the mirror of emitMove
+// for the `=` form (user op=(Self^) if defined, else synthesized whole-value copy).
+void emitCopy(std::string const& dst, std::string const& src, widen::TypeRef cs,
+              std::ostream& out);
 struct DtorScope;
 void emitConstructAt(std::string const& addr, widen::TypeRef type,
                      std::string const& llty, ast::Node const* init, bool is_move,
@@ -173,6 +181,14 @@ std::string newTmp(char const* tag) {
 // ast::Tree::vtables. A virtual class's ctor stamps its vtable; `delete` of a virtual
 // pointer dispatches the destructor through the vtable (slot 0).
 std::set<std::string> g_vtable_syms;
+// Class move-operator symbols `@<Class>__$move` a user op<--(Self^) already DEFINED
+// (desugar's methodSymbol renamed it to this symbol; emitFunction records it here). The
+// run() synthesis loop skips these — a class WITH a user op<-- provides its own move; a
+// class without gets the synthesized default move under the same symbol.
+std::set<std::string> g_defined_move_syms;
+// Class copy-operator symbols `@<Class>__$copy` a user op=(Self^) already DEFINED
+// (mirror of g_defined_move_syms). The run() synthesis loop skips these.
+std::set<std::string> g_defined_copy_syms;
 // File-local globals, keyed by resolved_entry_id. Populated in run() from
 // ast::Tree::globals; a kIdentExpr / lvalue whose id is here loads/stores through
 // `@<symbol>` instead of a SymTab alloca. (Global storage, not stack.)
@@ -1232,6 +1248,25 @@ void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
     // Any other form is a leaf with nothing to null: a primitive (the common case).
 }
 
+// A whole-value class MOVE: dispatch to the class's move function @<Class>__$move
+// (`cs` is stripped, a kSlid class). Every function-return / assignment move of a
+// whole class object routes here so a user op<-- runs instead of a raw blit; a class
+// without op<-- gets the synthesized default move under the same symbol (run()).
+void emitMove(std::string const& dst, std::string const& src, widen::TypeRef cs,
+              std::ostream& out) {
+    out << "  call void @" << widen::classSymbol(cs) << "__$move(ptr " << dst
+        << ", ptr " << src << ")\n";
+}
+
+// A whole-value class COPY (assignment): dispatch to @<Class>__$copy — the mirror of
+// emitMove for the `=` form. A user op=(Self^) runs instead of a raw blit; a class
+// without op= gets the synthesized default copy (whole-value, NO source-null) (run()).
+void emitCopy(std::string const& dst, std::string const& src, widen::TypeRef cs,
+              std::ostream& out) {
+    out << "  call void @" << widen::classSymbol(cs) << "__$copy(ptr " << dst
+        << ", ptr " << src << ")\n";
+}
+
 // `*addr ±= 1` for ONE scalar / iterator leaf at `addr`, typed `leaf`. An iterator
 // steps by one ELEMENT (load ptr, GEP ±1, store); a numeric leaf loads, add/sub 1
 // (float uses fadd/fsub + 1.0), and stores. Returns the new SSA value (callers that
@@ -2104,6 +2139,17 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
         // the source's pointer leaves so it is left a valid moved-from husk.
         std::string src = emitLvalueAddr(init, syms, pool, out, diag,
                                          /*allow_partial=*/true);
+        // A whole-value CLASS move dispatches to the class's move function
+        // @<Class>__$move (the user op<-- if defined, else the synthesized default
+        // whole-value-move + source-null), so a returned / assigned class runs its
+        // op<-- instead of a raw blit. Non-class aggregates keep the inline move.
+        widen::TypeRef sty = widen::strip(type);
+        if (widen::form(sty) == widen::Type::Form::kSlid
+            && typeNeedsHook(sty, /*ctor=*/true)
+            && widen::deepStrip(init.inferred_type) == widen::deepStrip(type)) {
+            emitMove(addr, src, sty, out);
+            return;
+        }
         std::string raw = newTmp("mv");
         out << "  " << raw << " = load " << llvmForRef(init.inferred_type)
             << ", ptr " << src << "\n";
@@ -2121,6 +2167,22 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
         out << "  store " << llty << " " << val << ", ptr " << addr << "\n";
         emitNullLeaves(src, init.inferred_type, out);
         return;
+    }
+    // A whole-value CLASS copy from an LVALUE dispatches to the class's copy function
+    // @<Class>__$copy (the user op= if defined, else the synthesized whole-value copy),
+    // mirroring the move branch above. An rvalue source has no object to op=-assign from
+    // (it IS the value), so it falls through to the plain materialize + store below.
+    {
+        widen::TypeRef sty = widen::strip(type);
+        if (!is_move && isAstLvalue(init)
+            && widen::form(sty) == widen::Type::Form::kSlid
+            && typeNeedsHook(sty, /*ctor=*/true)
+            && widen::deepStrip(init.inferred_type) == widen::deepStrip(type)) {
+            std::string src = emitLvalueAddr(init, syms, pool, out, diag,
+                                             /*allow_partial=*/true);
+            emitCopy(addr, src, sty, out);
+            return;
+        }
     }
     // A copy (or a move from an RVALUE — no source storage to null).
     std::string val;
@@ -2261,12 +2323,20 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 std::string slot = newTmp("rettmp");
                 out << "  " << slot << " = alloca " << Tll << "\n";
                 emitCall(*stmt.children[0], syms, pool, out, diag, slot);
-                std::string raw = newTmp("mv");
-                out << "  " << raw << " = load " << Tll << ", ptr " << slot << "\n";
-                out << "  store " << Tll << " " << raw << ", ptr "
-                    << it->second.alloca_name << "\n";
-                emitNullLeaves(slot, T, out);
-                emitDestructHooks(slot, widen::strip(T), out);
+                // Assign the temp into the target: this is the `=` form, so a whole CLASS
+                // goes through its COPY function @<Class>__$copy (runs op= if defined);
+                // a non-class aggregate does a whole-value blit. Then destroy the temp.
+                widen::TypeRef sT = widen::strip(T);
+                if (widen::form(sT) == widen::Type::Form::kSlid) {
+                    emitCopy(it->second.alloca_name, slot, sT, out);
+                } else {
+                    std::string raw = newTmp("mv");
+                    out << "  " << raw << " = load " << Tll << ", ptr " << slot
+                        << "\n";
+                    out << "  store " << Tll << " " << raw << ", ptr "
+                        << it->second.alloca_name << "\n";
+                }
+                emitDestructHooks(slot, sT, out);
                 out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
                 return;
             }
@@ -3008,6 +3078,11 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     std::string emit_name = fn.name;
     if (endsWith(fn.name, "__$ctor") || endsWith(fn.name, "__$dtor"))
         emit_name += "__impl";
+    // A user op<--(Self^) / op=(Self^) is emitted under @<Class>__$move / @<Class>__$copy
+    // (desugar renamed it): record it so run()'s synthesis loop doesn't ALSO emit a
+    // default move / copy for this class.
+    if (endsWith(fn.name, "__$move")) g_defined_move_syms.insert(fn.name);
+    if (endsWith(fn.name, "__$copy")) g_defined_copy_syms.insert(fn.name);
     out << "define " << ret_llty << " @" << emit_name << "(";
     bool need_comma = false;
     if (sret) {
@@ -3326,6 +3401,36 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         if (typeNeedsHook(cs, /*ctor=*/false)) {
             body << "define internal void @" << sym << "__$dtor(ptr %o) {\n";
             emitClassDtorBody("%o", cs, body);
+            body << "  ret void\n}\n\n";
+        }
+    }
+    // Per-class MOVE / COPY (assign) operators @<Name>__$move / @<Name>__$copy(dst, src) —
+    // the canonical same-type transfers. A class that DEFINES op<--(Self^) / op=(Self^)
+    // already emits its body under the symbol (desugar renamed it), so skip that one;
+    // otherwise SYNTHESIZE the default: a whole-value copy (move additionally nulls the
+    // source's pointer leaves — a valid moved-from husk). Every whole-class move / assign
+    // site (a function-return fallback, the caller husk, `a <-- b` / `a = b`) calls these,
+    // so a class runs its op<-- / op= instead of a raw blit. Gated to non-trivial classes —
+    // a trivial class keeps the inline whole-value transfer at the site.
+    for (widen::TypeRef ct : tree.classes) {
+        if (diagnostic::hasErrors(diag)) break;
+        widen::TypeRef cs = widen::strip(ct);
+        if (!typeNeedsHook(cs, /*ctor=*/true)) continue;
+        std::string sym = widen::classSymbol(cs);
+        std::string llty = llvmForRef(cs);
+        // MOVE: whole-value copy + null the source's pointer leaves (moved-from husk).
+        if (!g_defined_move_syms.count(sym + "__$move")) {   // else user op<-- IS @__$move
+            body << "define internal void @" << sym << "__$move(ptr %d, ptr %s) {\n";
+            body << "  %v = load " << llty << ", ptr %s\n";
+            body << "  store " << llty << " %v, ptr %d\n";
+            emitNullLeaves("%s", cs, body);
+            body << "  ret void\n}\n\n";
+        }
+        // COPY (assign): whole-value copy, source untouched.
+        if (!g_defined_copy_syms.count(sym + "__$copy")) {   // else user op= IS @__$copy
+            body << "define internal void @" << sym << "__$copy(ptr %d, ptr %s) {\n";
+            body << "  %v = load " << llty << ", ptr %s\n";
+            body << "  store " << llty << " %v, ptr %d\n";
             body << "  ret void\n}\n\n";
         }
     }

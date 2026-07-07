@@ -262,10 +262,13 @@ CODEGEN — the funnel (LANDED, Slice C)
   grep the name.)
   BUILT — the funnel (codegen.cpp, just before emitStmt):
     emitInitFill(addr, type, llty, init, is_move, ...)  — FILL storage from an init:
-      array<->tuple bridge / per-leaf aggregate widen / move-from-lvalue (null source
-      leaves) / whole-value copy. Stores only; no hooks, no registration. It does NOT
-      dispatch per-field op= / op<-- — classify already rewrote a user operator to a
-      method call, so codegen fills whole-value.
+      array<->tuple bridge / per-leaf aggregate widen / whole-value copy or move. A whole-
+      CLASS transfer dispatches to the class's transfer FUNCTION — a move-from-lvalue ->
+      emitMove (`@<Class>__$move`), a copy-from-lvalue -> emitCopy (`@<Class>__$copy`) — so
+      the user op<-- / op= runs (or the synthesized default: whole-value store, move also
+      nulls the source's pointer leaves); a non-class value stays an inline store (+ null
+      for a move). No hooks, no registration. See [[project_ctor_dtor_injection]] (copy/move
+      AS FUNCTIONS mirror the ctor/dtor complete-method model).
     emitConstructed(addr, type, register_dtor, scope)   — FINALIZE raw storage: run ctor
       hooks + register the dtor (unless the caller owns it). The SINGLE hooks+register
       pairing — one typeNeedsHook flag governs both, so they cannot diverge.
