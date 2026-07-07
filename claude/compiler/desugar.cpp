@@ -374,12 +374,12 @@ void buildVtables(parse::Tree const& tree, ast::Tree& out) {
         if (slots.empty()) continue;
         ast::Vtable vt;
         vt.class_symbol = widen::classSymbol(widen::strip(kv.first));
-        // Slot 0 is ALWAYS the destructor — the class's COMPLETE dtor (`__$vdtor`, which
-        // runs the dtor body then chains through fields + the base subobject). It sits at
-        // a fixed index across the whole hierarchy so `delete base_ptr` dispatches to the
-        // most-derived dtor. Virtual methods follow at slots 1+ (g_entry_slot is 0-based
-        // over the methods, so lowerMethodCall adds 1).
-        vt.slot_symbols.push_back(vt.class_symbol + "__$vdtor");
+        // Slot 0 is ALWAYS the destructor — the class's COMPLETE dtor (`__$dtor`, which
+        // stamps the vtable, runs the dtor body, then chains through fields + the base
+        // subobject). It sits at a fixed index across the whole hierarchy so `delete
+        // base_ptr` dispatches to the most-derived dtor. Virtual methods follow at slots
+        // 1+ (g_entry_slot is 0-based over the methods, so lowerMethodCall adds 1).
+        vt.slot_symbols.push_back(vt.class_symbol + "__$dtor");
         for (VSlot const& s : slots) {
             // A PURE slot has no implementation — emit null (an "" sentinel). The class
             // is abstract (not instantiable), so its vtable is never dispatched; a derived

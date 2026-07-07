@@ -42,6 +42,13 @@ void emitConstructHooks(std::string const& addr, widen::TypeRef type,
                         std::ostream& out);
 void emitDestructHooks(std::string const& addr, widen::TypeRef type,
                        std::ostream& out);
+// The BODIES of the per-class complete ctor/dtor and their slot loops. The complete
+// methods are materialized once per class (in run()); the dispatch above routes a
+// class object to them and inlines aggregate walks down to a class leaf.
+void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out);
+void emitSlotDtors(std::string const& addr, widen::TypeRef cs, std::ostream& out);
+void emitClassCtorBody(std::string const& addr, widen::TypeRef cs, std::ostream& out);
+void emitClassDtorBody(std::string const& addr, widen::TypeRef cs, std::ostream& out);
 bool typeNeedsHook(widen::TypeRef type, bool ctor);
 bool isSretReturn(widen::TypeRef t);
 struct DtorScope;
@@ -1819,17 +1826,19 @@ widen::TypeRef arrayElemOf(widen::TypeRef arr) {
                               std::vector<int>(a.dims.begin() + 1, a.dims.end()));
 }
 
-// Itanium recursive descent. Construct: build each contained class (its hooks, in
-// declaration / element order), THEN run a class's own ctor hook. Memory is
-// already laid down (field-init); this runs the HOOKS. Descends class fields,
-// tuple slots, AND array elements.
+// Itanium recursive descent. Construct: DISPATCH. A class object routes to its
+// COMPLETE constructor @<Name>__$ctor (field/base ctors + vtable stamp + user body,
+// materialized once per class — emitClassCtorBody). An array / tuple has no method,
+// so its hook-carrying elements / slots are built in place, recursing until a class
+// leaf reaches its complete ctor. Memory is already laid down (field-init); this
+// runs the HOOKS.
 void emitConstructHooks(std::string const& addr, widen::TypeRef type,
                         std::ostream& out) {
     widen::TypeRef cs = widen::strip(type);
     widen::Type const& ct = widen::get(cs);
-    std::string llty = llvmForRef(cs);
     if (ct.form == widen::Type::Form::kArray) {
         int n = ct.dims[0];   // capture before arrayElemOf interns (dangles ct)
+        std::string llty = llvmForRef(cs);
         widen::TypeRef et = arrayElemOf(cs);
         if (typeNeedsHook(et, true)) {
             for (int i = 0; i < n; i++) {
@@ -1841,35 +1850,61 @@ void emitConstructHooks(std::string const& addr, widen::TypeRef type,
         }
         return;
     }
-    for (std::size_t i = 0; i < ct.slots.size(); i++) {     // kSlid / kTuple slots
-        if (typeNeedsHook(ct.slots[i], true)) {
+    if (ct.form == widen::Type::Form::kSlid) {
+        // Only a NON-TRIVIAL class has a complete ctor (the synthesis in run() gates
+        // on the same predicate); a trivial class constructs nothing.
+        if (typeNeedsHook(cs, /*ctor=*/true))
+            out << "  call void @" << widen::classSymbol(cs) << "__$ctor(ptr "
+                << addr << ")\n";
+        return;
+    }
+    emitSlotCtors(addr, cs, out);   // a tuple: construct each hook-carrying slot
+}
+
+// Construct each hook-carrying slot of a class / tuple in place (declaration order —
+// the base subobject is field 0, so it constructs first).
+void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out) {
+    std::string llty = llvmForRef(cs);
+    std::vector<widen::TypeRef> slots = widen::get(cs).slots;  // copy: recursion may intern
+    for (std::size_t i = 0; i < slots.size(); i++) {
+        if (typeNeedsHook(slots[i], true)) {
             std::string gep = newTmp("ctorfld");
             out << "  " << gep << " = getelementptr inbounds " << llty
                 << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
-            emitConstructHooks(gep, ct.slots[i], out);
+            emitConstructHooks(gep, slots[i], out);
         }
     }
-    // Stamp the vtable pointer at offset 0 for a virtual class — at CONSTRUCTION, before
-    // the ctor body runs (so virtual calls inside the ctor already dispatch to this class)
-    // and INDEPENDENT of whether a user ctor exists. Base subobjects stamped their own
-    // vtables during the field recursion above; this most-derived stamp overwrites them.
-    if (ct.form == widen::Type::Form::kSlid
-        && g_vtable_syms.count(widen::classSymbol(cs)))
-        out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
-            << addr << "\n";
-    if (ct.form == widen::Type::Form::kSlid && ct.has_ctor)
-        out << "  call void @" << widen::classSymbol(cs) << "__$ctor(ptr " << addr << ")\n";
 }
 
-// Destruct: a class's own dtor hook FIRST, then tear down contained classes in
-// REVERSE order — the mirror of construction (fields, slots, AND array elements).
+// The BODY of @<Name>__$ctor: construct each hook-carrying field (base at slot 0
+// first), stamp this class's vtable — before the user body runs, so a virtual call
+// inside the ctor already dispatches here, and independent of whether a user ctor
+// exists — then run the user ctor body @<Name>__$ctor__impl (present only when the
+// author defined `_()`).
+void emitClassCtorBody(std::string const& addr, widen::TypeRef cs,
+                       std::ostream& out) {
+    bool has_ctor = widen::get(cs).has_ctor;   // capture before emitSlotCtors interns
+    emitSlotCtors(addr, cs, out);
+    if (g_vtable_syms.count(widen::classSymbol(cs)))
+        out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
+            << addr << "\n";
+    if (has_ctor)
+        out << "  call void @" << widen::classSymbol(cs)
+            << "__$ctor__impl(ptr " << addr << ")\n";
+}
+
+// Destruct: DISPATCH — the mirror of construction. A class object routes to its
+// COMPLETE destructor @<Name>__$dtor (vtable stamp + user body + reverse field/base
+// teardown — emitClassDtorBody), which sits at vtable slot 0 so `delete base_ptr`
+// runs the most-derived chain. An array / tuple tears its elements / slots down in
+// REVERSE in place, recursing until a class leaf reaches its complete dtor.
 void emitDestructHooks(std::string const& addr, widen::TypeRef type,
                        std::ostream& out) {
     widen::TypeRef cs = widen::strip(type);
     widen::Type const& ct = widen::get(cs);
-    std::string llty = llvmForRef(cs);
     if (ct.form == widen::Type::Form::kArray) {
         int n = ct.dims[0];   // capture before arrayElemOf interns (dangles ct)
+        std::string llty = llvmForRef(cs);
         widen::TypeRef et = arrayElemOf(cs);
         if (typeNeedsHook(et, false)) {
             for (int i = n; i-- > 0; ) {
@@ -1881,26 +1916,48 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
         }
         return;
     }
-    // Re-stamp the vtable pointer at offset 0 BEFORE this class's dtor body runs, so a
-    // virtual call from within the destructor dispatches to THIS class — never to a
-    // more-derived override whose object part has already been torn down. This mirrors
-    // construction's per-class stamp, in reverse: the slot recursion below reaches the
-    // base subobject (slot 0, offset 0) and re-stamps the base's vtable, so the vptr
-    // "downgrades" as teardown walks toward the root (the C++ rule).
-    if (ct.form == widen::Type::Form::kSlid
-        && g_vtable_syms.count(widen::classSymbol(cs)))
-        out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
-            << addr << "\n";
-    if (ct.form == widen::Type::Form::kSlid && ct.has_dtor)
-        out << "  call void @" << widen::classSymbol(cs) << "__$dtor(ptr " << addr << ")\n";
-    for (std::size_t i = ct.slots.size(); i-- > 0; ) {      // kSlid / kTuple slots
-        if (typeNeedsHook(ct.slots[i], false)) {
+    if (ct.form == widen::Type::Form::kSlid) {
+        // Only a NON-TRIVIAL class has a complete dtor (the synthesis in run() gates
+        // on the same predicate); a trivial class destructs nothing.
+        if (typeNeedsHook(cs, /*ctor=*/false))
+            out << "  call void @" << widen::classSymbol(cs) << "__$dtor(ptr "
+                << addr << ")\n";
+        return;
+    }
+    emitSlotDtors(addr, cs, out);   // a tuple: tear down each hook-carrying slot
+}
+
+// Tear down each hook-carrying slot of a class / tuple in REVERSE declaration order
+// (the base subobject, field 0, is torn down last — the vptr "downgrades" toward the
+// root, the C++ rule).
+void emitSlotDtors(std::string const& addr, widen::TypeRef cs, std::ostream& out) {
+    std::string llty = llvmForRef(cs);
+    std::vector<widen::TypeRef> slots = widen::get(cs).slots;  // copy: recursion may intern
+    for (std::size_t i = slots.size(); i-- > 0; ) {
+        if (typeNeedsHook(slots[i], false)) {
             std::string gep = newTmp("dtorfld");
             out << "  " << gep << " = getelementptr inbounds " << llty
                 << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
-            emitDestructHooks(gep, ct.slots[i], out);
+            emitDestructHooks(gep, slots[i], out);
         }
     }
+}
+
+// The BODY of @<Name>__$dtor: re-stamp this class's vtable BEFORE the dtor body runs
+// (so a virtual call from the destructor dispatches to THIS class, never a
+// more-derived override whose part is already gone), run the user dtor body
+// @<Name>__$dtor__impl (present only when the author defined `~()`), then tear down
+// fields in reverse.
+void emitClassDtorBody(std::string const& addr, widen::TypeRef cs,
+                       std::ostream& out) {
+    bool has_dtor = widen::get(cs).has_dtor;   // capture before emitSlotDtors interns
+    if (g_vtable_syms.count(widen::classSymbol(cs)))
+        out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
+            << addr << "\n";
+    if (has_dtor)
+        out << "  call void @" << widen::classSymbol(cs)
+            << "__$dtor__impl(ptr " << addr << ")\n";
+    emitSlotDtors(addr, cs, out);
 }
 
 // Emit the destructors for ONE scope, in reverse declaration order.
@@ -2940,7 +2997,18 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // unchanged (returned by value).
     bool sret = isSretReturn(fn.return_type);
     std::string ret_llty = sret ? "void" : llvmForRef(fn.return_type);
-    out << "define " << ret_llty << " @" << fn.name << "(";
+    // A ctor/dtor method's user body is emitted as @<sym>__$ctor__impl /
+    // @<sym>__$dtor__impl; the COMPLETE @<sym>__$ctor / @<sym>__$dtor (field/base
+    // hooks + vtable stamp + this body) is materialized in run(). Every other
+    // function keeps its own symbol.
+    auto endsWith = [](std::string const& s, std::string const& suf) {
+        return s.size() >= suf.size()
+            && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+    std::string emit_name = fn.name;
+    if (endsWith(fn.name, "__$ctor") || endsWith(fn.name, "__$dtor"))
+        emit_name += "__impl";
+    out << "define " << ret_llty << " @" << emit_name << "(";
     bool need_comma = false;
     if (sret) {
         out << "ptr %sret.in";
@@ -3237,17 +3305,29 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         if (diagnostic::hasErrors(diag)) break;   // stop at the first error
         emitFunction(*fn, pool, body, diag);
     }
-    // Per-virtual-class COMPLETE destructor. `@<Name>__$vdtor(obj)` runs the full
-    // destruction of `obj` at its EXACT type — the dtor body then the reverse-order
-    // field + base-subobject chain (exactly emitDestructHooks). It sits at vtable slot 0,
-    // so `delete base_ptr` dispatches the most-derived one and the whole chain runs.
+    // Per-class COMPLETE constructor / destructor. `@<Name>__$ctor(obj)` builds each
+    // hook-carrying field (base at slot 0 first), stamps the vtable, then runs the user
+    // ctor body `@<Name>__$ctor__impl`; `@<Name>__$dtor(obj)` mirrors it — stamp, user
+    // dtor body, then the reverse-order field + base-subobject teardown. The dtor sits
+    // at vtable slot 0, so `delete base_ptr` dispatches the most-derived one and the
+    // whole chain runs. Every construction / destruction site calls these (the dispatch
+    // in emitConstructHooks / emitDestructHooks). Only a NON-TRIVIAL class (a hook at
+    // some leaf) gets a method; a trivial class emits none and its sites do value-init
+    // only. Emitted for virtual AND non-virtual classes (the vtable stamp is gated).
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
-        std::string sym = widen::classSymbol(ct);
-        if (!g_vtable_syms.count(sym)) continue;
-        body << "define internal void @" << sym << "__$vdtor(ptr %o) {\n";
-        emitDestructHooks("%o", ct, body);
-        body << "  ret void\n}\n\n";
+        widen::TypeRef cs = widen::strip(ct);
+        std::string sym = widen::classSymbol(cs);
+        if (typeNeedsHook(cs, /*ctor=*/true)) {
+            body << "define internal void @" << sym << "__$ctor(ptr %o) {\n";
+            emitClassCtorBody("%o", cs, body);
+            body << "  ret void\n}\n\n";
+        }
+        if (typeNeedsHook(cs, /*ctor=*/false)) {
+            body << "define internal void @" << sym << "__$dtor(ptr %o) {\n";
+            emitClassDtorBody("%o", cs, body);
+            body << "  ret void\n}\n\n";
+        }
     }
     // Per-class size helper. LLVM owns the struct layout, so the byte size is the
     // GEP-null/ptrtoint of the struct type — emitted as `<Name>__$sizeof()` (v1's

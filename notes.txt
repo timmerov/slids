@@ -1,5 +1,5 @@
 
-agenda:
+leftover crap from plan-declarator landing fail:
 
    But "every construct site routes through emitConstructed" is literally true only for scope-dtor'd sites.
   Three construct outside it:
@@ -69,6 +69,8 @@ widen::internOrNone
 preferredSpelling
 spellOrEmpty
 widen::strip
+
+does swap operator make any sense?
 
 remaining class todo:
 incomplete, operator, refine, virtual

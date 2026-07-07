@@ -40,7 +40,17 @@ BUGS
     (tuple/destructure.sl), which sidesteps it by using a tuple-returning function as the
     destructure source.
 
+  * fix these compile errors:
+    Class fn() { return Class; }
+    Class fn() { temp = Class; return temp; }
+
 UNBLOCKED FEATURES
+
+  * a synthesize default assign/move as actual function calls - not inlined.
+
+  * implement class type conversion (Class=expr).
+
+  * the spec for functions returning tuples, arrays, classes has changed.
 
 
 BLOCKED FEATURES

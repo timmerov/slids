@@ -84,65 +84,106 @@ desugars to:
         }
     }
 
-the call site has two (or three) options.
+the call site has four options.
 
 if the return type of the function and the type of the lhs match exactly,
 and either there is no ctor at any leaf, or the lhs is being created,
 then the call can be completed in place.
 
-case 1: types match exactly, the lhs is being created here:
+case 1: types match exactly and the lhs is being created here:
+elision.
 
     Type obj = fn();
+    Type obj <-- fn();
 
 desugars to:
 
     allocate space for obj.
     fn_$desugar(^obj);
 
-case 2: types match exactly, the lhs has no ctor in any leaf (plain old data):
+case 2: types match exactly and the lhs is plain old data:
+to be plain old data, no leaf of the type may contain a class with a ctor
+or the applicable transfer operator (assign or move).
+elision.
 
     Type obj;
     obj = fn();
+    obj <-- fn();
 
 desugars to:
 
     Type obj;
     fn_$desugar(^obj);
 
-case 3 (the fallback): types do not match or the lhs has already been ctor constructed.
-move semantics must be used.
+case 3: types match exactly and not case 1 or 2.
+elision is not possible.
+spill to a temp and copy/move it to the target.
 
-    OtherType obj;
-    obj = fn();
+    Type obj_copy;
+    Type obj_move;
+    obj_copy = fn();
+    obj_move <-- fn();
 
 desugars to:
 
-    OtherType obj;
+    Type obj_copy;
+    Type obj_move;
     {
         alloca $temp;
         fn_$desugar(^$temp);
-        obj <-- $temp;
+        obj_copy = $temp;
         $temp.dtor();
     }
+    {
+        alloca $temp;
+        fn_$desugar(^$temp);
+        obj_move <-- $temp;
+        $temp.dtor();
+    }
+
+case 4: types do not match exactly.
+elision is not possible.
+spill to a temp and assign/move it to the target.
+
+    OtherType obj_assign;
+    OtherType obj_move;
+    obj_assign = fn();
+    obj_move <-- fn();
+
+desugars to:
+
+    OtherType obj_assign;
+    OtherType obj_move;
+    {
+        alloca $temp;
+        fn_$desugar(^$temp);
+        obj_assign = $temp;
+        $temp.dtor();
+    }
+    {
+        alloca $temp;
+        fn_$desugar(^$temp);
+        obj_move <-- $temp;
+        $temp.dtor();
+    }
+
+note:
+in the desugaring blocks of cases 3,4 when the temp is transfered to the target...
+for case 3:
+'=' means use the assignment operator op=.
+'<--' means use the move operator op<--.
+the compiler synthesizes these if they're are not explicitly defined.
+for case 4:
+'=' means use a matching assignment operator op=.
+'<--' means use a matching move operator op<--.
+it's a compiler error if there is no matching operator.
+
 
 in all cases, the desugared function is the same.
 the only difference is how the call site handles the returned value.
 
 such a function used in an expression is writing to a newly created temporary variable.
 it's equivalent to call site case 1.
-
-eliding exception:
-the author explicitly defines either the assignment or move operator,
-and the assignment or move operator is used in the statement, then the
-overloaded operator should be used instead of eliding.
-
-    Class(int a) {
-        op=(Class^ rhs);
-        op<--(mutable Class^ rhs);
-    }
-    Class fn() { return Class(); }
-    cls = fn();
-    cls <-- fn();
 
 notes:
 
