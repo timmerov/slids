@@ -336,7 +336,7 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
       builds directly into our slot; no temp, no extra ctor.
     - FALLBACK (a non-NRVO named local / rvalue): move-init %sret.in from the value —
       a whole-class source calls the class's move function `@<Class>__$move` (the user
-      op<-- if defined, else the synthesized whole-value-move + source-null), then the
+      op<-- if defined, else the synthesized memberwise move + source-null), then the
       ctor runs; a named-local source is left a husk, dtor'd by the scope unwind. A
       defensive assert checks the value is exact-typed (desugar lowers any cross-form /
       leaf-widen return to an exact `_$ret` temp first).
@@ -346,8 +346,8 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
       registered for destruction (Phase-B case 1).
     - existing POD var, exact: OVERWRITE in place (case 2).
     - existing hook var, or non-exact: temp + assign fallback (case 3) — the `=` form
-      calls the target class's copy function `@<Class>__$copy` (user op= or synthesized
-      whole-value copy), the temp then destroyed; the result temp reclaimed via
+      calls the target class's copy function `@<Class>__$copy` (user op= or the
+      synthesized memberwise copy), the temp then destroyed; the result temp reclaimed via
       stacksave/restore (no per-iteration stack growth).
     - discarded call (`fn();`): build a temp, destroy it (also stacksave-bracketed).
     - INLINE (expression) position (`g(mk())`, a nested call): desugar::liftSretCallList
@@ -1165,9 +1165,12 @@ STAGE FILES (.h / .cpp pairs)
             row `g[i]`) or a tuple SLOT (whether the slot is a tuple or an array) is
             a valid swap/move operand — emitLvalueAddr threads allow_partial=true for
             the swap/move sites so emitElementAddr returns the slice/slot ADDRESS,
-            and the whole-value load/store at the operand's type exchanges/moves it
-            (subject to swap's exact-type rule, so two slots of differing type
-            reject). codegen-only — classify already types the partial index.
+            and the value at the operand's type is exchanged/moved — a hook-bearing
+            class (or a tuple/array with a class leaf) dispatches PER LEAF to the
+            class's `@<Class>__$swap` / `__$move` op (`emitAggregateSwap`/`Transfer`),
+            a POD operand keeps the inline whole-value load/store (subject to swap's
+            exact-type rule, so two slots of differing type reject). codegen-only —
+            classify already types the partial index.
             kNewExpr: a heap element must be sized — a primitive / pointer / array /
             TUPLE (compile-time typeByteSize, the tuple laid out with LLVM-default
             struct alignment) OR a CLASS (runtime __$sizeof, so it IS allocatable);
@@ -1258,9 +1261,10 @@ STAGE FILES (.h / .cpp pairs)
             adds a per-leaf source null (emitAggNullLeaves), a RETURN materializes a
             `_$ret` temp of the return type and copies into it by slot — so codegen's
             kMoveStmt / kReturnStmt only ever see a same-type whole-value op (a whole
-            CLASS one codegen then dispatches to `@<Class>__$copy` / `__$move`). Future
-            rewrites (receiver shapes, more operator dispatch) slot in as their phases
-            land.
+            CLASS one — or a tuple/array WITH a class leaf — codegen then dispatches PER
+            LEAF to `@<Class>__$copy` / `__$move` / `__$swap`, the memberwise transfer op).
+            Future rewrites (receiver shapes, more operator dispatch) slot in as their
+            phases land.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)

@@ -26,6 +26,12 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                               std::vector<std::unique_ptr<parse::Node>>& children,
                               diagnostic::Sink& diag);
 
+// Synthesize a class's default copy/move/swap operators (op=/op<--/op<-->(Self^)) as real
+// methods. Defined at resolve:: scope, forward-declared here so the anon-namespace
+// resolveScopeBodies — the single per-class body choke point — can call it.
+void synthesizeClassTransferOps(parse::Tree& tree, parse::Node& cnode,
+                                diagnostic::Sink& diag);
+
 namespace {
 
 bool isPrintIntrinsic(std::string const& name) {
@@ -851,6 +857,12 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
                                                         : nullptr;
         tree.current_base_name = node.text;   // base name for the `Base:` reframe (or "")
         tree.current_class_name = (it != tree.classes.end()) ? it->second.name : "";
+        // Synthesize the default copy/move/swap ops NOW — the SINGLE choke point every
+        // class-body pass funnels through (file-scope via run(), local via
+        // registerLocalClasses, namespace-local + class-nested by recursion). Fields are
+        // final (the TYPES phase ran) and user ops are registered, so the appended methods
+        // resolve in place in the member loop below. Covers EVERY class kind uniformly.
+        synthesizeClassTransferOps(tree, node, diag);
         // Field-default exprs, with the class frame open (a default may name a
         // sibling member bare).
         for (auto& p : node.params) {
@@ -4908,6 +4920,121 @@ void explodeAnonGlobalGroups(parse::Node& scope, int& gid_counter) {
     scope.children = std::move(flat);
 }
 
+// `recv^.field` — the field of a receiver/argument pointer, as a source-level lvalue
+// (a kFieldExpr over a kDerefExpr over the param ident). resolve/classify resolve the
+// names and types like any hand-written access.
+std::unique_ptr<parse::Node> makeRecvFieldAccess(std::string const& recv,
+                                                 std::string const& field,
+                                                 int file, int tok) {
+    auto id = std::make_unique<parse::Node>();
+    id->kind = parse::Kind::kIdentExpr;
+    id->name = recv;
+    id->file_id = file; id->tok = tok; id->name_tok = tok;
+    auto deref = std::make_unique<parse::Node>();
+    deref->kind = parse::Kind::kDerefExpr;
+    deref->file_id = file; deref->tok = tok;
+    deref->children.push_back(std::move(id));
+    auto fld = std::make_unique<parse::Node>();
+    fld->kind = parse::Kind::kFieldExpr;
+    fld->name = field;
+    fld->file_id = file; fld->tok = tok; fld->name_tok = tok;
+    fld->children.push_back(std::move(deref));
+    return fld;
+}
+
+// True iff the class frame already DECLARES a user same-type operator `opname`
+// (signature `(Self^)`), which shadows the synthesized default.
+bool classHasUserSelfOp(parse::Tree const& tree, int frame,
+                        std::string const& opname, widen::TypeRef cstrip) {
+    for (parse::Entry const& e : tree.entries) {
+        if (e.kind != parse::EntryKind::kFunction || e.owner_ns_frame != frame
+            || e.name != opname || e.param_types.size() != 2)
+            continue;
+        widen::TypeRef p = widen::strip(e.param_types[1]);
+        if (widen::form(p) != widen::Type::Form::kPointer) continue;
+        if (widen::deepStrip(widen::get(p).pointee) == widen::deepStrip(cstrip))
+            return true;
+    }
+    return false;
+}
+
+// Synthesize the default same-type transfer operators — op=(Self^) copy, op<--(Self^)
+// move, op<-->(Self^) swap — for every class that does not DECLARE one (a user op
+// shadows). They are REAL methods (a kFunctionDef + a kFunction entry in the class
+// frame), so findClassOperator finds them like any operator and every copy/move/swap
+// site dispatches them uniformly — no bespoke default path anywhere. Each body is
+// by-slot iterative and recursive: one statement per field, `_$recv^.fi OP _$src^.fi`,
+// which classify dispatches to THAT field's op — a class field recurses into its own
+// synthesized op, a primitive/pointer leaf bottoms out at a plain store/move/swap. The
+// vtable ptr is not a field, so it is never transferred; a base subobject (`_$base`,
+// slot 0) IS a field, so it transfers via the base's op. Runs after the TYPES phase
+// (fields + all user ops — including re-open members — registered) and before body
+// resolution, so resolveScopeBodies + classify + desugar + codegen process the
+// synthesized bodies exactly like user methods.
+void synthesizeClassTransferOps(parse::Tree& tree, parse::Node& cnode,
+                                diagnostic::Sink& diag) {
+    (void)diag;
+    if (cnode.resolved_entry_id < 0) return;
+    parse::Entry const& ce = tree.entries[cnode.resolved_entry_id];
+    widen::TypeRef cstrip = widen::strip(ce.slids_type);
+    int frame = ce.ns_frame_id;
+    auto itc = tree.classes.find(cstrip);
+    if (itc == tree.classes.end()) return;
+    // src_mutable: move / swap MUTATE the source (null it / exchange), so their pointer
+    // param must be `mutable` (opts out of the by-pointer-to-const munge); copy reads a
+    // const source.
+    struct OpSpec { char const* name; parse::Kind stmt; bool src_mutable; };
+    OpSpec const ops[] = {
+        {"op=",    parse::Kind::kStoreStmt, false},
+        {"op<--",  parse::Kind::kMoveStmt,  true},
+        {"op<-->", parse::Kind::kSwapStmt,  true},
+    };
+    widen::TypeRef voidTy = widen::internOrNone("void");
+    int file = cnode.file_id, tok = cnode.name_tok;
+    widen::TypeRef selfPtr = widen::internPointer(cstrip);   // `C^`
+    // Capture the field-name list BEFORE minting (addEntry / intern can move; the
+    // ClassInfo ref could dangle — copy the names out).
+    std::vector<std::string> fields = itc->second.field_names;
+    for (OpSpec const& op : ops) {
+        // Idempotent: classHasUserSelfOp matches a user OR an already-synthesized op, so
+        // re-running this on the same class (or a class reached by two drivers) is a no-op.
+        if (classHasUserSelfOp(tree, frame, op.name, cstrip)) continue;
+        auto fn = std::make_unique<parse::Node>();
+        fn->kind = parse::Kind::kFunctionDef;
+        fn->name = op.name;
+        fn->file_id = file; fn->tok = tok; fn->name_tok = tok;
+        fn->return_type = voidTy;
+        fn->params.push_back(parse::makeReceiverParam(selfPtr, file, tok));
+        auto src = std::make_unique<parse::Node>();
+        src->kind = parse::Kind::kParam;
+        src->name = "_$src";
+        src->file_id = file; src->tok = tok; src->name_tok = tok;
+        src->return_type = selfPtr;
+        src->is_mutable = op.src_mutable;
+        fn->params.push_back(std::move(src));
+        for (std::string const& f : fields) {
+            auto st = std::make_unique<parse::Node>();
+            st->kind = op.stmt;
+            st->file_id = file; st->tok = tok;
+            st->children.push_back(makeRecvFieldAccess("_$recv", f, file, tok));
+            st->children.push_back(makeRecvFieldAccess("_$src", f, file, tok));
+            fn->children.push_back(std::move(st));
+        }
+        parse::Entry e;
+        e.kind = parse::EntryKind::kFunction;
+        e.name = op.name;
+        e.slids_type = voidTy;
+        e.param_types = {selfPtr, selfPtr};
+        e.defined = true;
+        e.synthesized = true;
+        e.def_file_id = file;
+        e.def_tok = tok;
+        e.owner_ns_frame = frame;
+        fn->resolved_entry_id = parse::addEntry(tree, std::move(e));
+        cnode.children.push_back(std::move(fn));
+    }
+}
+
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
     parse::Node* program = nullptr;
     for (auto& n : tree.nodes) {
@@ -5241,6 +5368,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             }
         }
     }
+
+    // (Default copy/move/swap ops are synthesized inside resolveScopeBodies — the single
+    // choke point every class-body pass funnels through — so file-scope AND local classes
+    // are covered by one mechanism; no per-driver synthesis pass here.)
 
     // Pass 2 — walk each top-level function body.
     for (auto& ch : program->children) {

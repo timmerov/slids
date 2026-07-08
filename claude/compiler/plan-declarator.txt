@@ -265,10 +265,11 @@ CODEGEN — the funnel (LANDED, Slice C)
       array<->tuple bridge / per-leaf aggregate widen / whole-value copy or move. A whole-
       CLASS transfer dispatches to the class's transfer FUNCTION — a move-from-lvalue ->
       emitMove (`@<Class>__$move`), a copy-from-lvalue -> emitCopy (`@<Class>__$copy`) — so
-      the user op<-- / op= runs (or the synthesized default: whole-value store, move also
-      nulls the source's pointer leaves); a non-class value stays an inline store (+ null
-      for a move). No hooks, no registration. See [[project_ctor_dtor_injection]] (copy/move
-      AS FUNCTIONS mirror the ctor/dtor complete-method model).
+      the user op<-- / op= runs, OR the synthesized default (a real MEMBERWISE op method, not
+      a blit); a hook-bearing tuple/array goes PER LEAF (emitAggregateTransfer) so a class
+      ELEMENT runs its op too; a POD value stays an inline store (+ null for a move). No
+      hooks, no registration. See [[project_ctor_dtor_injection]] (copy/move/swap AS
+      FIRST-CLASS operator methods, synthesized at the resolveScopeBodies choke point).
     emitConstructed(addr, type, register_dtor, scope)   — FINALIZE raw storage: run ctor
       hooks + register the dtor (unless the caller owns it). The SINGLE hooks+register
       pairing — one typeNeedsHook flag governs both, so they cannot diverge.
@@ -285,8 +286,11 @@ CODEGEN — the funnel (LANDED, Slice C)
   (now an assert-unreachable) — classify desugars every destructure to per-slot declarator
   statements, so a kDestructureStmt never reaches codegen.
   Spellings differ from the working names above: emitConstructAtPtrs / emitSlidAssign were
-  NOT needed (per-field op dispatch is a classify concern; codegen fills whole-value).
-  CLAUDE.md "declarator codegen funnel" is the reconciled spec.
+  NOT needed — a per-field USER-operator rewrite is a classify concern (it rewrites `op=` to
+  a method call), while the DEFAULT transfer fills whole-value and, for a hook-bearing
+  class/aggregate, dispatches PER LEAF to the class's synthesized `@__$copy`/`__$move`/
+  `__$swap` op (emitAggregateTransfer/Swap). CLAUDE.md "declarator codegen funnel" is the
+  reconciled spec.
 
 
 ======================================================================
@@ -711,11 +715,11 @@ handles EVERY variable type; verified end-to-end. Three pieces:
   agg_conv_spill, hoisted by desugar) fall out. For a CLASS target the declarator is real:
   classify's kConvertExpr arm calls lowerClassConversion, which — reusing the SAME machinery a
   decl-init op= uses — default-constructs a `_$cret` (classifyClassInit) and FILLS it from the
-  source: a user op= dispatches `_$cret.op=(src)` (findClassOperator + makeOpCallStmt); a
-  SAME-CLASS source with no user op= falls through to the DEFAULT whole-value copy
-  `_$cret = src` (a kAssignStmt codegen lowers via @Class__$copy — the fallback every OTHER
-  binding site already had). Both stash [construct, fill] as the node's two
-  children (class_conversion flag). Desugar's liftSretCallExprs lifts the pair into a temp
+  source: it dispatches `_$cret.op=(src)` (findClassOperator + makeOpCallStmt). findClass-
+  Operator surfaces every op= — a user op=(T)/op=(T^) AND the synthesized default op=(Self^)
+  — so a same-class source resolves to the memberwise default copy with no bespoke fallback
+  (the old same-class kAssignStmt hack is DELETED). Stashes [construct, fill] as the node's
+  two children (class_conversion flag). Desugar's liftSretCallExprs lifts the pair into a temp
   (the class analog of a construction lift) and yields a `_$cret` read; the temp constructs /
   destroys through the existing class-temp lifetime (phrase-scoped at a statement-expression
   position, enclosing-scoped at a decl/assign rhs). ONE small codegen touch: in a CONDITION

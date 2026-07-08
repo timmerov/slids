@@ -112,32 +112,37 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     COPY, or a MOVE for `<--`: classifyClassInit short-circuits it (deepStrip equality
     with the class type), codegen dispatches the transfer to the class's COPY / MOVE
     FUNCTION and STILL runs the ctor, so a copied/moved object is constructed exactly
-    once and balances its dtor. COPY / MOVE AS FUNCTIONS (mirror of the ctor/dtor
-    complete-method model): every non-trivial class emits `@<Class>__$copy(dst,src)` /
-    `@<Class>__$move(dst,src)`. A user `op=(Self^)` / `op<--(Self^)` IS that symbol —
-    desugar's methodSymbol renames the same-type transfer operator to `__$copy` / `__$move`,
-    so its definition AND every call agree; a class WITHOUT one gets a SYNTHESIZED default
-    (whole-value store; move additionally nulls the source's pointer leaves — a valid
-    moved-from husk). Every whole-class transfer CALLS the function instead of inlining a
-    blit: the `=` form (a fresh `obj = fn()` husk, a whole-class copy from an lvalue) ->
-    `__$copy`; the `<--` form (the function-return fallback `ret^ <-- E`, `a <-- b`) ->
-    `__$move`. So a class ALWAYS has a same-type op= / op<-- (user or synthesized) and the
-    author's operator runs uniformly, INSTEAD of a raw copy/move — the old "eliding
-    exception" is now just "the call goes to the class's transfer function". A CROSS-TYPE
-    operator (`op=(Other^)` / `op<--(Other^)`, case 4) is a distinct method dispatched by
-    classify, NOT renamed. canon test/class/operator.sl + test/function/return_fn.sl.
+    once and balances its dtor. COPY / MOVE / SWAP AS FIRST-CLASS OPERATOR METHODS: the
+    default op=(Self^) / op<--(Self^) / op<-->(Self^) are REAL memberwise methods — resolve's
+    `synthesizeClassTransferOps` mints them (unless the user declared one, which shadows) as
+    kFunctionDef + kFunction entries (marked Entry.synthesized) in the class's op tree, body
+    one statement per field `_$recv^.fi OP _$src^.fi` (copy / move / swap). It runs at the
+    resolveScopeBodies choke point — the SINGLE per-class body pass every driver funnels
+    through (file-scope, hoisted, reopened, derived, virtual, class-nested, AND function/
+    block-LOCAL classes), so EVERY class is covered by one mechanism. Each per-field stmt
+    dispatches THAT field's op, so a class field recurses into its own transfer (memberwise:
+    `@Outer__$copy` CALLS `@Inner__$copy`) and a primitive/pointer leaf bottoms out at a
+    plain store/move/swap. desugar's methodSymbol renames op= / op<-- / op<--> (user OR
+    synthesized) to `@<Class>__$copy` / `__$move` / `__$swap`, so definition and every call
+    agree; codegen just CALLS that symbol (`emitCopy`/`emitMove`; a hook-bearing tuple/array
+    goes PER LEAF via `emitAggregateTransfer`/`emitAggregateSwap`, so a class element runs
+    its op, not a byte blit). findClassOperator finds a same-type op= for EVERY class, but
+    dispatchAssignInit ELIDES a synthesized one (returns false) so a fresh decl builds in
+    place / a live copy runs through the existing fill path rather than reordering ctor vs
+    copy — a USER op wins over elision. There is NO codegen whole-value blit fallback (that
+    loop + its g_defined_*_syms gate were deleted; nothing is left to fall back to). A
+    CROSS-TYPE operator (`op=(Other^)` / `op<--(Other^)`, case 4) is a distinct method
+    dispatched by classify, NOT renamed. canon test/class/operator.sl + return_fn.sl.
   * A `(Class = src)` VALUE CONVERSION binds a FRESH temp from src — the "assignment to a
     temporary variable" model. classify::lowerClassConversion default-constructs a `_$cret`
-    and FILLS it from the source: a user op= runs `_$cret.op=(src)` (findClassOperator +
-    makeOpCallStmt, exactly the op= a decl-init `Class x = src` would run); a SAME-CLASS
-    source with NO user op= falls through to the default whole-value copy `_$cret = src` (a
-    kAssignStmt codegen lowers via @Class__$copy — the no-user-op= fallback every other
-    binding site already had; findClassOperator only surfaces USER operators, never the
-    synthesized copy/move — see todo.txt for making those first-class). desugar lifts the
-    [construct, fill] pair like a construction, so the temp destroys through the ordinary
-    class-temp lifetime. A conversion is thus as permissive as the class's op= overloads
-    (value via op=(T), pointer via op=(T^)) PLUS a same-class copy; a source that is neither
-    op=-viable nor the same class is a clean reject. It is the 12th declarator binding site
+    and FILLS it from the source by dispatching `_$cret.op=(src)` (findClassOperator +
+    makeOpCallStmt, exactly the op= a decl-init `Class x = src` would run). findClassOperator
+    surfaces every op= — a user op=(T)/op=(T^) AND the synthesized default op=(Self^) — so a
+    same-class source resolves to the memberwise default copy with no bespoke fallback here.
+    desugar lifts the [construct, fill] pair like a construction, so the temp destroys
+    through the ordinary class-temp lifetime. A conversion is thus as permissive as the
+    class's op= overloads (value via op=(T), pointer via op=(T^)) PLUS the same-class default
+    copy; a source no op= accepts is a clean reject. It is the 12th declarator binding site
     (plan-declarator.txt "THE CONVERSION-TARGET TEMP"); an identifier-led grammar trigger
     (looksLikeConvTarget) routes user-named / namespaced / alias / virtual targets. An
     AGGREGATE target with a class leaf converts PER SLOT (classify::lowerAggregateConversion

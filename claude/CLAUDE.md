@@ -37,14 +37,14 @@ Three modes govern how I work. The user sets the mode by what they ask for. I de
 ### Session shape
 
 Default arc of a session:
-1. **User presents file(s).** Bug repros or feature stubs. **Those files are canon.** Barring typos, they are the source of truth — memories, TODO.md, and existing compiler code are subordinate. When any of those conflicts with the presented file, the file wins.
+1. **User presents file(s).** Bug repros or feature stubs. **Only the user's own comment(s) in those files are canon** — the test code is not. Barring typos, the user's comment is the source of truth — the test code, memories, TODO.md, and existing compiler code are all subordinate. When any of those conflicts with the user's comment, the comment wins.
 2. Discussion.
 3. Likely: tests get added to the presented file.
 4. Compiler change lands.
 5. User runs tests against files you can't see. Trust the report.
 6. *If asked*, discuss documentation.
 
-Tests are canon — they go first. Documentation is the closing item, and only when the user raises it. Do not volunteer doc updates, do not propose them mid-flow, do not spend turns explaining what the docs should say. The default time budget for documentation is zero.
+Tests are **not** canon — only the user's comment is. Tests still go first in the work order (written before the compiler change). Documentation is the closing item, and only when the user raises it. Do not volunteer doc updates, do not propose them mid-flow, do not spend turns explaining what the docs should say. The default time budget for documentation is zero.
 
 ## What this is
 

@@ -181,14 +181,6 @@ std::string newTmp(char const* tag) {
 // ast::Tree::vtables. A virtual class's ctor stamps its vtable; `delete` of a virtual
 // pointer dispatches the destructor through the vtable (slot 0).
 std::set<std::string> g_vtable_syms;
-// Class move-operator symbols `@<Class>__$move` a user op<--(Self^) already DEFINED
-// (desugar's methodSymbol renamed it to this symbol; emitFunction records it here). The
-// run() synthesis loop skips these — a class WITH a user op<-- provides its own move; a
-// class without gets the synthesized default move under the same symbol.
-std::set<std::string> g_defined_move_syms;
-// Class copy-operator symbols `@<Class>__$copy` a user op=(Self^) already DEFINED
-// (mirror of g_defined_move_syms). The run() synthesis loop skips these.
-std::set<std::string> g_defined_copy_syms;
 // File-local globals, keyed by resolved_entry_id. Populated in run() from
 // ast::Tree::globals; a kIdentExpr / lvalue whose id is here loads/stores through
 // `@<symbol>` instead of a SymTab alloca. (Global storage, not stack.)
@@ -1267,6 +1259,112 @@ void emitCopy(std::string const& dst, std::string const& src, widen::TypeRef cs,
         << ", ptr " << src << ")\n";
 }
 
+// A whole-value COPY / MOVE of a same-typed value from `src` into `dst`, PER LEAF — the
+// aggregate analog of emitCopy/emitMove. A CLASS leaf dispatches its op (@__$copy /
+// @__$move), so a class element inside a tuple/array runs its operator instead of a byte
+// blit (the array↔tuple bridge and POD copies keep the single load/store elsewhere; this
+// path is taken only when typeNeedsHook is true — a hook-bearing class is present). A
+// tuple recurses per slot, an array flat-walks its elements, and a primitive / pointer
+// leaf is load+store'd (a move additionally nulls the source's pointer leaves so it is a
+// valid moved-from husk). Mirrors emitNullLeaves' leaf walk.
+void emitAggregateTransfer(std::string const& dst, std::string const& src,
+                           widen::TypeRef ty, bool is_move, std::ostream& out) {
+    using F = widen::Type::Form;
+    widen::TypeRef s = widen::strip(ty);
+    F f = widen::form(s);
+    if (f == F::kSlid) {
+        if (is_move) emitMove(dst, src, s, out); else emitCopy(dst, src, s, out);
+        return;
+    }
+    if (f == F::kTuple) {
+        std::string tll = llvmForRef(s);
+        std::vector<widen::TypeRef> const& slots = widen::get(s).slots;
+        for (std::size_t i = 0; i < slots.size(); i++) {
+            std::string dg = newTmp("acp"), sg = newTmp("acp");
+            out << "  " << dg << " = getelementptr inbounds " << tll << ", ptr "
+                << dst << ", i32 0, i32 " << i << "\n";
+            out << "  " << sg << " = getelementptr inbounds " << tll << ", ptr "
+                << src << ", i32 0, i32 " << i << "\n";
+            emitAggregateTransfer(dg, sg, slots[i], is_move, out);
+        }
+        return;
+    }
+    if (f == F::kArray) {
+        widen::TypeRef elem = widen::get(s).elem;
+        std::string elem_ll = llvmForRef(elem);
+        long total = 1;
+        for (int d : widen::get(s).dims) total *= d;
+        for (long i = 0; i < total; i++) {
+            std::string dg = newTmp("acp"), sg = newTmp("acp");
+            out << "  " << dg << " = getelementptr " << elem_ll << ", ptr "
+                << dst << ", i64 " << i << "\n";
+            out << "  " << sg << " = getelementptr " << elem_ll << ", ptr "
+                << src << ", i64 " << i << "\n";
+            emitAggregateTransfer(dg, sg, elem, is_move, out);
+        }
+        return;
+    }
+    // A primitive / pointer leaf: load + store, and (for a move) null the source leaf.
+    std::string ll = llvmForRef(s);
+    std::string v = newTmp("lcp");
+    out << "  " << v << " = load " << ll << ", ptr " << src << "\n";
+    out << "  store " << ll << " " << v << ", ptr " << dst << "\n";
+    if (is_move) emitNullLeaves(src, s, out);
+}
+
+// A whole-value SWAP of two same-typed lvalues `a`/`b`, PER LEAF — the swap analog of
+// emitAggregateTransfer. A CLASS leaf dispatches its op @<Class>__$swap (a user op<-->
+// if defined, else the synthesized default exchange), so a class element inside a
+// tuple/array runs its operator rather than a byte-blit swap. Taken only when
+// typeNeedsHook is true (a hook-bearing class is present); a POD swap keeps the inline
+// whole-value exchange at the site.
+void emitAggregateSwap(std::string const& a, std::string const& b,
+                       widen::TypeRef ty, std::ostream& out) {
+    using F = widen::Type::Form;
+    widen::TypeRef s = widen::strip(ty);
+    F f = widen::form(s);
+    if (f == F::kSlid) {
+        out << "  call void @" << widen::classSymbol(s) << "__$swap(ptr " << a
+            << ", ptr " << b << ")\n";
+        return;
+    }
+    if (f == F::kTuple) {
+        std::string tll = llvmForRef(s);
+        std::vector<widen::TypeRef> const& slots = widen::get(s).slots;
+        for (std::size_t i = 0; i < slots.size(); i++) {
+            std::string ag = newTmp("asw"), bg = newTmp("asw");
+            out << "  " << ag << " = getelementptr inbounds " << tll << ", ptr "
+                << a << ", i32 0, i32 " << i << "\n";
+            out << "  " << bg << " = getelementptr inbounds " << tll << ", ptr "
+                << b << ", i32 0, i32 " << i << "\n";
+            emitAggregateSwap(ag, bg, slots[i], out);
+        }
+        return;
+    }
+    if (f == F::kArray) {
+        widen::TypeRef elem = widen::get(s).elem;
+        std::string ell = llvmForRef(elem);
+        long total = 1;
+        for (int d : widen::get(s).dims) total *= d;
+        for (long i = 0; i < total; i++) {
+            std::string ag = newTmp("asw"), bg = newTmp("asw");
+            out << "  " << ag << " = getelementptr " << ell << ", ptr "
+                << a << ", i64 " << i << "\n";
+            out << "  " << bg << " = getelementptr " << ell << ", ptr "
+                << b << ", i64 " << i << "\n";
+            emitAggregateSwap(ag, bg, elem, out);
+        }
+        return;
+    }
+    // A primitive / pointer leaf: exchange the two values.
+    std::string ll = llvmForRef(s);
+    std::string va = newTmp("asw"), vb = newTmp("asw");
+    out << "  " << va << " = load " << ll << ", ptr " << a << "\n";
+    out << "  " << vb << " = load " << ll << ", ptr " << b << "\n";
+    out << "  store " << ll << " " << vb << ", ptr " << a << "\n";
+    out << "  store " << ll << " " << va << ", ptr " << b << "\n";
+}
+
 // `*addr ±= 1` for ONE scalar / iterator leaf at `addr`, typed `leaf`. An iterator
 // steps by one ELEMENT (load ptr, GEP ±1, store); a numeric leaf loads, add/sub 1
 // (float uses fadd/fsub + 1.0), and stores. Returns the new SSA value (callers that
@@ -2149,15 +2247,14 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
         // the source's pointer leaves so it is left a valid moved-from husk.
         std::string src = emitLvalueAddr(init, syms, pool, out, diag,
                                          /*allow_partial=*/true);
-        // A whole-value CLASS move dispatches to the class's move function
-        // @<Class>__$move (the user op<-- if defined, else the synthesized default
-        // whole-value-move + source-null), so a returned / assigned class runs its
-        // op<-- instead of a raw blit. Non-class aggregates keep the inline move.
+        // A whole-value move of a hook-bearing value dispatches PER LEAF through each
+        // class's move function @<Class>__$move (the user op<-- if defined, else the
+        // synthesized default) — a class, OR a tuple/array with a class element, runs its
+        // op<-- instead of a raw blit. A POD aggregate keeps the inline move below.
         widen::TypeRef sty = widen::strip(type);
-        if (widen::form(sty) == widen::Type::Form::kSlid
-            && typeNeedsHook(sty, /*ctor=*/true)
+        if (typeNeedsHook(sty, /*ctor=*/true)
             && widen::deepStrip(init.inferred_type) == widen::deepStrip(type)) {
-            emitMove(addr, src, sty, out);
+            emitAggregateTransfer(addr, src, sty, /*is_move=*/true, out);
             return;
         }
         std::string raw = newTmp("mv");
@@ -2178,19 +2275,19 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
         emitNullLeaves(src, init.inferred_type, out);
         return;
     }
-    // A whole-value CLASS copy from an LVALUE dispatches to the class's copy function
-    // @<Class>__$copy (the user op= if defined, else the synthesized whole-value copy),
-    // mirroring the move branch above. An rvalue source has no object to op=-assign from
-    // (it IS the value), so it falls through to the plain materialize + store below.
+    // A whole-value copy from an LVALUE of a hook-bearing value dispatches PER LEAF
+    // through each class's copy function @<Class>__$copy (the user op= if defined, else
+    // the synthesized default) — a class, OR a tuple/array with a class element, runs its
+    // op= instead of a raw blit; mirrors the move branch. An rvalue source has no object
+    // to op=-assign from (it IS the value), so it falls through to materialize + store.
     {
         widen::TypeRef sty = widen::strip(type);
         if (!is_move && isAstLvalue(init)
-            && widen::form(sty) == widen::Type::Form::kSlid
             && typeNeedsHook(sty, /*ctor=*/true)
             && widen::deepStrip(init.inferred_type) == widen::deepStrip(type)) {
             std::string src = emitLvalueAddr(init, syms, pool, out, diag,
                                              /*allow_partial=*/true);
-            emitCopy(addr, src, sty, out);
+            emitAggregateTransfer(addr, src, sty, /*is_move=*/false, out);
             return;
         }
     }
@@ -2420,6 +2517,15 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                                 /*allow_partial=*/true);
             std::string addr_b = emitLvalueAddr(b, syms, pool, out, diag,
                                                 /*allow_partial=*/true);
+            // A hook-bearing value swaps PER LEAF through each class's swap op
+            // @<Class>__$swap (a user op<--> if defined, else the synthesized default) —
+            // a class, OR a tuple/array with a class element, runs its op<--> rather than
+            // a raw blit. A POD value keeps the inline whole-value exchange below.
+            widen::TypeRef sty = widen::strip(a.inferred_type);
+            if (typeNeedsHook(sty, /*ctor=*/true)) {
+                emitAggregateSwap(addr_a, addr_b, sty, out);
+                return;
+            }
             std::string va = newTmp("swap");
             std::string vb = newTmp("swap");
             out << "  " << va << " = load " << ll << ", ptr " << addr_a << "\n";
@@ -3088,11 +3194,6 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     std::string emit_name = fn.name;
     if (endsWith(fn.name, "__$ctor") || endsWith(fn.name, "__$dtor"))
         emit_name += "__impl";
-    // A user op<--(Self^) / op=(Self^) is emitted under @<Class>__$move / @<Class>__$copy
-    // (desugar renamed it): record it so run()'s synthesis loop doesn't ALSO emit a
-    // default move / copy for this class.
-    if (endsWith(fn.name, "__$move")) g_defined_move_syms.insert(fn.name);
-    if (endsWith(fn.name, "__$copy")) g_defined_copy_syms.insert(fn.name);
     out << "define " << ret_llty << " @" << emit_name << "(";
     bool need_comma = false;
     if (sret) {
@@ -3414,36 +3515,11 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             body << "  ret void\n}\n\n";
         }
     }
-    // Per-class MOVE / COPY (assign) operators @<Name>__$move / @<Name>__$copy(dst, src) —
-    // the canonical same-type transfers. A class that DEFINES op<--(Self^) / op=(Self^)
-    // already emits its body under the symbol (desugar renamed it), so skip that one;
-    // otherwise SYNTHESIZE the default: a whole-value copy (move additionally nulls the
-    // source's pointer leaves — a valid moved-from husk). Every whole-class move / assign
-    // site (a function-return fallback, the caller husk, `a <-- b` / `a = b`) calls these,
-    // so a class runs its op<-- / op= instead of a raw blit. Gated to non-trivial classes —
-    // a trivial class keeps the inline whole-value transfer at the site.
-    for (widen::TypeRef ct : tree.classes) {
-        if (diagnostic::hasErrors(diag)) break;
-        widen::TypeRef cs = widen::strip(ct);
-        if (!typeNeedsHook(cs, /*ctor=*/true)) continue;
-        std::string sym = widen::classSymbol(cs);
-        std::string llty = llvmForRef(cs);
-        // MOVE: whole-value copy + null the source's pointer leaves (moved-from husk).
-        if (!g_defined_move_syms.count(sym + "__$move")) {   // else user op<-- IS @__$move
-            body << "define internal void @" << sym << "__$move(ptr %d, ptr %s) {\n";
-            body << "  %v = load " << llty << ", ptr %s\n";
-            body << "  store " << llty << " %v, ptr %d\n";
-            emitNullLeaves("%s", cs, body);
-            body << "  ret void\n}\n\n";
-        }
-        // COPY (assign): whole-value copy, source untouched.
-        if (!g_defined_copy_syms.count(sym + "__$copy")) {   // else user op= IS @__$copy
-            body << "define internal void @" << sym << "__$copy(ptr %d, ptr %s) {\n";
-            body << "  %v = load " << llty << ", ptr %s\n";
-            body << "  store " << llty << " %v, ptr %d\n";
-            body << "  ret void\n}\n\n";
-        }
-    }
+    // (No whole-value blit synthesis for @<Name>__$move / __$copy / __$swap: EVERY class —
+    // file-scope, hoisted, reopened, derived, virtual, nested, and LOCAL — now owns a real
+    // MEMBERWISE operator method synthesized in resolve (synthesizeClassTransferOps, run at
+    // the resolveScopeBodies choke point), so those symbols are always defined and there is
+    // nothing left to fall back to.)
     // Per-class size helper. LLVM owns the struct layout, so the byte size is the
     // GEP-null/ptrtoint of the struct type — emitted as `<Name>__$sizeof()` (v1's
     // design), which sizeof(Class) (and new/delete) call. A function rather than an

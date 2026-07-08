@@ -296,20 +296,21 @@ std::string sanitizeSymbolName(std::string const& name) {
 // is a valid LLVM identifier (the raw name still drives the overload count below).
 std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
                          std::string const& name, int entry_id) {
-    // The same-type transfer operators op<--(Self^) / op=(Self^) are the class's canonical
-    // move / copy functions @<Class>__$move / @<Class>__$copy — every whole-class move /
-    // assign site (a function-return fallback, the caller husk, `a <-- b` / `a = b`) calls
-    // that symbol, and a class lacking the user operator gets a synthesized function with
-    // the same signature (codegen run()). Both the definition and every call mangle here,
-    // so they always agree on the symbol.
-    if ((name == "op<--" || name == "op=") && entry_id >= 0
+    // The same-type transfer operators op<--(Self^) / op=(Self^) / op<-->(Self^) are the
+    // class's canonical move / copy / swap functions @<Class>__$move / __$copy / __$swap —
+    // every whole-class transfer site (a function-return fallback, the caller husk,
+    // `a <-- b` / `a = b` / `a <--> b`) calls that symbol, and a class lacking the user
+    // operator gets a synthesized function (a real memberwise method, resolve's
+    // synthesizeDefaultTransferOps; a template instantiation falls back to codegen run()'s
+    // whole-value body). Both the definition and every call mangle here, so they agree.
+    if ((name == "op<--" || name == "op=" || name == "op<-->") && entry_id >= 0
         && tree.entries[entry_id].param_types.size() == 2) {
         widen::TypeRef pointee =
             widen::get(widen::strip(tree.entries[entry_id].param_types[1])).pointee;
         if (pointee != widen::kNoType
             && widen::deepStrip(pointee) == widen::deepStrip(defCls))
             return widen::classSymbol(defCls)
-                 + (name == "op=" ? "__$copy" : "__$move");
+                 + (name == "op=" ? "__$copy" : name == "op<--" ? "__$move" : "__$swap");
     }
     std::string base = widen::classSymbol(defCls) + "__" + sanitizeSymbolName(name);
     if (entry_id < 0) return base;

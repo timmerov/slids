@@ -3613,7 +3613,15 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
                         std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr,
                         bool needs_construct = false) {
     if (widen::form(widen::strip(clsType)) != widen::Type::Form::kSlid) return false;
-    if (findClassOperator(tree, clsType, rhs, opname) < 0) return false;
+    int op_id = findClassOperator(tree, clsType, rhs, opname);
+    if (op_id < 0) return false;
+    // A SYNTHESIZED default op is NOT dispatched as an explicit `dest.op=(src)` method
+    // call — that would force a default-construct-then-assign and reorder the ctor hooks
+    // relative to the copy. The op exists to give `@Class__$copy`/`__$move`/`__$swap` a
+    // memberwise body; the existing binding/codegen paths already CALL that body (fill +
+    // construct for a decl, a plain copy/move for live storage). So elide here and let
+    // them run. Only a USER op (which may observe / transform) dispatches through classify.
+    if (tree.entries[op_id].synthesized) return false;
     // Materialize a class RVALUE source into a `_$cinit` temp so the operator takes its
     // address (a named lvalue / primitive is used in place).
     int idx = expr_lhs ? 1 : 0;
@@ -3752,17 +3760,13 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     widen::TypeRef C = e.return_type;
     e.inferred_type = C;
     parse::Node& operand = *e.children[0];
-    // The conversion is "assignment to a temp": it dispatches the target's op= exactly
-    // as a decl-init `Class x = src` would. Probe for a USER op= (a value source through
-    // op=(T), a pointer through op=(T^)); if none matches BUT the source is the SAME class,
-    // fall through to the default whole-value COPY — the synthesized op= (@Class__$copy)
-    // that every other binding site uses as its no-user-op= fallback (findClassOperator
-    // only surfaces user-declared operators, never the synthesized one). Only a source
-    // that is neither op=-viable nor the same class is a clean error.
+    // The conversion is "assignment to a temp": it dispatches the target's op= exactly as
+    // a decl-init `Class x = src` would. findClassOperator surfaces every op= — a user
+    // op=(T)/op=(T^) AND the compiler-synthesized default op=(Self^), so a same-class
+    // source resolves to the memberwise default copy with no bespoke fallback here. Only a
+    // source no op= accepts is a clean error.
     int op_id = findClassOperator(tree, C, operand, "op=");
-    bool same_class = op_id < 0
-        && widen::strip(operand.inferred_type) == widen::strip(C);
-    if (op_id < 0 && !same_class) {
+    if (op_id < 0) {
         diagnostic::report(diag, {e.file_id, e.tok,
             "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
             + "' to class '" + widen::spellOrEmpty(C)
@@ -3795,27 +3799,13 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     dc->file_id = f;
     dc->tok = tk;
     classifyClassInit(tree, *dc, itc->second, diag);
-    // The second lifted statement fills `_$cret` from the source: a USER op= dispatches
-    // `_$cret.op=(src)` (the operand is the operator's argument); a same-class source with
-    // no user op= does the default whole-value COPY `_$cret = src` (a kAssignStmt codegen
-    // lowers via @Class__$copy — the same fill a decl-init copy rides). Both are one
-    // statement in the [construct, fill] pair the desugar class_conversion lift hoists.
-    std::unique_ptr<parse::Node> fill;
-    if (op_id >= 0) {
-        std::vector<std::unique_ptr<parse::Node>> args;
-        args.push_back(std::move(e.children[0]));
-        fill = makeOpCallStmt(tree, "_$cret", cid, C, "op=", std::move(args), f, tk, diag);
-    } else {
-        fill = std::make_unique<parse::Node>();
-        fill->kind = parse::Kind::kAssignStmt;
-        fill->name = "_$cret";
-        fill->name_tok = tk;
-        fill->resolved_entry_id = cid;
-        fill->return_type = C;
-        fill->file_id = f;
-        fill->tok = tk;
-        fill->children.push_back(std::move(e.children[0]));   // the source
-    }
+    // The second lifted statement fills `_$cret` from the source by dispatching
+    // `_$cret.op=(src)` (the operand is the operator's argument) — a user op= OR the
+    // synthesized default copy, both real methods. This is one statement in the
+    // [construct, fill] pair the desugar class_conversion lift hoists.
+    std::vector<std::unique_ptr<parse::Node>> args;
+    args.push_back(std::move(e.children[0]));
+    auto fill = makeOpCallStmt(tree, "_$cret", cid, C, "op=", std::move(args), f, tk, diag);
     e.class_conversion = true;
     e.resolved_entry_id = cid;
     e.children.clear();

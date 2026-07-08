@@ -472,11 +472,11 @@ Phase 4 — types beyond primitives
     LANDED: `(Class = src)` — the literal "assignment to a temp" — default-constructs
     a `_$cret`, dispatches its op= from the source [findClassOperator + makeOpCallStmt,
     the same op= a decl-init runs], and lifts the pair like a construction; as permissive
-    as the class's op= overloads [value via op=(T), pointer via op=(T^)], AND a SAME-CLASS
-    source with no user op= falls through to the DEFAULT whole-value COPY [_$cret = src, a
-    kAssignStmt codegen lowers via @Class__$copy — the same fill a decl-init copy rides;
-    the fallback every OTHER binding site already had]; a source that is neither op=-viable
-    nor the same class is a clean reject. Grammar: the identifier-led target [looksLikeConv-
+    as the class's op= overloads [value via op=(T), pointer via op=(T^)] PLUS the same-class
+    DEFAULT copy — findClassOperator now surfaces the synthesized op=(Self^) too, so a same-
+    class source dispatches the memberwise default copy with no bespoke fallback [the old
+    same-class kAssignStmt hack is DELETED]; a source no op= accepts is a clean reject.
+    Grammar: the identifier-led target [looksLikeConv-
     Target scans a `::` global + `:` member name], so user-named / NAMESPACED / alias /
     virtual targets all work; a top-level `=` inside `(...)` is unambiguous [slids has no
     assignment-EXPRESSION]. This is the 12th declarator binding site — see plan-
@@ -768,19 +768,26 @@ Phase 5 — classes
     The virtual complete dtor `__$vdtor` collapsed into `__$dtor` (vtable slot 0 points at it).
     Behavior-preserving (same calls/order); value-init stays inline (visible layout only —
     opaque cross-TU construction is a separate future param-ctor). See [[project_ctor_dtor_injection]].
-    * copy/move AS FUNCTIONS — LANDED (mirror of ctor/dtor injection). Each non-trivial class
-    emits `@<Class>__$copy(dst,src)` / `@<Class>__$move(dst,src)`: a user op=(Self^) / op<--(Self^)
-    IS that symbol (desugar's methodSymbol renames it — so definition AND every call agree), else
-    a SYNTHESIZED default (whole-value copy; move additionally nulls the source's pointer leaves).
-    Every whole-class transfer calls it instead of inlining a blit: the `=` sites (the `obj=fn()`
-    husk, emitInitFill's copy-from-lvalue, decl-init) -> `__$copy`; the `<--` sites (the function-
-    return fallback `ret^<--E`, `a<--b`) -> `__$move`. codegen can't resolve operators, so run()
-    skips synthesizing a symbol emitFunction already emitted (g_defined_copy_syms/g_defined_move_syms).
-    Gated typeNeedsHook; behavior-preserving on canon (every default-transferred class there has no
-    user op, so synth == the old inline blit). Fixed a real bug: the `obj=fn()` husk was doing a
-    MOVE (blit+null) where the spec says `=`->op= copy; it now dispatches `__$copy`. Cross-type (case
-    4) transfers still dispatch through classify (a distinct op=(Other^)/op<--(Other^)); NOT renamed.
-    See [[project_ctor_dtor_injection]], [[project_operator_overloading]], canon return_fn.sl.
+    * copy/move/swap AS FIRST-CLASS OPERATOR METHODS — LANDED. The default op=(Self^) /
+    op<--(Self^) / op<-->(Self^) are REAL memberwise methods, synthesized by resolve's
+    `synthesizeClassTransferOps` (kFunctionDef + kFunction entry, Entry.synthesized; body one
+    stmt per field `_$recv^.fi OP _$src^.fi`) unless the user declared one (shadows). Run at
+    the `resolveScopeBodies` choke point — the SINGLE per-class body pass every driver funnels
+    through — so EVERY class kind is covered by one mechanism: file-scope, hoisted, reopened,
+    derived, virtual, class-nested, AND function/block-LOCAL (the old `all_classes`-only pass
+    missed locals, which register during body resolution). Each per-field stmt dispatches THAT
+    field's op, so it recurses memberwise (`@Outer__$copy` CALLS `@Inner__$copy`) and bottoms
+    out at a primitive leaf. desugar's methodSymbol renames op= / op<-- / op<--> (user OR
+    synthesized) to `@<Class>__$copy` / `__$move` / `__$swap`; codegen CALLS that symbol
+    (emitCopy/emitMove; a hook-bearing tuple/array goes PER LEAF via emitAggregateTransfer /
+    emitAggregateSwap, so a class element runs its op — fixes the old aggregate copy-raw).
+    findClassOperator finds a same-type op= for every class, but dispatchAssignInit ELIDES a
+    synthesized one (a fresh decl builds in place / a live copy runs the fill path, no ctor-vs-
+    copy reorder; a USER op wins over elision). The codegen whole-value BLIT loop + its
+    g_defined_*_syms gate are DELETED — nothing falls back (0 blit defs suite-wide). Cross-type
+    (case 4) transfers dispatch through classify (a distinct op=(Other^)/op<--(Other^)); NOT
+    renamed. See [[project_ctor_dtor_injection]], [[project_operator_overloading]], canon
+    test/class/operator.sl + return_fn.sl.
   * new/delete/sizeof for classes + explicit `.~()` — LANDED. sizeof(Class) =
     `call @<Name>__$sizeof()` (LLVM owns the layout, v1's design); `new T(args)`
     constructs + runs the ctor; `new T[n]` field-inits + the new[]/delete[] count

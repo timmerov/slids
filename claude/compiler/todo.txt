@@ -61,26 +61,11 @@ BUGS
     scalar class already crash in a nested fn); surfaced while landing aggregate class-leaf
     conversions — the canon neg_class_in_slot helper is written as a nested function.
 
-  * SYNTHESIZED op= / op<-- SHOULD BE FIRST-CLASS OPERATORS, NOT SIDE FUNCTIONS — the
-    default copy/move for a class are emitted as bespoke codegen functions (@Class__$copy /
-    @Class__$move) invoked structurally by the fill path, NOT as operator entries in the
-    class's method (op) tree. So findClassOperator (a name-based `op=` lookup over
-    tree.entries) never sees them; every binding site has to special-case "no user op= →
-    fall through to the default copy/move." That scatter is exactly what bit the conversion
-    site: lowerClassConversion did the lookup, saw no user op=, and ERRORED instead of
-    falling through (patched with a same-class copy branch — a hack). FIX = when a class is
-    registered, SYNTHESIZE its default op=(Self^) / op<--(Self^) as real Function entries
-    inserted into the op tree exactly where a user operator method would go (unless the user
-    declared one, which shadows). Then findClassOperator finds the copy/move like any other
-    operator, overload ranking is uniform, and NO site needs a default-copy/move fallback —
-    the funnel collapses to "find the op, dispatch it." Removes the hack in
-    lowerClassConversion and the "else the caller does the default copy/move/elide" branches
-    everywhere.
-
 UNBLOCKED FEATURES
 
   * the spec for functions returning tuples, arrays, classes has changed.
 
+  * operator overloads is only partially landed.
 
 BLOCKED FEATURES
 
@@ -91,21 +76,6 @@ BLOCKED FEATURES
     - CONSTRUCTION in a STORE TARGET / MOVE operand: `arr[i] = Class()`,
       `r^ = Class()`, `w <-- Class()` are still rejected ("Constructing a class in
       this position") — those positions aren't lifted (see nameless.sl negatives).
-
-  * CLASS-VALUED ELEMENTS FROM AN AGGREGATE SOURCE COPY RAW (class init) — when a
-    class is initialized from a tuple-like VALUE whose slots are themselves class
-    values (e.g. `F arr[2]; Pair p = arr;` where Pair's fields are `F`), each field
-    is filled by a plain struct copy of the source element AND then the field's ctor
-    runs (copy-then-ctor), rather than the field being placed via the class's copy
-    assignment. It compiles, the values are right, and ctors/dtors balance, but the
-    copy doesn't dispatch a per-field `op=` the way the tuple-LITERAL element path does
-    (`Pair p = (f(), g())`). (Per-field op= dispatch is a CLASSIFY concern — it rewrites
-    a user operator to a method call; codegen's declarator funnel fills whole-value, so
-    there is no codegen per-field assignment hook to route this through — an earlier note
-    here named a non-existent `emitSlidAssign`.) Harmless for a class with the default
-    copy; revisit when assignment-operator semantics for the aggregate-spread path are
-    defined. Lowering lives in classify::classifyClassInit (the per-field spread) and
-    classifyStmt (an rvalue source is spilled to a temp).
 
   * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
     the class structure: a class IS a named tuple. `Name(field-list){body}` interns

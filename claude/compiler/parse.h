@@ -355,6 +355,11 @@ struct Entry {
     int file_id = -1;
     int tok = -1;
     bool defined = false;         // Function: true once a body has been seen
+    bool synthesized = false;     // kFunction: a COMPILER-synthesized default op=/op<--/
+                                  // op<-->(Self^) (not user-written). Resolves like any
+                                  // operator, but is ELIDABLE — from a class RVALUE source
+                                  // a binding builds in place rather than materialize +
+                                  // default-copy (a user op wins over elision instead).
     bool is_virtual = false;      // kFunction (a class method): declared `virtual` —
                                   // dispatched through the vtable. Copied from the
                                   // method's parse::Node is_virtual at registration.
