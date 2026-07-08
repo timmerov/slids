@@ -1514,14 +1514,37 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             // (The abstract-class check is not here: `new Class` builds its object through
             // constructClass -> classifyClassInit below, where the check lives.)
-            // Constructor args (children[2]) belong to a SINGLE class object.
+            // Constructor args (children[2]) belong to a SINGLE class object, OR — for
+            // an ARRAY new — a size-matched initializer tuple that distributes across
+            // the elements exactly like the stack `T arr[k](...)` form.
             parse::Node* args = (e.children.size() > 2) ? e.children[2].get() : nullptr;
-            if (args && (!is_class || is_array)) {
+            if (is_array && args) {
+                // An ARRAY new WITH an initializer distributes the tuple element-by-
+                // element through the SAME array<->tuple bridge the stack form uses
+                // (classifyArrayFromTuple) — no new init semantics. It needs a LITERAL
+                // element count so the `T[k]` array type (and the matched-size check)
+                // exist at compile time; a runtime count has no fixed shape to match a
+                // fixed tuple against, so it stays default-only (init rejected).
+                parse::Node& size = *e.children[0];
+                if (size.kind != parse::Kind::kIntLiteral
+                    && size.kind != parse::Kind::kUintLiteral) {
+                    diagnostic::report(diag, {args->file_id, args->tok,
+                        "An array allocation with a non-literal size cannot take an "
+                        "initializer.", {}});
+                } else {
+                    long long k = std::strtoll(size.text.c_str(), nullptr, 10);
+                    widen::TypeRef arrTy = widen::internArray(
+                        e.return_type, std::vector<int>{static_cast<int>(k)});
+                    // Validates the shape against T[k] (a mismatch is the same
+                    // "Array initializer shape does not match" the stack form gives)
+                    // and rewrites each element to its construction in place.
+                    classifyArrayFromTuple(tree, arrTy, *args, diag);
+                    args->inferred_type = arrTy;   // codegen: whole-array construct
+                }
+            } else if (args && !is_class) {
                 diagnostic::report(diag, {args->file_id, args->tok,
-                    is_array
-                      ? "An array allocation cannot take constructor arguments."
-                      : "Only a class takes constructor arguments; '" + elem
-                            + "' cannot.", {}});
+                    "Only a class takes constructor arguments; '" + elem
+                        + "' cannot.", {}});
             } else if (is_class) {
                 // Construct the heap object: normalize the args (or defaults) into a
                 // per-field construction tuple, exactly like a class var-decl. Stored

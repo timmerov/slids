@@ -65,6 +65,8 @@ void emitConstructAt(std::string const& addr, widen::TypeRef type,
                      bool sret_in_place, bool register_dtor, DtorScope* scope,
                      SymTab const& syms, strings::Pool& pool, std::ostream& out,
                      diagnostic::Sink& diag);
+void emitConstructed(std::string const& addr, widen::TypeRef type,
+                     bool register_dtor, DtorScope* scope, std::ostream& out);
 bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
@@ -1625,13 +1627,20 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 if (expr.children[0]) {        // array: n * elem-size
                     std::string n = emitExpr(*expr.children[0], syms, pool, out,
                                              diag, widen::intern("int64"));
+                    // A SIZE-MATCHED initializer (classify typed children[2] as the
+                    // `T[k]` array) constructs the WHOLE array through the funnel — the
+                    // array<->tuple bridge distributes it element-by-element and runs
+                    // each element's ctor. Without one, every element is uniformly
+                    // default-constructed.
+                    bool whole_init =
+                        expr.children.size() > 2 && expr.children[2]
+                        && widen::form(widen::strip(expr.children[2]->inferred_type))
+                             == widen::Type::Form::kArray;
                     if (is_class) {
-                        // A class array: EVERY element is field-initialized (the
-                        // default value laid into the slot). A HOOK class additionally
-                        // prepends an 8-byte count COOKIE (so delete can loop the dtor)
-                        // and runs the ctor per element. The cookie/hook are gated on
-                        // needs; the field-init is not (a trivial class still has
-                        // field defaults).
+                        // A HOOK class prepends an 8-byte count COOKIE so delete can
+                        // loop the dtor. Construction (default-broadcast or whole-array
+                        // init) routes through the funnel; `new` owns no SCOPE dtor
+                        // (delete frees it), so register_dtor=false / scope=nullptr.
                         bool needs = typeNeedsHook(es, /*ctor=*/false);
                         std::string db = newTmp("nbytes");
                         out << "  " << db << " = mul i64 " << n << ", "
@@ -1651,36 +1660,50 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                             out << "  " << p << " = call ptr @malloc(i64 " << db
                                 << ")\n";
                         }
-                        std::string defv = emitExpr(*expr.children[2], syms, pool,
-                                                    out, diag, expr.return_type);
-                        std::string ll = llvmForRef(expr.return_type);
-                        std::string pre = newLabel("newc_pre");
-                        std::string cnd = newLabel("newc_cond");
-                        std::string bdy = newLabel("newc_body");
-                        std::string fin = newLabel("newc_end");
-                        out << "  br label %" << pre << "\n";
-                        out << pre << ":\n";
-                        out << "  br label %" << cnd << "\n";
-                        out << cnd << ":\n";
-                        std::string i = newTmp("ci");
-                        std::string inx = newTmp("cinext");
-                        out << "  " << i << " = phi i64 [ 0, %" << pre << " ], [ "
-                            << inx << ", %" << bdy << " ]\n";
-                        std::string cmp = newTmp("ccmp");
-                        out << "  " << cmp << " = icmp ult i64 " << i << ", " << n
-                            << "\n";
-                        out << "  br i1 " << cmp << ", label %" << bdy
-                            << ", label %" << fin << "\n";
-                        out << bdy << ":\n";
-                        std::string elem = newTmp("celem");
-                        out << "  " << elem << " = getelementptr " << ll << ", ptr "
-                            << p << ", i64 " << i << "\n";
-                        out << "  store " << ll << " " << defv << ", ptr " << elem
-                            << "\n";
-                        if (needs) emitConstructHooks(elem, expr.return_type, out);
-                        out << "  " << inx << " = add i64 " << i << ", 1\n";
-                        out << "  br label %" << cnd << "\n";
-                        out << fin << ":\n";
+                        if (whole_init) {
+                            widen::TypeRef arrTy = expr.children[2]->inferred_type;
+                            emitConstructAt(p, arrTy, llvmForRef(arrTy),
+                                            expr.children[2].get(), /*is_move=*/false,
+                                            /*sret_in_place=*/false,
+                                            /*register_dtor=*/false, /*scope=*/nullptr,
+                                            syms, pool, out, diag);
+                        } else {
+                            // Uniform default: broadcast the one default value into
+                            // every slot (evaluate-once), then FINALIZE each element
+                            // through emitConstructed (register_dtor=false).
+                            std::string defv = emitExpr(*expr.children[2], syms, pool,
+                                                        out, diag, expr.return_type);
+                            std::string ll = llvmForRef(expr.return_type);
+                            std::string pre = newLabel("newc_pre");
+                            std::string cnd = newLabel("newc_cond");
+                            std::string bdy = newLabel("newc_body");
+                            std::string fin = newLabel("newc_end");
+                            out << "  br label %" << pre << "\n";
+                            out << pre << ":\n";
+                            out << "  br label %" << cnd << "\n";
+                            out << cnd << ":\n";
+                            std::string i = newTmp("ci");
+                            std::string inx = newTmp("cinext");
+                            out << "  " << i << " = phi i64 [ 0, %" << pre << " ], [ "
+                                << inx << ", %" << bdy << " ]\n";
+                            std::string cmp = newTmp("ccmp");
+                            out << "  " << cmp << " = icmp ult i64 " << i << ", " << n
+                                << "\n";
+                            out << "  br i1 " << cmp << ", label %" << bdy
+                                << ", label %" << fin << "\n";
+                            out << bdy << ":\n";
+                            std::string elem = newTmp("celem");
+                            out << "  " << elem << " = getelementptr " << ll << ", ptr "
+                                << p << ", i64 " << i << "\n";
+                            out << "  store " << ll << " " << defv << ", ptr " << elem
+                                << "\n";
+                            emitConstructed(elem, expr.return_type,
+                                            /*register_dtor=*/false, /*scope=*/nullptr,
+                                            out);
+                            out << "  " << inx << " = add i64 " << i << ", 1\n";
+                            out << "  br label %" << cnd << "\n";
+                            out << fin << ":\n";
+                        }
                     } else {
                         std::string mul = newTmp("nbytes");
                         out << "  " << mul << " = mul i64 " << n << ", "
@@ -1688,6 +1711,16 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                         p = newTmp("new");
                         out << "  " << p << " = call ptr @malloc(i64 " << mul
                             << ")\n";
+                        if (whole_init) {
+                            // A POD array with a size-matched initializer: the bridge
+                            // fills the slots (no hooks, no dtor).
+                            widen::TypeRef arrTy = expr.children[2]->inferred_type;
+                            emitConstructAt(p, arrTy, llvmForRef(arrTy),
+                                            expr.children[2].get(), /*is_move=*/false,
+                                            /*sret_in_place=*/false,
+                                            /*register_dtor=*/false, /*scope=*/nullptr,
+                                            syms, pool, out, diag);
+                        }
                     }
                 } else {
                     p = newTmp("new");
@@ -1695,16 +1728,22 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                         << ")\n";
                 }
             }
-            // A single class object is constructed in place: field-init from the
-            // construction tuple (children[2]), then run the ctor hook. (The array
-            // form's per-element construction lands with the new[] cookie work.)
-            if (is_class && !expr.children[0]
-                && expr.children.size() > 2 && expr.children[2]) {
-                std::string val = emitExpr(*expr.children[2], syms, pool, out,
-                                           diag, expr.return_type);
-                out << "  store " << llvmForRef(expr.return_type) << " " << val
-                    << ", ptr " << p << "\n";
-                emitConstructHooks(p, expr.return_type, out);
+            // A single class object is constructed in place THROUGH THE FUNNEL:
+            // emitConstructAt fills from the construction tuple (children[2]) and runs
+            // the ctor hooks — the SAME construct path as a var-decl / sret / global,
+            // so no site-specific fill/hooks duplication. `new` owns no SCOPE dtor
+            // (delete frees it), so register_dtor=false / scope=nullptr. An ABSENT init
+            // default-constructs (ctor still runs) rather than leaving raw memory.
+            // (The array forms above route through the funnel too: a whole-array
+            // emitConstructAt for a size-matched initializer, emitConstructed per
+            // element for the uniform-default broadcast.)
+            if (is_class && !expr.children[0]) {
+                ast::Node const* init = (expr.children.size() > 2 && expr.children[2])
+                    ? expr.children[2].get() : nullptr;
+                emitConstructAt(p, expr.return_type, llvmForRef(expr.return_type),
+                                init, /*is_move=*/false, /*sret_in_place=*/false,
+                                /*register_dtor=*/false, /*scope=*/nullptr,
+                                syms, pool, out, diag);
             }
             return widen::convert(p, expr.inferred_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);

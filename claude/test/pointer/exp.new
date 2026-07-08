@@ -47,3 +47,12 @@ tuple single= 30
 tuple array= 303
 const ptr= 7
 multidim= 9
+ctor 7 8 9 after
+Simple:ctor: 7
+Simple:ctor: 8
+Simple:ctor: 9
+init array= 7 8 9
+Simple:dtor: 9
+Simple:dtor: 8
+Simple:dtor: 7
+dtor 9 8 7 before

@@ -26,8 +26,11 @@ claude says:
 - a kNewExpr (a primary). grammar: `new`, an optional `(addr)` placement prefix,
   the element type, an optional `[n]` size. children[0] = the array-size expr (or
   null = single), [1] = the placement-address expr (or null = heap). yields T^
-  (single) or T[] (array). the `new T(value)` initializer form needs tuples — not
-  landed. a kDeleteStmt holds the pointer EXPRESSION in children[0].
+  (single) or T[] (array). children[2] = the initializer — a single object's ctor args,
+  or an array's size-matched initializer tuple. `new T(value)` and `new T[k](...)` are
+  LANDED: construction routes through the declarator funnel (codegen emitConstructAt), so
+  an array initializer distributes exactly like the stack `T arr[k](...)` form. a
+  kDeleteStmt holds the pointer EXPRESSION in children[0].
 - the element type is the ONE parseType, so it is ANY variable type — a pointer,
   iterator, tuple, grouped `(const int)^`, alias, or multi-dim array.
 - placement vs a `(`-led ELEMENT type after `new (`: newParenStartsPlacement()
@@ -264,6 +267,15 @@ int32 main() {
     __println("multidim= " + md_sum);                // 9
     delete md;
 
+    /* an array new WITH a size-matched initializer distributes it element-by-element,
+       exactly like the stack `Simple arr[k](...)` form — each element gets its own value
+       and its own ctor/dtor. the count must be a compile-time literal. */
+    __println("ctor 7 8 9 after");
+    sinit = new Simple[3](7, 8, 9);
+    __println("init array= " + sinit[0].x_ + " " + sinit[1].x_ + " " + sinit[2].x_);  // 7 8 9
+    delete sinit;
+    __println("dtor 9 8 7 before");
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: Cannot allocate 'void'
@@ -310,10 +322,18 @@ int32 main() {
     //int^ cp = new int(5);
     //__println("x= " + cp^);
 
-    /* an array allocation default-constructs its elements — no ctor args. */
-    //-EXPECT-ERROR: An array allocation cannot take constructor arguments
-    //ap = new Simple[2](1);
+    /* an array new WITH an initializer needs a LITERAL count — a runtime size has no
+       fixed shape to match a fixed initializer against, so the initializer is rejected. */
+    //-EXPECT-ERROR: An array allocation with a non-literal size cannot take an initializer
+    //asz = 2;
+    //ap = new Simple[asz](1, 2);
     //delete ap;
+
+    /* a size-matched initializer is required — a mismatched shape rejects exactly like
+       any array/tuple initializer (`(1)` is a scalar, not a 2-element array). */
+    //-EXPECT-ERROR: Array initializer shape does not match the dimensions of 'Simple[2]'
+    //ap2 = new Simple[2](1);
+    //delete ap2;
 
     /* an explicit destructor call needs a class receiver. */
     //-EXPECT-ERROR: A destructor call '.~()' requires a class object

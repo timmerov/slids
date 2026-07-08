@@ -217,15 +217,24 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     typeByteSize literal). `new T(args)`: grammar parses the trailing `(args)` onto
     kNewExpr children[2] (distinct from the leading `new(addr)` placement and `[n]`);
     classify routes it through constructClass (the same field-init tuple as a class
-    var-decl); codegen mallocs, field-inits the construction tuple at the pointer,
-    then emitConstructHooks dispatches the class's complete ctor `@<Name>__$ctor`.
-    PLACEMENT `new(addr) T(args)` reuses the
-    same construct at the buffer address (no malloc).
-  * NEW T[n] (the new[] COOKIE) — a class array always field-inits each element (the
-    default value laid into the slot); a HOOK class additionally prepends an 8-byte
-    count COOKIE (the returned pointer is malloc+8) and runs the ctor per element.
-    The cookie + ctor-hook gate on needs; the field-init does not (a trivial class
-    still has field defaults). A primitive array stays a plain malloc.
+    var-decl); codegen mallocs, then constructs THROUGH THE DECLARATOR FUNNEL —
+    emitConstructAt(register_dtor=false, scope=nullptr) fills at the pointer and
+    dispatches the class's complete ctor `@<Name>__$ctor` (an absent init default-
+    constructs; delete owns the dtor). PLACEMENT `new(addr) T(args)` reuses the same
+    construct at the buffer address (no malloc).
+  * NEW T[n] / NEW T[k](init) (the new[] COOKIE) — a class array WITHOUT an initializer
+    uniformly default-inits each element (broadcast the default value into the slot,
+    finalize per element via emitConstructed); a HOOK class additionally prepends an
+    8-byte count COOKIE (the returned pointer is malloc+8) so delete can loop the dtor.
+    The cookie gates on needs; the broadcast does not (a trivial class still has field
+    defaults). WITH a size-matched initializer `new T[k](a, b, ...)` (k a LITERAL),
+    classify types children[2] as the `T[k]` array (classifyArrayFromTuple — the same
+    shape check + per-element construction as the stack `T arr[k](...)` form) and codegen
+    builds the WHOLE array in ONE emitConstructAt: the array<->tuple bridge distributes it
+    element-by-element and emitConstructHooks runs each element's ctor. No new init
+    semantics — matched-size is required (a runtime count or a mismatched shape rejects).
+    A primitive array stays a plain malloc (a size-matched initializer fills the slots via
+    the same whole-array emitConstructAt).
   * DELETE — operand is ANY pointer expression. For an LVALUE (variable / field /
     array element / tuple slot / deref) codegen takes its address ONCE (emitLvalueAddr
     — so `delete arr[bump()]` runs the index once), frees, and stores null BACK

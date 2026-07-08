@@ -3,6 +3,24 @@ today's crap:
 
 leftover crap from plan-declarator landing fail:
 
+  1. new — heap construction (primary). codegen.cpp:1598–1710.
+  It re-implements construction inline instead of routing through emitConstructAt:
+  - Single object (1701–1707): raw store <field-init> + emitConstructHooks(p, …).
+  - Class array (1628–1683): a hand-rolled loop doing the same raw store + emitConstructHooks per element.
+
+  2. Call-arg rvalue materialization (secondary). emitCall, codegen.cpp:~788–800.
+  A materialized by-pointer rvalue arg does its own alloca + raw store (with a bespoke emitImplicitAggregateConvert for
+  the widen case — a funnel leaf primitive reused piecemeal). This is a fill into fresh storage — the same operation
+  emitInitFill performs. It's a weaker case (a transient, unnamed, dtor-less pass temp), but it's still a fill site
+  re-implementing a subset of the funnel inline.
+
+  emitConstructAt/emitInitFill/emitConstructed are really the universal "materialize a value into storage (+ hooks, +
+  optional dtor-register)" primitive — broader than "a declarator binds a name." The plan defined the umbrella by
+  binding sites (things with a name), so the non-name construct/fill sites — new, call-arg temps, and arguably the
+  class-conversion _$cret / op-temp _$optmp materializations — fall outside it even though they're the identical codegen
+  operation. That's the "incomplete interpretation": the umbrella should be every place a value is constructed/filled
+  into storage, not only named declarators.
+
    But "every construct site routes through emitConstructed" is literally true only for scope-dtor'd sites.
   Three construct outside it:
   2. kNewExpr heap (1534, 1561) — ctor hooks by hand; defensible as a separate heap/delete mechanism (no scope

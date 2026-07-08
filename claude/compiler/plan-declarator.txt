@@ -55,8 +55,10 @@ STATUS BY STAGE
   codegen   LANDED (Slice C). The construct/assign funnel exists: emitInitFill (the
             shared field-init fill), emitConstructed (the SINGLE hooks+dtor-registration
             pairing), emitConstructAt (construct = fill + finalize, with sret-build-in-
-            place). Construct sites (var-decl / sret return slot / global) route through
-            emitConstructAt; live-storage assign sites (kAssignStmt tail / kStoreStmt /
+            place). Construct sites (var-decl / sret return slot / global / single-object
+            heap `new T(init)`) route through emitConstructAt — including the nameless heap
+            temp, since the funnel is "materialize a value into storage", not only named
+            declarators; live-storage assign sites (kAssignStmt tail / kStoreStmt /
             kMoveStmt) share emitInitFill (no hooks/register). kSwapStmt stays (an
             exchange, not a fill); kAssignStmt keeps its two sret cases (incl. the husk
             teardown). Dead emitDestructure / destructureElem / kDestructureStmt arm
@@ -82,6 +84,18 @@ destructure slot, tuple-type slot, return value, and the assignment-form targets
 (bare-name `x = e`, complex-lvalue `obj.f = e` / `p^ = e` / `arr[i] = e`), plus
 the move / swap / compound forms of each. At every stage these are DIFFERENT
 parse-node kinds, but they are the SAME declarator concept and must share:
+
+UNNAMED VARIABLES AND TEMPS COUNT. The codegen half of the umbrella
+(emitInitFill / emitConstructed / emitConstructAt) is really "MATERIALIZE A VALUE
+INTO STORAGE (+ ctor hooks, + optional dtor registration)" — it is NOT limited to
+NAMED declarators. Any site that constructs / fills a value into storage belongs
+to it, whether or not a name is bound: a heap object (`new T(init)`), a conversion
+temp (`_$cret`), an operator-result temp (`_$optmp`), a materialized call-arg
+rvalue. Routing these through the ONE funnel is what keeps the field-init / ctor /
+dtor triad from drifting per site — the same "we missed a cell" guarantee, extended
+to the nameless construct sites. (`new` — single-object AND array — is now routed;
+see CODEGEN + STATUS LEDGER. The remaining nameless site still outside the funnel is
+the call-arg rvalue temp in emitCall.)
 
   parse     ONE parser        parseDeclarator(NamePolicy)            (LANDED)
   resolve   ONE type resolver resolveDeclType                        (LANDED) [for-array
@@ -280,10 +294,26 @@ CODEGEN — the funnel (LANDED, Slice C)
     emitConstructAt(addr, type, llty, init, is_move, sret_in_place, register_dtor, scope)
       — CONSTRUCT into raw storage: sret-build-in-place for an exact-typed call init,
       else emitInitFill + emitConstructed. init==nullptr default-constructs.
-  ROUTED: construct sites (var-decl / sret return slot / global) -> emitConstructAt;
-  live-storage assign sites (kAssignStmt tail / kStoreStmt / kMoveStmt) share emitInitFill
-  (no hooks/register). kSwapStmt stays (an exchange, not a fill). kAssignStmt keeps its
-  two sret cases (POD build-in-place + the hook husk-teardown). PARAMS are NOT routed and
+  ROUTED: construct sites (var-decl / sret return slot / global / heap `new`, both single-
+  object and array) -> emitConstructAt; live-storage assign sites (kAssignStmt tail /
+  kStoreStmt / kMoveStmt) share emitInitFill (no hooks/register). kSwapStmt stays (an
+  exchange, not a fill). kAssignStmt keeps its two sret cases (POD build-in-place + the
+  hook husk-teardown). `new` (kNewExpr, codegen.cpp) is routed at every shape — delete owns
+  the dtor, so register_dtor=false / scope=nullptr throughout:
+    - single object `new T(init)`  -> emitConstructAt (an absent init default-constructs,
+      closing the raw-store-can't-widen + no-init-no-ctor holes).
+    - array WITH a size-matched initializer `new T[k](...)` (k a LITERAL) -> classify types
+      children[2] as the `T[k]` array (reusing classifyArrayFromTuple — same shape check +
+      per-element construction as the stack `T arr[k](...)` form), and codegen constructs the
+      WHOLE array in one emitConstructAt: the array<->tuple bridge distributes it element-by-
+      element and emitConstructHooks runs each element's ctor. NO new tuple/array init
+      semantics — the matched-size rule is unchanged (a mismatch is the stack form's exact
+      "Array initializer shape does not match" error; a runtime count rejects the initializer).
+    - array with NO initializer -> the uniform-default broadcast loop (evaluate the default
+      once, store into each slot), now FINALIZED per element through emitConstructed
+      (register_dtor=false). Evaluate-once preserved; behavior unchanged.
+  STILL hand-rolled (fold-in pending): the call-arg rvalue materialization in emitCall.
+  PARAMS are NOT routed and
   need no dtor — a param is a primitive (by value) or a pointer (by pointer), so it never
   owns a slid instance; there is nothing to register.
   REMOVED as dead: emitDestructure + destructureElem + the kDestructureStmt emitStmt arm
@@ -362,6 +392,17 @@ STATUS LEDGER  (update as cleanup lands — keep this honest)
                 codegen removed. Closes holes 4, 5. Suite 71/71 positives; .ll behavior-
                 identical (SSA rename in return_fn + macros timestamp only). Landed
                 spellings, not emitConstructAtPtrs / emitSlidAssign (not needed).
+  [x] codegen   `new` FOLDED into the funnel — every shape (2026-07-08). Single object
+                `new T(init)` -> emitConstructAt (closes raw-store-can't-widen + no-init-
+                no-ctor). ARRAY: a size-matched initializer `new T[k](...)` (LITERAL k) now
+                distributes through the array<->tuple bridge exactly like the stack
+                `T arr[k](...)` form (classify types children[2] as `T[k]`; codegen does ONE
+                whole-array emitConstructAt) — new capability, reusing existing init code, no
+                change to the matched-size / default rules (runtime count or shape mismatch
+                still reject). No-initializer array keeps the evaluate-once default broadcast,
+                now finalized per element via emitConstructed(register_dtor=false). Suite
+                71/71 in-scope positives; verified new T[3](1,2,3) distributes + per-element
+                dtors fire. PENDING (last nameless site): the call-arg rvalue temp in emitCall.
   Tests: existing declarator negatives/positives in test/assign/vardecl.sl +
   typeconv.sl; operator dispatch canon in test/class/operator.sl. Holes 1/2 CLOSED:
   store-target op= (`obj.f = x`) routes through dispatchAssignInit; destructure

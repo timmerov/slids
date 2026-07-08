@@ -1167,7 +1167,8 @@ delete arr;              // free memory — arr is set to nullptr automatically
 ```
 
 - `new Type(value)` — allocates a single object, initialized to `value`
-- `new Type[n]` — allocates an array of `n` objects, each initialized by `Type`'s constructor. For types with no constructor or a no-op constructor (such as `int`), elements are uninitialized.
+- `new Type[n]` — allocates an array of `n` objects, each uniformly default-initialized by `Type`'s constructor. For types with no constructor or a no-op constructor (such as `int`), elements are uninitialized.
+- `new Type[k](a, b, c)` — allocates an array with a size-matched initializer, distributing it element-by-element exactly like the stack form `Type arr[k](a, b, c)` (element 0 ← `a`, element 1 ← `b`, ...). The count `k` must be a compile-time literal and the initializer must match `k` (same matched-size rule as any array/tuple initializer); a runtime count (`new Type[n](...)`) cannot take an initializer.
 - `delete p` — calls the destructor for the object (or all objects if `p` is an array), frees the memory, and sets `p` to `nullptr`
 - No dangling pointers after `delete` — the pointer is always nulled
 

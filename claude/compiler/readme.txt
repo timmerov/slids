@@ -1181,8 +1181,12 @@ STAGE FILES (.h / .cpp pairs)
             the element type, name_tok). An array size must be integer-class; a
             placement address must be a buffer-class pointer (isBufferClassPtr, the
             cast set void^/int8^/uint8^);
-            `new T(args)` ctor args (children[2]) belong to a single class (rejected
-            on a primitive / array). The result type is element + (array ? "[]" :
+            `new T(args)` ctor args (children[2]) belong to a single class; an ARRAY
+            new takes a size-matched initializer tuple for a LITERAL element count
+            (typed as the `T[k]` array via classifyArrayFromTuple — same shape check
+            as the stack `T arr[k](...)` form; a runtime count -> "non-literal size
+            cannot take an initializer", a non-class scalar -> "Only a class takes
+            constructor arguments"). The result type is element + (array ? "[]" :
             "^"). kDeleteStmt's operand must be a pointer type. See
             readme-classes.txt "CLASSES: NEW / DELETE / SIZEOF" for the construct/
             destruct lowering. Future: overload resolution when multiple Function entries
@@ -1412,10 +1416,14 @@ STAGE FILES (.h / .cpp pairs)
             `mul i64 n, sizeof(T)` then malloc (sizeof(T) is typeByteSize — a
             primitive / pointer / array / tuple; a CLASS uses its runtime __$sizeof);
             placement (children[1]) -> the address itself, no allocation. An assert
-            guards an unsized element (classify gated it). A single class object is
-            constructed in place (field-init inline + a dispatch to the class's complete
-            ctor `@<Name>__$ctor`); delete of a class runs its complete dtor — see
-            readme-classes.txt. kDeleteStmt: load the pointer, `call void
+            guards an unsized element (classify gated it). A class object is
+            constructed THROUGH THE FUNNEL (emitConstructAt, register_dtor=false since
+            delete owns the dtor): a single object from children[2] (an absent init
+            default-constructs); an array WITH a size-matched initializer builds the
+            whole `T[k]` in one emitConstructAt (the array<->tuple bridge distributes
+            it + runs each element's ctor); an array with NO initializer broadcasts the
+            default value per slot, each finalized via emitConstructed. delete of a
+            class runs its complete dtor — see readme-classes.txt. kDeleteStmt: load the pointer, `call void
             @free(ptr)`, store null back to its alloca. malloc / free are declared in
             the module preamble next to printf.
 
