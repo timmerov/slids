@@ -838,7 +838,20 @@ Phase 5 — classes
     infinite size SIGSEGVs codegen. A class name collides with ANY same-name entry
     (reportNameCollision, source-order carets); requireKnownType names a non-type
     precisely ("'X' is a namespace/function/constant/variable, not a type").
-  * operator overloading per slid
+  * operator overloading per slid — LANDED. `op<sym>` methods parse + full signature
+    validation + `$`-mangling. USES dispatch on a class: assignment/move/swap
+    (`= <-- <-->`), compound (`+= … <<= … ^^=`), arith/bitwise/shift/logical BINARY
+    (produce-self, in ALL expression positions — decl-init / assign / aliasing / nested /
+    call-arg / inferred — via a construct-temp that reuses the desugar class_conversion
+    lift), comparison (arity-1, built-in result), index (`op[]`, read + write, incl.
+    array-backed via the `^field[i]` resolve fix), deref (`op^`), unary arity-0 (built-in)
+    + arity-1 (produce-self). Out-of-line / external defs in BOTH forms (`bool C:op==(…)`
+    and no-return produce-self `C:op+=(…)`). Ambiguous op= is REPORTED; a class binary with
+    no viable operator is REJECTED cleanly (never lowered to invalid IR). DEFERRED:
+    expression-temp elimination (fuse a full `a+b+c+d` chain to zero temporaries —
+    copy-into-target / only-op+= seed / ping-pong, canon test/class/evaluate.sl); arity-2
+    comparison producing a class + reversed-operand comparison. See
+    [[project_operator_overloading]]; canon test/class/operator.sl.
   * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +
     infer-from-default (all of which free functions already had) by routing both
     through ONE shared overload engine: pickOverload(cands, args, recv_offset) +

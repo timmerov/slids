@@ -363,8 +363,10 @@ STATUS LEDGER  (update as cleanup lands — keep this honest)
                 identical (SSA rename in return_fn + macros timestamp only). Landed
                 spellings, not emitConstructAtPtrs / emitSlidAssign (not needed).
   Tests: existing declarator negatives/positives in test/assign/vardecl.sl +
-  typeconv.sl; operator dispatch canon in test/class/operator.sl (add kStoreStmt
-  op= + destructure-copy op= cases when hole 1/2 close).
+  typeconv.sl; operator dispatch canon in test/class/operator.sl. Holes 1/2 CLOSED:
+  store-target op= (`obj.f = x`) routes through dispatchAssignInit; destructure
+  move/swap landed. operator.sl now also carries full per-token dispatch coverage
+  (arith/bitwise/shift/logical binary + compound + comparison) + error negatives.
 
 
 ======================================================================

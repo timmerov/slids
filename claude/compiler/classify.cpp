@@ -615,8 +615,16 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
 void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
+void lowerClassOperatorTemp(parse::Tree& tree, parse::Node& e, widen::TypeRef C,
+                            std::string const& opname,
+                            std::vector<std::unique_ptr<parse::Node>> operands,
+                            diagnostic::Sink& diag);
 bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams);
+bool isArithBitBinaryOp(std::string const& op);
+bool tryLowerClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
+                         widen::TypeRef context, widen::TypeRef lref, widen::TypeRef rref,
+                         diagnostic::Sink& diag);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
 
@@ -1752,8 +1760,53 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.children.size() == 1 && "UnaryExpr needs 1 child");
             parse::Node& operand = *e.children[0];
             std::string const& op = e.text;
+            // `!` wants a bool-context operand (kNoType); `+ - ~` propagate the outer
+            // context. Infer ONCE here so the class-operator probe below can read the
+            // type (the branches no longer re-infer).
+            inferExpr(tree, operand, op == "!" ? widen::kNoType : context, diag);
+            // A unary +/-/~/! on a CLASS dispatches its ARITY-0 operator (op+/op-/op~/
+            // op!), which returns a built-in — `-a` -> `a.op-()` (canon 98-107). Mirrors
+            // the comparison rewrite: turn this node into the method-call expression;
+            // inferMethodCall stamps its built-in return. Probe-gated, so a non-class /
+            // no-op operand keeps the built-in unary semantics below. (An ARITY-1 unary
+            // that produces self — `Class r = -a` — is a separate expression-temp lower.)
+            if (widen::form(widen::strip(operand.inferred_type))
+                    == widen::Type::Form::kSlid
+                && classHasOperatorArity(tree, operand.inferred_type, "op" + op, 0)) {
+                auto opnode = std::move(e.children[0]);
+                e.kind = parse::Kind::kMethodCallStmt;
+                e.name = "op" + op;
+                e.name_tok = e.tok;
+                e.resolved_entry_id = -1;
+                e.children.clear();
+                e.children.push_back(std::move(opnode));
+                inferMethodCall(tree, e, diag);
+                return;
+            }
+            // ARITY-1 unary produce-self: `Class r = -a` -> `r.op-(a)` (canon 103-104,
+            // 208-212). Build a temp and run `_$optmp.op<op>(operand)` — the same
+            // expression-temp lower as a class-producing binary. RESULT class = the
+            // expected type (context) if it defines op<op>/1 (cross-class), else the
+            // OPERAND's own class (the common case; also reaches call-arg / inferred-decl
+            // positions with no threaded context).
+            if (op == "+" || op == "-" || op == "~" || op == "!") {
+                widen::TypeRef rc = widen::kNoType;
+                if (widen::form(widen::strip(context)) == widen::Type::Form::kSlid
+                    && classHasOperatorArity(tree, context, "op" + op, 1))
+                    rc = context;
+                else if (widen::form(widen::strip(operand.inferred_type))
+                             == widen::Type::Form::kSlid
+                    && classHasOperatorArity(tree, operand.inferred_type, "op" + op, 1))
+                    rc = operand.inferred_type;
+                if (rc != widen::kNoType) {
+                    std::vector<std::unique_ptr<parse::Node>> operands;
+                    operands.push_back(std::move(e.children[0]));
+                    lowerClassOperatorTemp(tree, e, rc, "op" + op,
+                                           std::move(operands), diag);
+                    return;
+                }
+            }
             if (op == "!") {
-                inferExpr(tree, operand, widen::kNoType, diag);
                 if (operand.inferred_type != widen::kNoType
                     && !isCoercibleToBool(operand.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
@@ -1762,7 +1815,6 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 }
                 e.inferred_type = widen::intern("bool");
             } else {  // + - ~
-                inferExpr(tree, operand, context, diag);
                 e.inferred_type = operand.inferred_type;
                 e.alias_label = operand.alias_label;   // a unary keeps the label
             }
@@ -1777,6 +1829,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (op == "&&" || op == "||" || op == "^^") {
                 inferExpr(tree, lhs, widen::kNoType, diag);
                 inferExpr(tree, rhs, widen::kNoType, diag);
+                // A class logical binary is a produce-self op like arith/bitwise/shift —
+                // `Flags f = a && b` -> `f.op&&(a, b)`. Dispatch through the shared helper
+                // before the built-in bool-coercion path (which rejects a class operand).
+                // The compound form `f &&= a` already dispatches in the aug-assign arm.
+                if (tryLowerClassBinary(tree, e, op, context,
+                                        lhs.inferred_type, rhs.inferred_type, diag)) {
+                    return;
+                }
                 if (lhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(lhs.inferred_type)) {
                     diagnostic::report(diag, {lhs.file_id, lhs.tok,
@@ -1799,6 +1859,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // Shift count stands alone — flexing into a float lhs would
                 // mis-type a small int literal. Codegen handles width mismatch.
                 inferExpr(tree, rhs, widen::kNoType, diag);
+                // A class shift is a produce-self binary op like arith/bitwise —
+                // `Shift c = a << b` -> `c.op<<(a, b)`. Dispatch through the shared
+                // helper before the numeric path (which rejects a class lhs). The
+                // compound form `c <<= a` already dispatches in the aug-assign arm.
+                if (tryLowerClassBinary(tree, e, op, context,
+                                        lhs.inferred_type, rhs.inferred_type, diag)) {
+                    return;
+                }
                 if (isAggregateType(lhs.inferred_type)) {
                     // An array IS a homogeneous tuple — shift slot-wise (the result
                     // keeps the lhs aggregate type; a scalar count broadcasts).
@@ -1847,6 +1915,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 e.children.push_back(std::move(lnode));
                 e.children.push_back(std::move(rnode));
                 inferMethodCall(tree, e, diag);
+                return;
+            }
+
+            // A class-PRODUCING arith/bitwise binary dispatches to op<op> (produce-self):
+            // build a temp, run `_$optmp.op<op>(lhs, rhs)` (canon 85-88). The direct non-
+            // aliasing assign-statement target fuses in place earlier (tryLowerBinaryChain)
+            // and never reaches here; aliasing (`a=a+b`) does (the fuse bails). No viable
+            // class → the numeric path below reports the error. (Shift `<< >>` dispatches
+            // through the same helper in its own arm above.)
+            if (isArithBitBinaryOp(op)
+                && tryLowerClassBinary(tree, e, op, context, lref, rref, diag)) {
                 return;
             }
 
@@ -1952,6 +2031,24 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 }
                 e.inferred_type = widen::intern("bool");
                 e.op_type = lnull ? rref : lref;
+                return;
+            }
+
+            // A CLASS operand reaching here dispatched to NO operator — the arith/bitwise
+            // hook (tryLowerClassBinary) and the comparison rewrite above already had their
+            // chance, and the shift / logical arms return earlier (each rejecting a class
+            // cleanly). No built-in binary applies to a class value, and the commonType
+            // path below would SILENTLY accept two identical class types and emit struct
+            // add/icmp — invalid IR. Reject cleanly instead. (The compiler must never emit
+            // invalid IR.) Nothing legitimate reaches here with a class operand.
+            if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
+                || widen::form(widen::strip(rref)) == widen::Type::Form::kSlid) {
+                widen::TypeRef cls =
+                    widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
+                        ? lref : rref;
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Operator '" + op + "' is not defined on class '"
+                    + widen::spellOrEmpty(cls) + "'.", {}});
                 return;
             }
 
@@ -3538,7 +3635,7 @@ bool referencesEntry(parse::Node const& n, int eid) {
 // pickOverload's cost ranking but emits NO diagnostics — a miss means "use the
 // default class copy/move/swap", not an error. `rhs` must already be inferred.
 int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& rhs,
-                      std::string const& opname) {
+                      std::string const& opname, diagnostic::Sink& diag) {
     int best = -1, best_cost = 1 << 30;
     bool tie = false;
     for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
@@ -3558,7 +3655,21 @@ int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& 
         }
         if (any_here) break;   // most-derived frame with the name shadows bases
     }
-    return tie ? -1 : best;
+    // A genuine TIE (two overloads convert the source equally well) is an author error,
+    // NOT "no operator" — report it rather than silently collapsing to -1, which would
+    // fall through to the default copy/move and hide the ambiguity. (The method-call
+    // operators report their own ties via pickOverload; this is the op=/op<--/op<-->
+    // assignment-dispatch path, whose sole -1 previously conflated tie with none.)
+    // On a tie, report here and return the distinct sentinel -2 ("ambiguous, already
+    // reported") so a caller can suppress its own no-operator message. -1 stays "none".
+    if (tie) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Ambiguous operator '" + opname + "': more than one overload of class '"
+            + widen::spellOrEmpty(cls) + "' matches source type '"
+            + widen::spellOrEmpty(rhs.inferred_type) + "' equally well.", {}});
+        return -2;
+    }
+    return best;
 }
 
 // Rewrite an assignment-form statement `lvalue = rhs` (a bare-name kAssignStmt) into
@@ -3625,7 +3736,7 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
                         std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr,
                         bool needs_construct = false) {
     if (widen::form(widen::strip(clsType)) != widen::Type::Form::kSlid) return false;
-    int op_id = findClassOperator(tree, clsType, rhs, opname);
+    int op_id = findClassOperator(tree, clsType, rhs, opname, diag);
     if (op_id < 0) return false;
     // A SYNTHESIZED default op is NOT dispatched as an explicit `dest.op=(src)` method
     // call — that would force a default-construct-then-assign and reorder the ctor hooks
@@ -3788,7 +3899,8 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     // op=(T)/op=(T^) AND the compiler-synthesized default op=(Self^), so a same-class
     // source resolves to the memberwise default copy with no bespoke fallback here. Only a
     // source no op= accepts is a clean error.
-    int op_id = findClassOperator(tree, C, operand, "op=");
+    int op_id = findClassOperator(tree, C, operand, "op=", diag);
+    if (op_id == -2) return;   // ambiguous op= — findClassOperator already reported
     if (op_id < 0) {
         diagnostic::report(diag, {e.file_id, e.tok,
             "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
@@ -3831,6 +3943,85 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     auto fill = makeOpCallStmt(tree, "_$cret", cid, C, "op=", std::move(args), f, tk, diag);
     e.class_conversion = true;
     e.resolved_entry_id = cid;
+    e.children.clear();
+    e.children.push_back(std::move(dc));
+    e.children.push_back(std::move(fill));
+}
+
+// Lower a class-PRODUCING operator expression (a binary `a op b`, or an arity-1 unary
+// `op a` producing self) in an EXPRESSION position into the construct-temp-then-op form
+// the desugar class_conversion lift hoists: a default-construct `_$optmp` of the RESULT
+// class C (the expected/context type) plus `_$optmp.op<sym>(operands)`. The node BECOMES
+// a kConvertExpr[class_conversion] carrying [construct, op-call] — structurally identical
+// to a `(Class = src)` conversion, so desugar lifts it with NO new arm and codegen builds
+// the temp then runs the op. C must define op<sym> at the operands' arity (the CALLER
+// checks via classHasOperatorArity). Mirrors lowerClassConversion; the direct assign-
+// statement target still fuses in place (tryLowerBinaryChain) — this catches decl-init,
+// aliasing, call args, and nested operand positions.
+// A class-PRODUCING binary op (arith / bitwise / SHIFT) in an EXPRESSION position: build a
+// temp and run `_$optmp.op<op>(lhs, rhs)` (canon 85-88). The RESULT class is the expected
+// type (context) if it defines op<op>/2 — this wins so a CROSS-class result (`Mat m=v1+v2`,
+// op+ on Mat) picks Mat — else an OPERAND's own class (the common `Class op Type` form; the
+// operator lives on the operands' class). The operand fallback reaches positions with NO
+// threaded context: a CALL ARG (`f(a+b)`) and an INFERRED decl-init (`x = a+b`). Returns
+// true iff it lowered; false leaves `e` untouched for the caller's numeric path. Shared by
+// the arith/bitwise hook and the shift arm so both dispatch identically.
+bool tryLowerClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
+                         widen::TypeRef context, widen::TypeRef lref, widen::TypeRef rref,
+                         diagnostic::Sink& diag) {
+    std::string opname = "op" + op;
+    widen::TypeRef rc = widen::kNoType;
+    if (widen::form(widen::strip(context)) == widen::Type::Form::kSlid
+        && classHasOperatorArity(tree, context, opname, 2))
+        rc = context;
+    else if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
+        && classHasOperatorArity(tree, lref, opname, 2))
+        rc = lref;
+    else if (widen::form(widen::strip(rref)) == widen::Type::Form::kSlid
+        && classHasOperatorArity(tree, rref, opname, 2))
+        rc = rref;
+    if (rc == widen::kNoType) return false;
+    std::vector<std::unique_ptr<parse::Node>> operands;
+    operands.push_back(std::move(e.children[0]));
+    operands.push_back(std::move(e.children[1]));
+    lowerClassOperatorTemp(tree, e, rc, opname, std::move(operands), diag);
+    return true;
+}
+
+void lowerClassOperatorTemp(parse::Tree& tree, parse::Node& e, widen::TypeRef C,
+                            std::string const& opname,
+                            std::vector<std::unique_ptr<parse::Node>> operands,
+                            diagnostic::Sink& diag) {
+    auto itc = tree.classes.find(widen::strip(C));
+    assert(itc != tree.classes.end()
+        && "lowerClassOperatorTemp: class absent from tree.classes");
+    int f = e.file_id, tk = e.tok;
+    parse::Entry ce;
+    ce.kind = parse::EntryKind::kLocalVar;
+    ce.name = "_$optmp";
+    ce.slids_type = widen::strip(C);
+    ce.file_id = f;
+    ce.tok = tk;
+    int cid = static_cast<int>(tree.entries.size());
+    tree.entries.push_back(std::move(ce));
+    auto dc = std::make_unique<parse::Node>();
+    dc->kind = parse::Kind::kVarDeclStmt;
+    dc->name = "_$optmp";
+    dc->name_tok = tk;
+    dc->resolved_entry_id = cid;
+    dc->return_type = C;
+    dc->file_id = f;
+    dc->tok = tk;
+    classifyClassInit(tree, *dc, itc->second, diag);
+    auto fill = makeOpCallStmt(tree, "_$optmp", cid, C, opname,
+                               std::move(operands), f, tk, diag);
+    e.kind = parse::Kind::kConvertExpr;
+    e.class_conversion = true;
+    e.return_type = C;
+    e.inferred_type = C;
+    e.resolved_entry_id = cid;
+    e.name.clear();
+    e.text.clear();
     e.children.clear();
     e.children.push_back(std::move(dc));
     e.children.push_back(std::move(fill));
@@ -4159,7 +4350,16 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                                     tree.entries[s.children[0]->resolved_entry_id]
                                         .slids_type;
                         } else {
-                            inferExpr(tree, *s.children[0], widen::kNoType, diag);
+                            // A class-PRODUCING operator expr (binary `a op b` / arity-1
+                            // unary `op a`) needs the DECL class as context to pick its
+                            // result operator — inferExpr then lowers it to a class-rvalue
+                            // temp (kConvertExpr[class_conversion]) that the elide path
+                            // below builds in place. Other sources infer context-free.
+                            bool op_expr =
+                                s.children[0]->kind == parse::Kind::kBinaryExpr
+                             || s.children[0]->kind == parse::Kind::kUnaryExpr;
+                            inferExpr(tree, *s.children[0],
+                                      op_expr ? s.return_type : widen::kNoType, diag);
                         }
                         std::string opname = s.default_move_init ? "op<--" : "op=";
                         if (dispatchAssignInit(tree, s, s.return_type, *s.children[0],

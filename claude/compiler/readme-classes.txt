@@ -605,6 +605,9 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   it desugars to `Class() { member }`, seeing Class's fields / consts / methods bare. Member
   kinds: const `const int C:k=7;`, alias `alias C:A=int;`, ENUM `enum int C:E ( … );` (a
   NAMED enum — its members are reached qualified, `C:E:m` / `E:m`), a METHOD `int C:m() { }`,
+  an OPERATOR (a method — value-producing `bool C:op==(int a) { }` OR a no-return produce-self
+  `C:op+=(int a) { }`; the qualifier loop accepts an `op<sym>` name, and parseQualifiedName
+  stops its chain before a `:op` so the core-type parser doesn't eat `C:op` as a qualified type),
   a NAMESPACE `Class:Namespace { }` (brace tail), and a hoisted-class RE-OPEN
   `Class:Reopen() { }` (EMPTY parens). A field-bearing head `Class:Name(fields) { }` is NOT
   this form — token-identical to inheritance (`Base:Derived(fields)`) and STAYS inheritance.

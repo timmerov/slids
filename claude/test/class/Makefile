@@ -10,6 +10,7 @@ BUILD_DIR = ../../build/test/$(DIR)
 SAMPLES = \
 	construct \
 	empty \
+	evaluate \
 	field \
 	hoisted \
 	incomplete \

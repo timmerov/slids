@@ -1,4 +1,6 @@
 
+today's crap:
+
 leftover crap from plan-declarator landing fail:
 
    But "every construct site routes through emitConstructed" is literally true only for scope-dtor'd sites.

@@ -726,7 +726,12 @@ struct Parser {
         segments.push_back(peek().text);
         toks.push_back(pos);
         advance();
-        while (peek().kind == token::Kind::kColon) {
+        // A qualified NAME segment is always an identifier (or `self`), never `op` — so a
+        // `:op` here is NOT part of the name: it starts a qualified OPERATOR-definition head
+        // (`Class:op+=(...)`), which the caller (parseFunctionDef) owns. Stop before it,
+        // leaving the `:op` unconsumed, rather than erroring on `op`.
+        while (peek().kind == token::Kind::kColon
+               && peekKind(1) != token::Kind::kOp) {
             advance();
             // `Base:self` — the receiver viewed as the base sub-object. `self` (a
             // reserved word) is allowed as a qualified-name segment; resolve reframes
@@ -3627,6 +3632,13 @@ struct Parser {
         // An operator method (`op<sym>(...)`) may omit the return type; a leading
         // `op` means there is no return-type declarator to parse.
         bool is_op = (peek().kind == token::Kind::kOp);
+        // A qualified member defined out of line with NO return type — `Class:op+=(...)`
+        // (canon: external reopen syntax for a produce-self operator) — leads with the
+        // qualifier class where a return type would sit. Record whether the leading token
+        // is a bare identifier and how many tokens the return-type declarator consumes, so
+        // a lone identifier followed by `:` can be reinterpreted as the qualifier below.
+        bool lead_ident = (!is_op && peek().kind == token::Kind::kIdentifier);
+        int type_start = pos;
         Declarator d;
         if (!is_op) {
             if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
@@ -3637,7 +3649,16 @@ struct Parser {
         std::string ret_type = std::move(d.type);
         std::string name;
         int name_tok;
-        if (peek().kind == token::Kind::kOp) {
+        if (lead_ident && pos == type_start + 1
+            && peek().kind == token::Kind::kColon) {
+            // The bare-identifier "return type" is really the qualifier's FIRST segment and
+            // there is NO return type (`Class:op+=` / `Class:method`): parseDeclarator ate
+            // the class where a return type would be, and a `:` (with no name) follows.
+            // Hand it to the name slot; the qualifier loop consumes the rest (incl. `:op`).
+            name = std::move(ret_type);
+            ret_type.clear();
+            name_tok = type_start;
+        } else if (peek().kind == token::Kind::kOp) {
             is_op = true;                       // `Ret op<sym>` — return type parsed above
             name_tok = pos;
             name = parseOperatorName();
@@ -3651,11 +3672,6 @@ struct Parser {
             name_tok = pos;
             advance();
         }
-        // An operator that "produces self" writes no return type; it mutates the
-        // receiver and returns nothing at the ABI level, so it lowers as `void`.
-        // (Operators that yield a value — comparison, unary arity-0, index/deref —
-        // spell their return type, so it is already set.)
-        if (is_op && ret_type.empty()) ret_type = "void";
         // A QUALIFIED head `Ret Class:method(...)` (or `A:B:m`) defines a member OUT OF
         // LINE: the leading segments are the qualifier (the target class / namespace),
         // the last is the member name. resolve routes it into that frame — for a class
@@ -3667,14 +3683,30 @@ struct Parser {
             advance();   // :
             qualifier.push_back(std::move(name));
             qualifier_toks.push_back(name_tok);
-            if (peek().kind != token::Kind::kIdentifier) {
+            // The qualified member may itself be an OPERATOR (`Ret Class:op+(...)`, or a
+            // produce-self `Class:op+=(...)` whose qualifier was reinterpreted above) — an
+            // operator is just a method, so the out-of-line member form accepts an
+            // `op<sym>` name after ':' exactly as the inline head does above.
+            if (peek().kind == token::Kind::kOp) {
+                is_op = true;
+                name_tok = pos;
+                name = parseOperatorName();
+                if (name.empty()) return nullptr;
+            } else if (peek().kind == token::Kind::kIdentifier) {
+                name = peek().text;
+                name_tok = pos;
+                advance();
+            } else {
                 error("Expected a member name after ':' in a qualified definition.");
                 return nullptr;
             }
-            name = peek().text;
-            name_tok = pos;
-            advance();
         }
+        // An operator that "produces self" writes no return type; it mutates the receiver
+        // and returns nothing at the ABI level, so it lowers as `void`. (A value-yielding
+        // operator — comparison, unary arity-0, index/deref — spells its return type, so
+        // it is already set.) Applied AFTER the qualifier loop so it also covers an out-of-
+        // line op whose `is_op` is only discovered there (`Class:op+=`).
+        if (is_op && ret_type.empty()) ret_type = "void";
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
 
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);

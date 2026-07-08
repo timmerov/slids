@@ -212,6 +212,13 @@ accepted signature templates and simple usage:
         op!(ConstType a);                       obj = !a;
     }
 
+operator overloads are method functions of the class.
+they may be added to a re-opened class.
+they may use the external reopen syntax.
+
+    bool Class:op==(ConstType a);
+    Class:op+=(ConstType a);
+
 default move/copy operators are synthesized iff the class
 does not explicitly define them.
 move/copy by slot iteratively and recursively.
@@ -489,6 +496,39 @@ Src(int s_) { _() {} ~() {} }
 Dst(int d_) { _() {} ~() {} op=(Src^ s) { d_ = s^.s_ + 300; } }
 Src mkSrc() { Src s(9); return s; }
 
+/* a class whose binary op+ and arity-1 unary op- take a class operand (Sum^), to
+   exercise class-producing operators in EXPRESSION positions (decl-init / aliasing /
+   nesting) — they build a temp then run the op, beyond the direct assign-target fuse. */
+Sum(int s_) {
+    _(){} ~(){}
+    op=(int a)            { s_ = a; }
+    op+(Sum^ x, Sum^ y)   { s_ = x^.s_ + y^.s_; }
+    op-(Sum^ x)           { s_ = 0 - x^.s_; }
+    op<<(Sum^ x, Sum^ y)  { s_ = x^.s_ << y^.s_; }   // shift: produce-self binary
+    op&&(Sum^ x, Sum^ y)  { s_ = x^.s_ & y^.s_; }    // logical: produce-self binary
+    op||(Sum^ x, Sum^ y)  { s_ = x^.s_ | y^.s_; }
+    op^^(Sum^ x, Sum^ y)  { s_ = x^.s_ ^ y^.s_; }
+}
+int useSum(Sum^ p) { return p^.s_; }
+
+/* op[] whose backing is a class FIELD array — `^field[i]` (address of a member array
+   element) now resolves inside a method, so index read AND write both work. */
+Arr(int data_[3]) {
+    _(){} ~(){}
+    int^ op[](int i) { return ^data_[i]; }
+}
+
+/* an operator defined OUT OF LINE (`Ret Class:op<sym>`), like an out-of-line method.
+   op== spells its return type; a produce-self op= spells the explicit `void`. */
+Ool(int n_) { _(){} ~(){} }
+int  Ool:op==(Ool^ o) { if (n_ == o^.n_) { return 1; } return 0; }
+void Ool:op=(int a)   { n_ = a; }
+Ool:op+=(int a)       { n_ += a; }   // produce-self op, out of line, NO return type
+
+/* an operator with DISTINCT parameter types (Type1 a, Type2 b) — canon allows any
+   primitive/const-pointer params, not just a single type. */
+Mixed(int64 v_) { _(){} ~(){} op=(int64 a){v_=a;} op+(int a, int64 b){ v_ = a + b; } }
+
 int32 main() {
 
     int a = 42;
@@ -605,6 +645,20 @@ int32 main() {
     int oj = oh^;                 // (oh.op^())^ -> 7
     __println("oj = " + oj);      // oj = 7
 
+    /* ---- unary arity-0: +/-/~/! on a class dispatch the arity-0 operator, which
+       returns a built-in — both as a bool value and in a condition (canon 98-107). ---- */
+    OpDefs un(5);
+    bool uplus = +un;             // un.op+() -> v_ > 0 -> true
+    __println("uplus = " + uplus);    // uplus = true
+    bool uminus = -un;            // un.op-() -> v_ < 0 -> false
+    __println("uminus = " + uminus);  // uminus = false
+    bool utilde = ~un;            // un.op~() -> v_ == 0 -> false
+    __println("utilde = " + utilde);  // utilde = false
+    bool ubang = !un;             // un.op!() -> v_ == 0 -> false
+    __println("ubang = " + ubang);    // ubang = false
+    OpDefs uz(0);
+    if (!uz) { __println("uz-cond fired"); }   // uz.op!() -> v_ == 0 -> true -> fires
+
     /* ---- convert fallback: int8 has no exact op=; it WIDENS to the op=(int64) overload
        (widening is flat-cost, so a single overload dispatches with no ambiguity). ---- */
     Widen wc(0);
@@ -690,6 +744,127 @@ int32 main() {
        NOT elide — it dispatches the convert op=(Src^) (+300). ---- */
     Dst cv = mkSrc();             // rvalue, non-exact -> op=(Src^) -> 9 + 300
     __println("cv = " + cv.d_);   // cv = 309
+
+    /* ---- class-producing operators in EXPRESSION positions: build a temp then run the
+       op (Slice B). Covers decl-init, aliasing (lhs among the operands), nesting, and an
+       arity-1 unary producing self. The direct assign-target still fuses in place. ---- */
+    Sum sma(3);
+    Sum smb(4);
+    Sum smd = sma + smb;          // decl-init binary -> _$optmp.op+(sma,smb); smd = 7
+    __println("smd = " + smd.s_);     // smd = 7
+    sma = sma + smb;              // aliasing -> temp then sma <- 7 (reads OLD sma)
+    __println("sma = " + sma.s_);     // sma = 7
+    Sum smn = sma + smb;          // sma=7, smb=4 -> 11
+    Sum smt = smn + sma;          // nested-in-decl: smn=11, sma=7 -> 18
+    __println("smt = " + smt.s_);     // smt = 18
+    Sum smu = -smb;               // arity-1 unary -> smu.op-(smb) -> -4
+    __println("smu = " + smu.s_);     // smu = -4
+    Sum shf(2);
+    Sum shg(3);
+    Sum shr = shf << shg;         // class shift binary -> shr.op<<(shf,shg) = 2<<3 = 16
+    __println("shr = " + shr.s_);     // shr = 16
+    Sum sla = shf && shg;         // class logical binary -> shf.op&&: 2 & 3 = 2
+    Sum slo = shf || shg;         // 2 | 3 = 3
+    Sum slx = shf ^^ shg;         // 2 ^ 3 = 1
+    __println("sla = " + sla.s_);     // sla = 2
+    __println("slo = " + slo.s_);     // slo = 3
+    __println("slx = " + slx.s_);     // slx = 1
+
+    /* ---- no-context positions (result class taken from the operand): a class op as a
+       CALL ARG and in an INFERRED decl-init (`x = a+b`, type from the rhs). ---- */
+    int scarg = useSum(sma + smb);    // call-arg binary -> temp.op+(sma,smb)=11; useSum -> 11
+    __println("scarg = " + scarg);    // scarg = 11
+    int scneg = useSum(-smb);         // call-arg unary -> temp.op-(smb)=-4; useSum -> -4
+    __println("scneg = " + scneg);    // scneg = -4
+    sib = sma + smb;                  // inferred decl-init binary -> Sum sib = 11
+    __println("sib = " + sib.s_);     // sib = 11
+    siu = -smb;                       // inferred decl-init unary  -> Sum siu = -4
+    __println("siu = " + siu.s_);     // siu = -4
+
+    /* ---- op[] over a backing FIELD array (`^field[i]` resolve) — read and write ---- */
+    Arr barr( (100, 200, 300) );
+    __println("ar1 = " + barr[1]);    // ar1 = 200
+    barr[2] = 7;                      // write through the op[] reference
+    __println("ar2 = " + barr[2]);    // ar2 = 7
+
+    /* ---- out-of-line operators ---- */
+    Ool oola(4);
+    Ool oolb(4);
+    Ool oolc(9);
+    if (oola == oolb) { __println("ool eq"); }    // out-of-line op== -> 1
+    if (oola == oolc) { __println("ool bad"); }    // -> 0, no print
+    oola = 12;                                      // out-of-line op=(int)
+    __println("ool = " + oola.n_);                  // ool = 12
+    oola += 3;                                      // out-of-line produce-self op+= (no ret type)
+    __println("ool2 = " + oola.n_);                 // ool2 = 15
+
+    /* ---- COVERAGE: every remaining OpDefs operator token dispatches to its op<sym>. A
+       token that did NOT dispatch would take the built-in path and change the value (the
+       `v_=a` ops yield the FIRST operand when dispatched, the real result otherwise), so
+       each printed value pins the dispatch. m=8, n=5 (declared above). ---- */
+    OpDefs bsub = m - n;    __println("bsub = " + bsub.v_);    // op-  -> 8-5 = 3
+    OpDefs bmul = m * n;    __println("bmul = " + bmul.v_);    // op*  -> 40
+    OpDefs bdiv = m / n;    __println("bdiv = " + bdiv.v_);    // op/  -> 1
+    OpDefs bmod = m % n;    __println("bmod = " + bmod.v_);    // op%  -> 3
+    OpDefs band = m & n;    __println("band = " + band.v_);    // op&  -> v_=a = 8
+    OpDefs bor  = m | n;    __println("bor = " + bor.v_);      // op|  -> 8
+    OpDefs bxor = m ^ n;    __println("bxor = " + bxor.v_);    // op^  -> 8
+    OpDefs bshl = m << n;   __println("bshl = " + bshl.v_);    // op<< -> 8
+    OpDefs bshr = m >> n;   __println("bshr = " + bshr.v_);    // op>> -> 8
+    OpDefs blan = m && n;   __println("blan = " + blan.v_);    // op&& -> 8
+    OpDefs blor = m || n;   __println("blor = " + blor.v_);    // op|| -> 8
+    OpDefs blxr = m ^^ n;   __println("blxr = " + blxr.v_);    // op^^ -> 8
+
+    /* compound assignment: each op<op>=(int) dispatches (op-= subtracts; the rest set v_=a) */
+    OpDefs cc(100);
+    cc -= 10;   __println("cc1 = " + cc.v_);    // op-=  -> 90
+    cc *= 7;    __println("cc2 = " + cc.v_);    // op*=  -> 7
+    cc /= 3;    __println("cc3 = " + cc.v_);    // op/=  -> 3
+    cc %= 9;    __println("cc4 = " + cc.v_);    // op%=  -> 9
+    cc &= 5;    __println("cc5 = " + cc.v_);    // op&=  -> 5
+    cc |= 6;    __println("cc6 = " + cc.v_);    // op|=  -> 6
+    cc ^= 8;    __println("cc7 = " + cc.v_);    // op^=  -> 8
+    cc <<= 2;   __println("cc8 = " + cc.v_);    // op<<= -> 2
+    cc >>= 4;   __println("cc9 = " + cc.v_);    // op>>= -> 4
+    cc &&= 1;   __println("cc10 = " + cc.v_);   // op&&= -> 1
+    cc ||= 11;  __println("cc11 = " + cc.v_);   // op||= -> 11
+    cc ^^= 12;  __println("cc12 = " + cc.v_);   // op^^= -> 12
+
+    /* comparison: each op<cmp>(int) returns a built-in bool */
+    OpDefs cq(50);
+    bool cne = (cq != 40);  __println("cne = " + cne);   // op!= -> true
+    bool clt = (cq < 40);   __println("clt = " + clt);   // op<  -> false
+    bool cgt = (cq > 40);   __println("cgt = " + cgt);   // op>  -> true
+    bool cle = (cq <= 50);  __println("cle = " + cle);   // op<= -> true
+    bool cge = (cq >= 60);  __println("cge = " + cge);   // op>= -> false
+
+    /* ---- shift / logical binary in the NON-decl-init positions (aliasing / call-arg /
+       inferred), mirroring the op+ Slice-B coverage; shf=2, shg=3 (Sum, above). ---- */
+    Sum sha(5);
+    sha = sha << shg;                 // aliasing shift  -> op<<(old 5, 3) = 40
+    __println("sha = " + sha.s_);     // sha = 40
+    int qsh = useSum(shf << shg);     // call-arg shift  -> 2<<3 = 16
+    __println("qsh = " + qsh);        // qsh = 16
+    ish = shf << shg;                 // inferred shift  -> Sum, 16
+    __println("ish = " + ish.s_);     // ish = 16
+    Sum sga(6);
+    sga = sga && shg;                 // aliasing logical -> op&&(old 6, 3) = 6 & 3 = 2
+    __println("sga = " + sga.s_);     // sga = 2
+    int qlg = useSum(shf && shg);     // call-arg logical -> 2 & 3 = 2
+    __println("qlg = " + qlg);        // qlg = 2
+    ilg = shf && shg;                 // inferred logical -> Sum, 2
+    __println("ilg = " + ilg.s_);     // ilg = 2
+
+    /* ---- op^ deref WRITE: `x^ = v` -> `(x.op^())^ = v` writes through the reference
+       (the write side of canon 121-128; op[] write is covered above). ---- */
+    OpDefs dw(0);
+    dw^ = 77;                         // (dw.op^())^ = 77  -> writes v_
+    __println("dw = " + dw.v_);       // dw = 77
+
+    /* ---- a binary operator with DISTINCT param types (int, int64) dispatches (m=8). ---- */
+    int64 big = 100;
+    Mixed mx = m + big;               // mx.op+(int, int64) -> 108
+    __println("mx = " + mx.v_);       // mx = 108
 
     return 0;
 }
@@ -806,3 +981,30 @@ negatives — one //-block uncommented per run.
 /* no naked operators — an operator must be a class method. */
 //-EXPECT-ERROR: An operator can only be defined as a method of a class.
 //op+(int a, int b) { }
+
+/* two op= overloads a source widens to EQUALLY (bool -> int AND int64, both flat cost)
+   are ambiguous — reported, not silently collapsed to the default copy. */
+//-EXPECT-ERROR: Ambiguous operator 'op='
+//NegAmb(int v_) {
+//    op=(int a)   { v_ = a; }
+//    op=(int64 a) { v_ = 1; }
+//}
+//int neg_ambiguous_op() {
+//    bool flag = true;
+//    NegAmb x;
+//    x = flag;
+//    return x.v_;
+//}
+
+/* a class binary with no matching operator is rejected cleanly — never lowered to the
+   numeric path (which would emit struct arithmetic = invalid IR). */
+//-EXPECT-ERROR: is not defined on class
+//NegBin(int v_) {
+//    op=(int a) { v_ = a; }
+//}
+//int neg_no_operator() {
+//    NegBin a(3);
+//    NegBin b(4);
+//    NegBin c = a + b;
+//    return c.v_;
+//}

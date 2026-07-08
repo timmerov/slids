@@ -8,6 +8,10 @@ quest's progress lives in plan.txt).
 
 BUGS
 
+  * this should compile but doesn't:
+    Shift(int a) { op<<(Shift^ lhs, Shift^ rhs) { a = lhs^.a << rhs^.a; } }
+    (Shift, Shift) tuple = (Shift(1), Shift(3)) << 1;
+
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
     (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,
@@ -73,7 +77,25 @@ BUGS
 
 UNBLOCKED FEATURES
 
-  * operator overloads is only partially landed.
+  * operator overloading — LANDED except two open areas:
+    - EXPRESSION-TEMP ELIMINATION: fuse a full `String s = a + b + c + d` chain to ZERO
+      temporaries (copy-into-target instead of move; only-op+= seed when no 2-arg op+;
+      ping-pong two-buffer). Active canon: test/class/evaluate.sl.
+    - COMPARISON forms deferred by the user: arity-2 comparison PRODUCING a class (e.g. a
+      SIMD mask `Mask m = a == b`), and reversed-operand comparison (`x < obj` -> `obj >= x`,
+      `int == class`). See REACH GOALS below + [[project_operator_overloading]].
+    Everything else (assignment/move/swap, arith/bitwise/shift/logical binary in all expr
+    positions, compound, comparison arity-1, index/deref, unary arity-0/1, out-of-line defs
+    in both forms, ambiguity reporting, no-invalid-IR guard) has landed with tests.
+
+  * these should not be an ambiguous matchings:
+    void fn(int64 i) { }
+    void fn(uint64 i) { }
+    fn( (int=5) );
+    fn( (uint=10) );
+    signed integer types should unambiguously match to the fn(int64).
+    unsigned integer types should unabiguously match to the fn(uint64).
+
 
 BLOCKED FEATURES
 
@@ -111,9 +133,11 @@ BLOCKED FEATURES
     not worth it. prerequisite: a 1-tuple spelling (none planned).
 
   * FOR-CLASS — classes have LANDED (incl. inheritance / re-open / virtual); what
-    remains is the for-each PROTOCOL (op[]/size or begin/end/next, Phase 5), which is
-    blocked on OPERATOR OVERLOADING (op[] does not parse yet). Lowers to a kForLongStmt
-    in desugar like the others once the protocol exists.
+    remains is the for-each PROTOCOL (op[]/size or begin/end/next, Phase 5). No longer
+    blocked on operator overloading — `op[]` now parses AND dispatches (read + write,
+    incl. an array-backed body). Remaining work is DESIGNING the protocol (which
+    operators/methods an iterable must provide) and lowering it to a kForLongStmt in
+    desugar like the others.
 
   * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
     the first DEFINITION (Entry.def_tok) and "first declared here" the first
@@ -245,11 +269,29 @@ BLOCKED FEATURES
 
 REACH GOALS
 
-  * decide if smallest widening wins when matching overloaded functions.
+  * b = (obj < x) desugars to b = obj.op<(x) regardless of x.
+    if x is not a class or obj.op<(x) is not defined then we could try transposing
+    the comparison:
+    b = (x < obj)  -->  b = (obj > x)  -->  b = obj.op>(x)
+    it's unlikely we'd want to apply this to all binary operations.
+
+  * smallest widening wins when matching overloaded functions — DECIDED: NO.
     void fn(int32) {}
     void fn(int64) {}
-    int16 x = 7; fn(x);
-    or if the matching is ambiguous.
+    int16 x = 7; fn(x);         // AMBIGUOUS (int16 widens to both, flat cost)
+    Widening is FLAT-cost; a tie is "Ambiguous call". Tried grading argConvertCost so the
+    narrowest target won, then REVERTED (no canon home; the OPPOSITE is canon in
+    overload_fn.sl / overload_cls.sl). Do not re-add a smallest-wins tiebreak.
+    See [[project_operator_overloading]].
+
+  * decide if we want to revisit expanding op==.
+    Vector<int> vecint1; Vector<int> vecint2; Vector<bool> vecbool;
+    vecbool = (vecint1 == vecint2);
+    what does that map to?
+    vecbool = vecint1.op==(vecint2);
+    vecbool.op==(vecint1, vecint2);
+    first case means we relax the restriction on what op== can return.
+    the second case means we allow binary op==.
 
   * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
     compile error today (canon nested.sl says "needs to be revisited"):

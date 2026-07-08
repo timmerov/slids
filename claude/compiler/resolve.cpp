@@ -1578,24 +1578,34 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             // an indexed element yields an iterator (`T[]`); a class field yields
             // a reference. Walk any subscript / field chain (resolving each index
             // as a read) down to the base variable.
-            // `^field` (a bare field in a method body) -> `^self.field`: rewrite the
-            // operand to a self.field access (using the `self` keyword, an address-
-            // aliased local, so the walk below descends to a resolvable ident — like
-            // the explicit `^self.field` form). A local shadowing the field resolves
-            // normally, so this only fires when no name resolved AND it is a field.
-            if (e.children[0] && e.children[0]->kind == parse::Kind::kIdentExpr
-                && !isQualified(*e.children[0])
-                && resolveName(tree, e.children[0]->name) < 0
-                && isMethodField(tree, e.children[0]->name)) {
-                parse::Node& op = *e.children[0];
-                auto self_id = std::make_unique<parse::Node>();
-                self_id->kind = parse::Kind::kIdentExpr;
-                self_id->name = "self";
-                self_id->file_id = op.file_id;
-                self_id->tok = op.tok;
-                op.kind = parse::Kind::kFieldExpr;   // op.name stays the field
-                op.children.clear();
-                op.children.push_back(std::move(self_id));
+            // `^field` / `^field[i]` / `^field.sub` (a bare field, OR a subscripted /
+            // sub-field of a field, in a method body) -> rewrite the BASE ident of the
+            // chain to `self.<field>`: a self.field access (the `self` keyword, an
+            // address-aliased local) so the walk below descends to a resolvable ident —
+            // like the explicit `^self.field[i]` form. Peek down the subscript/field
+            // chain to its base ident first (a bare `^field` has no chain). A local
+            // shadowing the field resolves normally, so this fires only when the base
+            // name did NOT resolve AND it is a method field. (Without descending to the
+            // base, `^field[i]` missed the rewrite and failed "Unresolved identifier".)
+            if (e.children[0]) {
+                parse::Node* peek = e.children[0].get();
+                while (peek->kind == parse::Kind::kIndexExpr
+                    || peek->kind == parse::Kind::kFieldExpr) {
+                    peek = peek->children[0].get();
+                }
+                if (peek->kind == parse::Kind::kIdentExpr
+                    && !isQualified(*peek)
+                    && resolveName(tree, peek->name) < 0
+                    && isMethodField(tree, peek->name)) {
+                    auto self_id = std::make_unique<parse::Node>();
+                    self_id->kind = parse::Kind::kIdentExpr;
+                    self_id->name = "self";
+                    self_id->file_id = peek->file_id;
+                    self_id->tok = peek->tok;
+                    peek->kind = parse::Kind::kFieldExpr;   // peek->name stays the field
+                    peek->children.clear();
+                    peek->children.push_back(std::move(self_id));
+                }
             }
             parse::Node* base = e.children[0].get();
             while (base->kind == parse::Kind::kIndexExpr
