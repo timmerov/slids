@@ -3156,6 +3156,21 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                     + "' to '" + widen::spellOrEmpty(dest) + "'.", {}});
             }
         } else {
+            // A size-1 `kTupleExpr` into a NUMBER / POINTER target is the construction
+            // form `Type name(value)` — the 1-tuple==scalar collapse applies at the NODE
+            // level too (the `=`-grouping form collapses at parse; the `(args)` form
+            // builds an explicit tuple that doesn't). Unwrap it to its element so the
+            // scalar/pointer checks + codegen see a scalar, not a tuple (a tuple node in
+            // a scalar slot segfaults codegen). A class dest never reaches here (it
+            // constructs via constructClass); a 0/2+-element tuple already failed the
+            // aggregate-mismatch arm above.
+            if (rhs.kind == parse::Kind::kTupleExpr && rhs.children.size() == 1
+                && rhs.children[0]
+                && (widen::form(widen::strip(dest)) == widen::Type::Form::kPrimitive
+                    || isPtrLikeType(dest))) {
+                parse::Node child = std::move(*rhs.children[0]);
+                rhs = std::move(child);
+            }
             // Neither side is a tuple/array: scalar / pointer / class. The terminal
             // checks — pointer implicit-cast, strong-const widen, typed-value widen,
             // class same-type.

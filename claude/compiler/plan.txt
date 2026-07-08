@@ -97,6 +97,13 @@ Phase 2 — declarations + flow (LANDED)
     assert-guarded). Aug-assign on an inferred var fixed: classify's kAugAssignStmt
     arm RE-READS entryType into s.return_type (resolve cached it empty before the
     inferred decl was stamped). Canon: test/assign/infer.sl.
+    CONSTRUCTION-STYLE init `Type name(value)` (the call/tuple form) LANDED for a
+    NUMBER / POINTER target: grammar builds an explicit 1-element kTupleExpr, and
+    checkValueAssign collapses a size-1 construction tuple to its element (the node-
+    level 1-tuple==scalar collapse — the `=`-grouping form gets it at parse), so
+    `int x(42)` == `int x = 42`. A 0- or 2+-element `(args)` stays a tuple-vs-scalar
+    mismatch ("Cannot assign '(...)' to '<scalar>'"). Fixed a segfault (a tuple node
+    reaching codegen's scalar fill). Canon: test/assign/vardecl.sl.
     The for-loop typeless/reuse loop var (Session-4 remainder + the v1 chess-sample
     reuse fix) is now WIRED IN on this mechanism (see the flow item below).
     Definite assignment LANDED: a local read before

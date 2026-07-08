@@ -42,6 +42,9 @@ covered here:
   - (assignment relation, class row — not definite assignment) a class VALUE
     converts only to the same class: assigning one to a primitive or an unrelated
     class errors at BOTH a decl and a bare assignment, via checkValueAssign.
+  - CONSTRUCTION-STYLE scalar init `Type name(value)` for a NUMBER / POINTER target
+    (== `Type name = value`): the size-1 construction tuple collapses to its element
+    in checkValueAssign; a 0- or 2+-element tuple stays a "Cannot assign" mismatch.
 
 not here: array/aggregate definite-assignment (an element store marking the whole
 array initialized — pointer/array.sl). NOTE: a constructed-but-unread CLASS local
@@ -237,6 +240,24 @@ int32 main() {
     __println("grp = " + grp1 + " (" + ##type(grp) + ")");             // 6 (int)
     (((int[3]))) garr = (7, 8, 9);
     __println("garr = " + garr[2] + " (" + ##type(garr) + ")");        // 9 (int[3])
+
+    /* CONSTRUCTION-STYLE scalar init `Type name(value)` — for a NUMBER or POINTER
+       target it equals `Type name = value`. The `(args)` form builds an explicit
+       construction tuple; a size-1 tuple collapses to its element (the node-level
+       1-tuple==scalar collapse — the `=`-grouping form gets it at parse). */
+    int cn(42);
+    __println("cn = " + cn);                                           // 42
+    int64 cn64(7);
+    __println("cn64 = " + cn64);                                       // 7
+    float32 cf(1.5);
+    __println("cf = " + cf);                                           // 1.5
+    bool cb(true);
+    __println("cb = " + cb);                                           // true
+    char cc(65);
+    __println("cc = " + cc);                                           // A
+    int cpv = 9;
+    int^ cpp(^cpv);                             // pointer target: element is a ref
+    __println("cpp = " + cpp^);                                        // 9
 
     {
         /* trivial statement uses x. */
@@ -576,5 +597,28 @@ array dim is written on the NAME, not inline on the type.
 //-EXPECT-ERROR: An array size belongs on the declared name
 //int32 neg_top_dim_on_type() {
 //    int[3] x = (1, 2, 3);
+//    return 0;
+//}
+
+/*
+construction-style scalar init boundary: only a SIZE-1 construction tuple collapses
+to its element. A 2+-element or empty `(args)` on a scalar target stays an
+aggregate-vs-scalar mismatch (`Cannot assign '(...)' to '<scalar>'`), the same as
+the `=` form (`int x = (1, 2)`).
+*/
+
+/* too many construction args for a scalar. */
+//-EXPECT-ERROR: Cannot assign '(int, int)' to 'int'
+//int32 neg_ctor_too_many() {
+//    int x(1, 2);
+//    x;
+//    return 0;
+//}
+
+/* an empty construction on a scalar has no value to init from. */
+//-EXPECT-ERROR: Cannot assign '()' to 'int'
+//int32 neg_ctor_empty() {
+//    int x();
+//    x;
 //    return 0;
 //}

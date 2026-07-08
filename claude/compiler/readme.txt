@@ -157,6 +157,15 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
   kNoType is "no conversion"). Before this it returned the raw `ptr` and stored it
   into an i64 slot — invalid IR (`store i64 <ptr>`); canon test/class/empty.sl.
 
+  A SIZE-1 CONSTRUCTION TUPLE collapses BEFORE this matrix. The `Type name(value)`
+  form builds an explicit 1-element kTupleExpr (grammar); for a NUMBER or POINTER
+  target checkValueAssign unwraps it to its element (the node-level 1-tuple==scalar
+  collapse — the `=`-grouping form gets it at parse), so the element then flows
+  through the normal integer / float / pointer cell. `int x(42)` == `int x = 42`
+  (this is why the `integer <- tup/arr = error` cell does not fire); a 0- or
+  2+-element `(args)` on a scalar stays the tuple-vs-scalar mismatch. Without the
+  collapse the tuple node reached codegen's scalar fill and segfaulted.
+
   Construction (a class ctor at a decl / `new`) is a SEPARATE operation, not this
   matrix — class <- tuple as a ctor lives outside it. Swap (`<-->`) is also outside:
   it requires the EXACT same type both ways, since it cannot convert both directions.

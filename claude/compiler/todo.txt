@@ -8,8 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * this segfaults the compiler: int x(3);
-
   * this should compile but doesn't:
     Shift(int a) { op<<(Shift^ lhs, Shift^ rhs) { a = lhs^.a << rhs^.a; } }
     (Shift, Shift) tuple = (Shift(1), Shift(3)) << 1;
@@ -78,9 +76,6 @@ BUGS
     conversions — the canon neg_class_in_slot helper is written as a nested function.
 
 UNBLOCKED FEATURES
-
-  * tuple-style initialization of primitives.
-    int x(1);
 
   * operator overloading — LANDED except two open areas:
     - EXPRESSION-TEMP ELIMINATION: fuse a full `String s = a + b + c + d` chain to ZERO
