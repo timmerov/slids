@@ -125,10 +125,14 @@ SITE x OPERATOR MATRIX  (classify: does the site dispatch the USER operator?)
   the operator's `Class^` param gets an address (a construction source is spilled only
   for a fresh decl; a live-assign construction bails to the clean "construct in this
   position" error), and — if `needs_construct` — splices a default-construct of the
-  target before the rewrite. The old "decl-init stays out of the funnel by design
-  (default-construct prelude + value-category guard)" seam is GONE: a user op=/op<-- wins
-  over copy-elision even from an rvalue, and inferred `x=e` dispatches too. Side effect:
-  the pre-existing assign-from-call-rvalue segfault (`x = mkCopy()`) is closed.
+  target before the rewrite. ELIDE-WHENEVER-POSSIBLE (2026-07-08, return_fn.sl site canon):
+  a DECL-INIT (`needs_construct`) from a same-type class RVALUE now ELIDES — the funnel
+  bails (`isBareLvalue==false && exact`) so the call/construction builds in place, no op.
+  The operator fires only where elision can't apply: a LVALUE copy (`Copy ca = cb`), a
+  NON-EXACT convert (`Dst d = mkSrc()` -> op=(Src^)), or an EXISTING-var assign (case 3/4).
+  This REVERSES the 2026-07-05 "a user op wins over elision even from an rvalue" seam (the
+  author forces the op by declaring, then assigning). Inferred `x=e` follows the same rule.
+  Side effect still holds: the assign-from-call-rvalue segfault (`x = mkCopy()`) stays closed.
 
   DECLARE-IF-FRESH now covers ALL FOUR init shapes (2026-07-05). Copy `x=e` (kAssignStmt)
   already promoted a bare undeclared target to a fresh inferred decl; MOVE `x <-- e` and

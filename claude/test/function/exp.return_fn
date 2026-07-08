@@ -23,17 +23,11 @@ y= 7
 dtor 7
 -- elide typed decl copy --
 ctor 7
-ctor 0
-copy
-cd= 107
-dtor 107
+cd= 7
 dtor 7
 -- elide inferred decl copy --
 ctor 7
-ctor 0
-copy
-ce= 107
-dtor 107
+ce= 7
 dtor 7
 -- elide existing copy --
 ctor 1
@@ -44,18 +38,12 @@ dtor 7
 dtor 107
 -- elide typed decl move --
 ctor 7
-ctor 0
-move
-cm= 207
-dtor 207
-dtor 0
+cm= 7
+dtor 7
 -- elide inferred decl move --
 ctor 7
-ctor 0
-move
-cn= 207
-dtor 207
-dtor 0
+cn= 7
+dtor 7
 -- elide existing move --
 ctor 1
 ctor 7

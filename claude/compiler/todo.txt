@@ -40,9 +40,19 @@ BUGS
     (tuple/destructure.sl), which sidesteps it by using a tuple-returning function as the
     destructure source.
 
-  * fix these compile errors:
-    Class fn() { return Class; }
-    Class fn() { temp = Class; return temp; }
+  * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
+    access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
+    class-field aggregate spread treat any BARE LVALUE source (`isBareLvalue`:
+    ident/field/index/deref) as "re-index in place, no side effect to duplicate" — but
+    an index/field whose ACCESS PATH has a side effect (`(Agg = arr[pick()])`,
+    `(Agg = get()^.f)`) is CLONED per slot, so the side effect runs N times instead of
+    once. Balanced/correct-valued, just a duplicated effect. Only a CALL/op source is
+    spilled-once today; a lvalue with a side-effecting subscript/deref/base is not.
+    Pre-existing for kIndexExpr/kDerefExpr; kFieldExpr joined the set with the
+    isBareLvalue dedup (2026-07-08). FIX = spill any source whose access path is not
+    provably side-effect-free (only a bare-ident chain is), not just non-lvalues.
+    Surfaced reviewing the return_fn elide work; `sp = ((Amt,Amt) = mkpair())` (call
+    source) already asserts spill-once, but no bare-lvalue-with-side-effect test exists.
 
   * NESTED-FUNCTION BODIES SKIP THE DESUGAR LOWERING PASSES — desugar's per-function
     loops (liftSretCallList, lowerAggregateList, lowerStatementList/PPID, analyzeNrvo)
@@ -62,8 +72,6 @@ BUGS
     conversions — the canon neg_class_in_slot helper is written as a nested function.
 
 UNBLOCKED FEATURES
-
-  * the spec for functions returning tuples, arrays, classes has changed.
 
   * operator overloads is only partially landed.
 

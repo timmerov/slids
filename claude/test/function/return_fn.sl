@@ -178,7 +178,6 @@ for case 4:
 '<--' means use a matching move operator op<--.
 it's a compiler error if there is no matching operator.
 
-
 in all cases, the desugared function is the same.
 the only difference is how the call site handles the returned value.
 
@@ -206,24 +205,23 @@ signatures to test with both variable declaration and existing variable.
 /*
 claude says:
 
-PHASE A — always-sret + both-side FALLBACKS (no optimization yet).
+always-sret + ELIDE-WHENEVER-POSSIBLE on both sides.
 
 A function returning a non-primitive type (array / tuple / class, or an aggregate
 with a class leaf) is ALWAYS desugared to `void fn_$desugar(Type^ ret)`. The body
 writes the result into `ret^` and never destructs it (the caller owns the dtor).
-Phase A uses the FALLBACK on both sides:
-  - FUNCTION: each `return E` default-move-inits `ret^` from E (field-move then
-    ctor), so `ret^` is constructed exactly once and the ctor sees the returned
-    values. No in-place RVO/NRVO yet.
-  - CALLER: every call materializes a `_$ret` temp, calls `fn(^_$ret, args)`, then
-    default-moves the temp into the lhs and destroys the temp. An inline use is the
-    same temp, consumed in place (caller case 1 into a temporary).
+  - FUNCTION: NRVO builds a returned local straight into `ret^` when its lifetime is
+    disjoint (one ctor, no move); overlapping returns fall back to `ret^ <-- local`.
+  - CALLER: the elide-or-spill decision funnels through the decl-init binding path.
+    A FRESH decl of the exact type from a call/construction rvalue ELIDES — the call
+    builds straight into the target's storage (header cases 1). Elision is skipped
+    only when it CAN'T apply: an existing var (already constructed → op= / op<-- or a
+    move-assign, cases 2-4), or a non-exact / lvalue source. An inline use materializes
+    a temp (caller case 1 into a temporary).
 
-Because nothing is elided yet, a class return materializes the MOST objects it ever
-will (each constructed once / destroyed once) — Phase B drops the call-site temp,
-Phase C (NRVO) drops the function-local. The invariant verified at every phase:
-ctor count == dtor count. The classes below print id on ctor/dtor so the balance
-is visible in the golden.
+The invariant: ctor count == dtor count. The classes below print id on ctor/dtor so the
+balance is visible in the golden; Op additionally prints copy/move so a FIRED operator
+(existing-var only) is distinct from an elided decl-init.
 */
 
 // A hook class — prints id on ctor + dtor so ctor/dtor balance is visible.
@@ -293,11 +291,12 @@ Class pickBad2(bool b) { Class a(1); if (b) { return a; } else { Class b2(2); re
 // own it); a regression that did would dtor the object twice.
 Class mkFromCall() { Class x = mkClass(); return x; }
 
-// ELIDING EXCEPTION (header canon above): a class that DEFINES op= / op<-- and is
-// initialized / assigned with `=` / `<--` runs the OPERATOR instead of eliding — even
-// from a call rvalue where RVO/NRVO could otherwise elide the copy. Op prints ctor/dtor
-// (the un-elided temp keeps the balance visible) plus copy/move (the operator fired);
-// op= adds 100, op<-- adds 200, so mkOp()'s 7 becomes 107 (copy) / 207 (move).
+// ELIDE-WHENEVER-POSSIBLE (header canon above): a class that DEFINES op= / op<-- still
+// ELIDES a class rvalue into a FRESH decl (`Op x = mkOp()` / `Op x <-- mkOp()`) — the
+// operator does NOT run, even though `=` / `<--` syntax is used. The operator fires only
+// on an EXISTING variable (the author forces it by declaring, then assigning). Op prints
+// ctor/dtor plus copy/move (so a fired operator is visible); op= adds 100, op<-- adds
+// 200 — so an ELIDED decl stays 7, and an existing-var assign turns 7 into 107 / 207.
 Op(int v_) {
     _()                    { __println("ctor " + v_); }
     ~()                    { __println("dtor " + v_); }
@@ -317,7 +316,7 @@ int32 main() {
     a2 = mkArr();
     __println("a2= " + a2[0] + " " + a2[2]);                    // 1 3
 
-    /* hook class — decl (Phase A: temp + move into x). ctor/dtor must balance. */
+    /* hook class — decl (mkClass elides straight into x). ctor/dtor must balance. */
     __println("-- class decl --");
     {
         Class x = mkClass();
@@ -328,7 +327,7 @@ int32 main() {
         (Class, Class) p = mkPair();
         __println("p= " + p[0].id_ + " " + p[1].id_);           // 8 9
     }
-    /* hook class — assign into an EXISTING var (Phase A: temp + move-assign).
+    /* hook class — assign into an EXISTING var (temp + move-assign, no elision).
        y is constructed (1), then overwritten by the moved-in result (7); counts
        still balance (the default move-assign is a whole-value overwrite). */
     __println("-- class assign --");
@@ -337,19 +336,20 @@ int32 main() {
         y = mkClass();
         __println("y= " + y.id_);                               // 7
     }
-    /* ELIDING EXCEPTION — a class defining op= / op<-- runs the OPERATOR (not RVO/NRVO
-       elision) when `=` / `<--` is used, from a call rvalue, across the full matrix:
-       {copy, move} x {typed decl-init, inferred decl-init, existing var}. Each fires
-       the operator (7 -> 107 copy / 207 move); the un-elided temp stays balanced. */
+    /* ELIDE-WHENEVER-POSSIBLE — a class defining op= / op<-- ELIDES a call rvalue into a
+       FRESH decl (RVO — the operator does NOT run), and dispatches the OPERATOR only on
+       an EXISTING variable. Across {copy, move} x {typed decl-init, inferred decl-init,
+       existing var}: each decl-init elides (stays 7); each existing-var assign fires the
+       operator (7 -> 107 copy / 207 move). ctor/dtor balances throughout. */
     __println("-- elide typed decl copy --");
     {
-        Op cd = mkOp();                                         // typed decl -> op=
-        __println("cd= " + cd.v_);                              // 107
+        Op cd = mkOp();                                         // typed decl -> elide
+        __println("cd= " + cd.v_);                              // 7
     }
     __println("-- elide inferred decl copy --");
     {
-        ce = mkOp();                                            // inferred decl -> op=
-        __println("ce= " + ce.v_);                              // 107
+        ce = mkOp();                                            // inferred decl -> elide
+        __println("ce= " + ce.v_);                              // 7
     }
     __println("-- elide existing copy --");
     {
@@ -359,13 +359,13 @@ int32 main() {
     }
     __println("-- elide typed decl move --");
     {
-        Op cm <-- mkOp();                                       // typed decl -> op<--
-        __println("cm= " + cm.v_);                              // 207
+        Op cm <-- mkOp();                                       // typed decl -> elide
+        __println("cm= " + cm.v_);                              // 7
     }
     __println("-- elide inferred decl move --");
     {
-        cn <-- mkOp();                                          // inferred decl -> op<--
-        __println("cn= " + cn.v_);                              // 207
+        cn <-- mkOp();                                          // inferred decl -> elide
+        __println("cn= " + cn.v_);                              // 7
     }
     __println("-- elide existing move --");
     {
@@ -537,10 +537,10 @@ int32 main() {
 //    return a.id_;
 //}
 
-/* ELIDING-EXCEPTION BOUNDARY — the construct-then-operator path is decl-init ONLY.
-   Constructing a class as an assign / move RHS into an EXISTING variable is a clean
-   error (declare a fresh variable instead), NOT the segfault a regression would
-   reintroduce by spilling an unbuildable rvalue. */
+/* CONSTRUCT-INTO-EXISTING BOUNDARY — constructing a class as an assign / move RHS into
+   an EXISTING variable (no fresh slot to build into) is a clean error (declare a fresh
+   variable instead), NOT the segfault a regression would reintroduce by spilling an
+   unbuildable rvalue. (A fresh decl from a construction rvalue elides in place.) */
 //-EXPECT-ERROR: Constructing a class in this position is not yet supported
 //int neg_copy_construct_existing() {
 //    Op x(1);

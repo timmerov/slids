@@ -127,9 +127,12 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     agree; codegen just CALLS that symbol (`emitCopy`/`emitMove`; a hook-bearing tuple/array
     goes PER LEAF via `emitAggregateTransfer`/`emitAggregateSwap`, so a class element runs
     its op, not a byte blit). findClassOperator finds a same-type op= for EVERY class, but
-    dispatchAssignInit ELIDES a synthesized one (returns false) so a fresh decl builds in
-    place / a live copy runs through the existing fill path rather than reordering ctor vs
-    copy — a USER op wins over elision. There is NO codegen whole-value blit fallback (that
+    dispatchAssignInit ELIDES a synthesized one (returns false), AND — ELIDE-WHENEVER-POSSIBLE
+    (2026-07-08) — elides a USER op too when a DECL-INIT's source is a same-type class RVALUE
+    (`isBareLvalue==false && exact`): the call/construction builds in place, no op. A USER op
+    fires only for a LVALUE copy, a NON-EXACT convert, or an EXISTING-var assign — the author
+    forces it by declaring, then assigning. (This reverses the earlier "a user op wins over
+    elision even from an rvalue".) There is NO codegen whole-value blit fallback (that
     loop + its g_defined_*_syms gate were deleted; nothing is left to fall back to). A
     CROSS-TYPE operator (`op=(Other^)` / `op<--(Other^)`, case 4) is a distinct method
     dispatched by classify, NOT renamed. canon test/class/operator.sl + return_fn.sl.

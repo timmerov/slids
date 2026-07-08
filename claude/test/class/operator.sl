@@ -477,6 +477,18 @@ Box(
     OpDefs b_
 ) { }
 
+/* a container holding a Copy, to exercise a decl-init op= from a COMPLEX-lvalue source
+   (field): `Copy cf = cbx.c_` copies via op=(Copy^) (+100), NOT elide (elide is
+   rvalue-only). The kFieldExpr / kIndexExpr / kDerefExpr arms of the bare-lvalue
+   predicate in the elide-vs-copy funnel. */
+CBox( Copy c_ ) { }
+
+/* a NON-EXACT class-rvalue decl-init: mkSrc() returns Src by value; `Dst d = mkSrc()`
+   does NOT elide (types differ), it dispatches the convert op=(Src^) (+300). */
+Src(int s_) { _() {} ~() {} }
+Dst(int d_) { _() {} ~() {} op=(Src^ s) { d_ = s^.s_ + 300; } }
+Src mkSrc() { Src s(9); return s; }
+
 int32 main() {
 
     int a = 42;
@@ -616,15 +628,6 @@ int32 main() {
     Widen we = wn;                // named int16 lvalue widens -> we.op=(int64); which_ = 9+1000
     __println("we = " + we.which_);   // we = 1009
 
-    /* ---- a user op= WINS over copy-elision: a class RVALUE decl-init is construct-then-
-       op='d, so the author's operator runs (+100) even when eliding would be cheaper. The
-       rvalue is materialized into a temp so op= takes its address. Covers a function-return
-       rvalue and a construction rvalue. ---- */
-    Copy cd = mkCopy();           // function-return rvalue -> construct + op=; v_ = 7+100
-    __println("cd = " + cd.v_);   // cd = 107
-    Copy ce = Copy(11);           // construction rvalue -> construct + op=; v_ = 11+100
-    __println("ce = " + ce.v_);   // ce = 111
-
     /* ---- decl-init MOVE / SWAP (fresh var). `<--` dispatches op<-- (default-construct
        then move); `<-->` default-constructs then op<--> (the fresh default flows back
        into the source — "weird but allowed"). The `=` copy vs `<--` move split is by the
@@ -667,6 +670,26 @@ int32 main() {
     OpDefs sarr[2];
     sarr[1] = 51;                 // index store  -> op=(int) -> v_ = 51
     __println("si = " + sarr[1].v_);   // si = 51
+
+    /* ---- decl-init op= from a COMPLEX-lvalue source (field / index / deref). Each is a
+       bare lvalue → dispatches the user op=(Copy^) copy (+100), NOT an elide (elide is
+       rvalue-only). Covers the kFieldExpr / kIndexExpr / kDerefExpr arms of the shared
+       bare-lvalue predicate; only kIdentExpr (`ca = cb`) was exercised before. ---- */
+    CBox cbx( Copy(5) );
+    Copy cfld = cbx.c_;           // FIELD lvalue  -> op= copy -> 5 + 100
+    __println("cfld = " + cfld.v_);   // cfld = 105
+    Copy carr[2] = ( Copy(6), Copy(7) );
+    Copy cidx = carr[0];          // INDEX lvalue  -> op= copy -> 6 + 100
+    __println("cidx = " + cidx.v_);   // cidx = 106
+    Copy cbase(8);
+    Copy^ cptr = ^cbase;
+    Copy cder = cptr^;            // DEREF lvalue  -> op= copy -> 8 + 100
+    __println("cder = " + cder.v_);   // cder = 108
+
+    /* ---- NON-EXACT class-RVALUE decl-init: mkSrc() returns Src; Dst differs, so it does
+       NOT elide — it dispatches the convert op=(Src^) (+300). ---- */
+    Dst cv = mkSrc();             // rvalue, non-exact -> op=(Src^) -> 9 + 300
+    __println("cv = " + cv.d_);   // cv = 309
 
     return 0;
 }

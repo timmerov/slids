@@ -58,8 +58,6 @@ wc = 1007
 wd = 1005
 ca = 105
 we = 1009
-cd = 107
-ce = 111
 omv = 77
 osw = 88 ossrc = 0
 da = 11 db = 22
@@ -68,6 +66,10 @@ dca = 11 dcb = 22
 sf = 31
 sd = 41
 si = 51
+cfld = 105
+cidx = 106
+cder = 108
+cv = 309
 dtor z
 dtor b
 dtor a

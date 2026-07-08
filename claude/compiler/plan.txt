@@ -783,7 +783,9 @@ Phase 5 — classes
     emitAggregateSwap, so a class element runs its op — fixes the old aggregate copy-raw).
     findClassOperator finds a same-type op= for every class, but dispatchAssignInit ELIDES a
     synthesized one (a fresh decl builds in place / a live copy runs the fill path, no ctor-vs-
-    copy reorder; a USER op wins over elision). The codegen whole-value BLIT loop + its
+    copy reorder) AND — ELIDE-WHENEVER-POSSIBLE (2026-07-08) — elides a USER op on a DECL-INIT
+    from a same-type class RVALUE; a USER op fires only for a lvalue copy / non-exact convert /
+    existing-var assign (reverses the earlier "a user op wins over elision"). The codegen whole-value BLIT loop + its
     g_defined_*_syms gate are DELETED — nothing falls back (0 blit defs suite-wide). Cross-type
     (case 4) transfers dispatch through classify (a distinct op=(Other^)/op<--(Other^)); NOT
     renamed. See [[project_ctor_dtor_injection]], [[project_operator_overloading]], canon

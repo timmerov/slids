@@ -29,6 +29,21 @@ bool isLiteralKind(parse::Kind k) {
         || k == parse::Kind::kFloatLiteral;
 }
 
+// A BARE LVALUE expression: one that names an existing storage location (an
+// address), as opposed to a computed rvalue (a call / op / construction / literal).
+// The distinction drives the copy-vs-elide and spread-vs-spill decisions: a bare
+// lvalue can be addressed / re-indexed in place, so it is copied (op=) or spread
+// directly; an rvalue must be built in place (elide) or spilled to a temp. Callers
+// that additionally need SIDE-EFFECT freedom (safe to re-read per slot) test more
+// narrowly (a bare kIdentExpr) — this is lvalue-ness, not evaluation-count safety.
+bool isBareLvalue(parse::Node const& n) {
+    parse::Kind k = n.kind;
+    return k == parse::Kind::kIdentExpr
+        || k == parse::Kind::kFieldExpr
+        || k == parse::Kind::kIndexExpr
+        || k == parse::Kind::kDerefExpr;
+}
+
 // The preferred user-facing spelling for an inferred-from-literal type: the
 // 32-bit defaults read as int / uint / float (their narrow preferred names), so
 // `a = 42` infers `int` (matching an explicitly-typed sibling's ##type), not the
@@ -2696,10 +2711,7 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                 == widen::deepStrip(info.type)) {
             return;
         }
-        parse::Kind sk = s.children[0]->kind;
-        bool lvalue = sk == parse::Kind::kIdentExpr
-                   || sk == parse::Kind::kIndexExpr
-                   || sk == parse::Kind::kDerefExpr;
+        bool lvalue = isBareLvalue(*s.children[0]);
         if (isAggregateType(srcT) && lvalue) {
             int m = aggregateSlotCount(srcT);
             for (int i = 0; i < m; i++) {
@@ -3622,9 +3634,24 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
     // construct for a decl, a plain copy/move for live storage). So elide here and let
     // them run. Only a USER op (which may observe / transform) dispatches through classify.
     if (tree.entries[op_id].synthesized) return false;
+    int idx = expr_lhs ? 1 : 0;
+    // ELIDE-WHENEVER-POSSIBLE (return-value site canon): a FRESH decl target
+    // (needs_construct) initialized from a same-type class RVALUE builds in place —
+    // RVO / field-init, NO operator — even though `=`/`<--` syntax is used and a user
+    // op= / op<-- exists. Elision needs an rvalue (a call / construction / op temp): a
+    // live LVALUE source is a genuine copy (dispatch op=), and a NON-EXACT source is a
+    // convert (dispatch op= + widen). Bail so the caller's construction/elision path
+    // runs. An existing-var assign (needs_construct=false) is unaffected — case 3/4
+    // always spill + op. The author forces the operator by declaring, then assigning.
+    if (needs_construct && idx < static_cast<int>(s.children.size())
+        && s.children[idx]) {
+        bool src_lvalue = isBareLvalue(*s.children[idx]);
+        bool exact = widen::deepStrip(s.children[idx]->inferred_type)
+                  == widen::deepStrip(clsType);
+        if (!src_lvalue && exact) return false;
+    }
     // Materialize a class RVALUE source into a `_$cinit` temp so the operator takes its
     // address (a named lvalue / primitive is used in place).
-    int idx = expr_lhs ? 1 : 0;
     // A CONSTRUCTION source can only be materialized into a FRESH decl target; a live-
     // storage assign RHS that is a construction is unsupported — bail so the caller reports
     // the clean "construct in this position is not yet supported" error (as with a class
@@ -3635,11 +3662,7 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
         return false;
     }
     if (prelude && idx < static_cast<int>(s.children.size()) && s.children[idx]) {
-        parse::Kind rk = s.children[idx]->kind;
-        bool rhs_lvalue = rk == parse::Kind::kIdentExpr
-                       || rk == parse::Kind::kFieldExpr
-                       || rk == parse::Kind::kIndexExpr
-                       || rk == parse::Kind::kDerefExpr;
+        bool rhs_lvalue = isBareLvalue(*s.children[idx]);
         auto srcIt = tree.classes.find(widen::strip(s.children[idx]->inferred_type));
         if (!rhs_lvalue && srcIt != tree.classes.end()) {
             if (s.children[idx]->kind == parse::Kind::kCallExpr
@@ -3858,9 +3881,7 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
     // aggregate value) is SPILLED to a `_$cinit` temp evaluated once, and each slot
     // indexes the temp. The spill decl is stashed for desugar to hoist before the
     // statement (agg_conv_spill), mirroring the class-conversion lift.
-    parse::Kind ok = operand.kind;
-    bool bareLvalue = ok == parse::Kind::kIdentExpr || ok == parse::Kind::kIndexExpr
-                   || ok == parse::Kind::kDerefExpr;
+    bool bareLvalue = isBareLvalue(operand);
     std::unique_ptr<parse::Node> spill_decl;
     int spill_id = -1;
     if (!srcIsLit && !bareLvalue) {

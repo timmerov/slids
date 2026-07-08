@@ -343,7 +343,10 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
   * CALLER side:
     - new decl, exact type (`Class x = fn()`): BUILD IN PLACE — emitCall(fn,
       sret_dst = the local's alloca); the local is constructed by the callee and
-      registered for destruction (Phase-B case 1).
+      registered for destruction (Phase-B case 1). ELIDE-WHENEVER-POSSIBLE: this holds
+      EVEN when the class defines op= / op<-- (classify's dispatchAssignInit elides the
+      op for a same-type class rvalue decl-init); the op fires only for the existing-var
+      / lvalue-copy / non-exact cases below.
     - existing POD var, exact: OVERWRITE in place (case 2).
     - existing hook var, or non-exact: temp + assign fallback (case 3) — the `=` form
       calls the target class's copy function `@<Class>__$copy` (user op= or the
@@ -358,8 +361,8 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
       "Returning a class by value in an expression position is not yet supported"
       rather than miscompiled.
   POD-aggregate returns ride the same sret ABI (behavior-neutral vs the old by-value
-  return) and NRVO too (eliding the copy). Open follow-up (todo.txt): returning an
-  unnamed temporary (`return Class(7)` — a front-end gap). Canon:
+  return) and NRVO too (eliding the copy). Returning an unnamed temporary (`return Class;`
+  / `return Class(7)`) now compiles (was a front-end gap). Canon:
   test/function/return_fn.sl.
 
 ANONYMOUS TUPLES + #x (landed this phase; spans every stage)

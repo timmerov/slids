@@ -139,6 +139,11 @@ Nested(Amt part, int label_) { _() {} ~() {} op=(int r) { part.cents_ = r; label
 /* a tuple-returning function — a side-effecting (non-lvalue, non-literal) conversion
    source, to prove the aggregate spill evaluates the source EXACTLY ONCE (prints once). */
 (int, int) mkpair() { __println("  mkpair"); return (50, 60); }
+/* a class with an aggregate FIELD, so `hld.pr_` is a bare-lvalue tuple source
+   (kFieldExpr): an aggregate conversion re-indexes it in place per slot with NO spill
+   — unlike mkpair()'s call source above. Exercises the kFieldExpr arm of the shared
+   bare-lvalue predicate at the aggregate-conversion spill site. */
+Holder( (int, int) pr_ ) { _() {} ~() {} }
 
 Amt amt_from(int n) { return (Amt = n); }               // a conversion at a RETURN
 int amt_pair(Amt^ a, Amt^ b) {
@@ -509,6 +514,12 @@ int32 main() {
     Nested nsrc; nsrc = 8;
     nc = (Nested = nsrc);
     __println("nc = " + nc.part.cents_ + " " + nc.label_);       // 8 9
+
+    /* FIELD SOURCE — a bare-lvalue aggregate field (`hld.pr_`) converts per slot,
+       re-indexed in place with NO spill (contrast mkpair's call source, spilled once). */
+    Holder hld( (14, 15) );
+    hfld = ((Amt, Amt) = hld.pr_);
+    __println("hfld = " + hfld[0].cents_ + " " + hfld[1].cents_);   // 14 15
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
