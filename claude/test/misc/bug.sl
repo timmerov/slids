@@ -10,10 +10,22 @@ claude is forbidden to mention this file unless the user specifically
 puts it in scope.
 */
 
+Class(int a) {
+    _() { __println("ctor"); }
+    ~() { __println("dtor"); }
+}
+
+int fn(Class^ cls) {
+    __println("fn");
+    return cls^.a;
+}
+
 int32 main() {
-
-    int^ x(nullptr);
+/*
+    __println("before");
+    int x = fn(Class(10));
     x;
-
+    __println("after");
+*/
     return 0;
 }

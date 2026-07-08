@@ -93,9 +93,9 @@ to it, whether or not a name is bound: a heap object (`new T(init)`), a conversi
 temp (`_$cret`), an operator-result temp (`_$optmp`), a materialized call-arg
 rvalue. Routing these through the ONE funnel is what keeps the field-init / ctor /
 dtor triad from drifting per site — the same "we missed a cell" guarantee, extended
-to the nameless construct sites. (`new` — single-object AND array — is now routed;
-see CODEGEN + STATUS LEDGER. The remaining nameless site still outside the funnel is
-the call-arg rvalue temp in emitCall.)
+to the nameless construct sites. (`new` — single-object AND array — AND the call-arg
+rvalue pass temp are now routed; see CODEGEN + STATUS LEDGER. The umbrella is COMPLETE:
+every construct/fill site, named or nameless, goes through the funnel.)
 
   parse     ONE parser        parseDeclarator(NamePolicy)            (LANDED)
   resolve   ONE type resolver resolveDeclType                        (LANDED) [for-array
@@ -312,8 +312,9 @@ CODEGEN — the funnel (LANDED, Slice C)
     - array with NO initializer -> the uniform-default broadcast loop (evaluate the default
       once, store into each slot), now FINALIZED per element through emitConstructed
       (register_dtor=false). Evaluate-once preserved; behavior unchanged.
-  STILL hand-rolled (fold-in pending): the call-arg rvalue materialization in emitCall.
-  PARAMS are NOT routed and
+  The call-arg rvalue materialization in emitCall now fills its by-pointer pass temp via
+  emitInitFill too (no dtor — a transient temp freed by the stacksave/stackrestore bracket,
+  not a scope dtor), so NO fill/construct site remains hand-rolled. PARAMS are NOT routed and
   need no dtor — a param is a primitive (by value) or a pointer (by pointer), so it never
   owns a slid instance; there is nothing to register.
   REMOVED as dead: emitDestructure + destructureElem + the kDestructureStmt emitStmt arm
@@ -402,7 +403,14 @@ STATUS LEDGER  (update as cleanup lands — keep this honest)
                 still reject). No-initializer array keeps the evaluate-once default broadcast,
                 now finalized per element via emitConstructed(register_dtor=false). Suite
                 71/71 in-scope positives; verified new T[3](1,2,3) distributes + per-element
-                dtors fire. PENDING (last nameless site): the call-arg rvalue temp in emitCall.
+                dtors fire.
+  [x] codegen   CALL-ARG rvalue pass temp FOLDED (2026-07-08). emitCall's by-pointer
+                materialization fills via emitInitFill (whole-value store + per-leaf widen
+                arms collapse into one call); no dtor — a transient temp freed by the
+                stacksave/stackrestore bracket. Behavior-identical (goldens unchanged; the
+                widening call-arg case sum_int3(carg) + fn(Class(10)) verified). UMBRELLA
+                COMPLETE: every construct/fill site — named declarators AND nameless temps
+                (new / conversion / op-result / call-arg) — routes through the funnel.
   Tests: existing declarator negatives/positives in test/assign/vardecl.sl +
   typeconv.sl; operator dispatch canon in test/class/operator.sl. Holes 1/2 CLOSED:
   store-target op= (`obj.f = x`) routes through dispatchAssignInit; destructure
@@ -706,8 +714,9 @@ Still INERT until Phase 6: ENFORCEMENT (nothing rejects a write through the cons
 pointee yet) — see plan.txt Phase 6.
 
 Call side: emitCall splits the by-pointer arg into the lvalue arm (pass &arg
-directly via emitLvalueAddr) and the rvalue arm (materialize via stacksave/
-alloca/store, pass the temp's address). autoRefPointee (classify) supplies the
+directly via emitLvalueAddr) and the rvalue arm (an alloca FILLED via emitInitFill —
+the ONE fill funnel — freed by the stacksave/stackrestore bracket, pass the temp's
+address). autoRefPointee (classify) supplies the
 TYPE side of the same convenience: a non-primitive value arg checks against the
 param's pointee.
 

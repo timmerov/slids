@@ -67,6 +67,10 @@ void emitConstructAt(std::string const& addr, widen::TypeRef type,
                      diagnostic::Sink& diag);
 void emitConstructed(std::string const& addr, widen::TypeRef type,
                      bool register_dtor, DtorScope* scope, std::ostream& out);
+void emitInitFill(std::string const& addr, widen::TypeRef type,
+                  std::string const& llty, ast::Node const& init, bool is_move,
+                  SymTab const& syms, strings::Pool& pool, std::ostream& out,
+                  diagnostic::Sink& diag);
 bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
@@ -785,19 +789,16 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
                 continue;
             }
             std::string pll = llvmForRef(pointee);
-            std::string v;
-            if (types_match) {
-                v = emitExpr(arg, syms, pool, out, diag, pointee);
-            } else {
-                // Aggregate widen: load source as-is, walk per-leaf with
-                // widen::convert into the pointee type, materialize the result.
-                v = emitExpr(arg, syms, pool, out, diag, widen::kNoType);
-                v = emitImplicitAggregateConvert(
-                    v, arg.inferred_type, pointee, arg.file_id, arg.tok, out, diag);
-            }
             std::string slot = newTmp("argtmp");
             out << "  " << slot << " = alloca " << pll << "\n";
-            out << "  store " << pll << " " << v << ", ptr " << slot << "\n";
+            // FILL the by-pointer pass temp through the ONE funnel: emitInitFill
+            // orchestrates the whole-value store (types_match) AND the per-leaf
+            // aggregate widen (the array<->tuple bridge / emitImplicitAggregateConvert)
+            // that this site used to hand-roll. NO dtor / registration — the temp is a
+            // transient, unnamed pass slot freed by the stacksave/stackrestore bracket
+            // (not a scope dtor), so emitConstructed is deliberately NOT called.
+            emitInitFill(slot, pointee, pll, arg, /*is_move=*/false,
+                         syms, pool, out, diag);
             arg_vals.push_back({"ptr", slot});
             continue;
         }

@@ -9,11 +9,23 @@ zero temporary String objects.
 
     s = a; s += b; s += c; s += d;
 
+
+notes:
+
 some things deferred from other landings that might apply here:
 
   - Copy-into-target instead of move — the expression-temp is copied into an existing-var target (one extra copy).
   - only-op+= seed — a class with op+= but no 2-arg op+ can't seed a fused chain.
   - Ping-pong two-buffer chains (only op+, no op+=).
+
+check the dtor for these temps run at the end of the statement.
+not the end of the enclosing scope.
+i think we should be using the sequence-expression machinery here.
+seq-exp = ( init/construct, function-call, destruct )
+
+    int x = fn(String + "Hello");
+    x = fn(String + "Hello");
+    fn(String + "Hello");
 
 */
 
