@@ -625,28 +625,42 @@ struct Parser {
     }
 
     // Pure lookahead at parsePrimary's LParen branch — the outer `(` is already
-    // consumed, so peek(0) is the FIRST INNER token. Recognizes a tuple-led
-    // conversion target: an inner `(...)` (balanced parens), optionally followed
-    // by a chain of type suffixes (`^`, `[]`, sized `[N]` / `[N,M]`), then `=`.
-    // `((char,char)=tpl)`, `((int,int)[2]=arr)`, `((int,int)^=ptr)` match;
-    // `((1,2),(3,4))` (a tuple of tuples) does NOT (after the inner `(1,2)` the
-    // next token is `,`, not a suffix and not `=`); `((x)==y)` does NOT (`==`
-    // is a distinct token from `=`). Identifier-led inner content (a user-named
-    // type target, deferred) still passes parseType to a clean diagnostic.
-    bool looksLikeTupleConvTarget() const {
-        if (peekKind(0) != token::Kind::kLParen) return false;
-        int o = 1, depth = 1;
-        while (depth > 0) {
-            token::Kind k = peekKind(o);
-            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
-                return false;
-            if (k == token::Kind::kLParen) depth++;
-            else if (k == token::Kind::kRParen) depth--;
+    // consumed, so peek(0) is the FIRST INNER token. Recognizes a `(TARGET = ...)`
+    // value-conversion target by its LEAD: either a balanced `(...)` (a tuple-led
+    // target — `((char,char)=tpl)`, `((int,int)[2]=arr)`) or a (possibly `::`-global
+    // / `:`-member qualified) NAME (an identifier-led target — `(String=x)`,
+    // `(Ns:T^=p)`, `(Vec3[2]=a)`); then a chain of type suffixes (`^`, `[]`, sized
+    // `[N]`), then `=`. UNAMBIGUOUS: slids has no assignment-EXPRESSION, so a top-level
+    // `=` after a type spelling can only open a conversion. Non-matches fall through to
+    // the paren-expr path: `(x)` (no `=`), `(x == y)` (a distinct token), `(x.f = e)`
+    // (a `.`, not a suffix), `((1,2),(3,4))` (a `,`, not a suffix/`=` after the inner
+    // tuple). A PRIMITIVE-keyword lead needs no lookahead — isTypeStart catches it at
+    // the call site.
+    bool looksLikeConvTarget() const {
+        int o = 0;
+        if (peekKind(o) == token::Kind::kLParen) {          // tuple-led: skip `(...)`
+            int depth = 1;
             o++;
+            while (depth > 0) {
+                token::Kind k = peekKind(o);
+                if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                    return false;
+                if (k == token::Kind::kLParen) depth++;
+                else if (k == token::Kind::kRParen) depth--;
+                o++;
+            }
+        } else {                                            // identifier-led: a name
+            if (peekKind(o) == token::Kind::kColonColon) o++;       // global `::T`
+            if (peekKind(o) != token::Kind::kIdentifier) return false;
+            o++;
+            while (peekKind(o) == token::Kind::kColon) {            // `A:B:C` segments
+                o++;                                        // (parseQualifiedName spelling)
+                if (peekKind(o) != token::Kind::kIdentifier) return false;
+                o++;
+            }
         }
-        // Skip a chain of type-suffix wrappers between the balanced `(...)` and
-        // the `=` — `^`, `[]`, `[ ... ]`. Bracket groups carry literal/const
-        // expressions; just scan past balanced `[...]` (no nesting inside).
+        // A chain of type-suffix wrappers between the lead and the `=`: `^`, `[]`,
+        // `[ ... ]` (scan past balanced brackets — they carry literal/const dims).
         for (;;) {
             token::Kind k = peekKind(o);
             if (k == token::Kind::kBitXor || k == token::Kind::kXorXor) { o++; continue; }
@@ -777,7 +791,7 @@ struct Parser {
         int op_tok = pos;
         Declarator d;
         if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
-                             /*allow_qualified=*/false, nullptr, d)) {
+                             /*allow_qualified=*/true, nullptr, d)) {
             return nullptr;
         }
         std::string target = std::move(d.type);
@@ -882,10 +896,11 @@ struct Parser {
             // `(Type=expr)` value conversion. A primitive type-start right after
             // `(` unambiguously marks a conversion (no expr starts with a type
             // keyword). A tuple-led target — inner `(...)` balanced parens then
-            // `=` — is recognized via lookahead and routed through the same
-            // chain. Chains `(A=B=expr)` nest right-to-left (one kConvertExpr per
-            // `Type=` link).
-            if (isTypeStart(peek().kind) || looksLikeTupleConvTarget()) {
+            // `=` — and an IDENTIFIER-led target (a user-named class / alias, then
+            // `=`) are recognized via lookahead and routed through the same chain.
+            // Chains `(A=B=expr)` nest right-to-left (one kConvertExpr per `Type=`
+            // link).
+            if (isTypeStart(peek().kind) || looksLikeConvTarget()) {
                 auto conv = parseConvertChain(t.file_id);
                 if (!conv) return nullptr;
                 if (!expect(token::Kind::kRParen, ")")) return nullptr;

@@ -1714,6 +1714,16 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                         out << "  store " << it->second.llvm_type << " " << a
                             << ", ptr " << it->second.alloca_name << "\n";
                     }
+                } else if ((ch.kind == ast::Kind::kCallExpr
+                            || ch.kind == ast::Kind::kCallStmt)
+                           && widen::form(ch.return_type)
+                                  == widen::Type::Form::kVoid) {
+                    // A discarded VOID effect call lifted into the seq — e.g. a class
+                    // conversion's `_$cret.op=(src)` dispatch when the conversion sits
+                    // in a CONDITION phrase (lifted via lowerPhraseSlot, not the
+                    // statement-pre path). emitExpr would assert on a void value; emit
+                    // it for its side effect and drop the absent result.
+                    emitCall(ch, syms, pool, out, diag);
                 } else {
                     emitExpr(ch, syms, pool, out, diag, widen::kNoType);
                 }

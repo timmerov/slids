@@ -3,7 +3,7 @@ test type conversion aka value conversion
 
 conceptually type conversion is an assignment to a temporary variable.
 parentheses are required.
-they type must be value type.
+the type must be value type.
 it may not be a pointer type.
 the expression may be a pointer when the type is bool, intptr,
 or a class that defines the approprate assignment operator.
@@ -65,18 +65,87 @@ covered here:
   - (negative) the strong result does not flex: int8 = (int=5) is a narrowing
     error, like assigning an int variable would be.
 
-a pointer is the only operand whose conversion target is restricted (bool /
-intptr only); every other value converts to every value type.
+a pointer is the only PRIMITIVE operand whose conversion target is restricted
+(bool / intptr only); every other value converts to every value type.
 
-deferred to Phase 5 (classes):
-  - (String = "...") and (Class = Type^) — class assignment-conversion.
-  - a user-named type as a conversion target (only primitive type keywords lead
-    a conversion in the grammar today).
+conversion to a CLASS target (LANDED). the "assignment to a temp" model is literal
+here: (Class = src) default-constructs a `_$cret` of the class, FILLS it from the
+source, and yields the temp — the same fill a decl-init `Class x = src` would run. a
+value source needs op=(T), a pointer source op=(T^) (header lines 8-9); a SAME-CLASS
+source with no user op= falls to the default whole-value COPY (like `Amt x = a`); a
+source that is neither op=-viable nor the same class is a clean error, no implicit
+narrowing into an operator. the grammar reaches a class target via an identifier-led
+conversion (looksLikeConvTarget; a top-level `=` inside `(...)` is unambiguous — slids
+has no assignment-EXPRESSION). the temp is a class rvalue lifted like a construction:
+destroyed at the end of the phrase (a statement-expression position) or the enclosing
+scope (a decl/assign rhs). an AGGREGATE target with a class leaf converts PER SLOT
+(lowerAggregateConversion desugars it to a tuple of per-slot sub-conversions). this is
+the 12th declarator binding site (plan-declarator.txt). scalar coverage: amt1/amt2/amt3
+(value / assign / pointer); w (a CLASS source via op=(Amt^)); inplace (field read off the
+temp); amt_from (a RETURN); amt_pair (TWO in one statement); mc (a NAMESPACED member class,
+single-colon); dol (an ALIAS); va (a VIRTUAL class — vptr stamped); the `if` (CONDITION —
+lifts through the phrase seq, so the seq codegen discards the void op= call). aggregate
+coverage: pair_cs (class-leaf tuple), sc (same-class copy), mx (mixed slots), cav (class
+array), cxf/rst (cross-form reshape both ways), nag (nested), sp (SPILL — mkpair prints
+once, proving single evaluation), wv (cross-class-in-slot), vv (virtual-in-slot), chc
+(chained to a class), nc (class-typed-field copy). negatives: neg_class_no_op (no viable
+op=), neg_class_ptr_target (a class pointer target), neg_abstract_target (the temp's
+default-construct triggers the abstract check).
 
 addresses are nondeterministic, so the pointer->intptr cases print a stable
 projection (a null address, or the bool of a non-null one) rather than the raw
 value.
 */
+
+/* a class that is the TARGET of a value conversion. A conversion to a class is an
+   assignment to a temporary of that class (header lines 8-9): it dispatches the
+   class's op= — a value source through op=(int), a pointer source through
+   op=(int^). The temp is destroyed at the end of the phrase. */
+Amt(int cents_) {
+    _() {}
+    ~() {}
+    op=(int rhs) { cents_ = rhs; }
+    op=(int^ p)  { cents_ = p^; }
+}
+
+/* the same class with OBSERVABLE ctor/dtor, to show the conversion temp's lifetime.
+   In a statement-expression position the `_$cret` temp is destroyed at the END OF
+   THE PHRASE — the same place a post-increment side effect lands. trace_use takes
+   the temp by pointer and prints it; the temp's -dtor fires before the next
+   statement, not at block exit. */
+Trace(int id_) {
+    _() { __println("  +ctor " + id_); }
+    ~() { __println("  -dtor " + id_); }
+    op=(int rhs) { id_ = rhs; }
+}
+int trace_use(Trace^ t) {
+    __println("  use " + t^.id_);
+    return 0;
+}
+
+/* more conversion targets: a CLASS source (op= takes another class by pointer), a
+   NAMESPACED member class, an ALIAS to a class, and a VIRTUAL class (its temp is
+   vptr-stamped so dispatch works). Abs is abstract — a conversion-target NEGATIVE
+   only, never instantiated in the positive path. */
+Wrap(int w_) { _() {} ~() {} op=(Amt^ a) { w_ = a^.cents_; } }
+Money {
+    Cents(int c_) { _() {} ~() {} op=(int r) { c_ = r; } }
+}
+alias Dollars = Amt;
+Vshape(int s_) { _() {} virtual ~() {} op=(int r) { s_ = r; } virtual int area() { return s_; } }
+Abs(int a_) { _() {} virtual ~() {} op=(int r) { a_ = r; } virtual int f() = delete; }
+/* a class with a CLASS-TYPED field — same-class copy must recurse into the inner class. */
+Nested(Amt part, int label_) { _() {} ~() {} op=(int r) { part.cents_ = r; label_ = r + 1; } }
+/* a tuple-returning function — a side-effecting (non-lvalue, non-literal) conversion
+   source, to prove the aggregate spill evaluates the source EXACTLY ONCE (prints once). */
+(int, int) mkpair() { __println("  mkpair"); return (50, 60); }
+
+Amt amt_from(int n) { return (Amt = n); }               // a conversion at a RETURN
+int amt_pair(Amt^ a, Amt^ b) {
+    int s = a^.cents_ + b^.cents_;
+    __println("pair = " + s);
+    return 0;
+}
 
 int32 main() {
 
@@ -329,6 +398,118 @@ int32 main() {
     cci = ((int, int) = ff);
     __println("cci = (" + cci[0] + "," + cci[1] + ")");                      // (1,2)
 
+    /* ---- conversion to a CLASS target — dispatches the class's op= ---- */
+
+    Amt amt1 = (Amt = 500);             // op=(int) fills a temp, copied into amt1
+    __println("amt1 = " + amt1.cents_); // 500
+
+    Amt amt2 = 0;
+    amt2 = (Amt = 250);                 // a conversion assigned to an existing class
+    __println("amt2 = " + amt2.cents_); // 250
+
+    int cval = 99;
+    int^ cp = ^cval;
+    Amt amt3 = (Amt = cp);              // pointer source -> op=(int^)
+    __println("amt3 = " + amt3.cents_); // 99
+
+    /* the conversion temp's scope ENDS AT THE PHRASE: -dtor fires before the next
+       statement (a statement-expression position), not at block exit. */
+    __println("phrase begin");
+    trace_use((Trace = 7));             // +ctor 0, op=(7), use 7, -dtor 7 — all here
+    __println("phrase end");
+
+    /* a CLASS source: op=(Amt^) takes another class by pointer. */
+    Amt src = 41;
+    Wrap w = (Wrap = src);
+    __println("w = " + w.w_);           // 41
+
+    /* the temp used IN PLACE — a field read off the conversion result. */
+    int inplace = (Amt = 5).cents_;
+    __println("inplace = " + inplace);  // 5
+
+    /* a conversion at a RETURN position. */
+    Amt r = amt_from(88);
+    __println("r = " + r.cents_);       // 88
+
+    /* TWO conversions in one statement — distinct temps. */
+    amt_pair((Amt = 3), (Amt = 4));     // pair = 7
+
+    /* a NAMESPACED member class as the target (single-colon qualified). */
+    Money:Cents mc = (Money:Cents = 9);
+    __println("mc = " + mc.c_);         // 9
+
+    /* an ALIAS to a class as the target. */
+    Dollars dol = (Dollars = 6);
+    __println("dol = " + dol.cents_);   // 6
+
+    /* a VIRTUAL class target — the temp's vptr is stamped, so dispatch works. */
+    Vshape vs = (Vshape = 15);
+    int va = vs.area();
+    __println("va = " + va);            // 15
+
+    /* CONDITION position — the temp is scoped to the condition's evaluation
+       (lifted through the phrase seq, not the statement-pre path). */
+    if ((Amt = 3).cents_ > 0) { __println("cond taken"); }
+
+    /* a class LEAF inside an aggregate conversion slot converts PER SLOT, iteratively
+       and recursively — each slot dispatches the class op= exactly like a top-level
+       '(Class = src)'. */
+    (int, int) cls_slot = (1, 2);
+    pair_cs = ((Amt, Amt) = cls_slot);
+    __println("pair_cs = " + pair_cs[0].cents_ + " " + pair_cs[1].cents_);   // 1 2
+
+    /* SAME-CLASS source — no user op= matches an Amt source, so the conversion falls to
+       the default whole-value COPY (assignment to a temp), exactly like `Amt x = a`. */
+    Amt sc_src; sc_src = 7;
+    sc = (Amt = sc_src);
+    __println("sc = " + sc.cents_);                              // 7
+
+    /* MIXED slots — a class slot and a primitive slot in one tuple target. */
+    mx = ((Amt, int) = (30, 40));
+    __println("mx = " + mx[0].cents_ + " " + mx[1]);             // 30 40
+
+    /* a class ARRAY target — per-ELEMENT op=(int). */
+    int csrc[2]; csrc[0] = 5; csrc[1] = 6;
+    Amt cav[2] = (Amt[2] = csrc);
+    __println("cav = " + cav[0].cents_ + " " + cav[1].cents_);   // 5 6
+
+    /* CROSS-FORM with a class element — a tuple literal converts to a class array, and a
+       same-class array reshapes to a class tuple (each slot copies). */
+    Amt cxf[2] = (Amt[2] = (7, 8));
+    __println("cxf = " + cxf[0].cents_ + " " + cxf[1].cents_);   // 7 8
+    Amt rsh[2]; rsh[0] = 1; rsh[1] = 2;
+    rst = ((Amt, Amt) = rsh);
+    __println("rst = " + rst[0].cents_ + " " + rst[1].cents_);   // 1 2
+
+    /* NESTED aggregate with class leaves at depth — the per-slot walk recurses. */
+    nag = (((Amt, int), (int, Amt)) = ((1, 2), (3, 4)));
+    __println("nag = " + nag[0][0].cents_ + " " + nag[0][1] + " "
+              + nag[1][0] + " " + nag[1][1].cents_);             // 1 2 3 4
+
+    /* SPILL — a side-effecting source (a tuple-returning call) is NOT a bare lvalue, so it
+       is evaluated ONCE into a temp then indexed per slot (mkpair prints exactly once). */
+    sp = ((Amt, Amt) = mkpair());
+    __println("sp = " + sp[0].cents_ + " " + sp[1].cents_);      // mkpair once; 50 60
+
+    /* CROSS-CLASS in a slot — each slot dispatches Wrap's op=(Amt^) on an Amt source. */
+    Amt wsrc[2]; wsrc[0] = 11; wsrc[1] = 22;
+    wv = ((Wrap, Wrap) = wsrc);
+    __println("wv = " + wv[0].w_ + " " + wv[1].w_);              // 11 22
+
+    /* VIRTUAL class in a slot — each slot's temp is vptr-stamped, so dispatch works. */
+    vv = ((Vshape, Vshape) = (10, 20));
+    __println("vv = " + vv[0].area() + " " + vv[1].area());      // 10 20
+
+    /* CHAINED to a class target — right-to-left: (int=3.9) folds to 3, then (Amt=3). */
+    chc = (Amt = int = 3.9);
+    __println("chc = " + chc.cents_);                            // 3
+
+    /* a class WITH A CLASS-TYPED FIELD, same-class copy — the whole value copies
+       recursively (the inner Amt field too). */
+    Nested nsrc; nsrc = 8;
+    nc = (Nested = nsrc);
+    __println("nc = " + nc.part.cents_ + " " + nc.label_);       // 8 9
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     /* a pointer converts only to bool / intptr, not an arbitrary numeric. */
@@ -427,12 +608,32 @@ int32 main() {
     //    return cs_es[0];
     //}
 
-    /* A class as a conversion target is deferred until op= lands. The grammar
-       has no top-level user-named conversion target, so a class would have to
-       be reached through a tuple/array slot — but a tuple type with a class
-       slot doesn't resolve today (separate gap), so the classify defer arm is
-       unreachable from any current test. Re-add a negative when either path
-       opens. */
+    /* a class conversion whose source matches no op= is rejected — the conversion
+       is only as permissive as the class's assignment operators (a float matches
+       neither op=(int) nor op=(int^); no implicit narrowing into an operator). */
+    //-EXPECT-ERROR: the class has no assignment operator accepting the source
+    //int neg_class_no_op() {
+    //    float badf = 1.5;
+    //    Amt bad = (Amt = badf);
+    //    return bad.cents_;
+    //}
+
+    /* a conversion target may not be a POINTER — a class pointer rejects like any
+       other (the identifier-led trigger routes it to the same check). */
+    //-EXPECT-ERROR: A type conversion target may not be a pointer type
+    //int neg_class_ptr_target() {
+    //    int n = 5;
+    //    Amt^ p_es = (Amt^ = n);
+    //    return p_es^.cents_;
+    //}
+
+    /* converting to an ABSTRACT class default-constructs its temp, so the abstract-
+       instantiation check fires. */
+    //-EXPECT-ERROR: Cannot instantiate the abstract class
+    //int neg_abstract_target() {
+    //    ab_es = (Abs = 1);
+    //    return ab_es.a_;
+    //}
 
     /* the result is a STRONG typed value, so assigning it to a narrower type is
        rejected just like an int variable would be — it does not flex. */

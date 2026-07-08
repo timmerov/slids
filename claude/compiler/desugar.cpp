@@ -501,6 +501,8 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->default_move_init = p.default_move_init;
     node->non_completing = p.non_completing;
     node->is_construction = p.is_construction;
+    node->class_conversion = p.class_conversion;
+    node->agg_conv_spill = p.agg_conv_spill;
     node->param_types = p.param_types;
     node->captures = p.captures;
     node->capture_types = p.capture_types;
@@ -1923,6 +1925,42 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
     if (node->kind == ast::Kind::kBinaryExpr
         && (node->text == "&&" || node->text == "||")) {
         liftSretCallExprs(node->children[0], pre, next_id, false);
+        return;
+    }
+    // A class conversion `(Class = src)` is an rvalue built into a `_$cret` temp — the
+    // class analog of a construction lift. Hoist its two children (the default-construct
+    // `_$cret` decl and the FILL statement — a `_$cret.op=(src)` op= call, or a
+    // `_$cret = src` whole-value copy-assign when the same-class source has no user op=)
+    // into `pre`, and replace the node with a read of `_$cret`. ALWAYS lifted
+    // (root_intercepted is ignored): codegen has no build-in-place path for a conversion.
+    // Recurse into the fill statement first, so a nested class rvalue source lifts ahead
+    // of this temp.
+    if (node->kind == ast::Kind::kConvertExpr && node->class_conversion) {
+        assert(node->children.size() == 2
+            && "class_conversion node must carry [construct decl, fill stmt]");
+        widen::TypeRef T = node->return_type;
+        int cid = node->resolved_entry_id;
+        int file = node->file_id, tok = node->tok;
+        auto decl = std::move(node->children[0]);
+        auto fill = std::move(node->children[1]);   // op= call OR copy-assign — a
+        liftSretCallExprs(fill, pre, next_id, false);   // discarded statement (emitStmt
+        pre.push_back(std::move(decl));                 // drops any result register)
+        pre.push_back(std::move(fill));
+        node = mintIdent("_$cret", cid, T, file, tok);
+        return;
+    }
+    // An aggregate conversion whose source was side-effecting: children = [spill decl
+    // `_$cinit = source`, the per-slot tuple that indexes `_$cinit`]. Hoist the spill
+    // FIRST (it must run before the tuple reads it), then lift any class-conversion slots
+    // out of the tuple (they reference the now-hoisted `_$cinit`), and become the tuple.
+    if (node->kind == ast::Kind::kConvertExpr && node->agg_conv_spill) {
+        assert(node->children.size() == 2
+            && "agg_conv_spill node must carry [spill decl, per-slot tuple]");
+        auto decl = std::move(node->children[0]);
+        auto tuple = std::move(node->children[1]);
+        pre.push_back(std::move(decl));
+        liftSretCallExprs(tuple, pre, next_id, false);
+        node = std::move(tuple);
         return;
     }
     for (auto& ch : node->children)

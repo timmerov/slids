@@ -54,3 +54,32 @@ pirv = true 0
 bib = true true
 tup_kt = (65 66 67, 90)
 cci = (1,2)
+amt1 = 500
+amt2 = 250
+amt3 = 99
+phrase begin
+  +ctor 0
+  use 7
+  -dtor 7
+phrase end
+w = 41
+inplace = 5
+r = 88
+pair = 7
+mc = 9
+dol = 6
+va = 15
+cond taken
+pair_cs = 1 2
+sc = 7
+mx = 30 40
+cav = 5 6
+cxf = 7 8
+rst = 1 2
+nag = 1 2 3 4
+  mkpair
+sp = 50 60
+wv = 11 22
+vv = 10 20
+chc = 3
+nc = 8 9

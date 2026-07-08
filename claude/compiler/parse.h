@@ -248,6 +248,17 @@ struct Node {
                                  // valid when Name is a class — a parenless default
                                  // construction (`Name` == `Name()`); resolveCallTarget
                                  // rejects a parenless non-class so `f;` is not a call.
+    bool class_conversion = false; // kConvertExpr: a `(Class = src)` conversion whose
+                                 // TARGET is a class — classify rewrites its children to
+                                 // [default-construct `_$cret` decl, `_$cret.op=(src)`
+                                 // call] and stamps resolved_entry_id = the `_$cret` id;
+                                 // desugar lifts the two into a `_$cret` temp (an rvalue
+                                 // via op=), the class analog of a construction lift.
+    bool agg_conv_spill = false; // kConvertExpr: an AGGREGATE conversion whose source
+                                 // was side-effecting, so classify spilled it once into a
+                                 // `_$cinit` temp — children = [spill decl, the per-slot
+                                 // tuple that indexes the temp]. desugar hoists the spill
+                                 // decl and yields the tuple (like a construction lift).
     bool is_mutable = false;     // kParam: declared with leading `mutable` — opts OUT
                                  // of the default const-pointee munge (mungeParamType)
     bool is_virtual = false;     // kFunctionDef/kFunctionDecl (a class method or the

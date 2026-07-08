@@ -656,10 +656,14 @@ STAGE FILES (.h / .cpp pairs)
             `<` is unambiguous since binary `<` only sits between operands; the
             target spelling rides on return_type, the operand is another unary so
             casts chain right-to-left), the `(Type = expr)` value conversion
-            (kConvertExpr — a type-keyword right after `(` opens it, or a
-            balanced `((...)...)` shape with a trailing `=` opens a tuple-led
-            target [looksLikeTupleConvTarget — scan past balanced parens and any
-            type-suffix chain `^`/`[]`/`[N]`, match if the next token is `=`];
+            (kConvertExpr — a type-keyword right after `(` opens it; ONE
+            lookahead [looksLikeConvTarget, factored from the former
+            looksLikeTupleConvTarget + looksLikeIdentConvTarget] opens a
+            tuple-led target `((...)...)` OR an identifier-led target
+            [a `::`(global)/`:`(member)-qualified class/alias name — user-named /
+            namespaced targets], by a lead that is either a balanced `(...)` or
+            a qualified name, then any type-suffix chain `^`/`[]`/`[N]`, matched
+            if the next token is `=`;
             parseConvertChain parses the target onto return_type and recurses
             for chain links `(A = B = expr)`, right-to-left, no inner parens),
             prefix/postfix ++/--, full binary set
@@ -1115,13 +1119,20 @@ STAGE FILES (.h / .cpp pairs)
             with NO context (it retypes, never flexes) then dispatches to
             checkConvertCompat — a lockstep recursive walk of target vs source:
             pointer-like target -> "may not be a pointer type"; void -> "must be
-            a value type"; class -> "conversion to a class is not yet
-            implemented" (deferred until op= lands); AGGREGATE target (tuple or
-            array) -> FORM-AGNOSTIC (an array IS a homogeneous tuple): the source
-            may be a tuple OR array, matched by slot/element COUNT
-            (aggregateSlotCount) and recursed per slot, so a CROSS-FORM conversion
-            (`(int[2]=(1,2))`, `((int,int)=anIntArray)`, any nesting) works;
-            aggregate-vs-scalar rejects ("Cannot convert ..."); leaf
+            a value type"; a TOP-LEVEL class target branches off BEFORE this walk to
+            lowerClassConversion (default-construct a `_$cret`, FILL it from the
+            source, lift like a construction — the literal "assignment to a temp";
+            the fill is the user op= if one matches, else a SAME-CLASS default
+            whole-value copy; the 12th declarator site, see plan-declarator.txt); an
+            AGGREGATE target (tuple or array) branches off to lowerAggregateConversion,
+            which desugars it BY SLOT — the kConvertExpr BECOMES a tuple of per-slot
+            sub-conversions `((T0=src[0]), ...)`, each re-inferred (a class slot reuses
+            the class path, a primitive slot the leaf grid, a nested aggregate
+            recurses) — so a class leaf at ANY depth converts, cross-form works (an
+            array IS a homogeneous tuple: source may be a tuple OR array, matched by
+            slot/element COUNT via aggregateSlotCount) with any nesting, and a
+            side-effecting source is SPILLED once (agg_conv_spill); aggregate-vs-scalar
+            and a slot-count mismatch reject ("Cannot convert ..."); a leaf
             (primitive) target -> a value source converts to any value target,
             a pointer/iterator source converts ONLY to `bool` or `intptr` (else
             "a pointer converts only to 'bool' or 'intptr'"), a non-value source
@@ -1370,14 +1381,18 @@ STAGE FILES (.h / .cpp pairs)
             `inttoptr` — and asserts if a pointer ever reaches the SCALAR
             conversion path (an ungated ptr->non-intptr would store a `ptr` as an
             integer; classify rejects them, so this guards against a missed gate).
-            A kConvertExpr (`(Type = expr)`) emits the operand at its own type,
-            then dispatches to emitConvertWalk, now FORM-AGNOSTIC: it recurses on
-            the DST's slots (cgAggSlotCount/cgAggSlotType) and extractvalues the
-            source slot by index — the index is identical for an LLVM array
-            `[N x T]` and a struct, so ONE walk converts array <-> tuple at any
-            nesting (cross-form) — building the result from `undef` via insertvalue;
-            a primitive (leaf) target calls widen::convertExplicit. Mirrors classify's
-            (also form-agnostic) checkConvertCompat + emitImplicitAggregateConvert.
+            A kConvertExpr (`(Type = expr)`) reaching codegen is now only a SCALAR
+            (primitive leaf) target — neither a CLASS nor an AGGREGATE target arrives
+            here: classify+desugar lowered a class target to a lifted `_$cret` temp
+            (construct + fill), and an AGGREGATE target to a tuple of per-slot sub-
+            conversions (classify::lowerAggregateConversion), so the node was already
+            replaced. So this arm emits the operand at its own type and calls
+            emitConvertWalk, which for a scalar leaf bottoms out at widen::convert-
+            Explicit. (emitConvertWalk is still FORM-AGNOSTIC — it recurses on the DST's
+            slots (cgAggSlotCount/cgAggSlotType) and extractvalues the source slot by
+            index, identical for an LLVM array `[N x T]` and a struct — but its
+            AGGREGATE arm is now BYPASSED for conversions, since aggregate targets
+            desugar per-slot in classify.)
             convertExplicit is the FULL value grid (sibling to convert, which
             only widens): trunc / sext / zext / fptrunc / fpext / fptosi /
             fptoui / sitofp / uitofp, a same-width int change is a no-op (sign

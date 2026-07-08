@@ -126,6 +126,23 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     exception" is now just "the call goes to the class's transfer function". A CROSS-TYPE
     operator (`op=(Other^)` / `op<--(Other^)`, case 4) is a distinct method dispatched by
     classify, NOT renamed. canon test/class/operator.sl + test/function/return_fn.sl.
+  * A `(Class = src)` VALUE CONVERSION binds a FRESH temp from src — the "assignment to a
+    temporary variable" model. classify::lowerClassConversion default-constructs a `_$cret`
+    and FILLS it from the source: a user op= runs `_$cret.op=(src)` (findClassOperator +
+    makeOpCallStmt, exactly the op= a decl-init `Class x = src` would run); a SAME-CLASS
+    source with NO user op= falls through to the default whole-value copy `_$cret = src` (a
+    kAssignStmt codegen lowers via @Class__$copy — the no-user-op= fallback every other
+    binding site already had; findClassOperator only surfaces USER operators, never the
+    synthesized copy/move — see todo.txt for making those first-class). desugar lifts the
+    [construct, fill] pair like a construction, so the temp destroys through the ordinary
+    class-temp lifetime. A conversion is thus as permissive as the class's op= overloads
+    (value via op=(T), pointer via op=(T^)) PLUS a same-class copy; a source that is neither
+    op=-viable nor the same class is a clean reject. It is the 12th declarator binding site
+    (plan-declarator.txt "THE CONVERSION-TARGET TEMP"); an identifier-led grammar trigger
+    (looksLikeConvTarget) routes user-named / namespaced / alias / virtual targets. An
+    AGGREGATE target with a class leaf converts PER SLOT (classify::lowerAggregateConversion
+    desugars to a tuple of per-slot sub-conversions), so a class leaf at any depth / form /
+    cross-form / same-class reshape / spilled source reuses this path. test/assign/typeconv.sl.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field

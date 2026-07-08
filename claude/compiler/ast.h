@@ -101,6 +101,14 @@ struct Node {
                                  // construction (children[0] = the construction
                                  // tuple). desugar lifts it into a synthetic
                                  // kVarDeclStmt temp (destroyed at statement end).
+    bool class_conversion = false; // kConvertExpr: a `(Class = src)` conversion to a
+                                 // class — children are [default-construct `_$cret`
+                                 // decl, `_$cret.op=(src)` call]; resolved_entry_id is
+                                 // the `_$cret` id. desugar lifts both into a temp.
+    bool agg_conv_spill = false; // kConvertExpr: an aggregate conversion with a spilled
+                                 // side-effecting source — children = [spill decl, the
+                                 // per-slot tuple]. desugar hoists the spill, yields the
+                                 // tuple.
     bool default_move_init = false;      // kVarDeclStmt: `<--` default-move-init (desugar nulls leaves)
     bool nrvo = false;           // sret NRVO: a kVarDeclStmt whose local IS the
                                  // return slot (built in place, not dtor'd here), and

@@ -416,9 +416,14 @@ bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
         return any;
     }
     if (df == F::kSlid) {
+        // A TOP-LEVEL class target is lowered in the kConvertExpr arm
+        // (lowerClassConversion). Reaching here means a class leaf inside an
+        // AGGREGATE slot — the aggregate value walk has no class-leaf arm, so
+        // reject cleanly (not a supported conversion shape).
         diagnostic::report(diag, {file_id, tok,
             "Cannot convert to class type '" + to
-            + "'; conversion to a class is not yet implemented.", {}});
+            + "' inside an aggregate; a class conversion must be a top-level "
+            "'(Class = src)'.", {}});
         return true;
     }
     // df is kPrimitive (the leaf). Validate the scalar grid.
@@ -593,6 +598,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 // A CONSTRUCTION receiver (`Class(a).m()`) is fine in either: desugar lifts it to a
 // `_$cret` temp (liftSretCallExprs) whose address is passed as `_$recv`.
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
+void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
+void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
 bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
@@ -1566,9 +1573,32 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // leaf target uses the scalar grid; tuple/array targets recurse
             // per-slot / per-element; pointer/void/class targets are rejected.
             // A literal operand was already folded in constfold.
+            // Already lowered (a class conversion rewritten to construct + op= on a
+            // prior inferExpr pass) — idempotent: its type is the target.
+            if (e.class_conversion) { e.inferred_type = e.return_type; return; }
             assert(e.children.size() == 1 && "kConvertExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
+            // A CLASS target is an assignment-to-a-temp: default-construct a `_$cret`
+            // of the class, dispatch its op= from the source, yield the temp (lowered
+            // here, lifted by desugar). An AGGREGATE target converts BY SLOT, iteratively
+            // and recursively — exactly like every other aggregate: it desugars to a
+            // tuple of per-slot conversions `((T0=src[0]), (T1=src[1]))`, so a class slot
+            // reuses the class path, a primitive slot the value grid, a nested aggregate
+            // recurses. Both suppress a cascade on a kNoType operand (already reported).
+            widen::Type::Form tf = widen::form(widen::strip(e.return_type));
+            if (tf == widen::Type::Form::kSlid) {
+                if (operand.inferred_type != widen::kNoType)
+                    lowerClassConversion(tree, e, diag);
+                else e.inferred_type = e.return_type;
+                return;
+            }
+            if (tf == widen::Type::Form::kTuple || tf == widen::Type::Form::kArray) {
+                if (operand.inferred_type != widen::kNoType)
+                    lowerAggregateConversion(tree, e, diag);
+                else e.inferred_type = e.return_type;
+                return;
+            }
             if (operand.inferred_type != widen::kNoType) {
                 checkConvertCompat(e.return_type, operand.inferred_type,
                                    e.file_id, e.tok, diag);
@@ -3709,6 +3739,222 @@ std::unique_ptr<parse::Node> makeOpCallStmt(
     for (auto& a : args) call->children.push_back(std::move(a));
     inferMethodCall(tree, *call, diag);
     return call;
+}
+
+// Lower a class-target conversion `(Class = src)` — "assignment to a temporary" — into
+// the construct-then-op= form the desugar lift hoists: a default-construct `_$cret` decl
+// plus the `_$cret.op=(src)` dispatch, stashed as the node's two children with
+// class_conversion set (desugar lifts both into a temp and yields a read of it). The
+// class must define an op= accepting the source; otherwise a clean diagnostic fires
+// (the source is not a viable conversion). Reuses findClassOperator + classifyClassInit
+// + makeOpCallStmt — the same machinery a decl-init op= uses; no bespoke lowering.
+void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
+    widen::TypeRef C = e.return_type;
+    e.inferred_type = C;
+    parse::Node& operand = *e.children[0];
+    // The conversion is "assignment to a temp": it dispatches the target's op= exactly
+    // as a decl-init `Class x = src` would. Probe for a USER op= (a value source through
+    // op=(T), a pointer through op=(T^)); if none matches BUT the source is the SAME class,
+    // fall through to the default whole-value COPY — the synthesized op= (@Class__$copy)
+    // that every other binding site uses as its no-user-op= fallback (findClassOperator
+    // only surfaces user-declared operators, never the synthesized one). Only a source
+    // that is neither op=-viable nor the same class is a clean error.
+    int op_id = findClassOperator(tree, C, operand, "op=");
+    bool same_class = op_id < 0
+        && widen::strip(operand.inferred_type) == widen::strip(C);
+    if (op_id < 0 && !same_class) {
+        diagnostic::report(diag, {e.file_id, e.tok,
+            "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
+            + "' to class '" + widen::spellOrEmpty(C)
+            + "'; the class has no assignment operator accepting the source.", {}});
+        return;
+    }
+    auto itc = tree.classes.find(widen::strip(C));
+    // A viable op= (or a same-class copy) implies C is a known class — its entry cannot
+    // be absent here. Assert the invariant rather than silently returning (which would
+    // leave an un-lowered kConvertExpr for codegen to choke on).
+    assert(itc != tree.classes.end()
+        && "lowerClassConversion: class absent from tree.classes");
+    int f = e.file_id, tk = e.tok;
+    // Mint the `_$cret` temp entry (the conversion's result value).
+    parse::Entry ce;
+    ce.kind = parse::EntryKind::kLocalVar;
+    ce.name = "_$cret";
+    ce.slids_type = widen::strip(C);
+    ce.file_id = f;
+    ce.tok = tk;
+    int cid = static_cast<int>(tree.entries.size());
+    tree.entries.push_back(std::move(ce));
+    // Default-construct decl (classifyClassInit builds the per-field default tuple).
+    auto dc = std::make_unique<parse::Node>();
+    dc->kind = parse::Kind::kVarDeclStmt;
+    dc->name = "_$cret";
+    dc->name_tok = tk;
+    dc->resolved_entry_id = cid;
+    dc->return_type = C;
+    dc->file_id = f;
+    dc->tok = tk;
+    classifyClassInit(tree, *dc, itc->second, diag);
+    // The second lifted statement fills `_$cret` from the source: a USER op= dispatches
+    // `_$cret.op=(src)` (the operand is the operator's argument); a same-class source with
+    // no user op= does the default whole-value COPY `_$cret = src` (a kAssignStmt codegen
+    // lowers via @Class__$copy — the same fill a decl-init copy rides). Both are one
+    // statement in the [construct, fill] pair the desugar class_conversion lift hoists.
+    std::unique_ptr<parse::Node> fill;
+    if (op_id >= 0) {
+        std::vector<std::unique_ptr<parse::Node>> args;
+        args.push_back(std::move(e.children[0]));
+        fill = makeOpCallStmt(tree, "_$cret", cid, C, "op=", std::move(args), f, tk, diag);
+    } else {
+        fill = std::make_unique<parse::Node>();
+        fill->kind = parse::Kind::kAssignStmt;
+        fill->name = "_$cret";
+        fill->name_tok = tk;
+        fill->resolved_entry_id = cid;
+        fill->return_type = C;
+        fill->file_id = f;
+        fill->tok = tk;
+        fill->children.push_back(std::move(e.children[0]));   // the source
+    }
+    e.class_conversion = true;
+    e.resolved_entry_id = cid;
+    e.children.clear();
+    e.children.push_back(std::move(dc));
+    e.children.push_back(std::move(fill));
+}
+
+// Lower an AGGREGATE-target conversion `(AggType = src)` BY SLOT — the same way tuples
+// are handled everywhere else. `((Class,int) = rhs)` becomes the per-slot tuple
+// `((Class = rhs[0]), (int = rhs[1]))`: each slot is itself a conversion, re-inferred
+// here, so a class slot reuses the class path (construct + op=), a primitive slot the
+// value grid (checkConvertCompat), and a nested aggregate recurses. The node BECOMES a
+// kTupleExpr typed as the target (an array target rides the array<->tuple bridge at its
+// binding). Cross-form falls out — `rhs[i]` is form-agnostic (a tuple OR array source),
+// and the target's form dictates the slot types. Source access, evaluated ONCE per slot:
+// a tuple LITERAL yields its element i in place; a bare lvalue is re-indexed (no side
+// effect to duplicate); a non-bare source is spilled to `_$cinit` first (evaluated once)
+// and the spill spliced into `prelude`.
+void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
+    widen::TypeRef T = e.return_type;
+    widen::TypeRef Ts = widen::strip(T);
+    parse::Node& operand = *e.children[0];
+    widen::TypeRef srcT = widen::strip(operand.inferred_type);
+    e.inferred_type = T;
+    bool srcIsLit = operand.kind == parse::Kind::kTupleExpr;
+    // The source must be an aggregate (an array IS a homogeneous tuple) of matching arity.
+    if (!srcIsLit && !isAggregateType(srcT)) {
+        diagnostic::report(diag, {e.file_id, e.tok,
+            "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
+            + "' to '" + widen::spellOrEmpty(T) + "'.", {}});
+        return;
+    }
+    int n = aggregateSlotCount(Ts);
+    int sn = srcIsLit ? static_cast<int>(operand.children.size())
+                      : aggregateSlotCount(srcT);
+    if (sn != n) {
+        diagnostic::report(diag, {e.file_id, e.tok,
+            "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
+            + "' to '" + widen::spellOrEmpty(T) + "'; slot count differs ("
+            + std::to_string(sn) + " vs " + std::to_string(n) + ").", {}});
+        return;
+    }
+    int f = e.file_id, tk = e.tok;
+    // Capture the per-slot target types BEFORE the loop — aggregateSlotType may intern an
+    // array element type, dangling a held get()-ref (arena safety).
+    std::vector<widen::TypeRef> slotTypes;
+    for (int i = 0; i < n; i++) slotTypes.push_back(aggregateSlotType(Ts, i));
+    // Source-once: a tuple LITERAL yields its element i in place; a bare lvalue is
+    // re-indexed (no side effect to duplicate); anything else (a call / op / another
+    // aggregate value) is SPILLED to a `_$cinit` temp evaluated once, and each slot
+    // indexes the temp. The spill decl is stashed for desugar to hoist before the
+    // statement (agg_conv_spill), mirroring the class-conversion lift.
+    parse::Kind ok = operand.kind;
+    bool bareLvalue = ok == parse::Kind::kIdentExpr || ok == parse::Kind::kIndexExpr
+                   || ok == parse::Kind::kDerefExpr;
+    std::unique_ptr<parse::Node> spill_decl;
+    int spill_id = -1;
+    if (!srcIsLit && !bareLvalue) {
+        parse::Entry se;
+        se.kind = parse::EntryKind::kLocalVar;
+        se.name = "_$cinit";
+        se.slids_type = srcT;
+        se.file_id = f;
+        se.tok = tk;
+        spill_id = static_cast<int>(tree.entries.size());
+        tree.entries.push_back(std::move(se));
+        spill_decl = std::make_unique<parse::Node>();
+        spill_decl->kind = parse::Kind::kVarDeclStmt;
+        spill_decl->name = "_$cinit";
+        spill_decl->name_tok = tk;
+        spill_decl->resolved_entry_id = spill_id;
+        spill_decl->return_type = operand.inferred_type;
+        spill_decl->file_id = f;
+        spill_decl->tok = tk;
+        spill_decl->children.push_back(std::move(e.children[0]));   // the source
+    }
+    std::vector<std::unique_ptr<parse::Node>> lit;
+    if (srcIsLit) for (auto& c : operand.children) lit.push_back(std::move(c));
+    std::vector<std::unique_ptr<parse::Node>> slots;
+    for (int i = 0; i < n; i++) {
+        std::unique_ptr<parse::Node> src_i;
+        if (srcIsLit) {
+            src_i = std::move(lit[i]);
+        } else {
+            // `src[i]` — index the bare lvalue, or the `_$cinit` spill temp.
+            auto idx = std::make_unique<parse::Node>();
+            idx->kind = parse::Kind::kIntLiteral;
+            idx->text = std::to_string(i);
+            idx->file_id = f;
+            idx->tok = tk;
+            auto base = std::make_unique<parse::Node>();
+            if (spill_id >= 0) {
+                base->kind = parse::Kind::kIdentExpr;
+                base->name = "_$cinit";
+                base->resolved_entry_id = spill_id;
+                base->inferred_type = operand.inferred_type;
+                base->file_id = f;
+                base->tok = tk;
+            } else {
+                base = cloneExpr(operand);
+            }
+            auto ix = std::make_unique<parse::Node>();
+            ix->kind = parse::Kind::kIndexExpr;
+            ix->file_id = f;
+            ix->tok = tk;
+            ix->children.push_back(std::move(base));
+            ix->children.push_back(std::move(idx));
+            src_i = std::move(ix);
+        }
+        auto conv = std::make_unique<parse::Node>();
+        conv->kind = parse::Kind::kConvertExpr;
+        conv->return_type = slotTypes[i];
+        conv->file_id = f;
+        conv->tok = tk;
+        conv->children.push_back(std::move(src_i));
+        inferExpr(tree, *conv, widen::kNoType, diag);   // recurse: class / primitive / nested
+        slots.push_back(std::move(conv));
+    }
+    // Build the per-slot tuple.
+    auto tuple = std::make_unique<parse::Node>();
+    tuple->kind = parse::Kind::kTupleExpr;
+    tuple->file_id = f;
+    tuple->tok = tk;
+    tuple->inferred_type = T;
+    for (auto& s : slots) tuple->children.push_back(std::move(s));
+    e.class_conversion = false;
+    e.children.clear();
+    if (spill_decl) {
+        // Keep e a kConvertExpr carrying [spill decl, tuple]; desugar hoists the spill.
+        e.agg_conv_spill = true;
+        e.children.push_back(std::move(spill_decl));
+        e.children.push_back(std::move(tuple));
+        e.inferred_type = T;
+    } else {
+        // No spill — e simply BECOMES the tuple.
+        e.kind = parse::Kind::kTupleExpr;
+        for (auto& c : tuple->children) e.children.push_back(std::move(c));
+        e.inferred_type = T;
+    }
 }
 
 // Lower `a = X op Y [op Z ...]` — a class lvalue assigned an arith/bitwise binary

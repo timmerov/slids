@@ -699,6 +699,39 @@ handles EVERY variable type; verified end-to-end. Three pieces:
      a kTuple case (LLVM-default struct layout via a new file-local typeByteAlign) — which
      also makes sizeof(tuple) report a real size + agrees with codegen's malloc size.
 
++ THE CONVERSION-TARGET TEMP (LANDED): the 12th site. A value conversion `(Type = src)` IS
+  a declarator — an ANONYMOUS one, in expression position — binding a fresh temp of the
+  target type from `src` (the header's own framing: "type conversion is assignment to a
+  temporary variable"). For a PRIMITIVE (scalar) target the temp is elided to an SSA
+  value (widen::convertExplicit). An AGGREGATE target desugars BY SLOT in classify
+  (lowerAggregateConversion): the kConvertExpr BECOMES a tuple of per-slot sub-conversions
+  `((T0=src[0]), (T1=src[1]), ...)`, each re-inferred — a class leaf at any depth reuses the
+  class path below, a primitive slot the scalar path, a nested aggregate recurses; cross-form
+  (array<->tuple) and a spilled side-effecting source (a `_$cinit` temp evaluated once,
+  agg_conv_spill, hoisted by desugar) fall out. For a CLASS target the declarator is real:
+  classify's kConvertExpr arm calls lowerClassConversion, which — reusing the SAME machinery a
+  decl-init op= uses — default-constructs a `_$cret` (classifyClassInit) and FILLS it from the
+  source: a user op= dispatches `_$cret.op=(src)` (findClassOperator + makeOpCallStmt); a
+  SAME-CLASS source with no user op= falls through to the DEFAULT whole-value copy
+  `_$cret = src` (a kAssignStmt codegen lowers via @Class__$copy — the fallback every OTHER
+  binding site already had). Both stash [construct, fill] as the node's two
+  children (class_conversion flag). Desugar's liftSretCallExprs lifts the pair into a temp
+  (the class analog of a construction lift) and yields a `_$cret` read; the temp constructs /
+  destroys through the existing class-temp lifetime (phrase-scoped at a statement-expression
+  position, enclosing-scoped at a decl/assign rhs). ONE small codegen touch: in a CONDITION
+  phrase the pair lifts through the kSeqExpr path (lowerPhraseSlot, not the statement-pre
+  path), so the seq-child emit loop grew a branch to DISCARD a void effect call (the op=) via
+  emitCall — otherwise emitExpr asserts on a void value. The grammar reaches a class target via
+  looksLikeConvTarget (the factored lookahead): a top-level `=` inside `(...)` is unambiguous
+  (slids has no assignment-EXPRESSION); it scans `::` (global) + `:` (member) segments, so a
+  NAMESPACED target (`Money:Cents = x`) routes too. A source that is neither op=-viable nor the
+  same class is a clean reject. Test: test/assign/typeconv.sl — scalar value / assign / pointer
+  / class-source / in-place / return / multi / namespaced / alias / virtual / condition, plus
+  the aggregate surface (class-leaf tuple, same-class copy, mixed, class array, cross-form
+  reshape, nested, spill, cross-class-in-slot, virtual-in-slot, chained, class-typed-field copy)
+  + negatives (no-op= / pointer-target / abstract). REMAINING: a class conversion inside a
+  NESTED FUNCTION crashes — a pre-existing desugar-pass gap, not conversion-specific (todo.txt).
+
 
 IMPLEMENTATION NOTES
 

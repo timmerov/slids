@@ -44,9 +44,40 @@ BUGS
     Class fn() { return Class; }
     Class fn() { temp = Class; return temp; }
 
-UNBLOCKED FEATURES
+  * NESTED-FUNCTION BODIES SKIP THE DESUGAR LOWERING PASSES — desugar's per-function
+    loops (liftSretCallList, lowerAggregateList, lowerStatementList/PPID, analyzeNrvo)
+    iterate only the TOP-LEVEL program functions (`program->children`); a NESTED function
+    is a statement inside a host body, and liftSretCallList has no kFunctionDef case, so
+    it is passed through un-recursed. Its body therefore never gets lift / aggregate-copy /
+    PPID lowering. Result: inside a nested function, `++`/`--` ("inc/dec survived desugar's
+    PPID pass"), a cross-form/leaf-widen aggregate COPY, and every CLASS TEMP (a
+    `Class(args)` construction, a hook-returning call, a scalar OR aggregate value
+    conversion `(Class = src)` / `((Class,int) = t)`) reach codegen unlowered and hit the
+    `kConvertExpr needs 1 operand` / inc-dec asserts. Codegen already lifts nested fns to
+    top-level LLVM (collectNestedFunctions), but the AST passes run before that and miss
+    them. FIX = have each of the four desugar pass-loops process nested-function bodies
+    too, each with ITS OWN return type (collect all fn defs recursively, or add a
+    kFunctionDef-recurse to the list walkers). Pre-existing (class value conversions to a
+    scalar class already crash in a nested fn); surfaced while landing aggregate class-leaf
+    conversions — the canon neg_class_in_slot helper is written as a nested function.
 
-  * implement class type conversion (Class=expr).
+  * SYNTHESIZED op= / op<-- SHOULD BE FIRST-CLASS OPERATORS, NOT SIDE FUNCTIONS — the
+    default copy/move for a class are emitted as bespoke codegen functions (@Class__$copy /
+    @Class__$move) invoked structurally by the fill path, NOT as operator entries in the
+    class's method (op) tree. So findClassOperator (a name-based `op=` lookup over
+    tree.entries) never sees them; every binding site has to special-case "no user op= →
+    fall through to the default copy/move." That scatter is exactly what bit the conversion
+    site: lowerClassConversion did the lookup, saw no user op=, and ERRORED instead of
+    falling through (patched with a same-class copy branch — a hack). FIX = when a class is
+    registered, SYNTHESIZE its default op=(Self^) / op<--(Self^) as real Function entries
+    inserted into the op tree exactly where a user operator method would go (unless the user
+    declared one, which shadows). Then findClassOperator finds the copy/move like any other
+    operator, overload ranking is uniform, and NO site needs a default-copy/move fallback —
+    the funnel collapses to "find the op, dispatch it." Removes the hack in
+    lowerClassConversion and the "else the caller does the default copy/move/elide" branches
+    everywhere.
+
+UNBLOCKED FEATURES
 
   * the spec for functions returning tuples, arrays, classes has changed.
 
@@ -75,28 +106,6 @@ BLOCKED FEATURES
     copy; revisit when assignment-operator semantics for the aggregate-spread path are
     defined. Lowering lives in classify::classifyClassInit (the per-field spread) and
     classifyStmt (an rvalue source is spilled to a temp).
-
-  * CLASS / USER-TYPE CONVERSION TARGET (Phase 5) — `(Type = expr)` LANDED for
-    primitives, tuples, and arrays (lockstep recursive walk; see
-    [[project_v2_type_conversions]]). Two slices still wait:
-      - a CLASS target `(String = "...")` / `(Class = Type^)` is class
-        assignment-conversion (routes through the class's `op=` / char[]-assign
-        path, exactly like `String s = "x"`), plus a pointer SOURCE to a class
-        that defines `op=(Type^)`. The classify defer arm exists ("conversion
-        to a class is not yet implemented") but is unreachable from any test
-        today — the user-named top-level form `(Foo=v)` doesn't parse. (A
-        tuple/array WITH a class slot now works — leafIsKnownClass's kTuple arm +
-        per-slot constructClass landed — so that is no longer a blocker here.)
-      - a USER-NAMED type as the TOP-LEVEL target: the grammar opens a
-        conversion on a primitive type KEYWORD after `(` or on a balanced
-        `((...)...)` shape (the tuple/array path), so `(Foo = v)` (single
-        parens, identifier-led) isn't recognized; falls to parseExpr →
-        "Expected ')'". `((Foo)=v)` (extra parens via the balanced-paren
-        lookahead) DOES work via single-slot tuple-collapse + alias
-        transparency, but only for primitive-backed aliases — a class-backed
-        alias would hit the defer arm above. Needs the is-this-a-type lookahead
-        Phase 5 brings.
-    typeconv.sl keeps the `(String=...)` example commented. prerequisite: classes.
 
   * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
     the class structure: a class IS a named tuple. `Name(field-list){body}` interns

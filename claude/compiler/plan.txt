@@ -263,8 +263,9 @@ Phase 4 — types beyond primitives
     eagerly by resolve with the provisional `[1]`, are re-pointed by an AliasRefresh
     bakeNodeDims records [node types at walk-entry, entry types on bake]. The for-var
     head accepts a tuple type [looksLikeTupleTypeDecl] so a for-var carries one.
-    [Array and tuple conversion targets land via the lockstep
-    emitConvertWalk; the const-dim plumbing rides the same dim_sink path into
+    [Array and tuple conversion targets desugar PER SLOT in classify
+    (lowerAggregateConversion — the kConvertExpr becomes a tuple of per-slot
+    sub-conversions); the const-dim plumbing rides the same dim_sink path into
     the conversion target.]
     SET FROM A HOMOGENEOUS TUPLE [init or whole-array assign]: a multi-dim array
     takes a NESTED tuple whose SHAPE matches the declared dims [row × col] —
@@ -434,11 +435,12 @@ Phase 4 — types beyond primitives
     bits [a cast reinterprets them]; modeled as assignment-to-a-temp, so the
     result is a STRONG typed value of the target [does not flex — `int8 = (int=5)`
     is a narrowing error]. Grammar seam: a type-keyword right after `(` is
-    unambiguous -> parseConvertChain; a tuple-led target `((T0,T1,...) = ...)` is
-    recognized via a balanced-paren lookahead (looksLikeTupleConvTarget — scan
-    past balanced `(...)` and any type-suffix chain [`^`, `[]`, `[N]`], match if
-    the next token is `=`); chains `(A = B = expr)` nest right-to-left, no inner
-    parens. Semantics are C across the whole value grid [int/uint/float families
+    unambiguous -> parseConvertChain; a tuple-led target `((T0,T1,...) = ...)` OR an
+    identifier-led target `(Name = ...)` is recognized via ONE balanced-paren lookahead
+    (looksLikeConvTarget — a lead that is either a balanced `(...)` or a `::`/`:`-qualified
+    name, then any type-suffix chain [`^`, `[]`, `[N]`], match if the next token is `=`;
+    factored from the former looksLikeTupleConvTarget + looksLikeIdentConvTarget); chains
+    `(A = B = expr)` nest right-to-left, no inner parens. Semantics are C across the whole value grid [int/uint/float families
     + bool + char] for scalar leaves: float->int truncates toward zero, int->int
     reinterprets the low N bits per target signedness [same-width sign change is
     a free no-op], ->bool is a nonzero/non-null test, ->float is sitofp/uitofp/
@@ -448,22 +450,40 @@ Phase 4 — types beyond primitives
     works, any nesting [tuple-of-array, array-of-tuple, multi-dim]; aggregate-vs-
     scalar rejects. classify gates [classify::checkConvertCompat]:
     pointer/iterator/anyptr -> "may not be a pointer type"; void -> "must be a
-    value type"; class -> "conversion to a class is not yet implemented"; a
-    value source converts to any value target; a pointer/iterator source
-    converts ONLY to `bool` [icmp ne null] or `intptr` [ptrtoint], or a class
-    with op=(Type^) [Phase 5]. constfold tryFoldConvert folds a SCALAR literal
+    value type"; a TOP-LEVEL class target -> lowered to construct-a-temp + op=
+    (classify::lowerClassConversion; see below); a class leaf inside an AGGREGATE
+    slot -> converted PER SLOT [classify::lowerAggregateConversion; see below]; a value
+    source converts to any value target; a pointer/
+    iterator source converts ONLY to `bool` [icmp ne null] or `intptr` [ptrtoint],
+    or to a class that defines op=(Type^). constfold tryFoldConvert folds a SCALAR literal
     operand to a strong target-typed literal so a conversion can initialize a
-    const or size an array dimension. Lowering: scalar leaves go through
-    widen::convertExplicit [the full grid]; aggregate targets use codegen::
-    emitConvertWalk [FORM-AGNOSTIC: recurse on the DST slots, extractvalue the
-    source slot by index (identical for array/struct), insertvalue into the result,
-    leaf bottoms out at convertExplicit]. codegen arm mirrors the cast [emit operand ->
-    emitConvertWalk -> flex into dest]. test/assign/typeconv.sl. DEFERRED
-    to Phase 5: a CLASS target `(String = "...")` / `(Class = Type^)` [class
-    assignment-conversion] and a USER-NAMED TOP-LEVEL target [the tuple-led
-    `((Foo)=v)` works today via single-slot tuple-collapse + alias transparency,
-    but bare `(Foo=v)` needs the is-this-a-type lookahead Phase 5 brings].
-    See [[project_v2_type_conversions]], [[feedback_cast_vs_conversion]].)
+    const or size an array dimension. Lowering: a scalar leaf stays a kConvertExpr and
+    codegen changes the bits via widen::convertExplicit [the full grid; codegen arm
+    mirrors the cast: emit operand -> convertExplicit -> flex into dest]. An AGGREGATE
+    target desugars BY SLOT in classify [classify::lowerAggregateConversion]: the
+    kConvertExpr BECOMES a tuple of per-slot sub-conversions `((T0=src[0]), (T1=src[1]),
+    ...)`, each re-inferred [a class slot reuses the class path, a primitive slot the
+    leaf grid, a nested aggregate recurses] — so cross-form / any nesting still works and
+    codegen NEVER sees an aggregate-target kConvertExpr [emitConvertWalk's aggregate arm is
+    now bypassed; only scalar leaves reach it]. Source-once: a tuple LITERAL yields its
+    element in place, a bare lvalue is re-indexed, a side-effecting source is SPILLED once
+    to a `_$cinit` temp then indexed [agg_conv_spill, hoisted by desugar]. aggregate-vs-
+    scalar and slot-count mismatch reject. test/assign/typeconv.sl. CLASS TARGET
+    LANDED: `(Class = src)` — the literal "assignment to a temp" — default-constructs
+    a `_$cret`, dispatches its op= from the source [findClassOperator + makeOpCallStmt,
+    the same op= a decl-init runs], and lifts the pair like a construction; as permissive
+    as the class's op= overloads [value via op=(T), pointer via op=(T^)], AND a SAME-CLASS
+    source with no user op= falls through to the DEFAULT whole-value COPY [_$cret = src, a
+    kAssignStmt codegen lowers via @Class__$copy — the same fill a decl-init copy rides;
+    the fallback every OTHER binding site already had]; a source that is neither op=-viable
+    nor the same class is a clean reject. Grammar: the identifier-led target [looksLikeConv-
+    Target scans a `::` global + `:` member name], so user-named / NAMESPACED / alias /
+    virtual targets all work; a top-level `=` inside `(...)` is unambiguous [slids has no
+    assignment-EXPRESSION]. This is the 12th declarator binding site — see plan-
+    declarator.txt "THE CONVERSION-TARGET TEMP" + [[project_class_type_conversion]].
+    Aggregate slots reach the class path per-slot [lowerAggregateConversion above], so a
+    class leaf at ANY depth / form / cross-form / same-class reshape / spilled source
+    converts. See [[project_v2_type_conversions]], [[feedback_cast_vs_conversion]].)
   * sizeof (`sizeof(T)` / `sizeof(expr)`)                          LANDED
     (kSizeofExpr — a primary; grammar splits a TYPE operand [paren starts with a
     type keyword -> parseType onto return_type] from an EXPRESSION operand [resolve
