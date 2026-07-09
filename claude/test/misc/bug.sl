@@ -13,6 +13,14 @@ puts it in scope.
 Class(int a_) {
     _() { __println("Class:ctor: " + a_); }
     ~() { __println("Class:dtor: " + a_); }
+    void inc() { ++a_; }
+}
+
+global Global (
+    Class g
+) {
+    _() { __println("Global:ctor: " + g.a_); }
+    ~() { __println("Global:dtor: " + g.a_); }
 }
 
 int32 main() {
@@ -21,6 +29,12 @@ int32 main() {
     int x = fn(Class(10));
     x;
     __println("after");
+*/
+/*
+    Global:g.inc();
+    Global:g.inc();
+    Global:g.inc();
+    __println(Global:g.a_);
 */
     return 0;
 }

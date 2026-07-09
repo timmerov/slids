@@ -8,24 +8,17 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * claude says:
-    - Root area: resolve.cpp kAddrOfExpr (~1486–1554) — the ^field→^self.field self-rewrite only fires for a bare identifier,
-    not a subscripted-field base.
-    - Impact: it blocks the natural op[] pattern (indexing a backing array in the body). The op[] machinery itself is correct
-    (verified with a scalar-backed ^v_).
-    - I left it unfixed — it's outside operator-overloading scope, and a resolve fix at the tail of a long session is exactly
-    the kind of change I shouldn't make speculatively. A clean fix would extend that self-rewrite to descend a subscript/field
-    chain to its base ident before resolveName. It's documented in memory for when you want it.
+  * Method calls on a global class object lose the first mutation: gc.inc() twice → reads 1, not 2 (each read lags by
+    one). The receiver IR passes the correct @__global_c address, and direct field writes (gc.n_ = 5) work — so this is a
+    global lazy-init / touch ordering defect (the method-receiver access doesn't fire the global's construction gate, so
+    the first read re-runs the ctor and wipes the prior mutation), not an address-taking bug. It's independent of the
+    ^g addr-of bug (fixed 2026-07-08).
 
-  * this should compile but doesn't.
+  * Passing a fixed-size array to an `int[]` (iterator) param is rejected — an array→iterator conversion gap.
     int^ retref(int[] arr, int i) { return ^arr[i]; }
     int arr[3] = (1,2,3);
-    int^ ref = retref(arr, 1);
-    claude:
-    My first op[] test hit an "Unresolved identifier" error that I initially — and wrongly, through a couple of sloppy tests —
-    pinned on op[]. It's actually a pre-existing, general resolve bug unrelated to operators: taking the address of a class
-    field's array/iterator element (^field[i]) fails inside any method body — a plain int^ ref(int i){ return ^data_[i]; }
-    breaks identically. ^scalarfield and bare field[i] reads work; only ^field[i] breaks.
+    int^ ref = retref(arr, 1);        // "Cannot assign 'int[3]' to '(const int)[]'"
+    The retref body compiles (^arr[i] resolves); the gap is only the int[3] → int[] param conversion at the call.
 
   * Ambiguous op overloads are treated as no-match rather than an error.
 
@@ -104,8 +97,14 @@ BUGS
     - Deferred fix: lower a same-type tuple = per slot (t[i].op=(s[i]) / @Elem__$copy) instead of one blit, so each
     element's copy semantics run.
 
+  * ● I have to correct myself — I was wrong earlier. The full error for the global by-ref loop is "'arr' is not an enum,
+    array, or tuple", not the addr-of gate (the truncated "declared here" misled me). Both by-ref and by-value loops over
+    a global array fail this way — a separate bug where the for-loop iterable resolver doesn't recognize a global, nothing
+    to do with address-taking.
+
 
 UNBLOCKED FEATURES
+  * should we be able to take the address of a temporary variable?
 
   * operator overloading — LANDED except two open areas:
     - EXPRESSION-TEMP ELIMINATION: fuse a full `String s = a + b + c + d` chain to ZERO

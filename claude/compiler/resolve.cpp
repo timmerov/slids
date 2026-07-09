@@ -1631,7 +1631,13 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 return;
             }
             parse::Entry const& entry = tree.entries[id];
-            if (entry.kind != parse::EntryKind::kLocalVar) {
+            // Addressable = a storage-backed variable: a local (stack alloca; params
+            // and the address-aliased receiver are kLocalVar too) or a global (static
+            // `@`-storage). The rest of EntryKind has no runtime slot to point at —
+            // kConst is substituted, kAlias/kNamespace/kClass are type/scope names,
+            // kFunction is code. codegen's emitLvalueAddr addresses exactly these two.
+            if (entry.kind != parse::EntryKind::kLocalVar
+                && entry.kind != parse::EntryKind::kGlobalVar) {
                 diagnostic::report(diag, {base->file_id, base->tok,
                     "Cannot take the address of '" + base->name + "'.",
                     {{entry.file_id, entry.tok, "declared here"}}});

@@ -1106,7 +1106,11 @@ Phase 8 — namespaces + cross-TU
     declare a member. Rides the existing scope/SymTab machinery + the one lazy-group
     mechanism; the only globals-specific code is the `explodeAnonGlobalGroups` bridge
     (dissolves an anon group into bare members) and desugar's `finalizeGroup` /
-    `needsSynth` group-lazy marking. Phase 8 adds only the CROSS-TU
+    `needsSynth` group-lazy marking. ADDRESS-OF (2026-07-08): `^g` / `^garr[i]` /
+    passing `^g` to a `T^` param now resolve — the `^` addressability gate
+    (resolve.cpp ~1634) accepts kGlobalVar (a storage-backed variable), matching
+    codegen, which already addressed globals; the other EntryKinds stay rejected (no
+    storage). Phase 8 adds only the CROSS-TU
     piece: a global declared in a `.slh` header is visible to all linked files (a `.sl`
     global stays file-local) — deferred with the rest of .slh propagation.
 

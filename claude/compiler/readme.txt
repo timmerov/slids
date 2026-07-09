@@ -505,7 +505,11 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   root), and `Enclosing:member` all fall out of ordinary frame-chain name resolution;
   no per-scope code. Storage is an `internal @`-symbol (a `ptr`), so a global slots into
   the SymTab uniformly beside a `%`-alloca local — after emitFunction seeds the globals,
-  every access site (read / lvalue / index-base / assign) treats them identically.
+  every access site (read / lvalue / index-base / assign / address-of `^g`) treats them
+  identically. Because a global IS a storage-backed variable, resolve's `^` addressability
+  gate accepts kGlobalVar alongside kLocalVar (the only two storage kinds); codegen's
+  emitLvalueAddr already handed out `@g` + the touch gate, so `^g` / `^garr[i]` / passing
+  `^g` to a `T^` param all fall out with no codegen change.
 
   SPELLINGS (all desugar to the same two shapes — a plain global or a named group):
     * SHORT / BARE — `global [Type] name = init;`, or at namespace/file scope the
