@@ -9,6 +9,8 @@ zero temporary String objects.
 
     s = a; s += b; s += c; s += d;
 
+in cases where lhs is existing object variable and rhs is a temp,
+move (not copy) semantics should be used when possible.
 
 notes:
 
@@ -26,6 +28,26 @@ seq-exp = ( init/construct, function-call, destruct )
     int x = fn(String + "Hello");
     x = fn(String + "Hello");
     fn(String + "Hello");
+
+this produces 11 ctor/dtors.
+
+    ((a, b), c) = ((Class(1), Class(2)), Class(3));
+
+does not compile:
+
+    ((a, b), c) <--  ((Class(1), Class(2)), Class(3));
+    ((a, b), c) <--> ((Class(1), Class(2)), Class(3));
+
+some claude detritus:
+
+  - Chains a = b + c + d — the whole fuse/fresh/seed/ping-pong design, and the elide-if-fresh / move-if-existing / never-copy
+  tail. Chains currently error (cleanly — not a miscompile).
+  - Unary (a = -b → a.op-(b) is an easy 1-arg rewrite; if(-a) → a.op-() is stage-4-like).
+  - Aliasing a = a + c (the direct rewrite reads+writes a — needs a temp).
+  - Decl-init binary Class r = a + b (same kVarDeclStmt gap as decl-init op=).
+  - Only-op+= head (seed via op=) and ping-pong (only op+).
+  - User op<-- for the =-class-rvalue implicit move (class rvalues currently take the existing default move/elide — wiring a
+  user op<-- into that return/move path is separate). [i think this is use move semantics
 
 */
 

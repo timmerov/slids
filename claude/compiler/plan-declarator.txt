@@ -93,9 +93,20 @@ to it, whether or not a name is bound: a heap object (`new T(init)`), a conversi
 temp (`_$cret`), an operator-result temp (`_$optmp`), a materialized call-arg
 rvalue. Routing these through the ONE funnel is what keeps the field-init / ctor /
 dtor triad from drifting per site — the same "we missed a cell" guarantee, extended
-to the nameless construct sites. (`new` — single-object AND array — AND the call-arg
-rvalue pass temp are now routed; see CODEGEN + STATUS LEDGER. The umbrella is COMPLETE:
-every construct/fill site, named or nameless, goes through the funnel.)
+to the nameless construct sites.
+
+TWO FEED PATHS reach the three helpers, and EVERY nameless site was once hand-rolled:
+  (1) DIRECT — a codegen construct site calls them itself: var-decl / sret / global /
+      `new` / the call-arg pass temp.
+  (2) VIA THE LIFT — classify+desugar rewrite a nameless class temp (`_$cret`
+      conversion, `_$optmp` op-result, an inline `Class(args)`) into a NAMED
+      kVarDeclStmt (liftSretCallExprs, desugar.cpp), which then takes path (1)'s
+      var-decl route. Verified: a `(Money = 5)` conversion emits @Money__$ctor + the
+      op= fill + a REGISTERED dtor at scope end — exactly like a named local.
+The path-2 class temps were funneled by an EARLIER session (the lift IS their fold);
+`new` (its own kNewExpr codegen) and the call-arg temp (inline in emitCall) were the
+two hand-rolled DIRECT sites THIS work folded. The umbrella is now COMPLETE — every
+construct/fill site, named or nameless, direct or lifted, goes through the funnel.
 
   parse     ONE parser        parseDeclarator(NamePolicy)            (LANDED)
   resolve   ONE type resolver resolveDeclType                        (LANDED) [for-array
@@ -367,6 +378,36 @@ KNOWN HOLES  (close as a consequence of the funnels; do not one-off patch)
 
 
 ======================================================================
+REMAINING  (declarator gap still open)
+======================================================================
+
+  NESTED move/swap destructure — `((a,b),c) <-- src` / `((a,b),c) <--> src`.
+  desugarDestructure (classify.cpp) already RECURSES for a nested COPY slot; the
+  MOVE/SWAP nested slot is rejected today with a clean "A nested move/swap
+  destructure is not yet supported." (classify.cpp ~3432). Landing it reuses the
+  copy-recursion template — three contained changes in desugarDestructure, NO
+  desugar / codegen work:
+    1. Drop the `!is_copy` guard on the nested-slot branch (~3432); take the same
+       recurse path the copy case does.
+    2. Propagate the op kind onto the sub-destructure: set the sub node's
+       default_move_init / default_swap_init from `s` before re-classifying, so the
+       recursion emits per-leaf kMoveStmt / kSwapStmt (not a copy).
+    3. Relax the move/swap SOURCE check (~3352, "requires a named (lvalue) source")
+       to accept a bare-lvalue ACCESS PATH (isBareLvalue: ident / index / field over
+       a named local), because the recursive sub-source is `src[i]` (a kIndexExpr),
+       not a bare ident — index it IN PLACE (do NOT spill to a temp, unlike the copy
+       path), so the per-leaf move nulls the right source leaf.
+  Everything else composes for free: per-leaf source-nulling (moved-from) and swap
+  exchange already ride the flat kMoveStmt / kSwapStmt lowering; the recursion just
+  distributes them one level deeper. Canon: add a nested POSITIVE to
+  test/tuple/destructure.sl (`((a,b),c) <-- src` nulls the source leaves; `<-->`
+  exchanges) and retire the nested-move/swap NEGATIVE. (The clean error is maskable
+  by a set-but-never-used resolve error when the targets are otherwise unused — a
+  general error-order quirk, not specific to this feature; a nested positive
+  sidesteps it.)
+
+
+======================================================================
 STATUS LEDGER  (update as cleanup lands — keep this honest)
 ======================================================================
 
@@ -379,8 +420,9 @@ STATUS LEDGER  (update as cleanup lands — keep this honest)
                 scoping (the ConflictScope/AnyScope knob is removed — for-vars conflict
                 same-frame only, like every other site).
   [x] classify  dispatchAssignInit — LANDED (Slice A); 5 assign-form sites routed
-                (hole 1). desugarDestructure — copy/move/swap per-slot, recursive
-                (hole 2). Both holes CLOSED. (4 destructure negative MESSAGES shifted by
+                (hole 1). desugarDestructure — copy/move/swap per-slot (hole 2);
+                COPY recurses for nested slots, MOVE/SWAP nested is the one gap left
+                (see REMAINING). Both holes CLOSED. (4 destructure negative MESSAGES shifted by
                 per-slot desugaring; the EXPECT-ERROR substrings were re-pointed — tuple
                 negatives 50/50.)
   [x] desugar   lowerAggCopyStmt — LANDED (as-is); THE cross-form copy/move lowerer for

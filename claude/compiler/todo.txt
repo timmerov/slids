@@ -8,6 +8,27 @@ quest's progress lives in plan.txt).
 
 BUGS
 
+  * claude says:
+    - Root area: resolve.cpp kAddrOfExpr (~1486–1554) — the ^field→^self.field self-rewrite only fires for a bare identifier,
+    not a subscripted-field base.
+    - Impact: it blocks the natural op[] pattern (indexing a backing array in the body). The op[] machinery itself is correct
+    (verified with a scalar-backed ^v_).
+    - I left it unfixed — it's outside operator-overloading scope, and a resolve fix at the tail of a long session is exactly
+    the kind of change I shouldn't make speculatively. A clean fix would extend that self-rewrite to descend a subscript/field
+    chain to its base ident before resolveName. It's documented in memory for when you want it.
+
+  * this should compile but doesn't.
+    int^ retref(int[] arr, int i) { return ^arr[i]; }
+    int arr[3] = (1,2,3);
+    int^ ref = retref(arr, 1);
+    claude:
+    My first op[] test hit an "Unresolved identifier" error that I initially — and wrongly, through a couple of sloppy tests —
+    pinned on op[]. It's actually a pre-existing, general resolve bug unrelated to operators: taking the address of a class
+    field's array/iterator element (^field[i]) fails inside any method body — a plain int^ ref(int i){ return ^data_[i]; }
+    breaks identically. ^scalarfield and bare field[i] reads work; only ^field[i] breaks.
+
+  * Ambiguous op overloads are treated as no-match rather than an error.
+
   * this should compile but doesn't:
     Shift(int a) { op<<(Shift^ lhs, Shift^ rhs) { a = lhs^.a << rhs^.a; } }
     (Shift, Shift) tuple = (Shift(1), Shift(3)) << 1;
@@ -75,6 +96,15 @@ BUGS
     scalar class already crash in a nested fn); surfaced while landing aggregate class-leaf
     conversions — the canon neg_class_in_slot helper is written as a nested function.
 
+  * ● Tuple op= (t = s where the slots are classes with a user op=):
+    - Today: the whole tuple is copied as one blob — load {{i32},{i32}} then store — a raw memory blit.
+    - So each slot's op= (and even the default @Elem__$copy) is skipped. Elem::op= fired never runs.
+    - Fine for trivial slots (the bytes are the value). Wrong for a slot whose copy is non-trivial — a heap-owning class
+    blits its pointer shallow → two owners → double-free.
+    - Deferred fix: lower a same-type tuple = per slot (t[i].op=(s[i]) / @Elem__$copy) instead of one blit, so each
+    element's copy semantics run.
+
+
 UNBLOCKED FEATURES
 
   * operator overloading — LANDED except two open areas:
@@ -95,6 +125,12 @@ UNBLOCKED FEATURES
     fn( (uint=10) );
     signed integer types should unambiguously match to the fn(int64).
     unsigned integer types should unabiguously match to the fn(uint64).
+
+  * review swap-init.
+    Primitive swap-init; = (tuple) op=; kStoreStmt-target op=.
+
+  * Nested destructure move/swap (((a,b),c) <--) → clean "not yet supported" error.
+    test/class/operator.sl
 
 
 BLOCKED FEATURES
@@ -268,6 +304,15 @@ BLOCKED FEATURES
 
 
 REACH GOALS
+
+  * inferred reference type.
+    int x = 100;
+    ref^ = x;
+    type of ref is int^.
+    actual use case:
+    for (ref^ : container) { }
+    the loop type is inferred from container.
+    but we specify we want to loop by reference, not value.
 
   * b = (obj < x) desugars to b = obj.op<(x) regardless of x.
     if x is not a class or obj.op<(x) is not defined then we could try transposing

@@ -1,67 +1,5 @@
 
-today's crap:
-
-leftover crap from plan-declarator landing fail:
-
-  emitConstructAt/emitInitFill/emitConstructed are really the universal "materialize a value into storage (+ hooks, +
-  optional dtor-register)" primitive — broader than "a declarator binds a name." The plan defined the umbrella by
-  binding sites (things with a name), so the non-name construct/fill sites — new, call-arg temps, and arguably the
-  class-conversion _$cret / op-temp _$optmp materializations — fall outside it even though they're the identical codegen
-  operation. That's the "incomplete interpretation": the umbrella should be every place a value is constructed/filled
-  into storage, not only named declarators.
-
-   But "every construct site routes through emitConstructed" is literally true only for scope-dtor'd sites.
-  Three construct outside it:
-  2. kNewExpr heap (1534, 1561) — ctor hooks by hand; defensible as a separate heap/delete mechanism (no scope
-  dtor).
-  3. husk teardown (2181-2207) — the plan does disclose this one.
-
-
-  - op= onto a field/deref/index target (obj.f = x, a kStoreStmt) — unchanged; though compound obj.f += x is wired.
-  - Ambiguous op overloads are treated as no-match rather than an error.
-
-    This slice is a real increment but it is not the fuse machinery from our discussion. Still pending, and all of it needs the
-  desugar temp/chain transform (mirroring tryDesugarAugAssign), not a classify one-liner:
-  - Chains a = b + c + d — the whole fuse/fresh/seed/ping-pong design, and the elide-if-fresh / move-if-existing / never-copy
-  tail. Chains currently error (cleanly — not a miscompile).
-  - Unary (a = -b → a.op-(b) is an easy 1-arg rewrite; if(-a) → a.op-() is stage-4-like).
-  - Aliasing a = a + c (the direct rewrite reads+writes a — needs a temp).
-  - Decl-init binary Class r = a + b (same kVarDeclStmt gap as decl-init op=).
-
-    a = a + b (aliasing) bails correctly from the fuse (can't use a as its own accumulator), then hits a pre-existing hole:
-  codegen emits an invalid LLVM struct add that llc rejects. This predates my change — any unlowered class binary hits it —
-  so my work is strictly additive, no regression. I chose not to bolt on a catch-all error guard, because it would preempt
-  the better "cannot convert int to Class" message for the genuine no-operator case. The proper fix rides with the
-  aliasing-temp slice.
-
-  - Aliasing a = a + b (needs a synthesized temp + move into a — also closes the invalid-IR hole).
-  - Only-op+= head (seed via op=) and ping-pong (only op+).
-  - Unary in expressions (a = -b → a.op-(b); if(-a) → a.op-()).
-  - Decl-init binary Class r = a + b (same kVarDeclStmt gap as decl-init op=).
-
-  My first op[] test hit an "Unresolved identifier" error that I initially — and wrongly, through a couple of sloppy tests —
-  pinned on op[]. It's actually a pre-existing, general resolve bug unrelated to operators: taking the address of a class
-  field's array/iterator element (^field[i]) fails inside any method body — a plain int^ ref(int i){ return ^data_[i]; }
-  breaks identically. ^scalarfield and bare field[i] reads work; only ^field[i] breaks.
-
-  - Root area: resolve.cpp kAddrOfExpr (~1486–1554) — the ^field→^self.field self-rewrite only fires for a bare identifier,
-  not a subscripted-field base.
-  - Impact: it blocks the natural op[] pattern (indexing a backing array in the body). The op[] machinery itself is correct
-  (verified with a scalar-backed ^v_).
-  - I left it unfixed — it's outside operator-overloading scope, and a resolve fix at the tail of a long session is exactly
-  the kind of change I shouldn't make speculatively. A clean fix would extend that self-rewrite to descend a subscript/field
-  chain to its base ident before resolveName. It's documented in memory for when you want it.
-
-  - User op<-- for the =-class-rvalue implicit move (class rvalues currently take the existing default move/elide — wiring a
-  user op<-- into that return/move path is separate).
-  - Primitive swap-init; = (tuple) op=; kStoreStmt-target op=.
-
-  - Nested destructure move/swap (((a,b),c) <--) → clean "not yet supported" error.
-  - User op<-- for the =-class-rvalue implicit move (class rvalues take the existing default move/elide).
-  - = (tuple) op=, kStoreStmt-target op=, primitive swap-init.
-
-  Class a = mk() elides today (verified). If elision ever fails it falls back to the default move, not a user op<-- — wiring
-  the user move operator into that implicit-move path is separate. In practice elision covers it, so it rarely bites.
+agenda:
 
 
 things to do before commits:
@@ -71,27 +9,8 @@ what test coverage gaps remain ?
 update readme*.txt, plan*.txt, and memories.
 remove landed items from todo.txt. update stale entries.
 
-claude really likes to look at types as a string.
-trying to eradicate this practice.
-but man...
-widen::internOrNone
-preferredSpelling
-spellOrEmpty
-widen::strip
-
-does swap operator make any sense?
-
 remaining class todo:
-incomplete, operator, refine, virtual
-
-inferred reference type.
-int x = 100;
-ref^ = x;
-type of ref is int^.
-actual use case:
-for (ref^ : container) { }
-the loop type is inferred from container.
-but we specify we want to loop by reference, not value.
+refine, cross-tu
 
 these need to move to optimizations.
 operations may be reduced:

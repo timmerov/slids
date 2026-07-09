@@ -10,14 +10,9 @@ claude is forbidden to mention this file unless the user specifically
 puts it in scope.
 */
 
-Class(int a) {
-    _() { __println("ctor"); }
-    ~() { __println("dtor"); }
-}
-
-int fn(Class^ cls) {
-    __println("fn");
-    return cls^.a;
+Class(int a_) {
+    _() { __println("Class:ctor: " + a_); }
+    ~() { __println("Class:dtor: " + a_); }
 }
 
 int32 main() {
