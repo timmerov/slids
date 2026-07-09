@@ -108,6 +108,17 @@ cog:ctor
 gear:ctor
 cog:ctor
 trio=0
+dial:ctor
+dial:turn 21
+dial:turn 22
+dial=22
+dial:ctor
+dial:turn 6
+knob=6
+addr=57
+grid2=130
+dial:dtor
+dial:dtor
 cog:dtor
 gear:dtor
 cog:dtor

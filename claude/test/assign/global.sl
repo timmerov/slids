@@ -329,6 +329,17 @@ that READS a member (members are live before the ctor / during the dtor); class-
 groups nested in a namespace / class / function; cross-group nesting (LIFO teardown);
 and 1- and 3-member arity.
 
+ADDRESS-OF a global + METHOD CALL on a global object — taking a global's address (`^g`,
+`^garr[i]`) and calling a method on a global object (`obj.m()`, whose receiver is passed
+as `^obj`) both go through `^`. Every `^`-of-a-variable now accepts a global (resolve's
+addressability gate accepts kGlobalVar — the addressable set is exactly kLocalVar +
+kGlobalVar), AND — the subtle part — `^` of a LAZY global fires its first-access
+construction gate, so a method call on a global class object CONSTRUCTS it before the
+method runs. (Previously the receiver skipped the gate, so the object stayed zero-init and
+the first field read re-ran the ctor, wiping the method's mutations.) Exercised below:
+`dial_` (method call is the first access), `^knob_` (lazy addr-of is the first access),
+`^addr_` (scalar write-through), `^grid_[2]` (array element).
+
 Globals are now complete across every scope (file / namespace / class / function) and
 every type (scalar / array / tuple / class). Nothing is deferred.
 */
@@ -660,6 +671,20 @@ global trio(
     Cog  t3_
 ) { }
 
+/* ADDRESS-OF a global + a METHOD CALL on a global object — both take a global's
+   ADDRESS (the receiver of `obj.m()` is passed as `^obj`), so both must fire the lazy
+   first-access gate: a lazy global is CONSTRUCTED before the method runs / before `^`
+   yields its address. A scalar / array global has no gate — the address is just `@sym`
+   / an element GEP. */
+Dial(int d_ = 0) {
+    void turn() { d_ = d_ + 1; __println("dial:turn " + d_); }
+    _() { __println("dial:ctor"); }
+    ~() { __println("dial:dtor"); }
+}
+global Dial dial_ = Dial(20);            /* first access is a METHOD CALL */
+global Dial knob_ = Dial(5);             /* first access is ADDRESS-OF */
+global int addr_ = 50;                   /* scalar: `^addr_` writes through */
+
 int32 main() {
     /* NEGATIVE (sits BEFORE `global;`, so uncommented it accesses a global outside
        the open scope — the explicit `global;` below suppresses the auto-insert). */
@@ -818,6 +843,34 @@ int32 main() {
     __println("trio=" + trio:t2_.gn_);       // cog:ctor, gear:ctor, cog:ctor, then 0
 
     /* (3) `dormant` is never touched -> no dormant:ctor / cog:ctor / dtor for it */
+
+    /* --- address-of a global + method-call on a global object --- */
+
+    /* METHOD CALL on a global object: the FIRST access is the call, which must
+       CONSTRUCT the object (dial:ctor) BEFORE running the method, so the mutation
+       persists and a later read sees it (the method-on-global first-mutation bug). */
+    dial_.turn();                            // dial:ctor, then dial:turn 21
+    dial_.turn();                            // dial:turn 22
+    __println("dial=" + dial_.d_);           // 22
+
+    /* ADDRESS-OF a LAZY class global: `^knob_` is the FIRST access, so it fires the
+       construction gate (dial:ctor); a later method call does NOT re-construct. */
+    Dial^ pk = ^knob_;                       // dial:ctor
+    knob_.turn();                            // dial:turn 6 (already constructed)
+    __println("knob=" + pk^.d_);             // 6 (read through the reference)
+
+    /* ADDRESS-OF a scalar global: write through `^addr_`; the global itself changes. */
+    int^ pa = ^addr_;
+    pa^ = pa^ + 7;
+    __println("addr=" + addr_);              // 57
+
+    /* ADDRESS-OF a global ARRAY element: `^grid_[2]` -> an int^ to the element. */
+    int^ pe = ^grid_[2];
+    pe^ = pe^ + 100;
+    __println("grid2=" + grid_[2]);          // 130
+
+    /* dial_ + knob_ are lazy classes constructed LAST (here), so they tear down FIRST
+       at exit (LIFO): knob_ then dial_ (each a dial:dtor), ahead of the gap groups. */
 
     /* at exit, dtors run LIFO by construction order. Within a group, teardown is the
        user ~() (if any) then members in REVERSE. The gap groups register last (in the
