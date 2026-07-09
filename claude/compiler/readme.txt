@@ -380,8 +380,9 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     parsePrimary, comma after the first paren expr; size-1 collapses to the bare
     expr). TYPE `(T,T,...)` parses in parseType, each slot a ListSlot declarator
     (anonymous — a NAMED slot `(int x, int y)` is "too many names"); a `(`-led
-    statement disambiguates via looksLikeTupleTypeDecl (trailing name) /
-    looksLikeTupleDestructure (`)=`).
+    statement disambiguates via looksLikeTupleTypeDecl (a type-suffix run then a
+    trailing name — the shared typeSuffixesThenName tail, so `(const int)[5]^ p`
+    and `(int,int)[2]^ t` parse) / looksLikeTupleDestructure (`)=`).
   * Landed: construct + whole-copy + const-index read `t[k]` (extractvalue; a
     RUNTIME index on a tuple is rejected — heterogeneous slots); slot write
     `t[k]=v` (struct-GEP) + destructure `(a,b,)=t` (kDestructureStmt, each slot a
@@ -602,13 +603,22 @@ STAGE FILES (.h / .cpp pairs)
             type name `Space:Dir` / `::A:B:T`, + T[] of any); a
             looksLikeQualifiedTypedDecl lookahead routes an identifier-typed decl
             to a var-decl (vs `Space:foo()` / `Space:kX = 1` / `p^ = v` /
-            `arr[i] = v`, name-led statements): it scans the (qualified) name, an
-            OPTIONAL caret run (`^` = a reference level; `^^` is one logical-xor
-            token read as TWO levels) or empty `[]` (iterator) suffix, then requires
-            the var name — so `Space:Dir x`, `Integer^ ref`, `Integer[] iter`,
-            `Space:Dir^ d` all parse (a non-empty `[i]` is a subscript, not a
-            suffix, so `arr[i] = v` stays a store; a bare `a ^ b` reads as a
-            reference decl `a^ b` since a bare XOR is not a statement form). An
+            `arr[i] = v`, name-led statements): it scans the (qualified) name, then
+            a type-suffix run, then requires the var name. The suffix run + trailing
+            name is the shared typeSuffixesThenName helper (used by BOTH this gate
+            and the `(`-led looksLikeTupleTypeDecl): it skips a MAXIMAL, interleaved
+            run of `^`/`^^` (reference levels; `^^` is one logical-xor token read as
+            TWO) and bracket groups — empty `[]` (iterator) OR sized `[N]`/`[a,b]`
+            (scanned by bracket depth) — mirroring parseType's real suffix chain, so
+            `Space:Dir x`, `Integer^ ref`, `Integer[] iter`, `Vec[5]^ v`,
+            `(const int)[5]^ p` all parse. The TRAILING IDENTIFIER is the
+            decl-vs-statement discriminator: a store/call puts an OPERATOR after the
+            suffix run (never a bare name), so `arr[i] = v` stays a store and
+            `p^ = v` a deref-store — bracket EMPTINESS no longer matters (a bare
+            `a ^ b` still reads as a reference decl `a^ b`, a bare XOR being no
+            statement form); a top-level sized dim (`(const int)[5] x`) is now
+            RECOGNIZED as a decl and reaches parseType's "size belongs on the name"
+            diagnostic, not a statement misparse. An
             array DIM (`Int nums[4]`) goes after the name -> the plain `Ident
             Ident` path; a bracket may hold a COMMA dim-list (`int g[3,5]`, the
             natural-order form) — each bracket's dims are appended REVERSED

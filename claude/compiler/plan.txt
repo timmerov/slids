@@ -609,7 +609,10 @@ Phase 4 — types beyond primitives
     kAliasDecl; an alias TARGET may be a pointer type `alias IntPtr = int^;`. An
     IDENTIFIER-typed decl with a pointer SUFFIX (`Integer^ ref`, `Integer[] iter`,
     `Space:Dir^ d`, and the Phase-5 `Cat^ c`) now parses — looksLikeQualifiedTypedDecl
-    accepts an optional `^`/`[]` suffix before the var name. Deferred alias items
+    accepts a full type-suffix run before the var name (the shared
+    typeSuffixesThenName helper: `^`/`^^` and bracket groups, empty `[]` OR sized
+    `[N]`, interleaved — so an alias-led sized-array ref `Vec[5]^ v` parses too).
+    Deferred alias items
     (##type-of-function, function-rename, templated) → todo.txt.
   * qualified type names — LANDED. A type spelling may be namespace-qualified
     (`Space:Dir`, `::A:B:T`): grammar's parseType accepts a qualified name and a

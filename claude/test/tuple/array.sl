@@ -284,6 +284,17 @@ int32 main() {
     int row[2] = va[0];
     __println("row= " + row[0] + " " + row[1]);                             // 1 2
 
+    /* a REFERENCE to a SIZED array carries the size in the type (vs the unsized
+       iterator `int[]`). A `(`-led grouped-const element type and an alias-led
+       element type, each with a nested sized dim before the `^`, exercise the
+       two declarator gates in var-decl position; `^base3` is the whole-array
+       address (`int[3]^`). */
+    int base3[3] = (1, 2, 3);
+    (const int)[3]^ grp = ^base3;
+    __println("grp= " + grp^[0] + " " + grp^[2]);                           // 1 3
+    Integer[3]^ ali = ^base3;
+    __println("ali= " + ali^[0] + " " + ali^[2]);                           // 1 3
+
     {
         // a size-1 array initialized from a bare SCALAR: size-1 tuples collapse to
         // their element, so the lone element's initializer is spelled bare. The
@@ -625,6 +636,23 @@ int32 main() {
 //int neg_array_type_const() {
 //    const int[3] c = (1,2,3);
 //    return c[0];
+//}
+
+/* the same rule for a `(`-led (grouped) type — the declarator gate now
+   RECOGNIZES it as a declaration (top-level sized dim, no `^`), so it reaches
+   the "size belongs on the name" diagnostic rather than a statement misparse. */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_type_grouped() {
+//    (const int)[3] x = (1,2,3);
+//    return x[0];
+//}
+
+/* and for an alias-led (identifier) type. */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_type_alias() {
+//    alias E = int;
+//    E[3] x = (1,2,3);
+//    return x[0];
 //}
 
 /* a nested array-element initializer whose SHAPE doesn't match the element. */

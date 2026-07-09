@@ -21,6 +21,7 @@ assume these named references have these types.
     const Type^ constp;
     Type^ mutp;
     intptr num;
+    Type arr[5];
 
 implicit casts are the widening rules of pointers.
 you may lose information.
@@ -43,6 +44,11 @@ iterators can be demoted to references of the same type.
 mutable pointers can become const pointers.
 
     constp = mutp;
+
+arrays may be demoted to iterators or references of the same type.
+
+    iter = arr;
+    ref = arr;
 
 implicit casts may be made explicit.
 

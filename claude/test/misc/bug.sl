@@ -26,6 +26,15 @@ global Global (
     _() { __println("Global:ctor: " + g.a_); }
     ~() { __println("Global:dtor: " + g.a_); }
 }
+/*
+void fn1( int[] p ) { __println(##type(p)); }
+void fn2( const int[] p ) { __println(##type(p)); }
+void fn3( (const int)[] p ) { __println(##type(p)); }
+void fn4( int[5]^ p ) { __println(##type(p)); }
+void fn5( const int[5]^ p ) { __println(##type(p)); }
+void fn6( (const int)[5]^ p ) { __println(##type(p)); }
+void fn7( const (const int)[5]^ p ) { __println(##type(p)); }
+*/
 
 int32 main() {
 /*
@@ -33,6 +42,25 @@ int32 main() {
     int x = fn(Class(10));
     x;
     __println("after");
+*/
+/*
+    /* should compile. */
+    int arr[5] = (1,2,3,4,5);
+    //fn1(arr);
+    //fn2(arr);
+    //fn3(arr);
+    fn4(arr);
+    fn5(arr);
+    fn6(arr);
+    fn7(arr);
+    fn1(^arr[0]);
+    fn2(^arr[0]);
+    fn3(^arr[0]);
+    /* compile errors. */
+    //fn4(^arr[0]);
+    //fn5(^arr[0]);
+    //fn6(^arr[0]);
+    //fn7(^arr[0]);
 */
     return 0;
 }

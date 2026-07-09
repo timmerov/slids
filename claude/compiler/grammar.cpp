@@ -516,14 +516,15 @@ struct Parser {
     }
 
     // Pure lookahead: do the tokens from the current position form a (qualified)
-    // identifier TYPE spelling, with an optional pointer suffix, immediately
+    // identifier TYPE spelling, with an optional type-suffix run, immediately
     // followed by an identifier? That is a typed var decl whose type is an
-    // identifier type (alias / enum / class), possibly a reference or iterator:
-    // `Space:Dir x`, `Integer^ ref`, `Integer[] iter`, `Space:Dir^ d`. Opposed to
-    // a name leading a call / assignment (`Space:foo()`, `Space:kX = 1`), a deref
-    // store (`p^ = v`), or an index store (`arr[i] = v` — a NON-empty `[i]`, so
-    // the iterator suffix below doesn't match). Primitive-typed decls don't come
-    // here (isTypeStart catches them). Consumes nothing.
+    // identifier type (alias / enum / class), possibly a reference / iterator /
+    // sized array: `Space:Dir x`, `Integer^ ref`, `Integer[] iter`, `Vec2[5]^ v`.
+    // Opposed to a name leading a call / assignment (`Space:foo()`, `Space:kX = 1`),
+    // a deref store (`p^ = v`), or an index store (`arr[i] = v`) — those put an
+    // operator, not a name, after the suffix run (see typeSuffixesThenName).
+    // Primitive-typed decls don't come here (isTypeStart catches them). Consumes
+    // nothing.
     bool looksLikeQualifiedTypedDecl() const {
         int o = 0;
         if (peekKind(o) == token::Kind::kColonColon) o++;
@@ -533,28 +534,50 @@ struct Parser {
             if (peekKind(o + 1) != token::Kind::kIdentifier) return false;
             o += 2;
         }
-        // An optional reference (`^`) or iterator (`[]` — empty brackets only)
-        // suffix, mirroring parseType. A non-empty `[i]` is a subscript, not a
-        // type suffix, so it is left for the name-led store path.
-        // A run of reference carets — `^` is one level, `^^` (one logical-xor
-        // token) is two, and a 3+ run already lexed as separate `^` tokens.
-        bool any_caret = false;
-        while (peekKind(o) == token::Kind::kBitXor
-               || peekKind(o) == token::Kind::kXorXor) {
-            o++;
-            any_caret = true;
-        }
-        if (!any_caret && peekKind(o) == token::Kind::kLBracket
-            && peekKind(o + 1) == token::Kind::kRBracket) {
-            o += 2;
+        // The core type is the qualified name; a type-suffix run then the name
+        // decides decl-vs-statement (shared with the tuple-led gate below).
+        return typeSuffixesThenName(o);
+    }
+
+    // From offset `o` (just past a core type), skip a MAXIMAL run of type-suffix
+    // tokens, then require the declared name. The suffix run is `^` / `^^`
+    // (reference levels) and bracket groups — empty `[]` (iterator) OR sized
+    // `[N]` / `[a,b]` — interleaved in ANY order, mirroring parseType's real
+    // suffix chain (`int[3]^`, `int^[3]`, `(const int)[5]^` are all types). The
+    // TRAILING IDENTIFIER is the decl-vs-statement discriminator: a store or
+    // call puts an operator (`=`, `.`, `(`, `;`, ...) after the suffix run, never
+    // a bare name — so `arr[i] = v` and `p^ = v` stay statements. Consumes
+    // nothing (operates on a copy of `o`).
+    bool typeSuffixesThenName(int o) const {
+        while (true) {
+            if (peekKind(o) == token::Kind::kBitXor
+                || peekKind(o) == token::Kind::kXorXor) {   // ^ / ^^
+                o++;
+                continue;
+            }
+            if (peekKind(o) == token::Kind::kLBracket) {    // [] / [N] / [a,b]
+                int depth = 1;
+                o++;
+                while (depth > 0) {
+                    token::Kind k = peekKind(o);
+                    if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                        return false;
+                    if (k == token::Kind::kLBracket) depth++;
+                    else if (k == token::Kind::kRBracket) depth--;
+                    o++;
+                }
+                continue;
+            }
+            break;
         }
         return peekKind(o) == token::Kind::kIdentifier;
     }
 
     // Pure lookahead: does a leading `(...)` form a tuple-TYPE declaration —
     // `(T0, T1) name` — as opposed to a parenthesized / tuple-literal expression
-    // statement? Scan to the matching `)`, skip an optional `^` / `[]` suffix,
-    // and require a trailing identifier (the var name). Consumes nothing.
+    // statement? Scan to the matching `)`, skip an optional type-suffix run
+    // (`(const int)[5]^ p`), and require a trailing identifier (the var name).
+    // Consumes nothing.
     bool looksLikeTupleTypeDecl() const {
         if (peekKind(0) != token::Kind::kLParen) return false;
         int o = 1, depth = 1;
@@ -566,13 +589,9 @@ struct Parser {
             else if (k == token::Kind::kRParen) depth--;
             o++;
         }
-        // A caret run (`^` = one level, `^^` = two) or a single `[]` iterator.
-        bool any_caret = false;
-        while (peekKind(o) == token::Kind::kBitXor
-               || peekKind(o) == token::Kind::kXorXor) { o++; any_caret = true; }
-        if (!any_caret && peekKind(o) == token::Kind::kLBracket
-            && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
-        return peekKind(o) == token::Kind::kIdentifier;
+        // The balanced `(...)` is the core type; a type-suffix run then the name
+        // decides decl-vs-statement (shared with the ident-led gate above).
+        return typeSuffixesThenName(o);
     }
 
     // After `new`, a leading `(` is ambiguous: a placement address `new (addr) T`, or a

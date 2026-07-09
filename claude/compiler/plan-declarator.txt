@@ -582,6 +582,26 @@ naive substitution `int[3] x` being illegal is irrelevant (substitution is on th
 resolved type, never on tokens). name-dims compose on top of an alias's dims:
 `Vec3 x[2]` -> int[2][3] (2 of int[3]).
 
+DECL-RECOGNITION GATES (upstream of the above). Before parseType runs, a `(`-led
+or identifier-led statement must be RECOGNIZED as a typed declaration vs a
+statement. The two lookaheads that do this — looksLikeTupleTypeDecl (`(`-led) and
+looksLikeQualifiedTypedDecl (identifier/alias-led) — share ONE tail,
+typeSuffixesThenName: from just past the core type it skips a MAXIMAL interleaved
+run of type-suffix tokens (`^`/`^^` and bracket groups, empty `[]` OR sized `[N]`,
+by bracket depth — mirroring parseType's real chain), then requires the trailing
+name. (A primitive-led decl needs no lookahead — isTypeStart commits it straight
+to parseType, which is why primitive-led sized types never had this gap.) The
+trailing-name check is the sole decl-vs-statement discriminator: a store/call puts
+an OPERATOR after the suffix run, so `arr[i] = v` / `p^ = v` stay statements
+regardless of bracket emptiness. Consequence: a `(`-led or alias-led type with a
+NESTED sized dim (`(const int)[5]^ p`, `Vec[5]^ v`, `(int,int)[2]^ t`) now parses
+as a decl (previously the gate stopped at the sized `[` and misparsed it), and a
+TOP-LEVEL sized dim (`(const int)[5] x`) is recognized as a decl and reaches the
+"size belongs on the name" diagnostic above rather than a confusing statement
+misparse. Tests: array.sl (`grp`/`ali` var decls + neg_array_type_grouped/alias),
+call.sl (sum_grp_ref/sum_alias_ref/sum_tup_ref params + neg_array_param_grouped/
+alias).
+
 
 name_policy PER SITE  (replaces reject_array_dims)
 

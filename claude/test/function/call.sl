@@ -232,6 +232,22 @@ intptr param_size(int a[3]) {
     return sizeof(a);
 }
 
+/* array-by-REFERENCE params that carry the SIZE in the type (vs the unsized
+   iterator `int[]`). The element type is written `(`-led (a grouped-const type
+   or a tuple) or alias-led, each with a nested sized dim before the `^` — the
+   declarator gates accept a sized-dim suffix run. `fn(arr)` promotes the whole
+   array to its address. */
+alias El = int;
+int sum_grp_ref((const int)[3]^ p) {         // `(`-led grouped-const element
+    return p^[0] + p^[1] + p^[2];
+}
+int sum_alias_ref(El[3]^ p) {                // alias-led element
+    return p^[0] + p^[1] + p^[2];
+}
+int sum_tup_ref((int,int)[2]^ p) {           // `(`-led tuple element (array of 2 tuples)
+    return p^[0][0] + p^[0][1] + p^[1][0] + p^[1][1];
+}
+
 /* rvalue arm: a tuple LITERAL has no caller-side address, so the call site
    materializes it in a stacksaved temp and passes the temp's address. */
 void echo_tpl((int,int,int)^ t) {
@@ -328,6 +344,16 @@ int32 main() {
        expected: 12 */
     int p3[3] = (0,0,0);
     __println("param_size = " + param_size(p3));
+
+    /* array-by-reference params — the size is carried in the type; `fn(arr)`
+       promotes the whole array to its address. expected: 6, 6 */
+    int rb[3] = (1, 2, 3);
+    __println("sum_grp_ref = " + sum_grp_ref(rb));
+    __println("sum_alias_ref = " + sum_alias_ref(rb));
+    /* a `(`-led tuple element with a sized dim: an array of 2 (int,int).
+       expected: 10 */
+    (int,int) tb[2] = ((1,2), (3,4));
+    __println("sum_tup_ref = " + sum_tup_ref(tb));
 
     /* rvalue arm — a tuple LITERAL materializes a temp at the call site.
        expected: echo= 9 8 7 */
@@ -456,6 +482,20 @@ int32 fwd_decl(int32 n) {
    the size belongs on the NAME (`int p[3]`). */
 //-EXPECT-ERROR: An array size belongs on the declared name
 //int neg_array_param(int[3] p) {
+//    return p[0];
+//}
+
+/* the same rule for a `(`-led (grouped) param type — the declarator gate now
+   RECOGNIZES it as a typed param (top-level sized dim, no `^`), so it reaches
+   the "size belongs on the name" diagnostic rather than a statement misparse. */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_param_grouped((const int)[3] p) {
+//    return p[0];
+//}
+
+/* and for an alias-led (identifier) param type. */
+//-EXPECT-ERROR: An array size belongs on the declared name
+//int neg_array_param_alias(El[3] p) {
 //    return p[0];
 //}
 
