@@ -1514,6 +1514,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                     && "kAddrOfExpr: operand must be a resolved variable");
                 auto it = syms.find(operand.resolved_entry_id);
                 assert(it != syms.end() && "kAddrOfExpr: operand not in SymTab");
+                emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
                 addr = it->second.alloca_name;
             }
             // `^lvalue` is a `ptr`; honor the destination type so an address taken

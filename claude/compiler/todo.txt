@@ -8,12 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * Method calls on a global class object lose the first mutation: gc.inc() twice → reads 1, not 2 (each read lags by
-    one). The receiver IR passes the correct @__global_c address, and direct field writes (gc.n_ = 5) work — so this is a
-    global lazy-init / touch ordering defect (the method-receiver access doesn't fire the global's construction gate, so
-    the first read re-runs the ctor and wipes the prior mutation), not an address-taking bug. It's independent of the
-    ^g addr-of bug (fixed 2026-07-08).
-
   * Passing a fixed-size array to an `int[]` (iterator) param is rejected — an array→iterator conversion gap.
     int^ retref(int[] arr, int i) { return ^arr[i]; }
     int arr[3] = (1,2,3);

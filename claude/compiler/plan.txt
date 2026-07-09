@@ -1107,10 +1107,13 @@ Phase 8 — namespaces + cross-TU
     mechanism; the only globals-specific code is the `explodeAnonGlobalGroups` bridge
     (dissolves an anon group into bare members) and desugar's `finalizeGroup` /
     `needsSynth` group-lazy marking. ADDRESS-OF (2026-07-08): `^g` / `^garr[i]` /
-    passing `^g` to a `T^` param now resolve — the `^` addressability gate
-    (resolve.cpp ~1634) accepts kGlobalVar (a storage-backed variable), matching
-    codegen, which already addressed globals; the other EntryKinds stay rejected (no
-    storage). Phase 8 adds only the CROSS-TU
+    passing `^g` to a `T^` param / a method call on a global object now work — TWO
+    sites: resolve.cpp ~1634 (the `^` gate accepts kGlobalVar, a storage-backed
+    variable; other EntryKinds stay rejected — no storage) + codegen kAddrOfExpr,
+    whose bare-ident branch now emitTouches the lazy first-access gate (was MISSING,
+    so `^` of a lazy global didn't construct it — which is why a method call on a
+    global object lost its mutations until the first read re-ran the ctor). Phase 8
+    adds only the CROSS-TU
     piece: a global declared in a `.slh` header is visible to all linked files (a `.sl`
     global stays file-local) — deferred with the rest of .slh propagation.
 

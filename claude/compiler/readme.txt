@@ -507,9 +507,14 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   the SymTab uniformly beside a `%`-alloca local — after emitFunction seeds the globals,
   every access site (read / lvalue / index-base / assign / address-of `^g`) treats them
   identically. Because a global IS a storage-backed variable, resolve's `^` addressability
-  gate accepts kGlobalVar alongside kLocalVar (the only two storage kinds); codegen's
-  emitLvalueAddr already handed out `@g` + the touch gate, so `^g` / `^garr[i]` / passing
-  `^g` to a `T^` param all fall out with no codegen change.
+  gate accepts kGlobalVar alongside kLocalVar (the only two storage kinds). All three
+  address helpers must fire the lazy-init touch gate — emitLvalueAddr (bare var / deref),
+  emitElementAddr (index / field), AND kAddrOfExpr; the last needed emitTouch ADDED to its
+  bare-ident branch (2026-07-08), else `^` of a lazy global — INCLUDING a method receiver
+  `^Global:g` (a `c.m()` call passes `^c`) — skipped construction, so the method's
+  mutations were wiped when the first read later fired the ctor. So `^g` / `^garr[i]` /
+  passing `^g` to a `T^` param / a method call on a global object all construct the global
+  first, then hand out `@g`.
 
   SPELLINGS (all desugar to the same two shapes — a plain global or a named group):
     * SHORT / BARE — `global [Type] name = init;`, or at namespace/file scope the
