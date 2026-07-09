@@ -90,12 +90,20 @@ claude says:
   infers it (iterator + loop var are synthesized typeless and classify fills T).
 - (todo: by-reference-to-const enforcement for a literal — needs const pointers
   [Phase 6]; rejecting a heterogeneous tuple LITERAL.)
+- a GLOBAL tuple iterates in place exactly like a local tuple variable — the loop's
+  iterator base `^gtup` TOUCHES the lazy global, constructing it before the walk;
+  by value and by mutable reference both work. The resolve for-iterable dispatch
+  accepts a kGlobalVar (not just kLocalVar). Exercised: `gtup`.
 */
 
 /* a function returning a tuple — for the rvalue-spill case. */
 (int, int, int) make_tuple() {
     return (4, 5, 6);
 }
+
+/* a GLOBAL tuple — iterated in place; the iterator base `^gtup` touches the lazy
+   global, constructing it before the walk. */
+global (int, int, int) gtup = (10, 20, 30);
 
 int32 main() {
 
@@ -250,6 +258,14 @@ int32 main() {
         }
         __println(" )");
     }
+
+    /* GLOBAL tuple iteration — the iterator base `^gtup` touches the lazy global,
+       constructing it before the walk; by value + by mutable reference. */
+    int gsum = 0;
+    for (x : gtup) { gsum = gsum + x; }
+    __println("gsum= " + gsum);                          // 60 (10+20+30)
+    for (int^ p : gtup) { p^ = p^ + 1; }
+    __println("gtup= " + gtup[0] + " " + gtup[1] + " " + gtup[2]);   // 11 21 31
 
     return 0;
 }

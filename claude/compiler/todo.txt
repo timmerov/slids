@@ -91,11 +91,6 @@ BUGS
     - Deferred fix: lower a same-type tuple = per slot (t[i].op=(s[i]) / @Elem__$copy) instead of one blit, so each
     element's copy semantics run.
 
-  * ● I have to correct myself — I was wrong earlier. The full error for the global by-ref loop is "'arr' is not an enum,
-    array, or tuple", not the addr-of gate (the truncated "declared here" misled me). Both by-ref and by-value loops over
-    a global array fail this way — a separate bug where the for-loop iterable resolver doesn't recognize a global, nothing
-    to do with address-taking.
-
 
 UNBLOCKED FEATURES
   * should we be able to take the address of a temporary variable?

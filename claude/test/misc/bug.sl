@@ -34,11 +34,5 @@ int32 main() {
     x;
     __println("after");
 */
-/*
-    Global:arr = (1,2,3);
-    for (ref : Global:arr) {
-        __println(ref^);
-    }
-*/
     return 0;
 }

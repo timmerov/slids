@@ -84,9 +84,21 @@ claude says:
   iterate by reference too (`for (ref : arr)` over `Class arr[3]`, `ref^.x_`).
 - break / continue, a labeled break (`break scan` + `:scan`), and a numbered break
   (`break 2` exits N enclosing loops) all work in the body.
+- a GLOBAL array iterates exactly like a local — the loop TOUCHES the lazy global
+  (constructs it on the first element access) then reads/writes elements; by-value
+  and by-reference both work, and a class-element global forces a reference. The
+  resolve for-iterable dispatch accepts a kGlobalVar (not just kLocalVar), and a
+  global is exempt from the by-value use-before-init check (always initialized).
+  Exercised: `garr` (scalar, by value + by ref), `gboxes` (class element).
 */
 
 alias Cell = int;
+
+/* GLOBAL arrays — iterated like a local; the loop touches the lazy global on the
+   first element access. A scalar array and a class-element array. */
+global int garr[4] = (2, 4, 6, 8);
+Box(int b_ = 0) { }
+global Box gboxes[3];
 
 int32 main() {
     int arr[5];
@@ -251,6 +263,21 @@ int32 main() {
         }
         __println(" ]");
     }
+
+    /* GLOBAL array iteration — the loop TOUCHES the lazy global (constructs it on
+       the first element access), by value and by reference. */
+    int gsum = 0;
+    for (int v : garr) { gsum = gsum + v; }
+    __println("gsum= " + gsum);            // 20 (2+4+6+8)
+    for (int^ p : garr) { p^ = p^ + 1; }
+    __println("garr= " + garr[0] + " " + garr[3]);   // 3 9
+
+    /* a GLOBAL CLASS array — a non-primitive element forces a reference. */
+    __print("gboxes=[");
+    for (ref : gboxes) {
+        __print(" " + ref^.b_);
+    }
+    __println(" ]");                       // 0 0 0
 
     return 0;
 }

@@ -1112,8 +1112,12 @@ Phase 8 — namespaces + cross-TU
     variable; other EntryKinds stay rejected — no storage) + codegen kAddrOfExpr,
     whose bare-ident branch now emitTouches the lazy first-access gate (was MISSING,
     so `^` of a lazy global didn't construct it — which is why a method call on a
-    global object lost its mutations until the first read re-ran the ctor). Phase 8
-    adds only the CROSS-TU
+    global object lost its mutations until the first read re-ran the ctor). FOR-
+    ITERATION (2026-07-08): `for (v : garr)` / `for (v : gtup)` now work — the resolve
+    for-iterable dispatch accepts kGlobalVar (was kLocalVar-only) and a global is
+    exempt from the by-value use-before-init check (always initialized); the loop
+    touches the lazy global via its element access (array) / iterator-base `^gtup`
+    (tuple), so no codegen change. Phase 8 adds only the CROSS-TU
     piece: a global declared in a `.slh` header is visible to all linked files (a `.sl`
     global stays file-local) — deferred with the rest of .slh propagation.
 

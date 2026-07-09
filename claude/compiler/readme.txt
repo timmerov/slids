@@ -505,8 +505,8 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   root), and `Enclosing:member` all fall out of ordinary frame-chain name resolution;
   no per-scope code. Storage is an `internal @`-symbol (a `ptr`), so a global slots into
   the SymTab uniformly beside a `%`-alloca local — after emitFunction seeds the globals,
-  every access site (read / lvalue / index-base / assign / address-of `^g`) treats them
-  identically. Because a global IS a storage-backed variable, resolve's `^` addressability
+  every access site (read / lvalue / index-base / assign / address-of `^g` /
+  for-iteration `for (v : g)`) treats them identically. Because a global IS a storage-backed variable, resolve's `^` addressability
   gate accepts kGlobalVar alongside kLocalVar (the only two storage kinds). All three
   address helpers must fire the lazy-init touch gate — emitLvalueAddr (bare var / deref),
   emitElementAddr (index / field), AND kAddrOfExpr; the last needed emitTouch ADDED to its

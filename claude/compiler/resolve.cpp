@@ -2249,12 +2249,15 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     //  - by REFERENCE (`^arr[_$idx]`): the array is FILLED through element
     //    references — it need not be initialized first, and is marked assigned.
     //  - by VALUE (`arr[_$idx]`): each element is READ, so the array must already
-    //    be initialized (mirrors the read-before-write check).
+    //    be initialized (mirrors the read-before-write check). A GLOBAL has static /
+    //    lazy storage — always initialized (its first touch constructs it) — so the
+    //    definite-assignment check does not apply to it.
     // Either way the array is read every iteration, so it is never unused.
     arr_ref.resolved_entry_id = arr_id;
     if (by_ref) {
         tree.assigned_arrays.insert(arr_id);
-    } else if (tree.assigned_arrays.count(arr_id) == 0) {
+    } else if (tree.entries[arr_id].kind != parse::EntryKind::kGlobalVar
+            && tree.assigned_arrays.count(arr_id) == 0) {
         diagnostic::report(diag, {afile, atok,
             "Use of uninitialized variable '" + tree.entries[arr_id].name + "'.",
             {}});
@@ -3332,12 +3335,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             }
             // The colon-form also iterates a fixed-size ARRAY local — `for (v :
             // arr)` — or a TUPLE local — `for (v : tuple)`. Dispatch on what the
-            // name resolved to.
-            if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
-                && isArrayType(tree.entries[enum_id].slids_type)) {
+            // name resolved to. A for-iterable is a storage-backed VARIABLE — a local
+            // OR a global (a global array/tuple iterates exactly like a local; only
+            // the storage class differs, and codegen touches the lazy global via the
+            // element access / iterator-base `^` inside the loop).
+            bool iter_var = tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
+                         || tree.entries[enum_id].kind == parse::EntryKind::kGlobalVar;
+            if (iter_var && isArrayType(tree.entries[enum_id].slids_type)) {
                 return understandForArray(tree, s, enum_id, diag);
             }
-            if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
+            if (iter_var
                 && widen::form(widen::strip(tree.entries[enum_id].slids_type))
                        == widen::Type::Form::kTuple) {
                 return understandForTuple(tree, s, tree.entries[enum_id].slids_type,
@@ -3348,8 +3355,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // used as an iterable can only be a tuple — route it as one with a
             // deferred type (homogeneity + arity resolve in classify); classify
             // errors if it doesn't actually infer to a tuple.
-            if (tree.entries[enum_id].kind == parse::EntryKind::kLocalVar
-                && tree.entries[enum_id].slids_type == widen::kNoType) {
+            if (iter_var && tree.entries[enum_id].slids_type == widen::kNoType) {
                 return understandForTuple(tree, s, widen::kNoType,
                                        /*is_literal=*/false, /*is_lvalue=*/true, diag);
             }
