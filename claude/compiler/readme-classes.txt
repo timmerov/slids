@@ -417,10 +417,20 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     operand, and under `^`. Canon test/class/field.sl.
   * METHOD / FUNCTION PARITY — methods get OVERLOADING + DEFAULT PARAMS + INFER-PARAM-
     TYPE-FROM-DEFAULT (the three callable features free functions already had) through
-    ONE shared overload engine. pickOverload(cands, args, recv_offset) is factored out
-    of classifyCall (exact 0 / widen 1 cost, lowest-total wins; tie = "Ambiguous call",
-    none = "No matching overload") and used by BOTH classifyCall (recv_offset 0) and
-    inferMethodCall (recv_offset 1 — `_$recv` is held out of ranking + the arity range).
+    ONE shared overload engine. The RANKING is factored into a single pure core
+    rankOverload(cands, args, recv_offset) → {best, tied[]} (exact 0 / widen 1 cost,
+    lowest-total wins; `tied` retains EVERY candidate at the winning cost). pickOverload
+    wraps it, keeping "No matching overload" (nothing viable) and routing a genuine tie
+    (`tied.size() > 1`) through the shared reportAmbiguity, which emits "Ambiguous call"
+    PLUS one note per tied candidate ("candidate '<sig>' declared here", anchored at its
+    def_tok) so the author sees the exact conflicting declarations. Used by BOTH
+    classifyCall (recv_offset 0) and inferMethodCall (recv_offset 1 — `_$recv` is held
+    out of ranking + the arity range). The assignment-operator path findClassOperator
+    gathers its base-chain candidates (most-derived frame shadows bases) then ranks them
+    through the SAME rankOverload/reportAmbiguity (recv_offset 1, the lone `rhs` operand);
+    a tie is reported with candidate notes and returns the -2 "ambiguous, already
+    reported" sentinel, -1 stays "none" (caller errors). So every function / method /
+    operator match shares one ranker and one ambiguity diagnostic.
     resolve allows a method OVERLOAD SET in a class frame (a same-name method is an
     overload; a collision with a non-function member is still a dup); a NAMESPACE
     function stays single-definition. classifyScopeSignatures runs classifyFunctionSig-

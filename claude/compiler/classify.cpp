@@ -2228,18 +2228,20 @@ void fillDefaults(parse::Node& s, parse::Entry const& e) {
     }
 }
 
-// Rank a candidate set against the provided user args (already inferred WITHOUT
-// context) and pick the lowest-total-cost overload. recv_offset = leading params
-// that are NOT user args (1 for a method's `_$recv` receiver, which always matches
-// the object and is held out of ranking). Reports "No matching overload" / "Ambiguous
-// call" and returns -1 on failure. Shared by classifyCall (functions, offset 0) and
-// inferMethodCall (methods, offset 1).
-int pickOverload(parse::Tree& tree, std::vector<int> const& cands,
-                 std::vector<parse::Node*> const& args, int recv_offset,
-                 std::string const& name, int file_id, int tok,
-                 diagnostic::Sink& diag) {
-    int best = -1, best_cost = INT_MAX;
-    bool tie = false;
+// The single overload-ranking core. Scores a candidate set against the user args
+// (already inferred WITHOUT context) and returns the winner plus EVERY candidate
+// tied for lowest total cost. recv_offset = leading params that are NOT user args
+// (1 for a method/operator's `_$recv` receiver, held out of ranking). PURE — emits
+// no diagnostics; the callers decide how a no-match / tie is reported. `best` is -1
+// when nothing is viable; `tied` holds >1 id only on a genuine ambiguity.
+struct OverloadRank {
+    int best = -1;
+    std::vector<int> tied;
+};
+OverloadRank rankOverload(parse::Tree& tree, std::vector<int> const& cands,
+                          std::vector<parse::Node*> const& args, int recv_offset) {
+    OverloadRank r;
+    int best_cost = INT_MAX;
     for (int cid : cands) {
         parse::Entry const& e = tree.entries[cid];
         std::size_t umin = e.num_required > recv_offset
@@ -2256,20 +2258,64 @@ int pickOverload(parse::Tree& tree, std::vector<int> const& cands,
             if (c < 0) ok = false; else cost += c;
         }
         if (!ok) continue;
-        if (cost < best_cost) { best_cost = cost; best = cid; tie = false; }
-        else if (cost == best_cost) { tie = true; }
+        if (cost < best_cost) { best_cost = cost; r.tied = {cid}; }
+        else if (cost == best_cost) { r.tied.push_back(cid); }
     }
-    if (best < 0) {
+    r.best = r.tied.empty() ? -1 : r.tied.front();
+    return r;
+}
+
+// Spell a candidate's signature `name(t0, t1, ...)` for a diagnostic note, skipping
+// the `recv_offset` receiver params so an operator/method reads as the user sees it.
+std::string spellCandidate(parse::Entry const& e, int recv_offset) {
+    std::string sig = e.name + "(";
+    bool first = true;
+    for (std::size_t i = (std::size_t)recv_offset; i < e.param_types.size(); i++) {
+        if (!first) sig += ", ";
+        first = false;
+        sig += widen::spellOrEmpty(e.param_types[i]);
+    }
+    return sig + ")";
+}
+
+// The single ambiguity diagnostic: the primary `msg` at the call/source site, plus
+// one note per tied candidate pointing at its declaration (the conflicting overloads
+// the author must disambiguate). Shared by every ranking path.
+void reportAmbiguity(parse::Tree& tree, int file_id, int tok, std::string const& msg,
+                     std::vector<int> const& tied, int recv_offset,
+                     diagnostic::Sink& diag) {
+    std::vector<diagnostic::Note> notes;
+    for (int cid : tied) {
+        parse::Entry const& e = tree.entries[cid];
+        int nf = e.def_file_id >= 0 ? e.def_file_id : e.file_id;
+        int nt = e.def_tok >= 0 ? e.def_tok : e.tok;
+        notes.push_back({nf, nt,
+            "candidate '" + spellCandidate(e, recv_offset) + "' declared here"});
+    }
+    diagnostic::report(diag, {file_id, tok, msg, notes});
+}
+
+// Rank a candidate set and pick the lowest-total-cost overload. Reports "No matching
+// overload" (no viable candidate) / "Ambiguous call" (a tie, with each conflicting
+// declaration cited) and returns -1 on failure. Shared by classifyCall (functions,
+// offset 0) and inferMethodCall (methods, offset 1).
+int pickOverload(parse::Tree& tree, std::vector<int> const& cands,
+                 std::vector<parse::Node*> const& args, int recv_offset,
+                 std::string const& name, int file_id, int tok,
+                 diagnostic::Sink& diag) {
+    OverloadRank r = rankOverload(tree, cands, args, recv_offset);
+    if (r.best < 0) {
         diagnostic::report(diag, {file_id, tok,
             "No matching overload for '" + name + "'.", {}});
         return -1;
     }
-    if (tie) {
-        diagnostic::report(diag, {file_id, tok,
-            "Ambiguous call to '" + name + "'; multiple overloads match.", {}});
+    if (r.tied.size() > 1) {
+        reportAmbiguity(tree, file_id, tok,
+            "Ambiguous call to '" + name + "'; multiple overloads match.",
+            r.tied, recv_offset, diag);
         return -1;
     }
-    return best;
+    return r.best;
 }
 
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
@@ -3756,14 +3802,16 @@ bool referencesEntry(parse::Node const& n, int eid) {
     return false;
 }
 
-// Silent probe: the best-matching single-parameter operator `opname` in `cls` (or
-// its base chain) for the argument `rhs`, or -1 if none / ambiguous. Mirrors
-// pickOverload's cost ranking but emits NO diagnostics — a miss means "use the
-// default class copy/move/swap", not an error. `rhs` must already be inferred.
+// Probe for the best-matching single-parameter operator `opname` in `cls` (or its
+// base chain) for the argument `rhs`. Gathers candidates (most-derived frame with the
+// name shadows bases) then ranks them through the SHARED rankOverload core. Returns
+// the winning entry id, -1 if NONE match (the caller reports "no operator" / falls to
+// its own error path), or -2 on a genuine tie, which is reported HERE (with each
+// conflicting declaration cited) — the distinct sentinel lets a caller suppress its
+// own no-operator message. `rhs` must already be inferred.
 int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& rhs,
                       std::string const& opname, diagnostic::Sink& diag) {
-    int best = -1, best_cost = 1 << 30;
-    bool tie = false;
+    std::vector<int> cands;
     for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
         if (fr < 0) continue;
         bool any_here = false;
@@ -3772,30 +3820,26 @@ int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& 
             if (e.kind != parse::EntryKind::kFunction || !e.defined
                 || e.owner_ns_frame != fr || e.name != opname)
                 continue;
-            any_here = true;
-            if (e.param_types.size() != 2) continue;   // [_$recv, one user param]
-            int c = argConvertCost(rhs, widen::strip(e.param_types[1]));
-            if (c < 0) continue;
-            if (c < best_cost) { best_cost = c; best = (int)id; tie = false; }
-            else if (c == best_cost) tie = true;
+            any_here = true;                            // name present in this frame
+            if (e.param_types.size() != 2) continue;    // [_$recv, one user param]
+            cands.push_back((int)id);
         }
         if (any_here) break;   // most-derived frame with the name shadows bases
     }
-    // A genuine TIE (two overloads convert the source equally well) is an author error,
-    // NOT "no operator" — report it rather than silently collapsing to -1, which would
-    // fall through to the default copy/move and hide the ambiguity. (The method-call
-    // operators report their own ties via pickOverload; this is the op=/op<--/op<-->
-    // assignment-dispatch path, whose sole -1 previously conflated tie with none.)
-    // On a tie, report here and return the distinct sentinel -2 ("ambiguous, already
-    // reported") so a caller can suppress its own no-operator message. -1 stays "none".
-    if (tie) {
-        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+    // recv_offset = 1: `_$recv` is implicit, so only the single user operand `rhs` is
+    // ranked (an assignment operator is arity-1). A cast drops rhs's const only for the
+    // read-only argConvertCost scoring inside the shared core.
+    std::vector<parse::Node*> args{const_cast<parse::Node*>(&rhs)};
+    OverloadRank r = rankOverload(tree, cands, args, 1);
+    if (r.tied.size() > 1) {
+        reportAmbiguity(tree, rhs.file_id, rhs.tok,
             "Ambiguous operator '" + opname + "': more than one overload of class '"
             + widen::spellOrEmpty(cls) + "' matches source type '"
-            + widen::spellOrEmpty(rhs.inferred_type) + "' equally well.", {}});
+            + widen::spellOrEmpty(rhs.inferred_type) + "' equally well.",
+            r.tied, 1, diag);
         return -2;
     }
-    return best;
+    return r.best;
 }
 
 // Rewrite an assignment-form statement `lvalue = rhs` (a bare-name kAssignStmt) into

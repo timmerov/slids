@@ -8,8 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * Ambiguous op overloads are treated as no-match rather than an error.
-
   * this should compile but doesn't:
     Shift(int a) { op<<(Shift^ lhs, Shift^ rhs) { a = lhs^.a << rhs^.a; } }
     (Shift, Shift) tuple = (Shift(1), Shift(3)) << 1;

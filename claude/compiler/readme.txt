@@ -1229,8 +1229,10 @@ STAGE FILES (.h / .cpp pairs)
             constructor arguments"). The result type is element + (array ? "[]" :
             "^"). kDeleteStmt's operand must be a pointer type. See
             readme-classes.txt "CLASSES: NEW / DELETE / SIZEOF" for the construct/
-            destruct lowering. Future: overload resolution when multiple Function entries
-            share a name.
+            destruct lowering. Overload resolution across same-name Function entries has
+            LANDED — one shared rankOverload core (pickOverload for fn/method calls,
+            findClassOperator for op=/op<--/op<-->) ranks by lowest total convert cost and
+            reports a tie via reportAmbiguity, citing each conflicting declaration.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
