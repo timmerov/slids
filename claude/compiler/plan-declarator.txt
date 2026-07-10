@@ -723,8 +723,12 @@ The dereference / subscript operators are the inverse of the wrappers:
   int x[3];    x^      ILLEGAL — x is an array, not a pointer; deref needs a
                        pointer wrapper. The first element is x[0].
 
-No implicit array -> iterator decay. `^` <-> pointer wrappers, `[i]` <-> array
-dims, kept distinct.
+Array -> pointer DECAY is now implicit (LANDED 2026-07-09, [[project_array_pointer_decay]]):
+a bare array lvalue in a POINTER target decays to its ELEMENT pointer `^arr[0]`
+(`int[] q = arr`, `int^ p = arr`, iterator/element-ref args) — classify rewrites it
+to the address-of. The WHOLE-array ref `int[N]^` is NOT implicit from a bare array
+(write `^arr`); `x^` on a bare array stays ILLEGAL (deref needs a pointer wrapper).
+`^` <-> pointer wrappers, `[i]` <-> array dims, still kept distinct in the grammar.
 
 
 PASSING — PRIMITIVES BY VALUE, EVERYTHING ELSE BY POINTER  (invariant since day 0)

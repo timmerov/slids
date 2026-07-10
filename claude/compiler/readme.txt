@@ -134,7 +134,12 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     cross-family reject). intptr is in the integer family here.
   * ptr    — pointer rules (classify ptrImplicitOk): a typed pointer target needs
     a MATCHING pointee, or an iterator->reference demote of the same pointee.
-    Unrelated pointees are an error (an explicit cast is required).
+    Unrelated pointees are an error (an explicit cast is required). An ARRAY source
+    DECAYS to a pointer: a bare array implicitly casts to the ELEMENT pointer
+    `Type[]`/`Type^` — classify rewrites it to `^arr[0]` (checkValueAssign /
+    wrapArrayAsElemAddr), so it flows through the normal pointer path. The
+    WHOLE-array ref `Type[N]^` is NOT implicit from a bare array (write `^arr`);
+    only a function ARGUMENT gets the whole-ref convenience (`fn(arr)`==`fn(^arr)`).
   * accept — terminal. intptr <- pointer/nullptr lowers to ptrtoint; pointer/
     void^ <- nullptr is the null store. void^ <- ANY pointer is the universal
     erase (the `to == void^` arm) — accept-in, cast-out: a void^ SOURCE into a
@@ -395,7 +400,12 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     tuple / class param must be a pointer (`(T,T)^`). The ARRAY SHORTHAND `int a[3]`
     (and `int[] p`) is the one exception: mungeParamType rewrites it to `(const int[3])^`
     (pointer-to-const array unless `mutable`) and classify + codegen implicit-deref it
-    at each index (`a[i]`, no `^`), so it passes BY POINTER with no copy.
+    at each index (`a[i]`, no `^`), so it passes BY POINTER with no copy. Passing a
+    bare ARRAY to a pointer param is no longer a special case — it is the general
+    array->pointer decay (see `ptr` in the ASSIGNMENT RELATION): an array arg to an
+    ITERATOR / element-reference param decays to `^arr[0]`, to a WHOLE-array-ref
+    param passes `^arr` (autoRefPointee); an array matching BOTH shapes is Ambiguous
+    (both cost-1 decays in argConvertCost — author writes `^arr[0]`/`^arr`).
   * ARRAY from a tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
     `int td[3][2]=((1,2),(3,4),(5,6))` (a NESTED tuple whose SHAPE — row × col —
     matches the standard-order dims). ELEMENT-AWARE: collectArrayElementNodes
@@ -1131,7 +1141,9 @@ STAGE FILES (.h / .cpp pairs)
             callee's return type; a void return used as a value is rejected
             here. Pointer-cast rules (Phase 4) live here as two predicates:
             ptrImplicitOk (a bare assignment may only STRIP info — nullptr->any,
-            any->`void^`/`intptr`, iterator->reference of the same pointee) and
+            any->`void^`/`intptr`, iterator->reference of the same pointee; an ARRAY
+            source decays to its ELEMENT pointer `^arr[0]`, rewritten in
+            checkValueAssign) and
             ptrExplicitOk (a `<Type^>` cast additionally bridges through a
             buffer-class pointer [`void^`/`int8^`/`uint8^`] or `intptr`, and
             reinterprets iterator<->reference of the same pointee; two unrelated

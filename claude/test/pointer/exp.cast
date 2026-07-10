@@ -20,3 +20,7 @@ bridge uint8= true
 expr cast= true
 complex operand= 8
 alias cast= 77
+decay iter= 10 50
+decay ref= 10
+decay cast= 10 10
+decay whole= 10 50

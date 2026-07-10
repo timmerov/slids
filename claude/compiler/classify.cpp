@@ -232,6 +232,41 @@ bool isArrayType(widen::TypeRef t) {
     return widen::form(widen::strip(t)) == widen::Type::Form::kArray;
 }
 
+// The FIRST-level element type of an array — peel ONE dimension. `int[5]` -> int;
+// `int[5][3]` -> int[3] (dims are source order, so drop dims[0]). kNoType if not an
+// array. This is the pointee an array DECAYS to (`^arr[0]`).
+widen::TypeRef arrayFirstElem(widen::TypeRef arr) {
+    widen::Type const& a = widen::get(widen::strip(arr));
+    if (a.form != widen::Type::Form::kArray) return widen::kNoType;
+    widen::TypeRef elem = a.elem;                            // capture before intern
+    if (a.dims.size() <= 1) return elem;
+    std::vector<int> rest(a.dims.begin() + 1, a.dims.end());
+    return widen::internArray(elem, rest);
+}
+
+// Rewrite an array node IN PLACE as its element address `^n[0]` — the array->pointer
+// decay made explicit. An array is storage, not a pointer; its address is `^arr[0]`,
+// an iterator over the element type. Codegen then handles an ordinary address-of, so
+// no codegen change is needed; the CALLER re-infers. An `int^` target demotes the
+// `Type[]` result to a reference through the normal iterator->reference rule.
+void wrapArrayAsElemAddr(parse::Node& n) {
+    int fid = n.file_id, tk = n.tok;
+    auto zero = std::make_unique<parse::Node>();
+    zero->kind = parse::Kind::kIntLiteral;
+    zero->text = "0";
+    zero->file_id = fid; zero->tok = tk;
+    auto idx = std::make_unique<parse::Node>();
+    idx->kind = parse::Kind::kIndexExpr;
+    idx->file_id = fid; idx->tok = tk;
+    idx->children.push_back(std::make_unique<parse::Node>(std::move(n)));
+    idx->children.push_back(std::move(zero));
+    auto addr = std::make_unique<parse::Node>();
+    addr->kind = parse::Kind::kAddrOfExpr;
+    addr->file_id = fid; addr->tok = tk;
+    addr->children.push_back(std::move(idx));
+    n = std::move(*addr);
+}
+
 // An aggregate is an array OR a tuple — arrays are homogeneous tuples, and the
 // two share one element-wise arithmetic path.
 bool isAggregateType(widen::TypeRef t) {
@@ -908,7 +943,17 @@ widen::TypeRef autoRefPointee(widen::TypeRef param, parse::Node const& arg) {
     if (widen::form(widen::strip(param)) != F::kPointer) return widen::kNoType;
     F af = widen::form(widen::strip(arg.inferred_type));
     if (af != F::kSlid && af != F::kTuple && af != F::kArray) return widen::kNoType;
-    return widen::get(widen::strip(param)).pointee;
+    widen::TypeRef pointee = widen::get(widen::strip(param)).pointee;
+    // An array whose pointee is its ELEMENT type (`int^` for an `int[5]` arg) is a
+    // DECAY to `^arr[0]`, NOT a by-ref pass — return kNoType so the pointer path
+    // decays it (else the arg is wrongly checked against the element, `int[5]` vs
+    // `int`). A WHOLE-array pointee (`int[5]^`, exact OR per-leaf widen) still
+    // auto-refs as before.
+    if (af == F::kArray
+        && widen::deepStrip(pointee)
+           == widen::deepStrip(arrayFirstElem(arg.inferred_type)))
+        return widen::kNoType;
+    return pointee;
 }
 
 // Conversion cost of argument `a` to parameter type `param` for overload ranking:
@@ -919,6 +964,25 @@ widen::TypeRef autoRefPointee(widen::TypeRef param, parse::Node const& arg) {
 // overload_cls.sl). There is no smallest-widening-wins tiebreak.
 int argConvertCost(parse::Node const& a, widen::TypeRef param) {
     widen::TypeRef at = widen::strip(a.inferred_type);   // see through one alias layer
+    // An ARRAY argument DECAYS to a pointer — it never passes "as itself". It may
+    // decay to the ELEMENT pointer `^arr[0]` (pointee == element type) OR the
+    // WHOLE-array ref `^arr` (pointee == the array). BOTH are cost-1 conversions, so
+    // an array arg matching two pointer params (int[] AND int[5]^) TIES -> Ambiguous
+    // (the author writes ^arr[0] / ^arr to disambiguate). Ranked HERE, before the
+    // autoRefPointee value->reference check, so the whole-ref match is a decay (1),
+    // not an exact by-ref (0) the way a tuple/class value pass is.
+    if (param != widen::kNoType && isArrayType(at) && isPtrLikeType(param)) {
+        widen::TypeRef pointee = pointeeType(param);
+        if (pointee != widen::kNoType) {
+            // WHOLE-array ref (`^arr` by-ref pass, exact OR per-leaf widen into an
+            // array pointee) OR ELEMENT decay (`^arr[0]`, exact element pointee).
+            if ((isArrayType(pointee)
+                    && shapesAndLeavesMatch(widen::strip(pointee), at))
+                || widen::deepStrip(pointee) == widen::deepStrip(arrayFirstElem(at)))
+                return 1;
+        }
+        return -1;
+    }
     // A non-primitive value auto-promotes to a reference param: viable when the
     // arg type matches the param's pointee (exact, mirroring the value checks).
     // SHAPE-MATCH with elem widen ranks as cost 1 (per-leaf widen, like a scalar
@@ -1592,6 +1656,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 return;
             }
             inferExpr(tree, operand, widen::kNoType, diag);
+            // An ARRAY operand DECAYS to its element pointer `^arr[0]` before the
+            // reinterpret: an array is storage, not a pointer, so the cast applies to
+            // its address. `<Type[]> arr` / `<Type^> arr` (canon) then reinterpret the
+            // element iterator (whole-array-ref you spell `^arr`, no cast).
+            if (isArrayType(operand.inferred_type)) {
+                wrapArrayAsElemAddr(operand);
+                inferExpr(tree, operand, widen::kNoType, diag);
+            }
             std::string to = widen::spellOrEmpty(e.return_type);
             // An empty operand type means inferExpr already reported an error;
             // skip the rule check (it would cascade a second, misleading
@@ -3096,6 +3168,22 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag) {
     if (dest == widen::kNoType) return;
+    // ARRAY -> ELEMENT POINTER decay (implicit): an array lvalue takes its element
+    // address `^arr[0]` when the target is a pointer whose pointee is the array's
+    // element type; rewrite to the explicit address-of so the normal pointer path
+    // handles it (incl. iterator->reference demotion for an `int^` target). The
+    // WHOLE-array ref (pointee == the array type) is the ARGUMENT-only convenience,
+    // NOT reachable from a bare array at an assignment/return — so `int[5]^ r = arr`
+    // does not rewrite and falls through to checkPtrAssign, which errors.
+    if (isPtrLikeType(dest) && isArrayType(rhs.inferred_type)) {
+        widen::TypeRef pointee = pointeeType(dest);
+        if (pointee != widen::kNoType
+            && widen::deepStrip(pointee)
+               == widen::deepStrip(arrayFirstElem(rhs.inferred_type))) {
+            wrapArrayAsElemAddr(rhs);
+            inferExpr(tree, rhs, dest, diag);
+        }
+    }
     if (isScalarIntoUnitArray(dest, rhs)) {
         // `int arr[1] = 2` / `int m[1][1] = 2` — the 1-tuple==scalar collapse means
         // the sole element's initializer arrives bare. Wrap it in nested 1-element

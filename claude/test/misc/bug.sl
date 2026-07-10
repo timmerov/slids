@@ -46,17 +46,26 @@ int32 main() {
 /*
     /* should compile. */
     int arr[5] = (1,2,3,4,5);
-    //fn1(arr);
-    //fn2(arr);
-    //fn3(arr);
+    int^ p1 = arr; p1;
+    int[] p2 = arr; p2;
+    fn1(arr);
+    fn2(arr);
+    fn3(arr);
     fn4(arr);
     fn5(arr);
     fn6(arr);
     fn7(arr);
+    fn4(^arr);
+    fn5(^arr);
+    fn6(^arr);
+    fn7(^arr);
     fn1(^arr[0]);
     fn2(^arr[0]);
     fn3(^arr[0]);
     /* compile errors. */
+    //fn1(^arr);
+    //fn2(^arr);
+    //fn3(^arr);
     //fn4(^arr[0]);
     //fn5(^arr[0]);
     //fn6(^arr[0]);

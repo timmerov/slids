@@ -426,6 +426,17 @@ Phase 4 — types beyond primitives
     bridges pointer<->integer. `void[]`/`void[N]` rejected — void has no stride, a
     void pointer must be `void^`. Codegen: ptr<->ptr no-op, ptr<->intptr ptrtoint/
     inttoptr; convert asserts on an ungated ptr->scalar. test/pointer/cast.sl.
+    ARRAY->POINTER DECAY LANDED (2026-07-09, see [[project_array_pointer_decay]]): an
+    array is storage AND a pointer to storage — a bare array implicitly casts to its
+    ELEMENT pointer `Type[]`/`Type^` (`^arr[0]`, size dropped; `<Type[]> arr` the
+    explicit form), the same "may strip info" lattice as iter->ref. Implemented as a
+    classify NODE REWRITE to `^arr[0]` (checkValueAssign + kCastExpr; wrapArrayAsElemAddr)
+    so no codegen change. The WHOLE-array ref `Type[N]^` is NOT implicit from a bare
+    array (`int[5]^ r = arr` errors — write `^arr`); only a function ARGUMENT gets the
+    whole-ref convenience (autoRefPointee). An array arg is a cost-1 decay at BOTH
+    shapes (argConvertCost), so matching int[] AND int[5]^ is Ambiguous. This retired
+    the todo "array->iterator param rejected" bug and made the array param handling a
+    RULE, not a special case.
     CONST-CAST SURFACE LANDED (syntax, NO enforcement): `const T^` (deep, outer
     const) / `(const T)^` (shallow, const pointee) targets; the `<const>` /
     `<mutable>` qualifier-only casts [target derived from the operand in classify

@@ -8,18 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * Passing a fixed-size array to an `int[]` (ITERATOR) param is rejected — an array→iterator conversion gap.
-    int^ retref(int[] arr, int i) { return ^arr[i]; }
-    int arr[3] = (1,2,3);
-    int^ ref = retref(arr, 1);        // "Cannot assign 'int[3]' to '(const int)[]'"
-    The retref body compiles (^arr[i] resolves); the gap is only the int[3] → int[] param conversion at the call.
-    NOTE (2026-07-09): the size-PRESERVING BY-REFERENCE path now works fully — a
-    `(const int)[N]^ p` param (or the C-style `int p[N]`) accepts `fn(arr)` and the
-    call promotes the whole array to its address (see the parse fix in
-    [[project_decl_recognition_gates]] / call.sl sum_grp_ref). This open gap is only
-    the SIZE-ERASING iterator form `int[] p` — an array→iterator VALUE conversion at
-    the call site, orthogonal to the (now-landed) parse of a sized-array-ref type.
-
   * Ambiguous op overloads are treated as no-match rather than an error.
 
   * this should compile but doesn't:

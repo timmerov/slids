@@ -248,6 +248,17 @@ int sum_tup_ref((int,int)[2]^ p) {           // `(`-led tuple element (array of 
     return p^[0][0] + p^[0][1] + p^[1][0] + p^[1][1];
 }
 
+/* array-by-reference via the ELEMENT decay: a bare array implicitly casts to an
+   iterator / element-reference param (`^arr[0]`, size dropped) — distinct from the
+   whole-array-ref params above (`^arr`). An array arg that matched BOTH shapes would
+   be Ambiguous; here each param admits exactly one. */
+int sum_iter(int[] p) {                      // iterator param
+    return p[0] + p[1] + p[2];
+}
+int first_ref(int^ p) {                      // element-reference param (element 0)
+    return p^;
+}
+
 /* rvalue arm: a tuple LITERAL has no caller-side address, so the call site
    materializes it in a stacksaved temp and passes the temp's address. */
 void echo_tpl((int,int,int)^ t) {
@@ -354,6 +365,11 @@ int32 main() {
        expected: 10 */
     (int,int) tb[2] = ((1,2), (3,4));
     __println("sum_tup_ref = " + sum_tup_ref(tb));
+    /* element decay: a bare array to an iterator / element-reference param.
+       expected: 15, 4 */
+    int rd[3] = (4, 5, 6);
+    __println("sum_iter = " + sum_iter(rd));
+    __println("first_ref = " + first_ref(rd));
 
     /* rvalue arm — a tuple LITERAL materializes a temp at the call site.
        expected: echo= 9 8 7 */

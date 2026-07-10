@@ -46,6 +46,8 @@ mutable pointers can become const pointers.
     constp = mutp;
 
 arrays may be demoted to iterators or references of the same type.
+in this case, array means the address of the stored data.
+so it's like a pointer.
 
     iter = arr;
     ref = arr;
@@ -58,6 +60,8 @@ implicit casts may be made explicit.
     voidp = <void^> ref;
     voidp = <void^> iter;
     constp = <const Type^> mutp;
+    iter = <Type[]> arr;
+    ref = <Type^> arr;
 
 you may cast a buffer-class pointer to a pointer of any type.
 you may cast a pointer of any type to a buffer-class pointer.
@@ -107,6 +111,20 @@ void has no stride.
 it cannot be an iterator.
 void[] is a compile error.
 
+you may not cast a pointer to an array.
+in this case, array means the stored data - not the address of the
+stored data.
+Type[N] is not a pointer type. it cannot be used in a cast expression.
+Type[N]^ is a pointer type. it may be used in a cast expression.
+Type[N][] is a pointer type. it may be used in a cast expression.
+no cast is needed for the reference because that is exactly the
+type of ^arr.
+an explicity cast is need to reinterpret a reference to an array to
+an iterator to an array.
+
+    Type[5]^ arr_ref = ^arr;
+    Type[5][] arr_iter = <Type[5][]> ^arr;
+
 notes:
 pointers to class hierarchies will be written when the feature lands.
 see class/inheritance.sl.
@@ -128,6 +146,16 @@ claude says:
   `int8^`, `uint8^`) or `intptr`, and reinterprets an iterator <-> a reference
   of the same pointee. two unrelated non-buffer pointers may not cast directly —
   chain through `void^`. only `intptr` bridges pointers and integers.
+- an ARRAY decays to a pointer (it is storage, addressed as `^arr[0]`): a bare
+  array implicitly casts to the ELEMENT pointer `Type[]` / `Type^` (size dropped),
+  and `<Type[]> arr` / `<Type^> arr` is the explicit form. classify rewrites the
+  array to `^arr[0]` (an address-of), so codegen needs no special case. The
+  WHOLE-array ref `Type[N]^` is NOT implicit from a bare array — write `^arr`
+  (address-of, exactly its type; `int[5]^ r = arr` errors). As a function ARGUMENT
+  the whole-array ref is a convenience (`fn(arr)` -> `fn(^arr)`); an array arg that
+  matches BOTH an element-pointer and a whole-array-ref param is Ambiguous (both
+  cost-1 decays — disambiguate with `^arr[0]` / `^arr`). `Type[N]` itself is not a
+  pointer type, so it is never a cast target/endpoint.
 - `void` has no stride: a void pointer must be a reference (`void^`). `void[]`
   (a void iterator/array) is a compile error.
 - DEFERRED to phase 6 (const correctness): `const Type^`, `<const>`, `<mutable>`,
@@ -245,6 +273,21 @@ int32 main() {
     int32^ ap = ^av;
     __println("alias cast= " + (<Pint^> ap)^);           // 77
 
+    /* an ARRAY decays to a pointer — it is storage, addressed as ^arr[0]. A bare
+       array implicitly casts to the ELEMENT pointer (size dropped); the explicit
+       <Type[]> / <Type^> form casts the same address; the WHOLE-array ref keeps the
+       size and is spelled ^arr (address-of, no cast). */
+    int32 darr[5] = (10, 20, 30, 40, 50);
+    int32[] dq = darr;                                   // implicit -> ^darr[0]
+    int32^  dp = darr;                                   // implicit element-0 ref
+    __println("decay iter= " + dq^ + " " + dq[4]);       // 10 50
+    __println("decay ref= " + dp^);                      // 10
+    int32[] dqx = <int32[]> darr;                        // explicit element decay
+    int32^  dpx = <int32^> darr;
+    __println("decay cast= " + dqx^ + " " + dpx^);       // 10 10
+    int32[5]^ dwhole = ^darr;                            // whole-array ref: ^arr, no cast
+    __println("decay whole= " + dwhole^[0] + " " + dwhole^[4]);   // 10 50
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: Cannot implicitly cast 'void^' to 'int32^'
@@ -273,9 +316,13 @@ int32 main() {
     //-EXPECT-ERROR: only 'intptr' may be cast to or from a pointer
     //num = <int32^> ref^;
 
-    /* a whole array is neither a pointer nor 'intptr' — not a cast endpoint. */
-    //-EXPECT-ERROR: a cast operand must be a pointer or 'intptr'
-    //ref = <int32^> buf;
+    /* an ARRAY decays to a pointer, so it IS a valid cast operand now: the element
+       decay `<int32^> buf` == `<int32^> ^buf[0]` (verified above via dqx / dpx).
+       The WHOLE-array ref, though, is NOT implicit from a bare array — spell `^arr`;
+       a bare array to `int32[5]^` is a compile error. */
+    //-EXPECT-ERROR: Cannot assign 'int32[5]' to 'int32[5]^'
+    //int32[5]^ badwhole = darr;
+    //__println("bad= " + badwhole^[0]);
 
     //-EXPECT-ERROR: A void pointer must be a reference 'void^'
     //void[] bad = nullptr;
