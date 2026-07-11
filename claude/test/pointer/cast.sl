@@ -23,6 +23,11 @@ assume these named references have these types.
     intptr num;
     Type arr[5];
 
+    Base(int a) { }
+    Base : Derived() { }
+    Base^ basep;
+    Derived^ derp;
+
 implicit casts are the widening rules of pointers.
 you may lose information.
 but you may not add information.
@@ -52,6 +57,11 @@ so it's like a pointer.
     iter = arr;
     ref = arr;
 
+a pointer to a derived class may be demoted to a pointer to any
+of it base classes.
+
+    basep = derp;
+
 implicit casts may be made explicit.
 
     ref = <Type^> nullptr;
@@ -62,11 +72,14 @@ implicit casts may be made explicit.
     constp = <const Type^> mutp;
     iter = <Type[]> arr;
     ref = <Type^> arr;
+    basep = <Base^> derp;
 
 you may cast a buffer-class pointer to a pointer of any type.
 you may cast a pointer of any type to a buffer-class pointer.
-you may not cast a non-buffer-class pointer directly to a different
-non-buffer-class pointer.
+you may cast a pointer to a base class to a pointer to a class derived
+from the same base class.
+otherwise, you may not cast a non-buffer-class pointer directly to a
+different non-buffer-class pointer.
 buffer-class pointers are void^, int8^, uint8^.
 
 all other casts are explicit.
@@ -125,9 +138,8 @@ an iterator to an array.
     Type[5]^ arr_ref = ^arr;
     Type[5][] arr_iter = <Type[5][]> ^arr;
 
-notes:
-pointers to class hierarchies will be written when the feature lands.
-see class/inheritance.sl.
+note:
+testing casting between base and derived pointers is in class/inheritance.sl.
 */
 
 /*
@@ -152,10 +164,13 @@ claude says:
   array to `^arr[0]` (an address-of), so codegen needs no special case. The
   WHOLE-array ref `Type[N]^` is NOT implicit from a bare array — write `^arr`
   (address-of, exactly its type; `int[5]^ r = arr` errors). As a function ARGUMENT
-  the whole-array ref is a convenience (`fn(arr)` -> `fn(^arr)`); an array arg that
-  matches BOTH an element-pointer and a whole-array-ref param is Ambiguous (both
-  cost-1 decays — disambiguate with `^arr[0]` / `^arr`). `Type[N]` itself is not a
-  pointer type, so it is never a cast target/endpoint.
+  the whole-array ref is a convenience (`fn(arr)` -> `fn(^arr)`) that plays no part
+  in matching: so an array arg matching BOTH a whole-array-ref param (`int[5]^`, via
+  `^arr`, an EXACT rung-0 match) and an element-pointer param (`int[]` / `int^`, via
+  the `^arr[0]` decay, a rung-2 cast) picks the whole-ref outright. Only an element
+  ITERATOR-vs-REFERENCE contest (both `^arr[0]` decays at the same cast rung) ties ->
+  Ambiguous (disambiguate with `^arr[0]`). `Type[N]` itself is not a pointer type, so
+  it is never a cast target/endpoint.
 - `void` has no stride: a void pointer must be a reference (`void^`). `void[]`
   (a void iterator/array) is a compile error.
 - DEFERRED to phase 6 (const correctness): `const Type^`, `<const>`, `<mutable>`,

@@ -1,11 +1,8 @@
 /*
 test overloaded methods.
-includes default parameters.
-matches the function call to the signature.
-applies widening rules.
 include infering the type of a default parameter.
 
-ambiguity is a compile error.
+usess the same rules as overloading bare functions.
 */
 
 /*
@@ -14,9 +11,10 @@ claude says:
 method / function parity: a method resolves through the SAME overload engine as a
 free function. A method name may have several definitions in one class with distinct
 signatures; obj.m(args) / self.m(args) / a bare SIBLING m(args) (which rewrites to
-self.m()) all rank the candidate set and pick the lowest-total-cost match (exact 0,
-widen 1). A tie is "Ambiguous call", no viable candidate is "No matching overload" —
-the same wording as a free function.
+self.m()) all rank the candidate set on the per-arg rung ladder and pick the lowest
+MAX-rung match (see overload_fn.sl for the ladder: exact 0, alias 1, cast 2, then
+smallest same-sign / cross-sign widening). A tie is "Ambiguous call", no viable
+candidate is "No matching overload" — the same wording as a free function.
 - DEFAULT PARAMETERS on a method: a trailing param may carry a default; omitted args
   fill from THE CHOSEN overload's defaults (after ranking). A param type may itself be
   INFERRED from its default value (`x = 7` -> int).
@@ -85,6 +83,8 @@ int32 main() {
     int64 j = 9;
     __println("rank_i = " + c.rank(i));             // 32 (exact)
     __println("rank_j = " + c.rank(j));             // 64 (exact)
+    int16 s16 = 3;
+    __println("rank_s = " + c.rank(s16));           // 32 (smallest widening int16->int32)
 
     __println("withdef1 = " + c.withdef(5));        // 105 (int overload, b=100, base_=0)
     __println("withdef2 = " + c.withdef(5, 6));     // 11
@@ -116,13 +116,18 @@ int32 main() {
     return 0;
 }
 
-/* a call where two overloads are equally good (int16 widens to both int32 and
-   int64 — both cost 1) is ambiguous. */
-//-EXPECT-ERROR: Ambiguous call to 'rank'
-//int32 amb() {
-//    Calc c(0);
-//    int16 s = 3;
-//    return c.rank(s);
+/* two method overloads a call is equally good for: mirror images that each match
+   one arg exactly and widen the other same-sign to int64 — neither dominates, so
+   the max-rung score ties -> ambiguous. */
+//-EXPECT-ERROR: Ambiguous call to 'mm'
+//AmbM(int n_) {
+//    int mm(int a, int64 b) { return 1; }
+//    int mm(int64 a, int b) { return 2; }
+//}
+//int32 amb_sym() {
+//    AmbM a(0);
+//    int x = 3;
+//    return a.mm(x, x);
 //}
 
 /* a call matching no overload's arity. */
@@ -160,13 +165,13 @@ int32 main() {
 //    return c.multi(1, 2, 3, 4);
 //}
 
-/* a BARE sibling call (rewrites to self.r) is overload-resolved too — int16 widens
-   to both r(int32) and r(int64), so it is ambiguous. */
+/* a BARE sibling call (rewrites to self.r) is overload-resolved too — mirror-image
+   overloads that each match one arg exactly and widen the other are ambiguous. */
 //-EXPECT-ERROR: Ambiguous call to 'r'
 //Sib(int n_) {
-//    int r(int32 x) { return 1; }
-//    int r(int64 x) { return 2; }
-//    int pick(int16 s) { return r(s); }
+//    int r(int a, int64 b) { return 1; }
+//    int r(int64 a, int b) { return 2; }
+//    int pick(int s) { return r(s, s); }
 //}
 
 /* a typeless method param with NO default has nothing to infer from. */

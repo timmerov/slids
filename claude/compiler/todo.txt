@@ -8,6 +8,18 @@ quest's progress lives in plan.txt).
 
 BUGS
 
+  * this should be a compile error:
+    void fn(int a) { }
+    void fn(int a, int b = 0) { }
+    what does fn(1) mean?
+    1. it's ambiguous, compile error. we can never call fn(a).
+    2. it matches fn(int). the only way to call fn(a,b) is to pass two arguments.
+    which means we can never use the default value of b.
+    DECIDED (2026-07-10): option 1. CURRENT behavior — fn(1) is "Ambiguous call" (both
+    viable at arity 1, equal exact rung; canon amb_one). TO BECOME a DECLARATION-time
+    error (a default whose arity range overlaps another overload's fixed arity) in a
+    future session; until then callers assume the pattern doesn't occur.
+
   * this should compile but doesn't:
     Shift(int a) { op<<(Shift^ lhs, Shift^ rhs) { a = lhs^.a << rhs^.a; } }
     (Shift, Shift) tuple = (Shift(1), Shift(3)) << 1;
@@ -98,14 +110,6 @@ UNBLOCKED FEATURES
     positions, compound, comparison arity-1, index/deref, unary arity-0/1, out-of-line defs
     in both forms, ambiguity reporting, no-invalid-IR guard) has landed with tests.
 
-  * these should not be an ambiguous matchings:
-    void fn(int64 i) { }
-    void fn(uint64 i) { }
-    fn( (int=5) );
-    fn( (uint=10) );
-    signed integer types should unambiguously match to the fn(int64).
-    unsigned integer types should unabiguously match to the fn(uint64).
-
   * review swap-init.
     Primitive swap-init; = (tuple) op=; kStoreStmt-target op=.
 
@@ -172,6 +176,16 @@ BLOCKED FEATURES
     The const + global file-scope registration arms already share addVarEntry;
     the remaining work is routing the const arm's non-scalar case through the
     global-storage path rather than erroring.
+
+  * is this overload allowed?
+    void fn(mutable int^ p);
+    void fn(const int^ p);
+    void fn((const int)^ p);
+    if it is then overload matching needs an update.
+    NOTE (2026-07-10): overload matching now ranks mut->const as EXACT (rung 0,
+    recursive to the leaf — see argConvertCost / overload_fn.sl canon), so these three
+    would be MUTUALLY AMBIGUOUS today. The "update" is to reject the overload set (or add
+    a const-distinguishing tiebreak) once const is enforced — deferred with const (Phase 6).
 
   longer term features:
 
@@ -300,15 +314,6 @@ REACH GOALS
     b = (x < obj)  -->  b = (obj > x)  -->  b = obj.op>(x)
     it's unlikely we'd want to apply this to all binary operations.
 
-  * smallest widening wins when matching overloaded functions — DECIDED: NO.
-    void fn(int32) {}
-    void fn(int64) {}
-    int16 x = 7; fn(x);         // AMBIGUOUS (int16 widens to both, flat cost)
-    Widening is FLAT-cost; a tie is "Ambiguous call". Tried grading argConvertCost so the
-    narrowest target won, then REVERTED (no canon home; the OPPOSITE is canon in
-    overload_fn.sl / overload_cls.sl). Do not re-add a smallest-wins tiebreak.
-    See [[project_operator_overloading]].
-
   * decide if we want to revisit expanding op==.
     Vector<int> vecint1; Vector<int> vecint2; Vector<bool> vecbool;
     vecbool = (vecint1 == vecint2);
@@ -418,3 +423,11 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     parseType recurses one frame per `(` layer, so a pathological depth is a theoretical
     parser-stack DoS. Same 1-tuple-collapse root as UNIT ARRAY WITH A NON-SCALAR ELEMENT
     above. Pinned by vardecl.sl (`((((int)))) grp`). Low priority; harmless today.
+
+  * review whether array to reference is a single cast or a chain of two casts.
+    int arr[5]; ^arr[0] is iterator. fn(arr) desugars to fn(^arr[0]) so it can match
+    fn(int[]). can fn(arr) also match fn(int^)? CURRENT IMPLEMENTATION: yes, ONE cast
+    (argConvertCost element-decay = rung 2) — call.sl first_ref(rd) relies on it, and
+    overload_fn.sl's no-match block was reworded to "single cast, subject to review".
+    OPEN (user-deferred 2026-07-10): revisit whether it should be TWO casts (array ->
+    int[] iterator, THEN int[] -> int^ iter->ref), which would REJECT fn(arr) -> fn(int^).

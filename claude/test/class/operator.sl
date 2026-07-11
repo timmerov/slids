@@ -460,9 +460,9 @@ OpDefs(
 }
 
 /* ---- stage 5: convert fallback. When no op= matches the arg EXACTLY, the integer
-   arg WIDENS into a matching op=. Widening is flat-cost, so a single wider overload
-   dispatches with no ambiguity (there is no smallest-widening-wins tiebreak — an arg
-   that widened to two overloads equally would be "Ambiguous", see overload_*.sl). ---- */
+   arg WIDENS into a matching op=. A single wider overload dispatches with no
+   ambiguity; widening is graded now (smallest same-sign target wins — see the rung
+   ladder in overload_fn.sl), so a scalar op= tie needs two equal-rung candidates. ---- */
 Widen(
     int64 which_
 ) {
@@ -660,7 +660,7 @@ int32 main() {
     if (!uz) { __println("uz-cond fired"); }   // uz.op!() -> v_ == 0 -> true -> fires
 
     /* ---- convert fallback: int8 has no exact op=; it WIDENS to the op=(int64) overload
-       (widening is flat-cost, so a single overload dispatches with no ambiguity). ---- */
+       (a single overload dispatches with no ambiguity). ---- */
     Widen wc(0);
     int8 wb = 7;
     wc = wb;                      // int8 widens to int64 -> wc.op=(int64); which_ = 7+1000
@@ -982,17 +982,22 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: An operator can only be defined as a method of a class.
 //op+(int a, int b) { }
 
-/* two op= overloads a source widens to EQUALLY (bool -> int AND int64, both flat cost)
-   are ambiguous — reported, not silently collapsed to the default copy. */
+/* two op= overloads a source hits at the SAME cast rung — an iterator widens to
+   int^ (iterator->reference) AND to void^ (a strip), both a single implicit pointer
+   cast — so the source is ambiguous, reported (not silently collapsed to a default
+   copy). Widening is graded now (smallest-widening wins), so a scalar op= tie needs
+   the flat cast rung; see overload_fn.sl for the ladder. */
 //-EXPECT-ERROR: Ambiguous operator 'op='
 //NegAmb(int v_) {
-//    op=(int a)   { v_ = a; }
-//    op=(int64 a) { v_ = 1; }
+//    op=(int^ p)  { v_ = 1; }
+//    op=(void^ q) { v_ = 2; }
 //}
 //int neg_ambiguous_op() {
-//    bool flag = true;
+//    int buf[4];
+//    buf[0] = 5;
+//    int[] it = ^buf[0];
 //    NegAmb x;
-//    x = flag;
+//    x = it;
 //    return x.v_;
 //}
 

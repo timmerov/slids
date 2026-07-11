@@ -956,60 +956,106 @@ widen::TypeRef autoRefPointee(widen::TypeRef param, parse::Node const& arg) {
     return pointee;
 }
 
-// Conversion cost of argument `a` to parameter type `param` for overload ranking:
-// 0 = exact (same class), 1 = a widening (literal flex, or within-family widen),
-// -1 = not convertible (narrowing / cross-family / un-typeable). Widening is FLAT
-// (all widenings cost 1), so two overloads a value widens to equally (int16 -> int32
-// vs int64) TIE and pickOverload reports "Ambiguous call" — canon (overload_fn.sl /
-// overload_cls.sl). There is no smallest-widening-wins tiebreak.
-int argConvertCost(parse::Node const& a, widen::TypeRef param) {
-    widen::TypeRef at = widen::strip(a.inferred_type);   // see through one alias layer
-    // An ARRAY argument DECAYS to a pointer — it never passes "as itself". It may
-    // decay to the ELEMENT pointer `^arr[0]` (pointee == element type) OR the
-    // WHOLE-array ref `^arr` (pointee == the array). BOTH are cost-1 conversions, so
-    // an array arg matching two pointer params (int[] AND int[5]^) TIES -> Ambiguous
-    // (the author writes ^arr[0] / ^arr to disambiguate). Ranked HERE, before the
-    // autoRefPointee value->reference check, so the whole-ref match is a decay (1),
-    // not an exact by-ref (0) the way a tuple/class value pass is.
+// The rung for a valid within-family WIDENING of scalar `at` to param `pt`, keyed
+// on the TARGET width and the sign relation: same-sign 3/4/5, cross-sign 6/7/8 for
+// a 16/32/64-bit target. Caller has already confirmed `at` widens to `pt`.
+int widenRung(widen::TypeRef at, widen::TypeRef pt) {
+    widen::TypeKind ka, kp;
+    widen::classify(at, ka);
+    widen::classify(pt, kp);
+    bool same_sign = (ka.cat == kp.cat);
+    int w = (kp.bits <= 16) ? 0 : (kp.bits <= 32) ? 1 : 2;
+    return (same_sign ? 3 : 6) + w;
+}
+
+// The max widen rung over the leaves of two shape-matched types (or the scalar rung
+// at a leaf) — grades a value->reference pass whose pointee widens per leaf. Shapes
+// are known to match (shapesAndLeavesMatch); at least one leaf widens here.
+int leafWidenRung(widen::TypeRef pt, widen::TypeRef at) {
+    pt = widen::strip(pt);
+    at = widen::strip(at);
+    if (isAggregateType(pt) && isAggregateType(at)) {
+        int n = aggregateSlotCount(pt), best = 0;
+        for (int i = 0; i < n; i++)
+            best = std::max(best, leafWidenRung(aggregateSlotType(pt, i),
+                                                aggregateSlotType(at, i)));
+        return best;
+    }
+    if (sameClass(at, pt)) return 0;
+    return widenRung(at, pt);
+}
+
+// Conversion RUNG of argument `a` to parameter type `praw`, for overload ranking. A
+// candidate's score is the MAX rung over its args (rankOverload); lowest score wins,
+// a tie is "Ambiguous call", none viable is "No matching overload". Ladder (tighter
+// -> looser); -1 = not viable (a narrowing / cross-family arg rejects the candidate):
+//   0 exact   — same class; the whole-array `^arr` + value->ref convenience (no part
+//               in matching); mut->const (recursive); a pointer exact modulo alias/const
+//   1 alias   — same underlying type crossed through a user `alias` name
+//   2 cast    — a SINGLE implicit pointer cast: nullptr->any, ->void^, ->intptr,
+//               iterator->reference, array element decay, or a derived->base demotion
+//   3/4/5     — smallest same-sign widening to a 16/32/64-bit target
+//   6/7/8     — smallest cross-sign widening (value-preserving unsigned->wider signed)
+int argConvertCost(parse::Tree& tree, parse::Node const& a, widen::TypeRef praw) {
+    widen::TypeRef araw = a.inferred_type;
+    widen::TypeRef param = widen::strip(praw);
+    widen::TypeRef at = widen::strip(araw);
+    // An ARRAY argument decays to a pointer. The WHOLE-array ref (`^arr`) is the
+    // convenience pass and plays no part in matching -> EXACT (0); the ELEMENT decay
+    // (`^arr[0]`) is one implicit cast (2). So `arr` matching both an `int[5]^` and an
+    // `int[]` param picks the whole-ref exactly — no longer ambiguous.
     if (param != widen::kNoType && isArrayType(at) && isPtrLikeType(param)) {
         widen::TypeRef pointee = pointeeType(param);
         if (pointee != widen::kNoType) {
-            // WHOLE-array ref (`^arr` by-ref pass, exact OR per-leaf widen into an
-            // array pointee) OR ELEMENT decay (`^arr[0]`, exact element pointee).
-            if ((isArrayType(pointee)
+            if (isArrayType(pointee)
                     && shapesAndLeavesMatch(widen::strip(pointee), at))
-                || widen::deepStrip(pointee) == widen::deepStrip(arrayFirstElem(at)))
-                return 1;
+                return 0;
+            if (widen::deepStrip(pointee) == widen::deepStrip(arrayFirstElem(at)))
+                return 2;
         }
         return -1;
     }
-    // A non-primitive value auto-promotes to a reference param: viable when the
-    // arg type matches the param's pointee (exact, mirroring the value checks).
-    // SHAPE-MATCH with elem widen ranks as cost 1 (per-leaf widen, like a scalar
-    // widening); exact match still wins overloads.
+    // A non-primitive VALUE auto-promotes to a reference param (convenience, no part
+    // in matching): exact when the pointee matches, else a per-leaf widen.
     if (param != widen::kNoType) {
         widen::TypeRef pointee = autoRefPointee(param, a);
         if (pointee != widen::kNoType) {
             if (sameClass(at, widen::strip(pointee))) return 0;
-            if (shapesAndLeavesMatch(widen::strip(pointee), at)) return 1;
+            if (shapesAndLeavesMatch(widen::strip(pointee), at))
+                return leafWidenRung(widen::strip(pointee), at);
             return -1;
         }
     }
     if (at == widen::kNoType) return -1;
-    // An already-a-pointer arg vs a pointer param: rank by the implicit-pointer
-    // relation, which deep-strips const/alias — so a `T^` arg matches a munged
-    // `(const T)^` param (const is transparent; no enforcement yet).
-    if (isPtrLikeType(at) && isPtrLikeType(param)) {
-        return ptrImplicitOk(at, param) ? 0 : -1;
+    // A pointer argument vs a pointer / `intptr` param. Exact modulo alias + const
+    // (so mut->const, recursive, and a pointee alias are 0). Otherwise a SINGLE
+    // implicit pointer cast (2): the strip rules (nullptr / ->void^ / ->intptr /
+    // iterator->reference) OR a derived->base demotion. No chained casts.
+    widen::TypeRef intptr = widen::intern("intptr");
+    if (isPtrLikeType(at) && (isPtrLikeType(param) || param == intptr)) {
+        if (widen::deepStrip(at) == widen::deepStrip(param)) return 0;
+        if (ptrImplicitOk(at, param)) return 2;
+        if (ptrBaseUpcastOk(tree, at, param)) return 2;
+        return -1;
     }
-    if (sameClass(at, param)) return 0;
+    // A scalar / class VALUE. Same class is exact (0), or alias (1) when a user
+    // `alias` name is crossed (same underlying type, different spelling).
+    bool alias_crossed = araw != praw
+        && (widen::form(araw) == widen::Type::Form::kAlias
+         || widen::form(praw) == widen::Type::Form::kAlias);
+    if (sameClass(at, param)) return alias_crossed ? 1 : 0;
+    // A weak literal flexes to any param it FITS, graded (sign + width) against its
+    // default type — so a signed literal prefers a same-sign target (int32 -> int64)
+    // over a cross-sign one it merely fits (int32 -> uint64), same as a typed value.
     if (literalFlexes(a)) {
-        return literalFitsContext(a, param) ? 1 : -1;   // weak literal flexes into param
+        if (!literalFitsContext(a, param)) return -1;
+        return widenRung(defaultLiteralType(a), param);
     }
-    // A strong-const literal (and any non-literal) ranks as a typed value: exact, a
-    // within-family widen, else not viable — so a narrowing arg is rejected.
+    // A typed value: a within-family widening graded by sign + target width, else
+    // not viable (a narrowing / cross-family arg rejects the candidate).
     widen::TypeRef out;
-    if (widen::commonType(at, param, out) && sameClass(out, param)) return 1;
+    if (widen::commonType(at, param, out) && sameClass(out, param))
+        return widenRung(at, param);
     return -1;
 }
 
@@ -2253,9 +2299,9 @@ OverloadRank rankOverload(parse::Tree& tree, std::vector<int> const& cands,
         bool ok = true;
         for (std::size_t i = 0; i < args.size() && ok; i++) {
             int c = args[i]
-                ? argConvertCost(*args[i], widen::strip(e.param_types[i + recv_offset]))
+                ? argConvertCost(tree, *args[i], e.param_types[i + recv_offset])
                 : -1;
-            if (c < 0) ok = false; else cost += c;
+            if (c < 0) ok = false; else cost = std::max(cost, c);
         }
         if (!ok) continue;
         if (cost < best_cost) { best_cost = cost; r.tied = {cid}; }

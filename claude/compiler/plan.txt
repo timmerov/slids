@@ -212,9 +212,10 @@ Phase 3 — functions
     (Entry.num_required + param_default_text/kind; required-before-
     optional; default = constant expression; classify fills defaults)
   * overload resolution (arity → types → const)                    LANDED
-    (per-arg cost: exact 0 / widen 1 / reject; ambiguity + no-match
-    diagnostics; mangle-by-entry-id; file-scope candidates only —
-    nested functions do NOT overload)
+    (per-arg RUNG: exact 0 / alias 1 / cast 2 / smallest same-sign 3-5 /
+    cross-sign 6-8 widen / reject; candidate = MAX rung over args; graded
+    widening — smallest target wins; ambiguity + no-match diagnostics;
+    mangle-by-entry-id; file-scope candidates only — nested fns do NOT overload)
   * nested functions + capture analysis                            LANDED
     (lambda-lift to top-level; capture host locals/params by reference;
     current value at call time; self-recursion ok; deep nesting + sibling
@@ -433,8 +434,9 @@ Phase 4 — types beyond primitives
     classify NODE REWRITE to `^arr[0]` (checkValueAssign + kCastExpr; wrapArrayAsElemAddr)
     so no codegen change. The WHOLE-array ref `Type[N]^` is NOT implicit from a bare
     array (`int[5]^ r = arr` errors — write `^arr`); only a function ARGUMENT gets the
-    whole-ref convenience (autoRefPointee). An array arg is a cost-1 decay at BOTH
-    shapes (argConvertCost), so matching int[] AND int[5]^ is Ambiguous. This retired
+    whole-ref convenience (autoRefPointee — the whole-ref via `^arr` is EXACT rung 0).
+    An array matching BOTH int[] and int[5]^ picks the whole-ref over the element decay
+    (cast rung 2) in argConvertCost — no longer ambiguous. This retired
     the todo "array->iterator param rejected" bug and made the array param handling a
     RULE, not a special case.
     CONST-CAST SURFACE LANDED (syntax, NO enforcement): `const T^` (deep, outer
@@ -894,7 +896,12 @@ Phase 5 — classes
     its base-chain candidates then ranks + reports through the SAME core (recv_offset 1,
     the lone rhs; tie → notes + the -2 sentinel; -1 → none, caller errors). So function,
     method, AND operator matching share ONE ranker and ONE ambiguity diagnostic that
-    cites the exact conflicting declarations. resolve
+    cites the exact conflicting declarations. UPDATE (2026-07-10): the ranker grades
+    each arg on a convert-cost RUNG (argConvertCost — exact 0 / alias 1 / single
+    implicit pointer cast 2 / smallest same-sign widen 3-5 / smallest cross-sign widen
+    6-8, TARGET width) and scores a candidate by the MAX rung over its args (was a flat
+    exact-0/widen-1 SUM); so widening is graded (int16 picks int32 over int64) and a tie
+    is an equal-MAX. Canon test/function/overload_fn.sl. resolve
     allows a method overload SET in a class frame; classifyScopeSignatures runs the
     signature pre-pass over every member (defaults + num_required + infer-from-default).
     SINCE: method-only signature validations (typeless-needs-default, required-after-

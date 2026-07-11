@@ -4,6 +4,7 @@ kind_i = 1
 kind_f = 2
 rank_i = 32
 rank_j = 64
+rank_s = 32
 withdef1 = 105
 withdef2 = 11
 withdef_f = 999

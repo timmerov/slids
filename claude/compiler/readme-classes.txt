@@ -418,8 +418,10 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
   * METHOD / FUNCTION PARITY — methods get OVERLOADING + DEFAULT PARAMS + INFER-PARAM-
     TYPE-FROM-DEFAULT (the three callable features free functions already had) through
     ONE shared overload engine. The RANKING is factored into a single pure core
-    rankOverload(cands, args, recv_offset) → {best, tied[]} (exact 0 / widen 1 cost,
-    lowest-total wins; `tied` retains EVERY candidate at the winning cost). pickOverload
+    rankOverload(cands, args, recv_offset) → {best, tied[]} (a per-arg convert RUNG —
+    exact 0 / alias 1 / cast 2 / smallest same-sign 3-5 / cross-sign 6-8 widen — a
+    candidate scored by the MAX rung over its args, lowest score wins; `tied` retains
+    EVERY candidate at the winning score). pickOverload
     wraps it, keeping "No matching overload" (nothing viable) and routing a genuine tie
     (`tied.size() > 1`) through the shared reportAmbiguity, which emits "Ambiguous call"
     PLUS one note per tied candidate ("candidate '<sig>' declared here", anchored at its

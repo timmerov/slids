@@ -316,7 +316,7 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     Value / emitTupleFromArrayValue / emitTupleLeafStores / emitArrayElemStores) are
     DELETED. The all-identical fast path keeps the whole-aggregate store. Call-site uses classify::
     shapesAndLeavesMatch in argConvertCost to rank shape-match-with-elem-widen as
-    cost 1 (exact still wins overloads). NUMERIC END-STATE:
+    a per-leaf widen rung (leafWidenRung; exact still wins overloads). NUMERIC END-STATE:
     classify::checkValueWiden ports widen::convert's reject rules (narrowing /
     cross-family / sign-change) and runs at the classify level (every
     assignment-family site + kAugAssignStmt + kForRangedStmt + kForArrayStmt).
@@ -404,8 +404,9 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     bare ARRAY to a pointer param is no longer a special case — it is the general
     array->pointer decay (see `ptr` in the ASSIGNMENT RELATION): an array arg to an
     ITERATOR / element-reference param decays to `^arr[0]`, to a WHOLE-array-ref
-    param passes `^arr` (autoRefPointee); an array matching BOTH shapes is Ambiguous
-    (both cost-1 decays in argConvertCost — author writes `^arr[0]`/`^arr`).
+    param passes `^arr` (autoRefPointee — the whole-ref via `^arr` is the convenience,
+    EXACT rung 0); an array matching BOTH shapes picks the whole-ref over the element
+    decay (cast rung 2) in argConvertCost — no longer ambiguous.
   * ARRAY from a tuple: `int a[3]=(1,2,3)`, `a=(4,5,6)`, multi-dim
     `int td[3][2]=((1,2),(3,4),(5,6))` (a NESTED tuple whose SHAPE — row × col —
     matches the standard-order dims). ELEMENT-AWARE: collectArrayElementNodes
@@ -1231,8 +1232,10 @@ STAGE FILES (.h / .cpp pairs)
             readme-classes.txt "CLASSES: NEW / DELETE / SIZEOF" for the construct/
             destruct lowering. Overload resolution across same-name Function entries has
             LANDED — one shared rankOverload core (pickOverload for fn/method calls,
-            findClassOperator for op=/op<--/op<-->) ranks by lowest total convert cost and
-            reports a tie via reportAmbiguity, citing each conflicting declaration.
+            findClassOperator for op=/op<--/op<-->) ranks each arg on a convert-cost RUNG
+            ladder (exact 0 / alias 1 / cast 2 / smallest same-sign 3-5 / cross-sign 6-8
+            widen) and scores a candidate by the MAX rung over its args, reporting a tie
+            via reportAmbiguity, citing each conflicting declaration.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
