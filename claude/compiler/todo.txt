@@ -87,6 +87,18 @@ BUGS
     scalar class already crash in a nested fn); surfaced while landing aggregate class-leaf
     conversions — the canon neg_class_in_slot helper is written as a nested function.
 
+  * CLASS-VALUED RHS ARG TEMP LEAKS TO ENCLOSING SCOPE — the seq-wrap that gives a
+    nested arg / receiver temp STATEMENT lifetime in a var-decl / assign / return rhs
+    (liftSretCallList, 2026-07-11) is SCALAR-VALUED-rhs only: when the rhs value is a
+    CLASS built in place (`Class y = make(Class(80));`), its arg temp still registers its
+    dtor in the ENCLOSING scope instead of dying at the statement. The class-valued rhs
+    takes the in-place sret fast paths (kVarDeclStmt sret-intercept / kReturnStmt sret /
+    kAssignStmt case-2/3), which need the RAW rhs node — a seq around it would defeat
+    in-place and force an extra copy. BALANCED (no leak/double-free), a lifetime bug
+    only. Pinned by test/class/evaluate.sl case 7. FIX = scope only the lifted PRE temps
+    (not the in-place target) — destroy them right after the sret call completes, rather
+    than wrapping the rhs value in a seq.
+
   * ● Tuple op= (t = s where the slots are classes with a user op=):
     - Today: the whole tuple is copied as one blob — load {{i32},{i32}} then store — a raw memory blit.
     - So each slot's op= (and even the default @Elem__$copy) is skipped. Elem::op= fired never runs.
@@ -102,7 +114,10 @@ UNBLOCKED FEATURES
   * operator overloading — LANDED except two open areas:
     - EXPRESSION-TEMP ELIMINATION: fuse a full `String s = a + b + c + d` chain to ZERO
       temporaries (copy-into-target instead of move; only-op+= seed when no 2-arg op+;
-      ping-pong two-buffer). Active canon: test/class/evaluate.sl.
+      ping-pong two-buffer). Active canon: test/class/evaluate.sl. NOTE (2026-07-11): the
+      temp-LIFETIME half is SEPARATE and LANDED — a scalar-valued var-decl/assign/return
+      rhs's nested arg temp now dies at the STATEMENT (a kSeqExpr wrap, liftSretCallList);
+      what remains here is the zero-temp FUSION only.
     - COMPARISON forms deferred by the user: arity-2 comparison PRODUCING a class (e.g. a
       SIMD mask `Mask m = a == b`), and reversed-operand comparison (`x < obj` -> `obj >= x`,
       `int == class`). See REACH GOALS below + [[project_operator_overloading]].

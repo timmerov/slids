@@ -882,9 +882,11 @@ Phase 5 — classes
     and no-return produce-self `C:op+=(…)`). Ambiguous op= is REPORTED; a class binary with
     no viable operator is REJECTED cleanly (never lowered to invalid IR). DEFERRED:
     expression-temp elimination (fuse a full `a+b+c+d` chain to zero temporaries —
-    copy-into-target / only-op+= seed / ping-pong, canon test/class/evaluate.sl); arity-2
-    comparison producing a class + reversed-operand comparison. See
-    [[project_operator_overloading]]; canon test/class/operator.sl.
+    copy-into-target / only-op+= seed / ping-pong, canon test/class/evaluate.sl; the
+    temp-LIFETIME half — a scalar-valued var-decl/assign/return rhs's arg temp now dies
+    at the STATEMENT via a kSeqExpr wrap, LANDED 2026-07-11 — is DONE; only the zero-
+    temp FUSION remains); arity-2 comparison producing a class + reversed-operand
+    comparison. See [[project_operator_overloading]]; canon test/class/operator.sl.
   * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +
     infer-from-default (all of which free functions already had) by routing both
     through ONE shared overload engine: a pure rankOverload(cands, args, recv_offset)

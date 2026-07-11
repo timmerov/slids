@@ -248,13 +248,15 @@ int32 main() {
 
     // CHAINED method call in a DECL initializer: each link returns a class BY VALUE,
     // so the next call's receiver is a temporary materialized into a `_$cret` slot.
-    // ctors run inner-to-outer (1 then 2). Decl-init temps keep ENCLOSING-SCOPE
-    // lifetime, so c(0) and both temps die together at scope end in reverse order.
+    // ctors run inner-to-outer (1 then 2). The chain TEMPS are statement-scoped (the
+    // scalar-valued rhs is wrapped in a seq): they die at the end of the DECL
+    // statement, 2 then 1 in reverse order, while the named local c(0) dies at
+    // scope end.
     {
         Chain c(0);
         int chain = c.next().next().get();   // 2
         __println("chain = " + chain);
-        __println("-- end chain (dtor 2,1,0 next, at scope end) --");
+        __println("-- end chain (dtor 2,1 ran at stmt; dtor 0 next, at scope end) --");
     }
 
     // CHAINED method call as a STATEMENT (the result discarded): the intermediate

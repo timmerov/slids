@@ -12,10 +12,10 @@ Use:scaleUp: 4
 Chain:ctor: 0
 Chain:ctor: 1
 Chain:ctor: 2
-chain = 2
--- end chain (dtor 2,1,0 next, at scope end) --
 Chain:dtor: 2
 Chain:dtor: 1
+chain = 2
+-- end chain (dtor 2,1 ran at stmt; dtor 0 next, at scope end) --
 Chain:dtor: 0
 Chain:ctor: 5
 Chain:ctor: 6

@@ -1,0 +1,80 @@
+B: bare call, one temp arg
+Class:ctor: 10
+Class:dtor: 11
+B end
+C: bare call, two temp args
+Class:ctor: 1
+Class:ctor: 2
+Class:dtor: 2
+Class:dtor: 1
+C end
+E: method call on temp receiver
+Class:ctor: 3
+Class:dtor: 4
+E end
+F: nested temp in a scalar var-decl rhs
+Class:ctor: 4
+Class:dtor: 5
+F end x=5
+G: build into declared var (no temp)
+Class:ctor: 9
+G end cd=9
+H: temp in if-condition
+Class:ctor: 20
+Class:dtor: 21
+H body
+H end
+I: temp in while-condition
+Class:ctor: 30
+Class:dtor: 31
+I body
+Class:ctor: 30
+Class:dtor: 31
+I end
+1: assign rhs
+Class:ctor: 10
+Class:dtor: 11
+1 end x1=11
+2: return rhs (ordering inside ret_rhs)
+Class:ctor: 70
+Class:ctor: 71
+Class:dtor: 72
+Class:dtor: 70
+2 end r=72
+3a: PPID in the value child
+Class:ctor: 30
+Class:dtor: 31
+3a end x=131 a=101
+3b: PPID in the temp construction arg
+Class:ctor: 40
+Class:dtor: 41
+3b end x=41 b=41
+4: two temps in a decl rhs
+Class:ctor: 1
+Class:ctor: 2
+Class:dtor: 2
+Class:dtor: 1
+4 end x=3
+5: seq-wrapped decl in a loop body
+Class:ctor: 50
+Class:dtor: 51
+5 body xl=51
+Class:ctor: 51
+Class:dtor: 52
+5 body xl=52
+5 end
+6: pointer-valued rhs
+Class:ctor: 60
+Class:dtor: 61
+6 end q=5
+7: class-valued rhs (temp leaks to enclosing scope)
+Class:ctor: 80
+Class:ctor: 181
+7 end y=181
+Class:dtor: 181
+Class:dtor: 81
+8: aug-assign rhs
+Class:ctor: 90
+Class:dtor: 91
+8 end acc=91
+Class:dtor: 9

@@ -27,13 +27,12 @@ global Global (
     ~() { __println("Global:dtor: " + g.a_); }
 }
 
+int fn(Class^ cls) {
+    cls^.inc();
+    return cls^.a_;
+}
 
 int32 main() {
-/*
-    __println("before");
-    int x = fn(Class(10));
-    x;
-    __println("after");
-*/
+
     return 0;
 }

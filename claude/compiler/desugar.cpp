@@ -1229,9 +1229,13 @@ void lowerInPhrase(std::unique_ptr<ast::Node>& slot,
     }
     // Every other interior node (arith/bitwise/^^/unary) is part of this
     // phrase; leaves have no children, so the loop is a no-op for them.
-    // seq/bump are synthesized by this pass — produced above and never re-walked
-    // (each phrase is lowered once), so reaching one here is a bug.
-    assert(n.kind != ast::Kind::kSeqExpr && n.kind != ast::Kind::kBumpExpr
+    // A kBumpExpr is synthesized by THIS pass — produced above and never re-walked
+    // (each phrase is lowered once), so reaching one here is a bug. A kSeqExpr,
+    // however, may be a liftSretCallList-produced rhs seq (statement-scoped arg
+    // temps wrapping the value), created BEFORE this pass — recursing into its
+    // children lowers any bumps in the temp inits (their own sub-phrases, via the
+    // kTupleExpr case) and in the value child (this same phrase).
+    assert(n.kind != ast::Kind::kBumpExpr
         && "lowerInPhrase: re-walked a synthesized PPID node");
     for (auto& c : n.children) lowerInPhrase(c, pre, post, next_id);
 }
@@ -2043,6 +2047,13 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
         // the statement end. A VarDecl/Assign/Return rhs only lifts NESTED arg
         // temps; those keep their established enclosing-scope lifetime (no wrap).
         bool stmt_scoped = false;
+        // A NESTED arg temp lifted from a VarDecl/Assign/Return rhs is STATEMENT-
+        // scoped: its dtor must run at the end of THIS statement, not at the end of
+        // the enclosing block. The rhs is wrapped in a kSeqExpr {pre... value} (see
+        // below) so codegen constructs the temps, evaluates the rhs, then destroys
+        // them (the seq's phrase-exit teardown), while the target — built by the
+        // statement from the seq's VALUE — keeps its own enclosing lifetime.
+        bool wrap_rhs_seq = false;
         if (k == ast::Kind::kVarDeclStmt || k == ast::Kind::kAssignStmt
             || k == ast::Kind::kReturnStmt) {
             // A `Class(args)` construction as the DIRECT rhs of a DECLARATION or a
@@ -2068,6 +2079,19 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
             if (!stmt->children.empty())
                 liftSretCallExprs(stmt->children[0], pre, next_id,
                                   /*root_intercepted=*/true);
+            // Only wrap when the rhs VALUE is a scalar. A class / aggregate (sret-
+            // form) rhs is built IN PLACE by the statement's sret fast paths (which
+            // need the raw rhs node, not a seq around it); a seq would also force an
+            // extra copy. An unknown (kNoType) rhs stays unwrapped too — no regression.
+            if (!pre.empty() && !stmt->children.empty() && stmt->children[0]) {
+                ast::Node const& rhs = *stmt->children[0];
+                using F = widen::Type::Form;
+                widen::TypeRef rt = (rhs.kind == ast::Kind::kCallExpr)
+                    ? rhs.return_type : rhs.inferred_type;
+                F rf = widen::form(widen::strip(rt));
+                wrap_rhs_seq = (rf == F::kPrimitive || rf == F::kPointer
+                             || rf == F::kIterator || rf == F::kAnyptr);
+            }
         } else if (k == ast::Kind::kCallStmt || k == ast::Kind::kCallExpr) {
             // The statement IS a (discarded) call codegen handles; lift its args
             // (incl. a lowered method call's receiver = AddrOf(temp)). A discarded
@@ -2084,6 +2108,22 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
         // A CONDITION's construction temp is NOT hoisted here — it must be scoped to
         // the condition's EVALUATION (rebuilt per loop iteration), so it is lifted
         // into the condition seq by lowerPhraseSlot (the PPID phrase path) instead.
+        if (wrap_rhs_seq && !pre.empty()) {
+            // Fold the lifted temps into a kSeqExpr wrapping the scalar rhs: the temps
+            // (pre) construct first, then the value child, whose result the statement
+            // consumes. codegen's kSeqExpr destroys the class temps after the value —
+            // so they die at the phrase end, and the target outlives them.
+            auto seq = std::make_unique<ast::Node>();
+            seq->kind = ast::Kind::kSeqExpr;
+            seq->inferred_type = stmt->children[0]->inferred_type;
+            seq->file_id = stmt->children[0]->file_id;
+            seq->tok = stmt->children[0]->tok;
+            seq->value_index = static_cast<int>(pre.size());
+            for (auto& d : pre) seq->children.push_back(std::move(d));
+            seq->children.push_back(std::move(stmt->children[0]));
+            stmt->children[0] = std::move(seq);
+            pre.clear();
+        }
         if (stmt_scoped && !pre.empty()) {
             auto block = std::make_unique<ast::Node>();
             block->kind = ast::Kind::kBlockStmt;

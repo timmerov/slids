@@ -54,15 +54,19 @@ then reuses the existing class-construction machinery — there is no new codege
 - FORM 2 (a construction used inline — a method receiver, a field read, a call
   arg): desugar lifts it into a `_$cret` temp. for a kCallStmt / kExprStmt the
   temp's decl is block-wrapped with the statement, so its dtor runs at the
-  SEMICOLON; as a call argument it keeps enclosing-scope lifetime.
+  SEMICOLON. a nested arg / receiver temp in a var-decl / assign / return rhs whose
+  VALUE is a SCALAR is folded into a kSeqExpr wrapping the rhs, so its dtor also runs
+  at the STATEMENT. (a rhs whose value is a CLASS built in place keeps enclosing-
+  scope lifetime — the seq wrap is scalar-only.)
 - a construction as the rhs of a DECLARATION (`Class x = Class(...)`, incl. the
   `<--` move-init form) or a RETURN (`return Class(x)`) builds in place (RVO) —
   one ctor, one dtor, no temp.
-- a construction used as a METHOD-CALL VALUE (`x = Class(...).method()`), a field
-  READ (`x = Class(...).field`), or in a CONDITION (if/while/for/switch — including
-  under `&&`/`||`) is lifted like form 2: built and destroyed per evaluation, so a
-  loop or short-circuit rebuilds or skips it (the short-circuit RHS lifts into its
-  OWN sub-seq, so a skipped branch runs no ctor/dtor).
+- a construction used as a METHOD-CALL VALUE (`x = Class(...).method()`) or a field
+  READ (`x = Class(...).field`) yields a SCALAR: the temp is lifted and, via the rhs
+  seq wrap, destroyed at the STATEMENT (built once). in a CONDITION (if/while/for/
+  switch — including under `&&`/`||`) it is instead built and destroyed per
+  EVALUATION, so a loop or short-circuit rebuilds or skips it (the short-circuit RHS
+  lifts into its OWN sub-seq, so a skipped branch runs no ctor/dtor).
 - a construction in any OTHER position is rejected cleanly (no silent miscompile):
   a store / move / swap operand, and a re-assignment to an existing variable
   (`w = Class(...)`).
@@ -226,23 +230,24 @@ int32 main() {
     }
 
     // FORM 2 — read a field off a construction temporary in an initializer. The
-    // value is read; the temp is destroyed when the enclosing scope ends.
+    // value is read; the temp is destroyed at the end of the DECL statement (the
+    // scalar rhs is seq-wrapped), before the next statement.
     __println("== 10: form-2 field read in an initializer ==");
     {
         int v = Class(11).c_;
         __println("v= " + v);
-        __println("-- end 10 (dtor 11 next) --");
+        __println("-- end 10 (dtor 11 already ran) --");
     }
 
     // FORM 2 — a METHOD CALL on a construction temporary, used as a VALUE: the temp
-    // is lifted (built, the method called on it, its result read), then destroyed at
-    // scope end. (Decl-init / argument / return positions lift it; a loop/if
-    // CONDITION does not — see neg_method_in_condition.)
+    // is lifted (built, the method called on it, its scalar result read), then
+    // destroyed at the end of the DECL statement (the scalar rhs is seq-wrapped). A
+    // loop/if CONDITION instead rebuilds it per evaluation — see 10c/10d.
     __println("== 10b: form-2 method call as a value ==");
     {
         int g = Class(15).get();
         __println("g= " + g);
-        __println("-- end 10b (dtor 15 at scope end) --");
+        __println("-- end 10b (dtor 15 already ran) --");
     }
 
     // FORM 2 — a construction-temporary method call in an IF CONDITION: the
@@ -516,7 +521,7 @@ int32 main() {
 //}
 
 /* a construction temporary in a CONDITION — an if/while/for condition or a switch
-   discriminant — IS supported (positives "10b"-"10d"): the temp is lifted into the
+   discriminant — IS supported (positives "10c"-"10d"): the temp is lifted into the
    condition's seq, constructed and destroyed per evaluation (so a loop rebuilds it
    each iteration). */
 

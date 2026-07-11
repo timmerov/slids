@@ -397,16 +397,21 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     resolveFunctionBody (like a param, not in body_locals); codegen binds its SymTab
     address to `_$recv^` once at the prologue (self_entry_id on the fn node). Bare
     `x_ += 1` field compound-writes resolve to the field too (the kAugAssignStmt
-    rewrite). A CONSTRUCTION receiver in a method call (`Class(2).m()`) is lifted to
-    a `_$cret` temp: in a decl-init / arg / return / STATEMENT it lifts to the
-    enclosing scope; in a CONDITION (if/while/for/switch) it lifts into the
-    condition's PPID seq (kSeqExpr), constructed at phrase entry and DESTROYED after
-    the value — so a loop receiver is rebuilt+destroyed each iteration and an
-    if-temp dies before the body. Codegen's kSeqExpr builds/destroys the class temp;
-    desugar's lowerPhraseSlot lifts it (lift_constructions, for conditions only — a
-    return / arg builds in place). A `&&`/`||` short-circuit RHS lifts into its OWN
-    sub-seq (lowerPhraseSlot recurses per short-circuit operand), so a skipped branch
-    runs no ctor/dtor; the unconditional LHS lifts into the condition pre. Still
+    rewrite). A CONSTRUCTION receiver / nested arg in a method call (`Class(2).m()`)
+    is lifted to a `_$cret` temp; WHERE its dtor fires depends on position. A
+    discarded kCallStmt/kExprStmt block-wraps the temp with the statement (SEMICOLON).
+    A nested arg / receiver temp in a var-decl / assign / return rhs whose VALUE is a
+    SCALAR is folded into a kSeqExpr wrapping the rhs, so it too dies at the STATEMENT
+    (liftSretCallList, 2026-07-11) — while a rhs whose value is a CLASS built in place
+    keeps enclosing-scope lifetime (the seq wrap is scalar-only; see todo.txt). A
+    CONDITION (if/while/for/switch) lifts into the condition's PPID seq (kSeqExpr),
+    constructed at phrase entry and DESTROYED after the value — so a loop receiver is
+    rebuilt+destroyed each iteration and an if-temp dies before the body. Codegen's
+    kSeqExpr builds/destroys the class temp; desugar's lowerPhraseSlot lifts
+    constructions for conditions (lift_constructions), liftSretCallList wraps the
+    scalar-rhs case. A `&&`/`||` short-circuit RHS lifts into its OWN sub-seq
+    (lowerPhraseSlot recurses per short-circuit operand), so a skipped branch runs no
+    ctor/dtor; the unconditional LHS lifts into the condition pre. Still
     todo.txt: a construction in a store-target / move operand (rejected). Detail:
     [[project_self_and_method_calls]].
   * BARE-FIELD REWRITE reaches MORE expression contexts. Besides reads / `=` writes /

@@ -370,6 +370,10 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
     - INLINE (expression) position (`g(mk())`, a nested call): desugar::liftSretCallList
       hoists the hook-returning call to a `_$cret = call;` temp decl (codegen's
       kVarDeclStmt sret-intercept then owns it), replacing the call with an ident.
+      LIFETIME: when the enclosing var-decl / assign / return rhs VALUE is a SCALAR,
+      the lifted temp is folded into a kSeqExpr wrapping the rhs so it dies at the
+      STATEMENT (liftSretCallList, 2026-07-11); a CLASS-valued rhs keeps the scope-end
+      lifetime the kVarDeclStmt sret-intercept gives it (the seq wrap is scalar-only).
       Positions the lift does NOT cover yet — a store target, a loop / if condition, a
       move/swap operand — are REJECTED at codegen (emitCall, value position) with
       "Returning a class by value in an expression position is not yet supported"

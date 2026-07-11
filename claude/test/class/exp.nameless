@@ -42,14 +42,14 @@ Class:dtor: 10
 -- end 9 (dtor 10 already ran) --
 == 10: form-2 field read in an initializer ==
 Class:ctor: 11
-v= 11
--- end 10 (dtor 11 next) --
 Class:dtor: 11
+v= 11
+-- end 10 (dtor 11 already ran) --
 == 10b: form-2 method call as a value ==
 Class:ctor: 15
-g= 15
--- end 10b (dtor 15 at scope end) --
 Class:dtor: 15
+g= 15
+-- end 10b (dtor 15 already ran) --
 == 10c: form-2 method call in an if condition ==
 Class:ctor: 16
 Class:dtor: 16
@@ -129,9 +129,9 @@ Inner:ctor: 90
 Inner:dtor: 90
 == 22: field read in a larger expression ==
 Class:ctor: 100
+Class:dtor: 100
 v= 101
 -- end 22 --
-Class:dtor: 100
 == 23: && short-circuit, rhs construction SKIPPED ==
 -- end 23 (no ctor/dtor 23) --
 == 24: && rhs evaluated, ctor/dtor balanced ==

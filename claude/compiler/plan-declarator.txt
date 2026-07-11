@@ -102,7 +102,10 @@ TWO FEED PATHS reach the three helpers, and EVERY nameless site was once hand-ro
       conversion, `_$optmp` op-result, an inline `Class(args)`) into a NAMED
       kVarDeclStmt (liftSretCallExprs, desugar.cpp), which then takes path (1)'s
       var-decl route. Verified: a `(Money = 5)` conversion emits @Money__$ctor + the
-      op= fill + a REGISTERED dtor at scope end — exactly like a named local.
+      op= fill + a REGISTERED dtor at scope end — exactly like a named local. A
+      lifted temp that is a NESTED arg / receiver in a var-decl / assign / return rhs
+      whose VALUE is a SCALAR instead folds into a kSeqExpr wrapping the rhs (statement
+      lifetime, register_dtor=false — codegen's kSeqExpr owns teardown), 2026-07-11.
 The path-2 class temps were funneled by an EARLIER session (the lift IS their fold);
 `new` (its own kNewExpr codegen) and the call-arg temp (inline in emitCall) were the
 two hand-rolled DIRECT sites THIS work folded. The umbrella is now COMPLETE — every
