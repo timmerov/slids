@@ -252,13 +252,54 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
     never passes through classify's operator dispatch, so naming the operator is the only way
     to guarantee it runs (see THE TRANSFER INVARIANT above — a bare move node relied on a
     codegen gate that blitted for a hook-less class).
+  * A DERIVED VALUE BINDS TO A BASE REFERENCE PARAM (fixed 2026-07-12; argConvertCost's
+    auto-ref arm + the shared checkArgAssign + emitCall's class-by-address test). An INHERITED
+    operator's params are typed as the BASE, so a derived operand had to bind a `Derived` value
+    to a `BaseOp^` param. That is an UPCAST — the base IS the derived's slot-0 sub-object, so
+    the address is identical and NOTHING is sliced — but the auto-ref (value -> reference)
+    convenience only accepted an exact class or a per-leaf widen, and returned -1 otherwise.
+    So EVERY user-written base operator was DEAD from a derived operand: `Derived + Derived`
+    reported "Operator '+' is not defined on class 'Derived'", and `Derived += Derived` fell
+    through the aug-assign hole (below) into INVALID IR. Now the auto-ref arm grants rung 2 —
+    the same single implicit cast the POINTER arm already gave an explicit `^derived` ->
+    `Base^` (ptrBaseUpcastOk). A genuine VALUE assignment (`Base b = d;`) WOULD slice and is
+    still rejected by checkSlidAssign; only the by-address arg path is affected. Pinned by
+    evaluate.sl Q1.
+  * A COMPOUND OPERATOR WITH NO MATCH IS REJECTED (fixed 2026-07-12). `a += b` on a class with
+    no `op+=` used to fall through the aug-assign arm into the NUMERIC path — where commonType
+    SUCCEEDS for two identical class types — and emit a struct `add`: INVALID IR. The
+    kBinaryExpr arm has had the no-viable-operator guard since the class-binary work; the
+    kAugAssignStmt arm never got it. Now: "Operator '+=' is not defined on class 'X'." Pinned
+    by evaluate.sl's neg_aug_no_op.
   * COUNTING LIVES IN evaluate.sl, NOT operator.sl. operator.sl's OpDefs/Sum have no
     ctor/dtor, so a fuse and a no-fuse print identically there — which is exactly how the old
     target-keyed chain fuse survived for months with green goldens. evaluate.sl's Acc / Str /
     Buf / Triv / Sw PRINT their ctor/dtor (or their operators), and the golden IS the
-    assertion. J: 12 objects -> 7. K: the only-op+= ladder (canon 51-56). M: every remaining
-    destination + shape. N: the un-fusable buffer + its lifetime. O: the transfer gates. P:
-    destructure (values right, shape NOT minimal — see todo).
+    assertion. The blocks:
+      J  the baseline — 12 objects -> 7.
+      K  the only-op+= ladder (canon 51-56; class Str, no 2-arg op+).
+      L  the TRIVIAL bucket — a hook-less class whose operators print (the transfer gates).
+      M  the destinations + shapes: a call arg; a store through a deref / a class field / an
+         array element; mixed operators (`a + b - c` really subtracts); a construction as a
+         NON-head operand; a parenthesized sub-chain; a chain in a loop body.
+      N  the UN-FUSABLE chain (class Buf: a 2-arg op+, no op+=) — the buffers AND their
+         statement lifetime.
+      O  hook-less transfers through all three gates: swap, tuple copy, tuple move, array copy.
+      P  DESTRUCTURE — values right, shape NOT minimal (a `_$dsrc` spill; see todo).
+      Q  where the operator COMES FROM: INHERITED, VIRTUAL (dispatched through the vtable),
+         used inside a METHOD body, used inside a CTOR and a DTOR body.
+      R  the other operator KINDS + the last destinations: a SHIFT chain (fuses via op<<=), a
+         LOGICAL binary, a GLOBAL target, a CROSS-CLASS destination (the funnel converts), and
+         chains in a switch-case and a do-while body.
+      S  the last positions: for-long and for-ranged bodies; a HEAP target (`p^ = a + b`) and a
+         heap-deref OPERAND; destructure into DECLARING (fresh) class slots.
+      T  the BLAST RADIUS of "a derived value binds to a base reference" — an EXACT derived
+         param must still beat the rung-2 upcast (T1), a base-only overload IS reachable from a
+         bare derived value (T2), DYNAMIC DISPATCH survives the upcast (T3), and a hook-less
+         class with a POINTER field moves through its operator and leaves a husk (T4). T1 and
+         T3 are the ones that would fail SILENTLY — the wrong overload, or a static call where
+         a virtual one was meant — so nothing else in the suite would notice them.
+    NEGATIVE: neg_aug_no_op — `+=` on a class with no op+= (the aug-assign guard).
 
 
 CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)

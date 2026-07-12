@@ -3626,6 +3626,122 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
     return Completion::Normal;
 }
 
+// NESTED-FUNCTION SIGNATURE PRE-PASS, per SCOPE. Register each nested function declared
+// DIRECTLY in this scope so a call may precede the definition (the canon `call_before`
+// shape) and so the function can recurse on itself. Runs for EVERY scoped statement list —
+// a function body's top level, a bare block, an if/else arm, a loop body, a switch case —
+// exactly like the local-class pre-pass right above it, and for the same reason: the name
+// belongs to THIS frame, so it shadows and drops with this scope. (It used to run only over
+// a function body's DIRECT children, so a function written inside a block was never
+// registered at all: calling it said "Unknown function", and NOT calling it left its body
+// unresolved, which crashed classify on an unstamped identifier.)
+//
+// A nested function inside a BLOCK captures that block's locals. That is sound for the same
+// reason a top-level capture is: a capture is the host alloca's ADDRESS, all allocas live in
+// the one function frame, and the function can only be CALLED from inside the block where
+// its captures are live.
+void registerNestedFunctions(parse::Tree& tree,
+                             std::vector<std::unique_ptr<parse::Node>>& stmts,
+                             diagnostic::Sink& diag) {
+    for (auto& ch : stmts) {
+        if (!ch || (ch->kind != parse::Kind::kFunctionDef
+                    && ch->kind != parse::Kind::kFunctionDecl)) {
+            continue;
+        }
+        // capture_floor >= 0 means we are resolving inside a NESTED function's body (at its
+        // top level or in one of its blocks) — a further nesting level.
+        if (tree.capture_floor >= 0) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "Nested functions may not contain further nested functions.", {}});
+            continue;
+        }
+        std::vector<widen::TypeRef> ptypes;
+        int nreq = 0;
+        bool seen_default = false;
+        for (auto& p : ch->params) {
+            if (!p) continue;
+            bool has_default = !p->children.empty();
+            if (p->return_type == widen::kNoType && !has_default) {
+                diagnostic::report(diag, {p->file_id, p->name_tok,
+                    "Parameter '" + p->name
+                        + "' needs an explicit type or a default value.", {}});
+            }
+            if (has_default) {
+                seen_default = true;
+            } else {
+                if (seen_default) {
+                    diagnostic::report(diag, {p->file_id, p->name_tok,
+                        "A required parameter cannot follow an optional "
+                        "parameter.", {}});
+                }
+                nreq++;
+            }
+            if (p->return_type != widen::kNoType) {
+                resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
+            }
+            ptypes.push_back(p->return_type);
+        }
+        resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
+        bool is_def = (ch->kind == parse::Kind::kFunctionDef);
+        // A nested function may be forward-declared (signature only) and defined later in
+        // the same scope — match an existing same-name entry: the signature must agree, and
+        // a second definition is a duplicate.
+        int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
+        if (existing >= 0) {
+            parse::Entry& prev = tree.entries[existing];
+            if (prev.kind != parse::EntryKind::kFunction
+                || prev.slids_type != ch->return_type
+                || prev.param_types != ptypes) {
+                diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                    "Duplicate declaration of '" + ch->name + "'.",
+                    {{prev.file_id, prev.tok, "first declared here"}}});
+                continue;
+            }
+            if (is_def && prev.defined) {
+                diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                    "Duplicate definition of '" + ch->name + "'.",
+                    {{prev.def_file_id, prev.def_tok, "first defined here"}}});
+                continue;
+            }
+            if (is_def) {
+                prev.defined = true;
+                prev.def_file_id = ch->file_id;
+                prev.def_tok = ch->name_tok;
+            }
+            ch->resolved_entry_id = existing;
+            continue;
+        }
+        parse::Entry e;
+        e.kind = parse::EntryKind::kFunction;
+        e.name = ch->name;
+        e.slids_type = ch->return_type;
+        e.param_types = std::move(ptypes);
+        e.num_required = nreq;
+        e.file_id = ch->file_id;
+        e.tok = ch->name_tok;
+        e.defined = is_def;
+        if (is_def) {
+            e.def_file_id = ch->file_id;
+            e.def_tok = ch->name_tok;
+        }
+        ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
+    }
+}
+
+// DEFERRED nested-function BODY pass, per SCOPE. Runs AFTER this scope's statements, with
+// this scope's frame still OPEN — so a nested function may reference any local of the scope
+// it lives in, declared anywhere in it (forward capture). Captures are published on the
+// nested entry here, before the host's call-site definite-assignment check reads them.
+void resolveNestedFunctionBodies(parse::Tree& tree,
+                                 std::vector<std::unique_ptr<parse::Node>>& stmts,
+                                 diagnostic::Sink& diag) {
+    for (auto& ch : stmts) {
+        if (ch && ch->kind == parse::Kind::kFunctionDef) {
+            resolveFunctionBody(tree, *ch, diag, /*nested=*/true);
+        }
+    }
+}
+
 Completion resolveStmtList(parse::Tree& tree,
                            std::vector<std::unique_ptr<parse::Node>>& stmts,
                            diagnostic::Sink& diag) {
@@ -3642,12 +3758,19 @@ Completion resolveStmtList(parse::Tree& tree,
     // — so the pre-pass registers them as members of that class/namespace.
     relocateOutOfLineMembers(tree, stmts, diag);
     registerLocalClasses(tree, stmts, diag);
+    // Nested-function SIGNATURES, after the classes (so a nested function may name a
+    // scope-local class in its signature) and before any statement — so a call may precede
+    // the definition.
+    registerNestedFunctions(tree, stmts, diag);
+    Completion result = Completion::Normal;
     for (std::size_t i = 0; i < stmts.size(); i++) {
         if (!stmts[i]) continue;
         Completion c = resolveStmt(tree, *stmts[i], diag);
         // Stop at the first error (the design's first-error policy): resolving
         // later statements after one failed only spawns cascading follow-on
         // diagnostics (e.g. a bad for-iterable leaves its body-var undeclared).
+        // No nested-function bodies are resolved on this path — main short-circuits
+        // before classify, so an unresolved body never reaches it.
         if (diagnostic::hasErrors(diag)) return c;
         if (c == Completion::Abrupt) {
             // 2A: every statement after an abrupt one is unreachable. Flag the
@@ -3660,10 +3783,15 @@ Completion resolveStmtList(parse::Tree& tree,
                     "Unreachable statement.", {}});
                 break;
             }
-            return Completion::Abrupt;
+            result = Completion::Abrupt;
+            break;
         }
     }
-    return Completion::Normal;
+    // Nested-function BODIES last, with this scope's frame still open. Runs on the ABRUPT
+    // path too: a definition after a `return` is unreachable CODE, but its body must still
+    // be resolved or classify meets an unstamped identifier.
+    resolveNestedFunctionBodies(tree, stmts, diag);
+    return result;
 }
 
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
@@ -3812,103 +3940,12 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
         if (needs_storage) tree.body_locals.push_back(ch->resolved_entry_id);
     }
-    // Nested-function pre-pass: register each nested function's signature in this
-    // body frame so the host (and the nested function's own body, for recursion)
-    // can call it regardless of textual order. Deep nesting is unsupported.
-    for (auto& ch : fn.children) {
-        if (!ch || (ch->kind != parse::Kind::kFunctionDef
-                    && ch->kind != parse::Kind::kFunctionDecl)) {
-            continue;
-        }
-        if (nested) {
-            diagnostic::report(diag, {ch->file_id, ch->name_tok,
-                "Nested functions may not contain further nested functions.", {}});
-            continue;
-        }
-        std::vector<widen::TypeRef> ptypes;
-        int nreq = 0;
-        bool seen_default = false;
-        for (auto& p : ch->params) {
-            if (!p) continue;
-            bool has_default = !p->children.empty();
-            if (p->return_type == widen::kNoType && !has_default) {
-                diagnostic::report(diag, {p->file_id, p->name_tok,
-                    "Parameter '" + p->name
-                        + "' needs an explicit type or a default value.", {}});
-            }
-            if (has_default) {
-                seen_default = true;
-            } else {
-                if (seen_default) {
-                    diagnostic::report(diag, {p->file_id, p->name_tok,
-                        "A required parameter cannot follow an optional "
-                        "parameter.", {}});
-                }
-                nreq++;
-            }
-            if (p->return_type != widen::kNoType) {
-                resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
-            }
-            ptypes.push_back(p->return_type);
-        }
-        resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
-        bool is_def = (ch->kind == parse::Kind::kFunctionDef);
-        // A nested function may be forward-declared (signature only) and defined
-        // later in the same body — match an existing same-name entry: the
-        // signature must agree, and a second definition is a duplicate.
-        int existing = parse::findInFrame(tree, parse::currentFrameId(tree),
-                                          ch->name);
-        if (existing >= 0) {
-            parse::Entry& prev = tree.entries[existing];
-            if (prev.kind != parse::EntryKind::kFunction
-                || prev.slids_type != ch->return_type
-                || prev.param_types != ptypes) {
-                diagnostic::report(diag, {ch->file_id, ch->name_tok,
-                    "Duplicate declaration of '" + ch->name + "'.",
-                    {{prev.file_id, prev.tok, "first declared here"}}});
-                continue;
-            }
-            if (is_def && prev.defined) {
-                diagnostic::report(diag, {ch->file_id, ch->name_tok,
-                    "Duplicate definition of '" + ch->name + "'.",
-                    {{prev.def_file_id, prev.def_tok, "first defined here"}}});
-                continue;
-            }
-            if (is_def) {
-                prev.defined = true;
-                prev.def_file_id = ch->file_id;
-                prev.def_tok = ch->name_tok;
-            }
-            ch->resolved_entry_id = existing;
-            continue;
-        }
-        parse::Entry e;
-        e.kind = parse::EntryKind::kFunction;
-        e.name = ch->name;
-        e.slids_type = ch->return_type;
-        e.param_types = std::move(ptypes);
-        e.num_required = nreq;
-        e.file_id = ch->file_id;
-        e.tok = ch->name_tok;
-        e.defined = is_def;
-        if (is_def) {
-            e.def_file_id = ch->file_id;
-            e.def_tok = ch->name_tok;
-        }
-        ch->resolved_entry_id = parse::addEntry(tree, std::move(e));
-    }
-    // (Local classes in this body are registered by resolveStmtList's pre-pass,
-    // which runs for every scope — including nested blocks/if/loops/switch.)
+    // Local classes AND nested functions (signatures, then bodies) are registered by
+    // resolveStmtList's per-SCOPE pre-passes — which run for every scope, including nested
+    // blocks / if-arms / loop bodies / switch cases. So a function nested in a BLOCK is
+    // registered in that block's frame and its body is resolved with that frame open,
+    // exactly as a top-level nested function is with the body frame open.
     resolveStmtList(tree, fn.children, diag);
-    // Deferred nested-function BODY pass: resolve each nested function's body now
-    // that every top-level host local exists, so a nested function may reference a
-    // host local declared anywhere in the host (forward capture). Captures are
-    // published on the nested entry here — before the call-site DA check below.
-    for (auto& ch : fn.children) {
-        if (ch && ch->kind == parse::Kind::kFunctionDef) {
-            resolveFunctionBody(tree, *ch, diag, /*nested=*/true);
-        }
-    }
     if (!nested) {
         // Now every nested function's captures are known: a host-level call must
         // have each captured host variable definitely-assigned at the call.

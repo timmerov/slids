@@ -221,6 +221,27 @@ Phase 3 — functions
     current value at call time; self-recursion ok; deep nesting + sibling
     calls unsupported [compile errors]; captured host var must be
     definitely-assigned at the call — deferred per-call snapshot check)
+    SCOPE (2026-07-12): a nested function may be declared in ANY SCOPE of its host —
+    a block, an if-arm, a loop body, a switch case — not just the body's top level.
+    It lives in the frame it is WRITTEN in (visible there incl. before its own
+    definition; gone when the scope closes) and captures that scope's locals; two
+    same-named nested functions in disjoint if/else arms are NOT a duplicate. Sound
+    because a capture is the host alloca's ADDRESS, all allocas live in the ONE
+    function frame, and the function can only be CALLED inside the scope where its
+    captures are live. resolve's signature pre-pass + deferred-body pass BOTH run
+    per SCOPE (out of resolveStmtList, like the local-class pre-pass beside them) —
+    they used to scan a body's DIRECT children only, so a block-nested function was
+    silently unregistered (calling it: "Unknown function"; NOT calling it: its body
+    never resolved -> classify ASSERTED). And a function may be nested in a FUNCTION,
+    a METHOD or an OPERATOR (and a ctor/dtor) — all of them ARE functions. There is
+    no "method nested in a method": a nested function inside a method is just a
+    FUNCTION, one that INHERITS `self` IF IT NEEDS TO (it names a field — a bare `v_`
+    rewrites to `self.v_` — or names `self`; either way `self` is an ordinary local of
+    the method's frame and captures like any other). Canon test/function/nested_fn.sl.
+    Desugar runs all four lowering passes on a nested body too (collectFunctionDefs,
+    per function, with its OWN return type) — they used to loop over PROGRAM-scope
+    functions only, so a nested body was NEVER lowered and a bare `i++` there asserted.
+    See [[project_nested_fn_desugar]].
   * method dispatch (`.method()`)                                  out of scope (Phase 4/5)
   * function pointers                                              out of scope
   * function aliases, ##type-of-function, templates                out of scope
@@ -861,9 +882,13 @@ Phase 5 — classes
     is minted at codegen by classSymbol — [[project_defer_name_mangling]]);
     per-local transitive needs. checkSlidAssign rejects a class value at a
     mismatched var-decl/assign/call-arg/return. A local class may be named in a
-    nested function's SIGNATURE (top-of-body classes register before the nested-fn
-    pre-pass), and nested-fn BODIES resolve after the host body so they FORWARD-
-    capture host locals. Detail: readme-classes.txt + [[project_v2_local_classes]].
+    nested function's SIGNATURE (a scope's classes register before its nested-fn
+    signature pre-pass), and nested-fn BODIES resolve after their scope's statements
+    (frame still open) so they FORWARD-capture that scope's locals. BOTH pre-passes
+    now run PER SCOPE out of resolveStmtList, so a class AND a function may be
+    declared in any block / if-arm / loop body / switch case, and a local class's
+    METHOD may itself hold a nested function. Detail: readme-classes.txt +
+    [[project_v2_local_classes]], [[project_nested_fn_desugar]].
   * class registration is TWO-PHASE (names then bodies) — LANDED. A class field may
     forward-reference a sibling class defined later; the kSlid handle is stable
     slotless->slotful (structKey excludes slots). A by-value field cycle (self /

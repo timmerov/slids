@@ -302,8 +302,9 @@ std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
     // every whole-class transfer site (a function-return fallback, the caller husk,
     // `a <-- b` / `a = b` / `a <--> b`) calls that symbol, and a class lacking the user
     // operator gets a synthesized function (a real memberwise method, resolve's
-    // synthesizeDefaultTransferOps; a template instantiation falls back to codegen run()'s
-    // whole-value body). Both the definition and every call mangle here, so they agree.
+    // synthesizeClassTransferOps — EVERY class gets one, so there is always a symbol to
+    // call and no blit fallback anywhere). Both the definition and every call mangle here,
+    // so they agree.
     if ((name == "op<--" || name == "op=" || name == "op<-->") && entry_id >= 0
         && tree.entries[entry_id].param_types.size() == 2) {
         widen::TypeRef pointee =
@@ -2812,6 +2813,23 @@ void lowerStatementList(std::vector<std::unique_ptr<ast::Node>>& stmts,
     stmts = std::move(lowered);
 }
 
+// EVERY function definition in a program subtree — top-level AND NESTED. A nested function
+// is a STATEMENT child of its host's body (possibly inside a block / if / loop), not a child
+// of the program, so the per-function pass loops in run() never saw one and its body was
+// never lowered: `++` / class temps / aggregate copies / operator chains all reached codegen
+// raw and hit their asserts.
+//
+// The pass BODIES need no change — they are already written to treat a nested kFunctionDef as
+// an OPAQUE statement (lowerStatementPPID returns on it; liftSretCallList / lowerAggregateList
+// have no arm for it; collectReturns stops at one). That "don't descend" discipline is right:
+// a nested function owns its own return type and its own sret slot. What was missing is this
+// collector — the outer loop that hands each body its OWN turn, with its OWN return type.
+void collectFunctionDefs(ast::Node& n, std::vector<ast::Node*>& out) {
+    if (n.kind == ast::Kind::kFunctionDef) out.push_back(&n);
+    for (auto& c : n.children)
+        if (c) collectFunctionDefs(*c, out);
+}
+
 // Lower `base.field` to `base[slot]` — a class is a named tuple, so a field is a
 // slot read by its declaration index. The base keeps its kSlid type; codegen
 // handles a kSlid base in the index path exactly like a tuple slot.
@@ -3108,48 +3126,47 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         if (!in.nodes[i] || in.nodes[i]->kind != parse::Kind::kProgram) continue;
         flattenScope(*in.nodes[i], out.nodes[i].get(), in, next_id);
     }
+    // The four lowering passes run PER FUNCTION — and "every function" means NESTED ones too
+    // (collectFunctionDefs). A nested function is a statement inside its host's body, so the
+    // old `for (fn : program->children)` loops never gave it a turn and its statements reached
+    // codegen unlowered. Each pass re-collects: an earlier pass restructures statement lists
+    // (block-wraps, spliced decls), and while that only MOVES nodes, re-collecting keeps the
+    // loop obviously correct rather than subtly so.
+    auto eachFunction = [&](auto&& body) {
+        for (auto& n : out.nodes) {
+            if (!n || n->kind != ast::Kind::kProgram) continue;
+            std::vector<ast::Node*> fns;
+            for (auto& c : n->children)
+                if (c) collectFunctionDefs(*c, fns);
+            for (ast::Node* fn : fns) body(*fn);
+        }
+    };
     // sret-call lift: hoist a hook-returning call out of an inline (expression)
     // position into a preceding `_$cret` temp decl, so the call lands at a position
     // codegen can construct + own (the temp's dtor runs at scope). Runs BEFORE the
     // aggregate-copy + PPID passes so the lifted decls / reduced statements are
-    // lowered like any other.
-    for (auto& n : out.nodes) {
-        if (!n || n->kind != ast::Kind::kProgram) continue;
-        for (auto& fn : n->children) {
-            if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            liftSretCallList(fn->children, next_id, fn->return_type);
-        }
-    }
+    // lowered like any other. Also expands class-operator chains (expandOpChainStmt).
+    eachFunction([&](ast::Node& fn) {
+        liftSretCallList(fn.children, next_id, fn.return_type);
+    });
     // Aggregate-copy lowering: rewrite every cross-form / leaf-widen aggregate
     // copy (array <-> tuple, any nesting) into per-slot stores BEFORE PPID, so a
     // copy with a `++` index lowers its bumps with the rest. Runs after the
     // aug-assign / class-lift phases so their generated copies are lowered too.
-    for (auto& n : out.nodes) {
-        if (!n || n->kind != ast::Kind::kProgram) continue;
-        for (auto& fn : n->children) {
-            if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            lowerAggregateList(fn->children, in, fn->return_type, next_id);
-        }
-    }
+    eachFunction([&](ast::Node& fn) {
+        lowerAggregateList(fn.children, in, fn.return_type, next_id);
+    });
     // PPID lowering: walk each function body's statements, extract ++/--, and
     // splice statement-level pre/post bumps as sibling statements around each
     // statement (post-bumps land after the statement's store).
-    for (auto& n : out.nodes) {
-        if (!n || n->kind != ast::Kind::kProgram) continue;
-        for (auto& fn : n->children) {
-            if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            lowerStatementList(fn->children, next_id);
-        }
-    }
+    eachFunction([&](ast::Node& fn) {
+        lowerStatementList(fn.children, next_id);
+    });
     // NRVO analysis: after all lowering, decide which functions can build their
-    // returned local directly in the sret slot (mark decl + returns `nrvo`).
-    for (auto& n : out.nodes) {
-        if (!n || n->kind != ast::Kind::kProgram) continue;
-        for (auto& fn : n->children) {
-            if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            analyzeNrvo(*fn);
-        }
-    }
+    // returned local directly in the sret slot (mark decl + returns `nrvo`). Per
+    // function, nested included — collectReturns already stops at a nested kFunctionDef,
+    // so a host never claims a nested function's returns and vice versa.
+    eachFunction([&](ast::Node& fn) { analyzeNrvo(fn); });
     // Auto-insert `global;` at the TOP of `main` when it has none and lazy groups
     // exist — the global lifetime then spans all of `main` (its dtor registry runs
     // at main's exit). An EXPLICIT `global;` anywhere in main suppresses this.

@@ -783,7 +783,19 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
             widen::TypeRef pointee = widen::get(widen::strip(dest)).pointee;
             bool types_match =
                 widen::deepStrip(arg.inferred_type) == widen::deepStrip(pointee);
-            if (isAstLvalue(arg) && types_match) {
+            // A CLASS lvalue always passes BY ADDRESS — exact type, or a DERIVED->BASE
+            // upcast (an inherited method / operator whose param is typed as the base).
+            // The base IS the derived's slot-0 sub-object, so the address is IDENTICAL:
+            // no adjustment, and NO temp. Materializing one would alloca the BASE's layout
+            // and store the wider DERIVED struct into it — invalid IR. classify is the
+            // gatekeeper for which class pairs get here (exact, or a real base chain), so
+            // this needs no base-chain walk of its own. A non-class aggregate still needs
+            // the exact-type test: an array<->tuple bridge / per-leaf widen genuinely
+            // materializes a converted temp.
+            bool class_by_addr =
+                widen::form(widen::strip(arg.inferred_type)) == widen::Type::Form::kSlid
+             && widen::form(widen::strip(pointee)) == widen::Type::Form::kSlid;
+            if (isAstLvalue(arg) && (types_match || class_by_addr)) {
                 std::string addr = emitLvalueAddr(arg, syms, pool, out, diag);
                 arg_vals.push_back({"ptr", addr});
                 continue;

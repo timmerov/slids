@@ -1038,9 +1038,20 @@ int argConvertCost(parse::Tree& tree, parse::Node const& a, widen::TypeRef praw)
     if (param != widen::kNoType) {
         widen::TypeRef pointee = autoRefPointee(param, a);
         if (pointee != widen::kNoType) {
-            if (sameClass(at, widen::strip(pointee))) return 0;
-            if (shapesAndLeavesMatch(widen::strip(pointee), at))
-                return leafWidenRung(widen::strip(pointee), at);
+            widen::TypeRef ps = widen::strip(pointee);
+            if (sameClass(at, ps)) return 0;
+            // A DERIVED class VALUE binds to a BASE reference param — the SAME single
+            // implicit cast (rung 2) the pointer arm below already grants an EXPLICIT
+            // `^derived` -> `Base^` (ptrBaseUpcastOk). The base is the derived's slot-0
+            // sub-object, so the address is unchanged; only the static type moves.
+            // Without this, an argument could reach an INHERITED method / operator only by
+            // spelling `^d` — a BARE `d` died here at -1. That made every user-written base
+            // operator unreachable from a derived operand (`Derived + Derived` reported
+            // "Operator '+' is not defined", and `Derived += Derived` fell through the
+            // aug-assign hole above into invalid IR).
+            if (isTransitiveBase(tree, ps, at)) return 2;
+            if (shapesAndLeavesMatch(ps, at))
+                return leafWidenRung(ps, at);
             return -1;
         }
     }
@@ -1101,6 +1112,28 @@ std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             int file_id, int tok,
                                             diagnostic::Sink& diag,
                                             bool subobject = false);
+
+// THE argument/parameter check — the one place an ARG is validated against its PARAM
+// (classifyCall's single-candidate + overload arms, and inferMethodCall). A non-primitive
+// VALUE bound to a reference param rides the AUTO-REF convenience: it is passed BY ADDRESS,
+// so the relation is the POINTER one, not the value one. In particular a DERIVED value binds
+// to a BASE reference param — the base IS the derived's slot-0 sub-object, so the address is
+// unchanged and NOTHING is sliced. Checking it as a VALUE assignment calls that a
+// Derived->Base conversion and rejects it, which is what made every inherited method /
+// operator unreachable from a bare (un-`^`d) argument. A genuine VALUE assignment of a
+// derived to a base (`Base b = d;`) WOULD slice and is still rejected by checkSlidAssign —
+// that path does not come through here.
+void checkArgAssign(parse::Tree& tree, widen::TypeRef param, parse::Node& arg,
+                    diagnostic::Sink& diag) {
+    widen::TypeRef byref = autoRefPointee(param, arg);
+    if (byref == widen::kNoType) {
+        checkValueAssign(tree, param, arg, diag);
+        return;
+    }
+    if (isTransitiveBase(tree, widen::strip(byref), widen::strip(arg.inferred_type)))
+        return;   // a derived value into a base ref: an upcast, address-identical
+    checkValueAssign(tree, byref, arg, diag);
+}
 
 // Element-wise arithmetic over two AGGREGATE operands (array and/or tuple),
 // shared by the kBinaryExpr arm and the kAugAssignStmt arith path so they never
@@ -2419,9 +2452,7 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             widen::TypeRef destRef = (i < s.param_types.size())
                 ? s.param_types[i] : widen::kNoType;
             inferExpr(tree, *s.children[i], destRef, diag);
-            widen::TypeRef byref = autoRefPointee(destRef, *s.children[i]);
-            checkValueAssign(tree, byref != widen::kNoType ? byref : destRef,
-                             *s.children[i], diag);
+            checkArgAssign(tree, destRef, *s.children[i], diag);
         }
         return;
     }
@@ -2447,9 +2478,7 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         if (!s.children[i]) continue;
         inferExpr(tree, *s.children[i], s.param_types[i], diag);
         if (i < s.param_types.size()) {
-            widen::TypeRef byref = autoRefPointee(s.param_types[i], *s.children[i]);
-            checkValueAssign(tree, byref != widen::kNoType ? byref : s.param_types[i],
-                             *s.children[i], diag);
+            checkArgAssign(tree, s.param_types[i], *s.children[i], diag);
         }
     }
 }
@@ -3842,9 +3871,7 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
         // Type-check each arg against its param (s.param_types is a stable copy; an
         // inferExpr below may realloc tree.entries and dangle a live entry ref).
         inferExpr(tree, *s.children[i], s.param_types[i], diag);
-        widen::TypeRef byref = autoRefPointee(s.param_types[i], *s.children[i]);
-        checkValueAssign(tree, byref != widen::kNoType ? byref : s.param_types[i],
-                         *s.children[i], diag);
+        checkArgAssign(tree, s.param_types[i], *s.children[i], diag);
     }
 }
 
@@ -4884,6 +4911,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                                        prelude, /*needs_construct=*/false)) {
                     return;
                 }
+                // NO viable compound operator on a class — reject CLEANLY. The numeric path
+                // below would SILENTLY accept it: commonType SUCCEEDS for two identical class
+                // types, so `a += b` on a class with no op+= emitted a struct `add` — INVALID
+                // IR (the compiler must never produce that). The kBinaryExpr arm has had this
+                // guard since the class-binary work; the aug-assign arm never got it, and no
+                // test could see the hole because a class with no operator is not something
+                // the operator tests exercise.
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Operator '" + op + "=' is not defined on class '"
+                    + widen::spellOrEmpty(s.return_type) + "'.", {}});
+                return;
             }
 
             // A reference admits no compound arithmetic/bitwise assignment.

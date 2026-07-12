@@ -9,3 +9,42 @@ with_def(5) = 15
 fwd_nested(5) = 6
 fn_local_class:nested_fn: 42
 fn_local_class:nested_fn: 37
+nested_ppid(5) = 507
+Acc:ctor: 9
+Acc:dtor: 9
+nested_temp() = 9
+nested_agg() = 6
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:op<--: 3
+Acc:dtor: 3
+Acc:dtor: 3
+Acc:dtor: 3
+Acc:dtor: 2
+Acc:dtor: 1
+nested_chain() = 303
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 0
+Acc:dtor: 2
+Acc:dtor: 1
+nested_nrvo() = 3
+Acc:dtor: 3
+block_nested(5) = 506
+loop_nested(2) = 90
+if_nested(4) = 8
+if_nested(-4) = 8
+switch_nested(1) = 10
+for_nested(10) = 33
+fwd_in_block(5) = 7
+Meth ctor nested = 8
+Meth use_local(5) = 6
+Meth use_field() = 108
+Meth use_self() = 208
+Meth in_block(5) = 506
+Meth op+= nested = 17
+ns-class method nested = 10
+local_class_method(5) = 110

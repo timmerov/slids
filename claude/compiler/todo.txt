@@ -70,29 +70,6 @@ BUGS
     Surfaced reviewing the return_fn elide work; `sp = ((Amt,Amt) = mkpair())` (call
     source) already asserts spill-once, but no bare-lvalue-with-side-effect test exists.
 
-  * NESTED-FUNCTION BODIES SKIP THE DESUGAR LOWERING PASSES — desugar's per-function
-    loops (liftSretCallList, lowerAggregateList, lowerStatementList/PPID, analyzeNrvo)
-    iterate only the TOP-LEVEL program functions (`program->children`); a NESTED function
-    is a statement inside a host body, and liftSretCallList has no kFunctionDef case, so
-    it is passed through un-recursed. Its body therefore never gets lift / aggregate-copy /
-    PPID lowering. Result: inside a nested function, `++`/`--` ("inc/dec survived desugar's
-    PPID pass"), a cross-form/leaf-widen aggregate COPY, and every CLASS TEMP (a
-    `Class(args)` construction, a hook-returning call, a scalar OR aggregate value
-    conversion `(Class = src)` / `((Class,int) = t)`, and — since 2026-07-12 — a CLASS-
-    OPERATOR CHAIN, whose stamped kBinaryExpr reaches emitBinary with 3 children) reach
-    codegen unlowered and hit the `kConvertExpr needs 1 operand` / inc-dec / BinaryExpr
-    asserts. Codegen already lifts nested fns to top-level LLVM (collectNestedFunctions),
-    but the AST passes run before that and miss them. FIX = have each of the four desugar
-    pass-loops process nested-function bodies too, each with ITS OWN return type (collect
-    all fn defs recursively, or add a kFunctionDef-recurse to the list walkers); the
-    walkers already treat a nested kFunctionDef as an opaque statement and collectReturns
-    already stops at one, so processing each function as its own unit composes without
-    touching the pass bodies. NOTHING works in a nested body today, so no golden can move.
-    Pre-existing and NOT chain-specific — verified 2026-07-12 that a bare `i++` in a nested
-    function asserts ("inc/dec survived desugar's PPID pass") with no classes involved.
-    Surfaced twice: landing aggregate class-leaf conversions (the canon neg_class_in_slot
-    helper is a nested function), and landing the chain lowering.
-
   * CLASS-VALUED RHS ARG TEMP LEAKS TO ENCLOSING SCOPE — the seq-wrap that gives a
     nested arg / receiver temp STATEMENT lifetime in a var-decl / assign / return rhs
     (liftSretCallList, 2026-07-11) is SCALAR-VALUED-rhs only: when the rhs value is a
@@ -143,9 +120,18 @@ UNBLOCKED FEATURES
       `int == class`). See REACH GOALS below + [[project_operator_overloading]].
     Everything else (assignment/move/swap, arith/bitwise/shift/logical binary in all expr
     positions, compound, comparison arity-1, index/deref, unary arity-0/1, out-of-line defs
-    in both forms, ambiguity reporting, no-invalid-IR guard, and the 2026-07-11 binary
-    signature rule — param0 must be a ref to the enclosing class, so a binary dispatches on
-    the LHS OPERAND alone) has landed with tests.
+    in both forms, ambiguity reporting, and the 2026-07-11 binary signature rule — param0 must
+    be a ref to the enclosing class, so a binary dispatches on the LHS OPERAND alone) has
+    landed with tests. Two operator bugs fixed 2026-07-12, BOTH found by a coverage sweep and
+    both pre-existing:
+    - the NO-INVALID-IR guard now covers kAugAssignStmt too. `a += b` on a class with no op+=
+      used to fall through to the numeric path (commonType SUCCEEDS for two identical class
+      types) and emit a struct `add`. Only kBinaryExpr had the guard. Negative neg_aug_no_op.
+    - an INHERITED operator is now reachable. Its params are typed as the BASE, and a DERIVED
+      value binding to a BASE reference param was rejected by argConvertCost's auto-ref arm —
+      so every user-written base operator was DEAD from a derived operand. It is an UPCAST
+      (slot-0 sub-object, same address, nothing sliced), not a conversion. Canon evaluate.sl
+      Q1 + block T (the blast radius). See [[project_derived_value_to_base_ref]].
     DON'T RE-DERIVE: the old target-keyed chain fuse (tryLowerBinaryChain, in CLASSIFY,
     pre-infer) inverted operator precedence (the `=` chose the `+`) and re-associated the
     chain, clobbering the target mid-expression. It is deleted. The fuse belongs in DESUGAR
@@ -365,16 +351,38 @@ REACH GOALS
     first case means we relax the restriction on what op== can return.
     the second case means we allow binary op==.
 
-  * NESTED FUNCTION RESTRICTIONS TO REVISIT — three deliberate limits, each a
-    compile error today (canon nested.sl says "needs to be revisited"):
+  * NESTED FUNCTION RESTRICTIONS TO REVISIT — the remaining deliberate limits, each a
+    compile error today (canon nested_fn.sl says "needs to be revisited"):
       - DEEP NESTING — a nested function may not contain a further nested
         function ("Nested functions may not contain further nested functions.").
+        The check is now "am I inside a nested function's body" (capture_floor >= 0),
+        so it catches an inner function hidden in a BLOCK too.
       - SIBLING CALLS — one nested function may not call another ("Calling a
         sibling nested function is not supported."). Lambda-lift threads only the
         host's captures, not a sibling's capture environment.
       - NESTED OVERLOADING — nested functions do NOT overload; a same-name nested
         pair is a "Duplicate declaration". classifyCall restricts candidates to
         file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
+    NO LONGER A LIMIT (2026-07-12): a nested function may be declared in ANY SCOPE of its
+    host — a block, an if-arm, a loop body, a switch case — not just the body's top level.
+    It lives in the frame it is WRITTEN in (visible there, incl. before its own definition;
+    gone when the scope closes) and captures that scope's locals; two same-named nested
+    functions in disjoint if/else arms are not a duplicate. This was never a designed
+    restriction, just an UNHANDLED SHAPE: resolve's signature pre-pass and its deferred-body
+    pass both scanned a function body's DIRECT children, so a block-nested function was
+    silently unregistered — calling it said "Unknown function 'X'", and NOT calling it left
+    its body entirely unresolved and CRASHED classify on an unstamped identifier (nothing in
+    the body was checked at all). Both passes now run per SCOPE, out of resolveStmtList,
+    exactly like the local-class pre-pass beside them. Desugar/codegen needed no change (both
+    already recurse into blocks).
+    ALSO ACCEPTED (2026-07-12): a function may be nested in a FUNCTION, a METHOD or an
+    OPERATOR (and in a ctor/dtor) — all of them ARE functions, so all take the same path, and
+    this needed no code beyond the per-scope fix. There is no "method nested in a method": a
+    nested function inside a method is just a FUNCTION, one that INHERITS `self` IF IT NEEDS
+    TO — it names a field (a bare `v_` rewrites to `self.v_`) or names `self` outright, and
+    either way `self` is an ordinary local of the method's frame that captures like any other.
+    Pinned in nested_fn.sl (Meth / Space:Inner / local_class_method).
+    See [[project_nested_fn_desugar]].
 
   * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
     enum, a bare member name on the rhs should resolve against that enum's

@@ -899,6 +899,36 @@ STAGE FILES (.h / .cpp pairs)
             joins (monotonic union — a read on any path is a use). Trailing-return
             correctness (classify) recurses into a trailing block and a trailing
             if/else whose arms both return (endsInReturn / endsInReturnNode).
+
+            NESTED FUNCTIONS ARE SCOPED, NOT TOP-LEVEL-ONLY. resolveStmtList runs
+            THREE pre-passes per SCOPE, in this order: relocateOutOfLineMembers,
+            registerLocalClasses, registerNestedFunctions — then the statements —
+            then resolveNestedFunctionBodies. So a nested function may be declared in
+            ANY scope of its host (the body's top level, a bare block, an if-arm, a
+            loop body, a switch case). It lives in the frame it is WRITTEN in:
+            visible there INCLUDING before its own definition (the signature
+            pre-pass), gone when the scope closes, and it captures that scope's
+            locals. Two same-named nested functions in disjoint if/else arms are NOT
+            a duplicate — different frames. The BODY pass runs after the scope's
+            statements with the frame still OPEN, so a nested function may reference
+            any local of its scope declared anywhere in it (FORWARD capture); it also
+            runs on the ABRUPT path (a definition after a `return` is unreachable
+            CODE, but its body must still resolve or classify meets an unstamped
+            ident). Classes register BEFORE functions so a signature may name a
+            scope-local class. Deep nesting is rejected via capture_floor >= 0 ("am I
+            inside a nested function's body"), which catches an inner function hidden
+            in a block too. Captures are SOUND at any depth: a capture is the host
+            alloca's ADDRESS, every alloca lives in the ONE function frame, and the
+            function can only be CALLED from inside the scope where its captures are
+            live. A METHOD / OPERATOR / ctor / dtor IS a kFunctionDef and takes this
+            same path, so a function nests in any of them; a nested function inside a
+            method INHERITS `self` if it needs it (a bare field name rewrites to
+            `self.field`, and `self` is an ordinary local of the method's frame, so
+            both capture like any other host local). Canon test/function/nested_fn.sl.
+            [Both pre-passes used to scan a function body's DIRECT children only — a
+            block-nested function was then never registered: calling it said "Unknown
+            function", and NOT calling it left its body entirely unresolved and
+            CRASHED classify on an unstamped identifier. Fixed 2026-07-12.]
             Loops: a kWhileStmt (pre-condition) is possibly-zero — condition + body
             resolve from S and the post-loop set is S again (body inits don't
             escape); normally Normal. EXCEPTION (3B revisited): a syntactically-
@@ -1243,7 +1273,26 @@ STAGE FILES (.h / .cpp pairs)
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
-            params, param_types, file_id, tok). Three rewrites are live.
+            params, param_types, file_id, tok).
+
+            THE LOWERING PASSES RUN PER FUNCTION — AND "EVERY FUNCTION" INCLUDES
+            NESTED ONES. run() collects every kFunctionDef in a program subtree
+            (collectFunctionDefs: top-level AND nested, recursively) and runs the four
+            passes over that list — liftSretCallList (the sret/construction lift + the
+            class-operator chain expansion), lowerAggregateList, lowerStatementList
+            (PPID), analyzeNrvo — each with the function's OWN return type. A nested
+            function is a STATEMENT inside its host's body, so the old
+            `for (fn : program->children)` loops never gave it a turn and its
+            statements reached codegen UNLOWERED: `++`/`--` asserted ("inc/dec survived
+            desugar's PPID pass" — no classes needed), as did class temps, aggregate
+            copies and operator chains. The pass BODIES needed no change and still
+            treat a nested kFunctionDef as an OPAQUE statement (lowerStatementPPID has
+            an explicit `case kFunctionDef: return;`; collectReturns stops at one) —
+            that "don't descend" discipline is CORRECT, since a nested function owns
+            its own return type and sret slot. What was missing was only the outer loop
+            handing each body its turn. Fixed 2026-07-12; see [[project_nested_fn_desugar]].
+
+            Three rewrites are live.
             (1) aug-assign (`lhs op= rhs`): a BARE-name lhs -> `lhs = lhs op rhs`
             (synthesized IdentExpr + BinaryExpr inheriting the aug-assign's
             classify-stamped types). A COMPLEX lvalue (array element / tuple slot /

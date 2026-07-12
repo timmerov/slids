@@ -165,8 +165,14 @@ Coverage classes, all of which PRINT:
   Buf   ctor/dtor + op= + 2-arg op+, NO op+=                — the un-fusable buffer + lifetime
   Triv  NO ctor/dtor, printing op= / op<-- / op+=           — the transfer gates
   Sw    NO ctor/dtor, printing op= / op<-- / op<-->         — the SWAP gate + aggregates
-Blocks: J (the baseline, 12 -> 7), K (the ladder), L (the trivial bucket), M (every remaining
-destination + shape), N (the un-fusable buffer), O (the three gates), P (destructure).
+Blocks: J (the baseline, 12 -> 7), K (the ladder), L (the trivial bucket), M (destinations +
+shapes), N (the un-fusable buffer + its lifetime), O (the three transfer gates), P (destructure
+— not minimal), Q (where the operator comes from: inherited / virtual / method body / ctor+dtor
+body), R (the other kinds: shift, logical; + a global target, a cross-class destination, switch
+and do-while bodies), S (for-long + for-ranged bodies, a heap target and a heap-deref operand,
+destructure into declaring slots), T (the blast radius of the derived->base bind: exact beats
+the upcast, a base-only overload is reachable, virtual dispatch survives, a pointer-field move).
+Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS".
 
 
 ------------------------------------------------------------------------------
@@ -177,7 +183,36 @@ STILL OPEN (all filed in todo.txt)
   - DESTRUCTURE is not minimal: a non-bare-name source is spilled to a `_$dsrc` tuple temp,
     so the chains are not the direct source of any assignment — 4 extra objects for 2 chains,
     and the accumulators keep enclosing-scope lifetime (the same seq-wrap gap case 7 pins).
-  - NESTED FUNCTIONS: a chain there reaches codegen unlowered and asserts — because NONE of
-    desugar's statement passes descend into a nested function body. Pre-existing and much
-    wider than chains (`i++` in a nested fn asserts too). Filed under BUGS.
-  - Chains in a `.slh` / template context: unexercised.
+  (NOT a gap: TEMPLATES. v2 has NO template machinery at all — plan.txt Phase 9, unstarted.
+   CLAUDE.md used to describe v1's template system as if it existed here, which is why earlier
+   drafts of this plan listed ".slh / template context" as an untested surface. Corrected
+   2026-07-12; the v1 design was migrated to v1/v1.md → "Templates". There is nothing to test.)
+
+TWO BUGS THE COVERAGE SWEEP FOUND (both PRE-EXISTING, neither caused by the chain work)
+  - AUG-ASSIGN HAD NO NO-VIABLE-OPERATOR GUARD. `a += b` on a class with no `op+=` fell
+    through to the NUMERIC path, where commonType SUCCEEDS for two identical class types —
+    emitting a struct `add`. INVALID IR, from a class with no operators at all. The
+    kBinaryExpr arm has had this guard for a long time; kAugAssignStmt never got it. Fixed;
+    negative neg_aug_no_op in evaluate.sl.
+  - AN INHERITED OPERATOR WAS UNREACHABLE. Its params are typed as the BASE, so a derived
+    operand must bind a `Derived` VALUE to a `BaseOp^` param. argConvertCost's auto-ref arm
+    accepted only an exact class or a per-leaf widen and returned -1 — so every user-written
+    base operator was dead from a derived operand (and `Derived += Derived` then fell into the
+    bug above and emitted invalid IR). It is an UPCAST, not a conversion: the base is the
+    derived's slot-0 sub-object, the address is identical, nothing is sliced. Fixed in three
+    places — argConvertCost (rung 2, matching what the POINTER arm already gave `^derived`),
+    a new shared checkArgAssign (the three arg/param check sites now agree), and emitCall
+    (a class lvalue passes BY ADDRESS, never through a materialized temp of the BASE's
+    layout — which is what produced the second round of invalid IR). Canon evaluate.sl Q1.
+
+FIXED ALONG THE WAY (was open when this plan was written)
+  - NESTED FUNCTIONS. A chain in a nested body used to reach codegen unlowered and assert —
+    because NONE of desugar's four passes descended into a nested function body (they looped
+    over PROGRAM-scope functions; a nested function is a STATEMENT inside its host). Wider
+    than chains: a bare `i++` there asserted too. FIXED 2026-07-12 — `collectFunctionDefs`
+    gathers every kFunctionDef (top-level AND nested) and each pass runs per function with
+    ITS OWN return type. The pass BODIES needed no change: they already treat a nested
+    kFunctionDef as an opaque statement and collectReturns already stops at one. Captures
+    verified: a chain whose destination is a CAPTURED host class writes through the capture
+    (op<-- runs, the host sees it). Canon test/function/nested_fn.sl (nested_ppid /
+    nested_temp / nested_agg / nested_chain — one per pass, each crossing a capture).
