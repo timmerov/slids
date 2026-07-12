@@ -77,4 +77,36 @@ Class:dtor: 81
 Class:ctor: 90
 Class:dtor: 91
 8 end acc=91
+J: binary-chain temp baseline
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 3
+J1: depth-1 decl-init  jd = ja + jb
+Acc:ctor: 0
+Acc:ctor: 3
+J1 end jd=3
+J2: depth-2 chain      je = ja + jb + jc
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 6
+J2 end je=6
+J3: existing target    jf = ja + jb + jc
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 6
+J3 end jf=6
+J end (locals dtor next)
+Acc:dtor: 6
+Acc:dtor: 6
+Acc:dtor: 3
+Acc:dtor: 6
+Acc:dtor: 6
+Acc:dtor: 6
+Acc:dtor: 3
+Acc:dtor: 3
+Acc:dtor: 3
+Acc:dtor: 3
+Acc:dtor: 2
+Acc:dtor: 1
 Class:dtor: 9

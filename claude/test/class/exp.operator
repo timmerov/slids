@@ -49,8 +49,6 @@ od = 13
 od = 50
 od = 1
 of = 50
-og = 13
-oh = 113
 eq = true
 oi = 113
 oj = 7
@@ -92,6 +90,7 @@ ar2 = 7
 ool eq
 ool = 12
 ool2 = 15
+badd = 13
 bsub = 3
 bmul = 40
 bdiv = 1

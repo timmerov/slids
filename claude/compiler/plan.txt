@@ -880,12 +880,41 @@ Phase 5 — classes
     array-backed via the `^field[i]` resolve fix), deref (`op^`), unary arity-0 (built-in)
     + arity-1 (produce-self). Out-of-line / external defs in BOTH forms (`bool C:op==(…)`
     and no-return produce-self `C:op+=(…)`). Ambiguous op= is REPORTED; a class binary with
-    no viable operator is REJECTED cleanly (never lowered to invalid IR). DEFERRED:
-    expression-temp elimination (fuse a full `a+b+c+d` chain to zero temporaries —
-    copy-into-target / only-op+= seed / ping-pong, canon test/class/evaluate.sl; the
-    temp-LIFETIME half — a scalar-valued var-decl/assign/return rhs's arg temp now dies
-    at the STATEMENT via a kSeqExpr wrap, LANDED 2026-07-11 — is DONE; only the zero-
-    temp FUSION remains); arity-2 comparison producing a class + reversed-operand
+    no viable operator is REJECTED cleanly (never lowered to invalid IR).
+
+    BINARY SIGNATURE RULE (2026-07-11, canon operator.sl 170-182) — a binary operator's
+    FIRST parameter must be a REFERENCE TO THE ENCLOSING CLASS: `op+(Class^ a, ConstType b)`.
+    It is the LEFT operand, and the op produces self from it. Enforced in
+    validateOperatorSignatureTypes (n==2 — the only 2-param shape in the catalog; the swap
+    rule is the template). CONSEQUENCE: a binary dispatches on the LHS OPERAND's class and
+    NOTHING else — `tryLowerClassBinary` now takes only `lref`. An arbitrary `A:op+(B, C)`
+    is rejected (the "worm-can": a class whose op+ takes two unrelated types could only ever
+    be selected by the assignment TARGET's type).
+
+    WHY IT MATTERS — OPERATOR PRECEDENCE. `+` binds tighter than `=`, so in `a = b + c` the
+    binary must have a meaning fixed by its OWN operands BEFORE the `=` is consulted. Two
+    mechanisms violated that and are DELETED (2026-07-11):
+      - tryLowerClassBinary's CONTEXT arm — picked the result class from the expected type
+        (the `=` target), which is what made a cross-class `Mat m = v1 + v2` expressible.
+        Also its rhs-operand arm (a silent reversed-operand path).
+      - tryLowerBinaryChain (+ flattenLeftChain, referencesEntry) — the target-keyed chain
+        fuse. It ran BEFORE classify's infer loop precisely because it had no operand types
+        yet, so it keyed on the TARGET; it re-associated `((m+n)+r)` into
+        `a.op+(m,n); a.op+=(r)`, and it CLOBBERED `a` mid-expression (an operand evaluated
+        later that reads `a` — e.g. `a = b + c + f()` — sees the half-built accumulator; the
+        `referencesEntry` aliasing check could never catch an indirect read).
+    Every class binary now lowers bottom-up through the `_$optmp` construct-temp. Aliasing
+    (`a = a + b`) works for free — the temp reads the OLD `a`. Cost: one temp per binary.
+
+    DEFERRED — STAGE 3 PROPER (the fuse, done right): port v1's `isFreshSlidTemp` and lower
+    in DESUGAR (where operand types exist), keying the fuse on "is my LHS already a fresh
+    temp?" (canon 78-88: `temp + rhs -> temp.op+=(rhs)`), then elide-into-fresh / move-into-
+    existing. Fusing into an anonymous temp is safe (nobody can observe it); eliding into `a`
+    is valid only when `a` is written exactly once. Also: only-op+= seed / ping-pong /
+    copy-into-target. Baseline: test/class/evaluate.sl case J counts the temps TODAY — when
+    Stage 3 lands, those ctor/dtor counts shrink, and that is the test. (The temp-LIFETIME
+    half — a scalar-valued rhs's arg temp dies at the STATEMENT via a kSeqExpr wrap — LANDED
+    2026-07-11.) Also deferred: arity-2 comparison producing a class + reversed-operand
     comparison. See [[project_operator_overloading]]; canon test/class/operator.sl.
   * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +
     infer-from-default (all of which free functions already had) by routing both

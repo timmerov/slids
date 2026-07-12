@@ -73,6 +73,14 @@ iteration, no growth), 6 a pointer-valued rhs (the guard's kPointer arm), 7 the
 guard-negative boundary (a CLASS-valued rhs leaks its temp -- pinned as the
 current deferred behavior), 8 aug-assign (lowers to assign, so covered too).
 
+case J: the binary-chain TEMP BASELINE (class Acc, whose ctor/dtor print so temps are
+countable). `a + b + c` evaluates bottom-up -- ((a+b)+c) -- dispatching on the LHS
+OPERAND's class, one temp per binary. The old target-keyed chain fuse (classify's
+tryLowerBinaryChain) is DELETED: it selected the operator from the assignment target and
+re-associated the chain, both precedence failures. The in-place elision returns with
+Stage 3 proper (temp-keyed fuse, lowered in desugar); when it lands, J's ctor/dtor counts
+SHRINK -- that shrinkage is the test.
+
 deliberately NOT correct yet (still-broken / deferred; case 7 pins the first):
   - a var-decl / return rhs whose VALUE is a CLASS built in place
     (Class y = make(Class(80));) still leaks its arg temp -- the seq wrap is
@@ -117,6 +125,20 @@ int^ ptr_rhs(Class^ c, int^ p) {
 Class make(Class^ c) {
     c^.inc();
     return Class(c^.a_ + 100);
+}
+
+// An accumulator class for the binary-chain TEMP BASELINE (case J). Its operators are
+// spec-conforming: a binary op's FIRST parameter is the enclosing class (Acc^), so
+// `a + b` dispatches on the LHS OPERAND's class -- never on the assignment target.
+// ctor/dtor PRINT, and that is the whole point: temps are COUNTABLE here. operator.sl's
+// OpDefs has no ctor/dtor, so a fuse and a no-fuse print the same thing there -- which is
+// how the old target-keyed chain fuse survived with green goldens. Counting lives here.
+Acc(int v_) {
+    _() { __println("Acc:ctor: " + v_); }
+    ~() { __println("Acc:dtor: " + v_); }
+    op=(Acc^ r)         { v_ = r^.v_; }
+    op+=(Acc^ r)        { v_ += r^.v_; }
+    op+(Acc^ x, Acc^ y) { v_ = x^.v_ + y^.v_; }
 }
 
 int32 main() {
@@ -258,6 +280,41 @@ int32 main() {
         int acc = 0;
         acc += fn(Class(90));
         __println("8 end acc=" + acc);             // dtor 91 BEFORE this
+    }
+
+    // ---- J: BINARY-CHAIN TEMP BASELINE ----
+    //
+    // This pins how many temporaries a class binary chain costs TODAY. Evaluation is
+    // bottom-up and precedence-correct: `a + b + c` is ((a+b)+c), so the inner `+` builds
+    // a temp, the outer `+` builds another from it, and only then is the result bound to
+    // the target. Dispatch is on the LHS OPERAND's class throughout; the target never
+    // gets a say (that would invert precedence).
+    //
+    // The ctor/dtor lines below ARE the assertion -- each temp announces itself. When
+    // Stage 3 proper lands (the temp-keyed fuse of canon 78-88, lowered in DESUGAR where
+    // operand types exist: fuse into a temp when the lhs is already a fresh temp, then
+    // elide-into-fresh / move-into-existing), these counts SHRINK -- and that shrinkage
+    // is the test. Today's numbers are the "before".
+    __println("J: binary-chain temp baseline");
+    {
+        Acc ja = Acc(1);
+        Acc jb = Acc(2);
+        Acc jc = Acc(3);
+
+        __println("J1: depth-1 decl-init  jd = ja + jb");
+        Acc jd = ja + jb;
+        __println("J1 end jd=" + jd.v_);           // 3
+
+        __println("J2: depth-2 chain      je = ja + jb + jc");
+        Acc je = ja + jb + jc;
+        __println("J2 end je=" + je.v_);           // 6
+
+        __println("J3: existing target    jf = ja + jb + jc");
+        Acc jf = Acc(0);
+        jf = ja + jb + jc;
+        __println("J3 end jf=" + jf.v_);           // 6
+
+        __println("J end (locals dtor next)");
     }
 
     return 0;

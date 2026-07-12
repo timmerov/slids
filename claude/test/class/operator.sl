@@ -127,9 +127,8 @@ desugar through deref:
     Iterator lhs^ = Class rhs
         -> lhs.op^()^ = rhs
 
-When no overload matches exactly, types are converted
-by calling the target type's op=. Integer types may be
-widened to match.
+matching an overloaded operator follows the same rules as matching
+an overloaded function and an overloaded method.
 
 operators signatures are restricted.
 most operators have no return type.
@@ -141,75 +140,85 @@ a move pointer parameter must be explicit mutable.
 the swap parameter must be explicit mutable.
 the parameters to all other operators may not be mutable.
 
+in all cases, self is involved.
+either as the product or as an operand.
+binary operations are an optimization so we don't have
+to create a temp.
+without binary operators, we would have to do this:
+with binary operators, it maps directly.
+
+    a = b + c;
+    temp = b; temp += c; a <-- temp;
+
 accepted signature templates and simple usage:
 
     /* pseudo-code */
     Number x = integer | float
     Primitive b = integer | float | pointer
-    ConstTypeN a,b = integer | float | pointer to const
+    ConstType a,b = integer | float | pointer to const
     Type = any type
     Class c = the enclosing class type
 
     Class() {
         /* assignment */
-        op=(ConstType a);                       obj = a;
-        op<--(Number x);                        obj <-- x;
-        op<--(mutable Type^ a);                 obj <-- a;
-        op<-->(mutable Class^ c);               obj1 <--> obj2;
+        op=(ConstType a);                   obj = a;
+        op<--(Number x);                    obj <-- x;
+        op<--(mutable Type^ a);             obj <-- a;
+        op<-->(mutable Class^ c);           obj1 <--> obj2;
 
         /* binary operation */
-        op+(ConstType1 a, ConstType2 b);        obj = a + b;
-        op-(ConstType1 a, ConstType2 b);        obj = a - b;
-        op*(ConstType1 a, ConstType2 b);        obj = a * b;
-        op/(ConstType1 a, ConstType2 b);        obj = a / b;
-        op%(ConstType1 a, ConstType2 b);        obj = a % b;
-        op&(ConstType1 a, ConstType2 b);        obj = a & b;
-        op|(ConstType1 a, ConstType2 b);        obj = a | b;
-        op^(ConstType1 a, ConstType2 b);        obj = a ^ b;
-        op<<(ConstType1 a, ConstType2 b);       obj = a << b;
-        op>>(ConstType1 a, ConstType2 b);       obj = a >> b;
-        op&&(ConstType1 a, ConstType2 b);       obj = a && b;
-        op||(ConstType1 a, ConstType2 b);       obj = a || b;
-        op^^(ConstType1 a, ConstType2 b);       obj = a ^^ b;
+        op+(Class^ a, ConstType b);         obj = a + b;
+        op-(Class^ a, ConstType b);         obj = a - b;
+        op*(Class^ a, ConstType b);         obj = a * b;
+        op/(Class^ a, ConstType b);         obj = a / b;
+        op%(Class^ a, ConstType b);         obj = a % b;
+        op&(Class^ a, ConstType b);         obj = a & b;
+        op|(Class^ a, ConstType b);         obj = a | b;
+        op^(Class^ a, ConstType b);         obj = a ^ b;
+        op<<(Class^ a, ConstType b);        obj = a << b;
+        op>>(Class^ a, ConstType b);        obj = a >> b;
+        op&&(Class^ a, ConstType b);        obj = a && b;
+        op||(Class^ a, ConstType b);        obj = a || b;
+        op^^(Class^ a, ConstType b);        obj = a ^^ b;
 
         /* augment assignment */
-        op+=(ConstType a);                      obj += a;
-        op-=(ConstType a);                      obj -= a;
-        op*=(ConstType a);                      obj *= a;
-        op/=(ConstType a);                      obj /= a;
-        op%=(ConstType a);                      obj %= a;
-        op&=(ConstType a);                      obj &= a;
-        op|=(ConstType a);                      obj |= a;
-        op^=(ConstType a);                      obj ^= a;
-        op<<=(ConstType a);                     obj <<= a;
-        op>>=(ConstType a);                     obj >>= a;
-        op&&=(ConstType a);                     obj &&= a;
-        op||=(ConstType a);                     obj ||= a;
-        op^^=(ConstType a);                     obj ^^= a;
+        op+=(ConstType a);                  obj += a;
+        op-=(ConstType a);                  obj -= a;
+        op*=(ConstType a);                  obj *= a;
+        op/=(ConstType a);                  obj /= a;
+        op%=(ConstType a);                  obj %= a;
+        op&=(ConstType a);                  obj &= a;
+        op|=(ConstType a);                  obj |= a;
+        op^=(ConstType a);                  obj ^= a;
+        op<<=(ConstType a);                 obj <<= a;
+        op>>=(ConstType a);                 obj >>= a;
+        op&&=(ConstType a);                 obj &&= a;
+        op||=(ConstType a);                 obj ||= a;
+        op^^=(ConstType a);                 obj ^^= a;
 
         /* comparison */
-        Primitive op==(ConstType a);            b = (obj == a);
-        Primitive op!=(ConstType a);            b = (obj != a);
-        Primitive op<(ConstType a);             b = (obj < a);
-        Primitive op>(ConstType a);             b = (obj > a);
-        Primitive op<=(ConstType a);            b = (obj <= a);
-        Primitive op>=(ConstType a);            b = (obj >= a);
+        Primitive op==(ConstType a);        b = (obj == a);
+        Primitive op!=(ConstType a);        b = (obj != a);
+        Primitive op<(ConstType a);         b = (obj < a);
+        Primitive op>(ConstType a);         b = (obj > a);
+        Primitive op<=(ConstType a);        b = (obj <= a);
+        Primitive op>=(ConstType a);        b = (obj >= a);
 
         /* index, dereference */
-        Type^ op[](ConstType a);                obj[a] = obj[b];
-        Type^ op^();                            obj1^ = obj2^;
+        Type^ op[](ConstType a);            obj[a] = obj[b];
+        Type^ op^();                        obj1^ = obj2^;
 
         /* unary */
-        Primitive op+();                        b = +obj;
-        Primitive op-();                        b = -obj;
-        Primitive op~();                        b = ~obj;
-        Primitive op!();                        b = !obj;
+        Primitive op+();                    b = +obj;
+        Primitive op-();                    b = -obj;
+        Primitive op~();                    b = ~obj;
+        Primitive op!();                    b = !obj;
 
         /* negation */
-        op+(ConstType a);                       obj = +a;
-        op-(ConstType a);                       obj = -a;
-        op~(ConstType a);                       obj = ~a;
-        op!(ConstType a);                       obj = !a;
+        op+(ConstType a);                   obj = +a;
+        op-(ConstType a);                   obj = -a;
+        op~(ConstType a);                   obj = ~a;
+        op!(ConstType a);                   obj = !a;
     }
 
 operator overloads are method functions of the class.
@@ -292,6 +301,13 @@ LOWERING CONTRACT (from the spec above — implement as classify rewrites)
   convert      no exact overload          -> target.op=(...) + integer widen, smallest wins
   The FUSE-vs-FRESH split keys on "is the lhs a fresh temp" (v1: isFreshSlidTemp) — the
   one subtle bit; index/deref lower THROUGH the existing `^`-deref lvalue machinery.
+  STATUS 2026-07-11: everything above lowers EXCEPT the FUSE row. Every binary currently
+  takes the FRESH row (one `_$optmp` per binary node), so `a+b+c` builds 2 temps. The fuse
+  is NOT a classify job: it needs operand types, which classify only has AFTER inferring
+  bottom-up, so a classify-side fuse can only key on the assign TARGET — which is what the
+  deleted tryLowerBinaryChain did, and it inverted precedence and re-associated the chain.
+  Do the fuse in DESUGAR, bottom-up, keyed on isFreshSlidTemp exactly as this row says.
+  Baseline for the temp counts to beat: test/class/evaluate.sl case J.
 
 SIGNATURE VALIDATION (v2 spec == v1 enforcement; port v1 rules into a classify/resolve
 pass — v1 did arity in the parser, but v2 has types resolved later, so do it post-resolve)
@@ -303,6 +319,13 @@ pass — v1 did arity in the parser, but v2 has types resolved later, so do it p
   MUTABLE (v1 parser.cpp:1298): op<-- / op<--> REQUIRE `mutable` on a pointer param;
     EVERY other operator FORBIDS `mutable` on any param (spec line 134).
   SWAP: op<--> takes exactly one `SameClass^` param (v1 codegen.cpp:371).
+  BINARY FIRST PARAM (2026-07-11 pivot; canon above): a 2-param operator's FIRST param must
+    be a reference to the ENCLOSING class -- `op+(Class^ a, ConstType b)`. Binary is the only
+    2-param shape in the catalog, so the check is just `n == 2` in
+    validateOperatorSignatureTypes (modeled on the swap rule). This pins binary dispatch to
+    the LHS OPERAND's class; there is no expected-type / assign-target steering, because
+    that would invert OPERATOR PRECEDENCE (`+` binds tighter than `=`, so `b + c` must mean
+    something on its own before `=` is consulted). An arbitrary `A:op+(B, C)` is rejected.
   RETURN TYPE: comparison ops and unary ARITY-0 (op+/-/~/! with 0 params) must return a
     BUILT-IN / Primitive (bool/int/float/pointer), never a class/self (v1 codegen.cpp:379).
     op[] and op^ must return a REFERENCE `Type^` — v2 SHOULD enforce this; v1 did NOT
@@ -404,20 +427,22 @@ OpDefs(
     op<--(mutable OpDefs^ a)   { v_ = a^.v_; }          // move from a pointer (mutable)
     op<-->(mutable OpDefs^ c)  { int t = v_; v_ = c^.v_; c^.v_ = t; }
 
-    /* binary -> self */
-    op+(int a, int b)          { v_ = a + b; }
-    op-(int a, int b)          { v_ = a - b; }
-    op*(int a, int b)          { v_ = a * b; }
-    op/(int a, int b)          { v_ = a / b; }
-    op%(int a, int b)          { v_ = a % b; }
-    op&(int a, int b)          { v_ = a; }
-    op|(int a, int b)          { v_ = a; }
-    op^(int a, int b)          { v_ = a; }              // binary xor (arity 2)
-    op<<(int a, int b)         { v_ = a; }
-    op>>(int a, int b)         { v_ = a; }
-    op&&(int a, int b)         { v_ = a; }
-    op||(int a, int b)         { v_ = a; }
-    op^^(int a, int b)         { v_ = a; }
+    /* binary -> self. canon 170-182: the FIRST parameter is the ENCLOSING CLASS -- it is
+       the LEFT operand of `obj = a + b`. The second is a ConstType. So a binary dispatches
+       on the LHS OPERAND's class and can never be steered by the assignment target. */
+    op+(OpDefs^ a, int b)      { v_ = a^.v_ + b; }
+    op-(OpDefs^ a, int b)      { v_ = a^.v_ - b; }
+    op*(OpDefs^ a, int b)      { v_ = a^.v_ * b; }
+    op/(OpDefs^ a, int b)      { v_ = a^.v_ / b; }
+    op%(OpDefs^ a, int b)      { v_ = a^.v_ % b; }
+    op&(OpDefs^ a, int b)      { v_ = a^.v_; }
+    op|(OpDefs^ a, int b)      { v_ = a^.v_; }
+    op^(OpDefs^ a, int b)      { v_ = a^.v_; }          // binary xor (arity 2)
+    op<<(OpDefs^ a, int b)     { v_ = a^.v_; }
+    op>>(OpDefs^ a, int b)     { v_ = a^.v_; }
+    op&&(OpDefs^ a, int b)     { v_ = a^.v_; }
+    op||(OpDefs^ a, int b)     { v_ = a^.v_; }
+    op^^(OpDefs^ a, int b)     { v_ = a^.v_; }
 
     /* compound assignment -> self */
     op+=(int a)                { v_ = v_ + a; }
@@ -498,7 +523,8 @@ Src mkSrc() { Src s(9); return s; }
 
 /* a class whose binary op+ and arity-1 unary op- take a class operand (Sum^), to
    exercise class-producing operators in EXPRESSION positions (decl-init / aliasing /
-   nesting) — they build a temp then run the op, beyond the direct assign-target fuse. */
+   nesting) — they build a `_$optmp` temp then run the op. EVERY position works this way now,
+   including a direct assign target: there is no target-keyed fuse. */
 Sum(int s_) {
     _(){} ~(){}
     op=(int a)            { s_ = a; }
@@ -527,7 +553,7 @@ Ool:op+=(int a)       { n_ += a; }   // produce-self op, out of line, NO return 
 
 /* an operator with DISTINCT parameter types (Type1 a, Type2 b) — canon allows any
    primitive/const-pointer params, not just a single type. */
-Mixed(int64 v_) { _(){} ~(){} op=(int64 a){v_=a;} op+(int a, int64 b){ v_ = a + b; } }
+Mixed(int64 v_) { _(){} ~(){} op=(int64 a){v_=a;} op+(Mixed^ a, int64 b){ v_ = a^.v_ + b; } }
 
 int32 main() {
 
@@ -619,21 +645,24 @@ int32 main() {
     __println("od = " + od.v_);   // od = 1
     __println("of = " + of.v_);   // of = 50
 
-    /* ---- stage 3 (partial): a single binary expression dispatches to the class's
-       binary operator — `dest = X op Y` -> dest.opOP(X, Y) (canon 79-80). Operand
-       chains (the fuse lowering) are a later slice. ---- */
-    int m = 8;
-    int n = 5;
-    OpDefs og(0);
-    og = m + n;                   // op+(int, int)  -> og.v_ = 13
-    __println("og = " + og.v_);   // og = 13
+    /* ---- the og/oh tests lived here. They exercised the TARGET-KEYED chain fuse
+       (`og = m + n` / `oh = m + n + r` -> og.op+(m,n); og.op+=(r)), which has been
+       DELETED: it selected the operator from the assignment target, re-associated
+       `((m+n)+r)`, and clobbered the target mid-expression. Both are precedence
+       failures -- `+` binds tighter than `=`, so `m + n` must have a meaning before
+       `=` is consulted.
 
-    /* a binary CHAIN fuses into the destination: head via the 2-arg op, each further
-       operand via the compound op (canon 70-80). `og` is the accumulator (no temp). */
-    int r = 100;
-    OpDefs oh(0);
-    oh = m + n + r;               // oh.op+(m,n)=13; oh.op+=(r) -> 113
-    __println("oh = " + oh.v_);   // oh = 113
+       They are NOT reshaped and kept here, for a reason worth recording: OpDefs
+       defines no ctor/dtor, so a fuse and a no-fuse print the SAME thing. Those tests
+       could never observe the temp elision they claimed to test -- which is how the
+       target-keyed fuse survived this long with green goldens.
+
+       Temp COUNTING is evaluate.sl's job (it uses ctor/dtor-printing classes). The
+       binary-chain temp baseline now lives there, and the in-place elision returns
+       with Stage 3 proper (temp-keyed, lowered in desugar). Binary DISPATCH is still
+       covered here by Sum (decl-init / aliasing / nested / shift / logical / unary),
+       and OpDefs' reshaped signatures are validated at compile time. ---- */
+    OpDefs oh(113);               // was the chain's result; stage 4 below reads it
 
     /* ---- stage 4: comparison returns a built-in; index / deref return references
        (canon 87-119). OpDefs' op[]/op^ back onto the scalar v_. ---- */
@@ -745,9 +774,11 @@ int32 main() {
     Dst cv = mkSrc();             // rvalue, non-exact -> op=(Src^) -> 9 + 300
     __println("cv = " + cv.d_);   // cv = 309
 
-    /* ---- class-producing operators in EXPRESSION positions: build a temp then run the
-       op (Slice B). Covers decl-init, aliasing (lhs among the operands), nesting, and an
-       arity-1 unary producing self. The direct assign-target still fuses in place. ---- */
+    /* ---- class-producing operators dispatch on the LHS OPERAND's class: build a temp then
+       run `_$optmp.op<sym>(lhs, rhs)`. Covers decl-init, aliasing (lhs among the operands),
+       nesting, and an arity-1 unary producing self. EVERY position comes through here now,
+       including a direct assign target -- there is no target-keyed fuse. Aliasing works for
+       free: the temp reads the OLD lhs before the assignment writes it. ---- */
     Sum sma(3);
     Sum smb(4);
     Sum smd = sma + smb;          // decl-init binary -> _$optmp.op+(sma,smb); smd = 7
@@ -798,22 +829,29 @@ int32 main() {
     oola += 3;                                      // out-of-line produce-self op+= (no ret type)
     __println("ool2 = " + oola.n_);                 // ool2 = 15
 
-    /* ---- COVERAGE: every remaining OpDefs operator token dispatches to its op<sym>. A
-       token that did NOT dispatch would take the built-in path and change the value (the
-       `v_=a` ops yield the FIRST operand when dispatched, the real result otherwise), so
-       each printed value pins the dispatch. m=8, n=5 (declared above). ---- */
-    OpDefs bsub = m - n;    __println("bsub = " + bsub.v_);    // op-  -> 8-5 = 3
-    OpDefs bmul = m * n;    __println("bmul = " + bmul.v_);    // op*  -> 40
-    OpDefs bdiv = m / n;    __println("bdiv = " + bdiv.v_);    // op/  -> 1
-    OpDefs bmod = m % n;    __println("bmod = " + bmod.v_);    // op%  -> 3
-    OpDefs band = m & n;    __println("band = " + band.v_);    // op&  -> v_=a = 8
-    OpDefs bor  = m | n;    __println("bor = " + bor.v_);      // op|  -> 8
-    OpDefs bxor = m ^ n;    __println("bxor = " + bxor.v_);    // op^  -> 8
-    OpDefs bshl = m << n;   __println("bshl = " + bshl.v_);    // op<< -> 8
-    OpDefs bshr = m >> n;   __println("bshr = " + bshr.v_);    // op>> -> 8
-    OpDefs blan = m && n;   __println("blan = " + blan.v_);    // op&& -> 8
-    OpDefs blor = m || n;   __println("blor = " + blor.v_);    // op|| -> 8
-    OpDefs blxr = m ^^ n;   __println("blxr = " + blxr.v_);    // op^^ -> 8
+    /* ---- COVERAGE: every OpDefs binary operator token dispatches to its op<sym>. A token
+       that did NOT dispatch would take the built-in path and change the value (the
+       `v_=a^.v_` ops yield the FIRST operand when dispatched, the real result otherwise),
+       so each printed value pins the dispatch.
+
+       The LEFT operand is the CLASS (canon 170-182) -- that is what selects the operator.
+       An int lhs (`bsub = m - n`) would dispatch NOTHING: it is plain int arithmetic, then
+       op=(int). Values are unchanged from the old int-lhs form because base.v_ == 8. ---- */
+    OpDefs base(8);
+    int n = 5;
+    OpDefs badd = base + n;    __println("badd = " + badd.v_);    // op+  -> 8+5 = 13
+    OpDefs bsub = base - n;    __println("bsub = " + bsub.v_);    // op-  -> 8-5 = 3
+    OpDefs bmul = base * n;    __println("bmul = " + bmul.v_);    // op*  -> 40
+    OpDefs bdiv = base / n;    __println("bdiv = " + bdiv.v_);    // op/  -> 1
+    OpDefs bmod = base % n;    __println("bmod = " + bmod.v_);    // op%  -> 3
+    OpDefs band = base & n;    __println("band = " + band.v_);    // op&  -> v_=a^.v_ = 8
+    OpDefs bor  = base | n;    __println("bor = " + bor.v_);      // op|  -> 8
+    OpDefs bxor = base ^ n;    __println("bxor = " + bxor.v_);    // op^  -> 8
+    OpDefs bshl = base << n;   __println("bshl = " + bshl.v_);    // op<< -> 8
+    OpDefs bshr = base >> n;   __println("bshr = " + bshr.v_);    // op>> -> 8
+    OpDefs blan = base && n;   __println("blan = " + blan.v_);    // op&& -> 8
+    OpDefs blor = base || n;   __println("blor = " + blor.v_);    // op|| -> 8
+    OpDefs blxr = base ^^ n;   __println("blxr = " + blxr.v_);    // op^^ -> 8
 
     /* compound assignment: each op<op>=(int) dispatches (op-= subtracts; the rest set v_=a) */
     OpDefs cc(100);
@@ -861,9 +899,11 @@ int32 main() {
     dw^ = 77;                         // (dw.op^())^ = 77  -> writes v_
     __println("dw = " + dw.v_);       // dw = 77
 
-    /* ---- a binary operator with DISTINCT param types (int, int64) dispatches (m=8). ---- */
+    /* ---- a binary operator whose SECOND param differs from the first (Mixed^, int64)
+       dispatches. param0 is still the enclosing class; only the rhs type varies. ---- */
     int64 big = 100;
-    Mixed mx = m + big;               // mx.op+(int, int64) -> 108
+    Mixed mbase(8);
+    Mixed mx = mbase + big;           // mx.op+(Mixed^, int64) -> 8 + 100 = 108
     __println("mx = " + mx.v_);       // mx = 108
 
     return 0;
@@ -1012,4 +1052,22 @@ negatives — one //-block uncommented per run.
 //    NegBin b(4);
 //    NegBin c = a + b;
 //    return c.v_;
+//}
+
+/* a binary operator's FIRST parameter must be the enclosing class (canon 170-182): it IS
+   the left operand, and the operator produces self from it. A PRIMITIVE param0 means the
+   operator could only ever be selected by the assignment target's type — which inverts
+   precedence (`b + c` must have a meaning before the `=` is consulted). Rejected. */
+//-EXPECT-ERROR: A binary operator's first parameter must be a reference to the enclosing class.
+//NegBinP(int v_) {
+//    op+(int a, int b) { v_ = a + b; }
+//}
+
+/* the same rule catches the WRONG class in param0 — the arbitrary `A:op+(B, C)` form. A
+   primitive-only check would miss this one. */
+//-EXPECT-ERROR: A binary operator's first parameter must be a reference to the enclosing class.
+//NegBinOther(int o_) {
+//}
+//NegBinX(int v_) {
+//    op+(NegBinOther^ a, int b) { v_ = a^.o_ + b; }
 //}

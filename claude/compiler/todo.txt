@@ -112,18 +112,28 @@ UNBLOCKED FEATURES
   * should we be able to take the address of a temporary variable?
 
   * operator overloading — LANDED except two open areas:
-    - EXPRESSION-TEMP ELIMINATION: fuse a full `String s = a + b + c + d` chain to ZERO
-      temporaries (copy-into-target instead of move; only-op+= seed when no 2-arg op+;
-      ping-pong two-buffer). Active canon: test/class/evaluate.sl. NOTE (2026-07-11): the
-      temp-LIFETIME half is SEPARATE and LANDED — a scalar-valued var-decl/assign/return
-      rhs's nested arg temp now dies at the STATEMENT (a kSeqExpr wrap, liftSretCallList);
-      what remains here is the zero-temp FUSION only.
+    - EXPRESSION-TEMP ELIMINATION (a.k.a. "stage 3 proper"): fuse a full
+      `String s = a + b + c + d` chain to ZERO temporaries. Active canon:
+      test/class/evaluate.sl (case J counts the temps TODAY — one `_$optmp` per binary; the
+      test IS that those ctor/dtor counts shrink when this lands).
+      HOW (the design, corrected 2026-07-11): lower binaries BOTTOM-UP in DESUGAR, where the
+      operand types exist, and key the fuse on THE LHS BEING A FRESH TEMP (port v1's
+      `isFreshSlidTemp`): `temp + rhs` -> `temp.op+=(rhs)`, canon 78-88. Fusing into an
+      anonymous temp is always safe. Eliding that temp into the assign target is a SEPARATE,
+      LATER step, legal only when the target is written exactly once. Then: copy-into-target
+      instead of move; only-op+= seed when no 2-arg op+; ping-pong two-buffer.
+      NOT how: the old target-keyed fuse (tryLowerBinaryChain, in CLASSIFY, pre-infer) is
+      DELETED — it inverted operator precedence (the `=` chose the `+`) and re-associated
+      the chain, clobbering the target mid-expression. Don't re-derive it. Lowering belongs
+      in desugar; classify only RESOLVES.
     - COMPARISON forms deferred by the user: arity-2 comparison PRODUCING a class (e.g. a
       SIMD mask `Mask m = a == b`), and reversed-operand comparison (`x < obj` -> `obj >= x`,
       `int == class`). See REACH GOALS below + [[project_operator_overloading]].
     Everything else (assignment/move/swap, arith/bitwise/shift/logical binary in all expr
     positions, compound, comparison arity-1, index/deref, unary arity-0/1, out-of-line defs
-    in both forms, ambiguity reporting, no-invalid-IR guard) has landed with tests.
+    in both forms, ambiguity reporting, no-invalid-IR guard, and the 2026-07-11 binary
+    signature rule — param0 must be a ref to the enclosing class, so a binary dispatches on
+    the LHS OPERAND alone) has landed with tests.
 
   * review swap-init.
     Primitive swap-init; = (tuple) op=; kStoreStmt-target op=.

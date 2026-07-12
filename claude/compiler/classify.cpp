@@ -658,8 +658,7 @@ bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams);
 bool isArithBitBinaryOp(std::string const& op);
 bool tryLowerClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
-                         widen::TypeRef context, widen::TypeRef lref, widen::TypeRef rref,
-                         diagnostic::Sink& diag);
+                         widen::TypeRef lref, diagnostic::Sink& diag);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
 
@@ -770,6 +769,25 @@ void validateOperatorSignatureTypes(parse::Node& fn, diagnostic::Sink& diag) {
         } else if (!p->is_mutable) {
             diagnostic::report(diag, {p->file_id, p->name_tok,
                 "A swap operator's parameter must be 'mutable'.", {}});
+        }
+    }
+
+    // A BINARY operator is the only 2-parameter shape in the catalog (canon 160-173:
+    // `op+(Class^ a, ConstType b)`), and its FIRST parameter is the LEFT operand — which
+    // IS the enclosing class: the operator produces self from (self-class lhs, rhs). So
+    // param0 must be a reference to this same class, exactly like the swap rule above.
+    // This pins binary dispatch to the LHS OPERAND's class, with no expected-type/context
+    // steering — which is what operator PRECEDENCE demands: `b + c` must have a meaning
+    // before the `=` in `a = b + c` is ever consulted. An arbitrary `A:op+(B, C)` (a class
+    // whose binary op takes two unrelated types) is rejected here.
+    if (n == 2) {
+        parse::Node* p = uparams[0];
+        bool same = isReference(p->return_type) && selfCls != widen::kNoType
+            && widen::deepStrip(pointeeType(p->return_type)) == widen::deepStrip(selfCls);
+        if (!same) {
+            diagnostic::report(diag, {p->file_id, p->name_tok,
+                "A binary operator's first parameter must be a reference to the "
+                "enclosing class.", {}});
         }
     }
 }
@@ -1974,8 +1992,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // `Flags f = a && b` -> `f.op&&(a, b)`. Dispatch through the shared helper
                 // before the built-in bool-coercion path (which rejects a class operand).
                 // The compound form `f &&= a` already dispatches in the aug-assign arm.
-                if (tryLowerClassBinary(tree, e, op, context,
-                                        lhs.inferred_type, rhs.inferred_type, diag)) {
+                if (tryLowerClassBinary(tree, e, op, lhs.inferred_type, diag)) {
                     return;
                 }
                 if (lhs.inferred_type != widen::kNoType
@@ -2004,8 +2021,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // `Shift c = a << b` -> `c.op<<(a, b)`. Dispatch through the shared
                 // helper before the numeric path (which rejects a class lhs). The
                 // compound form `c <<= a` already dispatches in the aug-assign arm.
-                if (tryLowerClassBinary(tree, e, op, context,
-                                        lhs.inferred_type, rhs.inferred_type, diag)) {
+                if (tryLowerClassBinary(tree, e, op, lhs.inferred_type, diag)) {
                     return;
                 }
                 if (isAggregateType(lhs.inferred_type)) {
@@ -2060,13 +2076,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
 
             // A class-PRODUCING arith/bitwise binary dispatches to op<op> (produce-self):
-            // build a temp, run `_$optmp.op<op>(lhs, rhs)` (canon 85-88). The direct non-
-            // aliasing assign-statement target fuses in place earlier (tryLowerBinaryChain)
-            // and never reaches here; aliasing (`a=a+b`) does (the fuse bails). No viable
-            // class → the numeric path below reports the error. (Shift `<< >>` dispatches
-            // through the same helper in its own arm above.)
+            // build a temp, run `_$optmp.op<op>(lhs, rhs)` (canon 85-88). EVERY class binary
+            // reaches here — including a direct assign-statement target (`a = b + c`) and an
+            // aliasing one (`a = a + b`, whose temp correctly reads the OLD `a`). Dispatch is
+            // on the LHS OPERAND's class; a non-class lhs falls to the numeric path below.
+            // (Shift `<< >>` dispatches through the same helper in its own arm above.)
             if (isArithBitBinaryOp(op)
-                && tryLowerClassBinary(tree, e, op, context, lref, rref, diag)) {
+                && tryLowerClassBinary(tree, e, op, lref, diag)) {
                 return;
             }
 
@@ -3840,14 +3856,6 @@ bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
     return false;
 }
 
-// True if entry `eid` is read anywhere in the expression `n` (an ident bound to it).
-bool referencesEntry(parse::Node const& n, int eid) {
-    if (n.kind == parse::Kind::kIdentExpr && n.resolved_entry_id == eid) return true;
-    for (auto const& c : n.children)
-        if (c && referencesEntry(*c, eid)) return true;
-    return false;
-}
-
 // Probe for the best-matching single-parameter operator `opname` in `cls` (or its
 // base chain) for the argument `rhs`. Gathers candidates (most-derived frame with the
 // name shadows bases) then ranks them through the SHARED rankOverload core. Returns
@@ -4055,24 +4063,6 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
     return true;
 }
 
-// Consume a left-associative arith/bitwise chain, returning the HEAD binary node and
-// filling `fuses` in APPLICATION order (inner-to-outer): each is (op, right-operand).
-// `((b+c)+d)+e` -> head=(b+c), fuses=[(+,d),(+,e)].
-std::unique_ptr<parse::Node> flattenLeftChain(
-    std::unique_ptr<parse::Node> node,
-    std::vector<std::pair<std::string, std::unique_ptr<parse::Node>>>& fuses) {
-    if (node->children.size() == 2 && node->children[0]
-        && node->children[0]->kind == parse::Kind::kBinaryExpr
-        && isArithBitBinaryOp(node->children[0]->text)) {
-        std::string op = node->text;
-        auto right = std::move(node->children[1]);
-        auto head = flattenLeftChain(std::move(node->children[0]), fuses);
-        fuses.emplace_back(std::move(op), std::move(right));
-        return head;
-    }
-    return node;
-}
-
 // Build and type (via inferMethodCall) the statement `recv.opname(args...)`.
 std::unique_ptr<parse::Node> makeOpCallStmt(
     parse::Tree& tree, std::string const& recvName, int recvEid, widen::TypeRef recvType,
@@ -4167,36 +4157,35 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
 // Lower a class-PRODUCING operator expression (a binary `a op b`, or an arity-1 unary
 // `op a` producing self) in an EXPRESSION position into the construct-temp-then-op form
 // the desugar class_conversion lift hoists: a default-construct `_$optmp` of the RESULT
-// class C (the expected/context type) plus `_$optmp.op<sym>(operands)`. The node BECOMES
-// a kConvertExpr[class_conversion] carrying [construct, op-call] — structurally identical
-// to a `(Class = src)` conversion, so desugar lifts it with NO new arm and codegen builds
-// the temp then runs the op. C must define op<sym> at the operands' arity (the CALLER
-// checks via classHasOperatorArity). Mirrors lowerClassConversion; the direct assign-
-// statement target still fuses in place (tryLowerBinaryChain) — this catches decl-init,
-// aliasing, call args, and nested operand positions.
+// class C plus `_$optmp.op<sym>(operands)`. The node BECOMES a kConvertExpr
+// [class_conversion] carrying [construct, op-call] — structurally identical to a
+// `(Class = src)` conversion, so desugar lifts it with NO new arm and codegen builds the
+// temp then runs the op. C must define op<sym> at the operands' arity (the CALLER checks
+// via classHasOperatorArity). Mirrors lowerClassConversion. EVERY class binary/unary comes
+// through here — decl-init, assign target, aliasing, call args, nested operands alike.
 // A class-PRODUCING binary op (arith / bitwise / SHIFT) in an EXPRESSION position: build a
-// temp and run `_$optmp.op<op>(lhs, rhs)` (canon 85-88). The RESULT class is the expected
-// type (context) if it defines op<op>/2 — this wins so a CROSS-class result (`Mat m=v1+v2`,
-// op+ on Mat) picks Mat — else an OPERAND's own class (the common `Class op Type` form; the
-// operator lives on the operands' class). The operand fallback reaches positions with NO
-// threaded context: a CALL ARG (`f(a+b)`) and an INFERRED decl-init (`x = a+b`). Returns
-// true iff it lowered; false leaves `e` untouched for the caller's numeric path. Shared by
-// the arith/bitwise hook and the shift arm so both dispatch identically.
+// temp and run `_$optmp.op<op>(lhs, rhs)` (canon 85-88).
+//
+// The RESULT class is the LHS OPERAND's class — full stop. A binary operator's first
+// parameter IS the enclosing class (validateOperatorSignatureTypes), so `a op b` can only
+// ever resolve to a's class, and it produces that class (self). There is nothing to pick.
+//
+// This is deliberate: the expected type (the `=` target) MUST NOT steer operator selection.
+// `b + c` has a meaning fixed by its own operands, BEFORE the `=` in `a = b + c` is
+// consulted — that is what precedence means. The old context-wins arm (which enabled a
+// cross-class `Mat m = v1 + v2`) inverted that, and the rhs-operand arm silently supported
+// reversed operands; both are gone. A non-class lhs simply returns false and falls to the
+// caller's numeric path (so `og = m + n` on ints is plain int arithmetic, then `op=`).
+//
+// Returns true iff it lowered; false leaves `e` untouched. Shared by the arith/bitwise hook
+// and the shift arm so both dispatch identically.
 bool tryLowerClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
-                         widen::TypeRef context, widen::TypeRef lref, widen::TypeRef rref,
-                         diagnostic::Sink& diag) {
+                         widen::TypeRef lref, diagnostic::Sink& diag) {
     std::string opname = "op" + op;
-    widen::TypeRef rc = widen::kNoType;
-    if (widen::form(widen::strip(context)) == widen::Type::Form::kSlid
-        && classHasOperatorArity(tree, context, opname, 2))
-        rc = context;
-    else if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
-        && classHasOperatorArity(tree, lref, opname, 2))
-        rc = lref;
-    else if (widen::form(widen::strip(rref)) == widen::Type::Form::kSlid
-        && classHasOperatorArity(tree, rref, opname, 2))
-        rc = rref;
-    if (rc == widen::kNoType) return false;
+    if (widen::form(widen::strip(lref)) != widen::Type::Form::kSlid
+        || !classHasOperatorArity(tree, lref, opname, 2))
+        return false;
+    widen::TypeRef rc = lref;
     std::vector<std::unique_ptr<parse::Node>> operands;
     operands.push_back(std::move(e.children[0]));
     operands.push_back(std::move(e.children[1]));
@@ -4373,102 +4362,6 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
         for (auto& c : tuple->children) e.children.push_back(std::move(c));
         e.inferred_type = T;
     }
-}
-
-// Lower `a = X op Y [op Z ...]` — a class lvalue assigned an arith/bitwise binary
-// chain, with `a` NOT among the operands — into the FUSE sequence (canon 70-80):
-//   a.opHEAD(X, Y);  a.opOP1=(Z);  a.opOP2=(W);  ...
-// The lvalue IS the accumulator (elided — no temp), so the head builds it via the
-// 2-arg op and each further operand fuses via the compound op. The head + all but the
-// LAST statement go to `prelude`; the last becomes `s`. Returns true iff handled;
-// otherwise `s` is untouched (caller falls through to the normal path / error).
-bool tryLowerBinaryChain(parse::Tree& tree, parse::Node& s, widen::TypeRef lref,
-                         std::vector<std::unique_ptr<parse::Node>>* prelude,
-                         diagnostic::Sink& diag) {
-    if (s.children.empty() || !s.children[0]
-        || s.children[0]->kind != parse::Kind::kBinaryExpr
-        || !isArithBitBinaryOp(s.children[0]->text))
-        return false;
-
-    // Non-destructive inspection: head op + step ops + operand leaves.
-    parse::Node* h = s.children[0].get();
-    std::vector<std::string> stepOps;
-    std::vector<parse::Node*> operands;
-    while (h->children.size() == 2 && h->children[0] && h->children[1]
-           && h->children[0]->kind == parse::Kind::kBinaryExpr
-           && isArithBitBinaryOp(h->children[0]->text)) {
-        stepOps.push_back(h->text);
-        operands.push_back(h->children[1].get());
-        h = h->children[0].get();
-    }
-    if (h->children.size() != 2 || !h->children[0] || !h->children[1]) return false;
-    std::string headOp = h->text;
-    operands.push_back(h->children[0].get());
-    operands.push_back(h->children[1].get());
-    // Only a flat chain of SIMPLE operands (a nested binary/unary operand — a
-    // non-left-assoc or mixed shape — is left to a later slice).
-    for (parse::Node* o : operands)
-        if (o->kind == parse::Kind::kBinaryExpr || o->kind == parse::Kind::kUnaryExpr)
-            return false;
-    // The operators must exist: the 2-arg head op, and each step's compound op.
-    if (!classHasOperatorArity(tree, lref, "op" + headOp, 2)) return false;
-    for (std::string const& op : stepOps)
-        if (!classHasOperatorArity(tree, lref, "op" + op + "=", 1)) return false;
-    // `a` must not alias the operands — else it can't be the in-place accumulator
-    // (a temp would be needed; left to a later slice).
-    if (referencesEntry(*s.children[0], s.resolved_entry_id)) return false;
-    // A multi-step chain needs the prelude to splice its leading statements.
-    if (!stepOps.empty() && !prelude) return false;
-
-    // Destructive build.
-    std::vector<std::pair<std::string, std::unique_ptr<parse::Node>>> fuses;
-    std::unique_ptr<parse::Node> head =
-        flattenLeftChain(std::move(s.children[0]), fuses);
-    auto head_left = std::move(head->children[0]);
-    auto head_right = std::move(head->children[1]);
-
-    std::string recvName = s.name;
-    int recvEid = s.resolved_entry_id;
-    int file = s.file_id, tok = s.tok;
-    std::size_t total = 1 + fuses.size();
-    std::size_t emitted = 0;
-    auto emit = [&](std::string const& opname,
-                    std::vector<std::unique_ptr<parse::Node>> args) {
-        emitted++;
-        if (emitted < total) {
-            prelude->push_back(makeOpCallStmt(tree, recvName, recvEid, lref, opname,
-                                              std::move(args), file, tok, diag));
-            return;
-        }
-        // The LAST statement is written onto `s` in place.
-        auto recv = std::make_unique<parse::Node>();
-        recv->kind = parse::Kind::kIdentExpr;
-        recv->name = recvName;
-        recv->name_tok = tok;
-        recv->resolved_entry_id = recvEid;
-        recv->inferred_type = lref;
-        recv->file_id = file;
-        recv->tok = tok;
-        s.kind = parse::Kind::kMethodCallStmt;
-        s.name = opname;
-        s.name_tok = tok;
-        s.resolved_entry_id = -1;
-        s.children.clear();
-        s.children.push_back(std::move(recv));
-        for (auto& a : args) s.children.push_back(std::move(a));
-        inferMethodCall(tree, s, diag);
-    };
-
-    std::vector<std::unique_ptr<parse::Node>> headArgs;
-    headArgs.push_back(std::move(head_left));
-    headArgs.push_back(std::move(head_right));
-    emit("op" + headOp, std::move(headArgs));
-    for (auto& fuse : fuses) {
-        std::vector<std::unique_ptr<parse::Node>> a;
-        a.push_back(std::move(fuse.second));
-        emit("op" + fuse.first + "=", std::move(a));
-    }
-    return true;
 }
 
 void classifyStmt(parse::Tree& tree, parse::Node& s,
@@ -4802,15 +4695,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 lref = parse::entryType(tree, s.resolved_entry_id);
                 lvalue_type = widen::spellOrEmpty(lref);
             }
-            // Stage 3: a class lvalue assigned an arith/bitwise binary CHAIN dispatches
-            // to the class's operators — `a = X op Y op Z` fuses into `a` as the
-            // accumulator (a.opHEAD(X,Y); a.opOP=(Z); …). Intercepted BEFORE the infer
-            // loop, which would otherwise reject the class binary ("operator not
-            // defined"). Handles depth-1 too; leaves `s` untouched when it can't lower.
-            if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
-                && tryLowerBinaryChain(tree, s, lref, prelude, diag)) {
-                return;
-            }
+            // NO pre-inference interception here. The rhs is inferred FIRST, bottom-up:
+            // `a = b + c` evaluates `b + c` on its own terms (dispatching on the LHS
+            // OPERAND's class — see tryLowerClassBinary) into a temp, and only THEN is the
+            // temp assigned into `a` via op=. That ordering IS operator precedence: `+`
+            // binds tighter than `=`, so the assignment target must never get a say in how
+            // the binary is evaluated. The old target-keyed chain fuse (tryLowerBinaryChain)
+            // ran before this loop precisely because it had no operand types to work with —
+            // so it keyed on `a`, re-associated `b + c + d` into `a.op+(b,c); a.op+=(d)`,
+            // and clobbered `a` mid-expression (visible to any later operand that reads it).
+            // It is deleted. Eliding the temp back into `a` is an OPTIMIZATION and belongs
+            // in desugar, where the operand types exist (see todo.txt: Stage 3 proper).
             for (auto& ch : s.children) {
                 if (ch) inferExpr(tree, *ch, lref, diag);
             }

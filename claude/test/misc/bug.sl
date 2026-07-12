@@ -17,6 +17,14 @@ Class(int a_) {
         ++a_;
         __println("Class:inc: " + a_);
     }
+    op=(int a) {
+        a_ = a;
+        __println("Class:op=int: " + a_);
+    }
+    op+=(int b) {
+        a_ += b;
+        __println("Class:op+=int: " + a_);
+    }
 }
 
 global Global (
@@ -33,6 +41,9 @@ int fn(Class^ cls) {
 }
 
 int32 main() {
+
+    //Class cls = Class + 1 + 2 + 3;
+    //__println(cls.a_);
 
     return 0;
 }
