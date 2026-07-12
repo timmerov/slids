@@ -9,6 +9,9 @@ what test coverage gaps remain ?
 update readme*.txt, plan*.txt, and memories.
 remove landed items from todo.txt. update stale entries.
 
+one of claude's current favorite fuck-ups is to use default move
+@Class_$move/copy/swap instead of calling the class's operator.
+
 remaining class todo:
 refine, cross-tu
 

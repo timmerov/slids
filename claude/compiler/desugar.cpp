@@ -1,5 +1,6 @@
 #include "desugar.h"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <string>
@@ -336,6 +337,13 @@ std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
 // lowerMethodCall.
 std::map<int, int> g_entry_slot;
 
+// The frozen parse tree, for the passes that run on the ast but still need to reach the
+// symbol table (an operator's entry -> its symbol / signature / owning class). Set by run()
+// before any lowering. The ast-level passes are already threaded through deep recursions
+// (lowerPhraseSlot, liftSretCallExprs) that no other stage parameterizes; a file-static
+// avoids churning all of them for one read-only handle.
+parse::Tree const* g_in = nullptr;
+
 struct VSlot {
     std::string name;
     std::vector<widen::TypeRef> params;   // includes the receiver at [0]
@@ -502,8 +510,15 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->default_move_init = p.default_move_init;
     node->non_completing = p.non_completing;
     node->is_construction = p.is_construction;
+    node->ctor_no_args = p.ctor_no_args;
     node->class_conversion = p.class_conversion;
     node->agg_conv_spill = p.agg_conv_spill;
+    node->class_op_chain = p.class_op_chain;
+    node->op_bin_eid = p.op_bin_eid;
+    node->op_aug_eid = p.op_aug_eid;
+    node->op_eq_lhs_eid = p.op_eq_lhs_eid;
+    node->op_eq_rhs_eid = p.op_eq_rhs_eid;
+    node->op_move_eid = p.op_move_eid;
     node->param_types = p.param_types;
     node->captures = p.captures;
     node->capture_types = p.capture_types;
@@ -1463,6 +1478,17 @@ std::unique_ptr<ast::Node> cloneAstExpr(ast::Node const& n) {
     c->is_const = n.is_const;
     c->default_move_init = n.default_move_init;
     c->non_completing = n.non_completing;
+    c->is_construction = n.is_construction;
+    c->ctor_no_args = n.ctor_no_args;
+    c->class_conversion = n.class_conversion;
+    c->agg_conv_spill = n.agg_conv_spill;
+    c->class_op_chain = n.class_op_chain;
+    c->op_bin_eid = n.op_bin_eid;
+    c->op_aug_eid = n.op_aug_eid;
+    c->op_eq_lhs_eid = n.op_eq_lhs_eid;
+    c->op_eq_rhs_eid = n.op_eq_rhs_eid;
+    c->op_move_eid = n.op_move_eid;
+    c->vtable_slot = n.vtable_slot;
     c->param_types = n.param_types;
     c->captures = n.captures;
     c->capture_types = n.capture_types;
@@ -1908,6 +1934,239 @@ bool returnTypeHasClassValue(widen::TypeRef t) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// CLASS-OPERATOR CHAIN LOWERING — the minimum-temporaries evaluation of `a + b + c`.
+//
+// classify RESOLVED each class binary and left it in place (kBinaryExpr, class_op_chain,
+// four candidate entry ids, children[2] = the result class's default field-init tuple).
+// Here the chain becomes an ACCUMULATOR plus a run of op calls. Two decisions live here,
+// and BOTH need the chain and its destination in one piece — which is why they are in
+// desugar and not in classify:
+//
+//  WHERE THE ACCUMULATOR LIVES — exactly the declarator funnel's existing question, "is
+//  this raw storage being CONSTRUCTED, or a live object being ASSIGNED?":
+//    * raw storage of the chain's exact class (a var-decl; a return, via NRVO) -> the
+//      DESTINATION IS THE ACCUMULATOR. Zero temporaries.
+//    * a LIVE object (an assign / a store through an lvalue) -> a statement-scoped
+//      `_$optmp`, MOVED in. A live target can never be the accumulator: making it one means
+//      re-running its constructor, and the op= seed would land on its OLD value.
+//    * anywhere else (a call argument, a nested operand) -> a lifted `_$optmp`.
+//
+//  THE LADDER — which operator each operand is applied with:
+//    1. a fresh `Class` / `Class()` / `Class(args)` at the head COLLAPSES INTO the
+//       accumulator (it is constructed with those args, never materialized separately);
+//    2. the first operand on a DEFAULT accumulator prefers `op=` (cheaper on an empty
+//       object), falling back to `op<OP>=`;
+//    3. on an accumulator built WITH ARGS, `op<OP>=` ONLY — an op= would discard them;
+//    4. a real operand PAIR at the head takes the 2-arg `op<OP>(x, y)` in one call, or
+//       decomposes to `acc.op=(x); acc.op<OP>=(y)` when the class has no 2-arg operator;
+//    5. every later operand FUSES: `acc.op<OP>=(operand)`;
+//    6. a continuation with NO `op<OP>=` cannot fuse (`acc.op+(acc, c)` would read acc
+//       while writing it), so it starts a FRESH buffer — today's per-node-temp shape, one
+//       temp per un-fusable step. Ping-pong (reusing two buffers) is a later cut.
+// ---------------------------------------------------------------------------
+
+// The accumulator a chain builds into: a named local (a destination, or a minted temp).
+struct ChainAcc {
+    std::string name;
+    int id = -1;
+};
+
+// `^receiver` — the operator's implicit `_$recv` argument. Mirrors lowerMethodCall: the
+// address of a DEREF receiver IS the pointer it derefs (an addr-of of a deref is not a
+// codegen lvalue), so pass that through; anything else takes its address.
+std::unique_ptr<ast::Node> makeRecvAddr(std::unique_ptr<ast::Node> recv, widen::TypeRef C,
+                                        int file, int tok) {
+    if (recv->kind == ast::Kind::kDerefExpr && !recv->children.empty()
+        && recv->children[0])
+        return std::move(recv->children[0]);
+    auto a = std::make_unique<ast::Node>();
+    a->kind = ast::Kind::kAddrOfExpr;
+    a->inferred_type = widen::internPointer(widen::strip(C));
+    a->file_id = file;
+    a->tok = tok;
+    a->children.push_back(std::move(recv));
+    return a;
+}
+
+// `receiver.<op>(args...)` as a LOWERED call — the same symbol / receiver-address shape
+// lowerMethodCall emits, built straight from the entry id classify resolved. EVERY operator
+// a chain runs (the seed, the fuse, the 2-arg head, and the MOVE into a live target) is
+// emitted through this one helper, so none of them can reach codegen as a bare transfer
+// node that a per-shape gate might blit instead of dispatching.
+std::unique_ptr<ast::Node> makeOpCall(int eid, std::unique_ptr<ast::Node> recv,
+                                      widen::TypeRef C,
+                                      std::vector<std::unique_ptr<ast::Node>> args,
+                                      int file, int tok) {
+    parse::Tree const& tree = *g_in;
+    parse::Entry const& en = tree.entries[eid];
+    // The symbol is minted from the operator's DEFINING class (an inherited operator names
+    // the base's symbol), exactly as lowerMethodCall does. A same-type op= / op<-- / op<-->
+    // mangles to the class's canonical @__$copy / @__$move / @__$swap — so a chain's move
+    // calls precisely the function every other move site calls.
+    widen::TypeRef defCls = widen::strip(C);
+    int cid = parse::classEntryForFrame(tree, en.owner_ns_frame);
+    if (cid >= 0) defCls = widen::strip(tree.entries[cid].slids_type);
+
+    auto call = std::make_unique<ast::Node>();
+    call->kind = ast::Kind::kCallExpr;
+    call->name = methodSymbol(tree, defCls, en.name, eid);
+    call->return_type = en.slids_type;
+    call->inferred_type = en.slids_type;
+    call->param_types = en.param_types;
+    call->file_id = file;
+    call->tok = tok;
+    call->name_tok = tok;
+
+    call->children.push_back(makeRecvAddr(std::move(recv), C, file, tok));
+    for (auto& a : args) call->children.push_back(std::move(a));
+
+    if (en.is_virtual) {
+        auto it = g_entry_slot.find(eid);
+        if (it != g_entry_slot.end()) call->vtable_slot = it->second + 1;   // dtor at 0
+    }
+    return call;
+}
+
+// The accumulator as a receiver.
+std::unique_ptr<ast::Node> makeAccOpCall(int eid, ChainAcc const& acc, widen::TypeRef C,
+                                         std::vector<std::unique_ptr<ast::Node>> args,
+                                         int file, int tok) {
+    return makeOpCall(eid, mintIdent(acc.name, acc.id, C, file, tok), C, std::move(args),
+                      file, tok);
+}
+
+// `Class name = <init tuple>;` — the accumulator's construction. Goes through codegen's
+// ordinary kVarDeclStmt field-init + ctor-hook + dtor-registration path, so an accumulator
+// is born and destroyed exactly like any other class local.
+std::unique_ptr<ast::Node> makeAccDecl(ChainAcc const& acc, widen::TypeRef C,
+                                       std::unique_ptr<ast::Node> init, int file, int tok) {
+    auto d = std::make_unique<ast::Node>();
+    d->kind = ast::Kind::kVarDeclStmt;
+    d->name = acc.name;
+    d->resolved_entry_id = acc.id;
+    d->return_type = C;
+    d->file_id = file;
+    d->tok = tok;
+    d->name_tok = tok;
+    d->children.push_back(std::move(init));
+    return d;
+}
+
+// The chain's spine, innermost (the head) FIRST. A chain node's lhs is another chain node
+// of the same class exactly when the source wrote `a + b + c` — left-associative, so the
+// spine is the left edge. Walking it is not the deleted flattenLeftChain: nothing here
+// consults a destination, and nothing re-associates. The order of application is the
+// source's order, unchanged.
+void collectChainSpine(ast::Node* n, std::vector<ast::Node*>& spine) {
+    while (true) {
+        spine.push_back(n);
+        ast::Node* l = n->children.empty() ? nullptr : n->children[0].get();
+        if (l && l->class_op_chain
+            && widen::deepStrip(l->inferred_type) == widen::deepStrip(n->inferred_type))
+            n = l;
+        else
+            break;
+    }
+    std::reverse(spine.begin(), spine.end());
+}
+
+// Lower `chain` into an accumulator + op calls. Statements are emitted into `pre` until the
+// ELIDED accumulator is created, and into `post` after — so a caller with a destination
+// statement (a var-decl) can place [pre..., THE DECL, post...] and keep the decl in the
+// middle where its own initializer belongs.
+//
+// `elide` names a destination the FINAL accumulator may occupy; pass an empty name to force
+// a fresh temp (then `post` stays empty and `elide_init` is untouched). On an elide, the
+// destination's construction VALUE is written to *elide_init — the caller installs it as
+// the destination's initializer.
+ChainAcc lowerOpChain(std::unique_ptr<ast::Node> chain, int& next_id,
+                      ChainAcc const& elide, std::unique_ptr<ast::Node>* elide_init,
+                      std::vector<std::unique_ptr<ast::Node>>& pre,
+                      std::vector<std::unique_ptr<ast::Node>>& post) {
+    std::vector<ast::Node*> spine;
+    collectChainSpine(chain.get(), spine);
+    widen::TypeRef C = chain->inferred_type;
+    int file = chain->file_id, tok = chain->tok;
+
+    // How many accumulators does this chain need? One to start, plus one for every
+    // continuation that cannot fuse (rule 6). Only the LAST one may be the destination.
+    int total = 1;
+    for (std::size_t i = 1; i < spine.size(); i++)
+        if (spine[i]->op_aug_eid < 0) total++;
+
+    int made = 0;
+    ChainAcc acc;
+    std::vector<std::unique_ptr<ast::Node>>* cur = &pre;
+    auto newAcc = [&](std::unique_ptr<ast::Node> init) {
+        made++;
+        if (made == total && !elide.name.empty()) {
+            acc = elide;                       // the destination IS the accumulator
+            *elide_init = std::move(init);     // ...and this is its initializer
+            cur = &post;                       // everything after it follows the decl
+        } else {
+            acc.name = "_$optmp";
+            acc.id = next_id++;
+            cur->push_back(makeAccDecl(acc, C, std::move(init), file, tok));
+        }
+    };
+    auto emit = [&](std::unique_ptr<ast::Node> call) { cur->push_back(std::move(call)); };
+    auto args1 = [](std::unique_ptr<ast::Node> a) {
+        std::vector<std::unique_ptr<ast::Node>> v;
+        v.push_back(std::move(a));
+        return v;
+    };
+
+    // ---- the HEAD ----
+    ast::Node* n0 = spine[0];
+    std::unique_ptr<ast::Node> head = std::move(n0->children[0]);
+    std::unique_ptr<ast::Node> rhs0 = std::move(n0->children[1]);
+    bool collapsed = head->is_construction
+        && widen::deepStrip(head->inferred_type) == widen::deepStrip(C);
+    if (collapsed) {
+        // Rule 1: the construction never exists as an operand — it IS the accumulator.
+        // Rules 2/3: seed with op= only on a DEFAULT (empty) accumulator; a head built with
+        // arguments must fuse, or op= would throw those arguments away.
+        assert(!head->children.empty() && head->children[0]
+            && "a construction lost its field-init tuple");
+        newAcc(std::move(head->children[0]));
+        int seed = (head->ctor_no_args && n0->op_eq_rhs_eid >= 0)
+                       ? n0->op_eq_rhs_eid : n0->op_aug_eid;
+        emit(makeAccOpCall(seed, acc, C, args1(std::move(rhs0)), file, tok));
+    } else if (n0->op_bin_eid >= 0) {
+        // Rule 4: the head pair in one 2-arg call.
+        newAcc(std::move(n0->children[2]));
+        std::vector<std::unique_ptr<ast::Node>> two;
+        two.push_back(std::move(head));
+        two.push_back(std::move(rhs0));
+        emit(makeAccOpCall(n0->op_bin_eid, acc, C, std::move(two), file, tok));
+    } else {
+        // Rule 4, decomposed: no 2-arg operator, so seed then fuse.
+        newAcc(std::move(n0->children[2]));
+        emit(makeAccOpCall(n0->op_eq_lhs_eid, acc, C, args1(std::move(head)), file, tok));
+        emit(makeAccOpCall(n0->op_aug_eid, acc, C, args1(std::move(rhs0)), file, tok));
+    }
+
+    // ---- every LATER operand ----
+    for (std::size_t i = 1; i < spine.size(); i++) {
+        ast::Node* n = spine[i];
+        std::unique_ptr<ast::Node> rhs = std::move(n->children[1]);
+        if (n->op_aug_eid >= 0) {
+            emit(makeAccOpCall(n->op_aug_eid, acc, C, args1(std::move(rhs)), file, tok));
+        } else {
+            // Rule 6: no fuse available — the running value becomes an operand of a FRESH
+            // buffer. `acc.op+(acc, rhs)` would read the accumulator while writing it.
+            auto prev = mintIdent(acc.name, acc.id, C, file, tok);
+            newAcc(std::move(n->children[2]));
+            std::vector<std::unique_ptr<ast::Node>> two;
+            two.push_back(std::move(prev));
+            two.push_back(std::move(rhs));
+            emit(makeAccOpCall(n->op_bin_eid, acc, C, std::move(two), file, tok));
+        }
+    }
+    return acc;
+}
+
 // Lift hook-returning calls within `node` into `pre` temp decls, INSIDE-OUT (an
 // inner call lifts before its enclosing call, preserving evaluation order), each
 // replaced by an ident reading the temp. `root_intercepted` means `node` itself
@@ -1920,6 +2179,33 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
                        std::vector<std::unique_ptr<ast::Node>>& pre,
                        int& next_id, bool root_intercepted) {
     if (!node) return;
+    // A stamped class-operator CHAIN in an INLINE position — a call argument, a nested
+    // operand, a condition — has no destination to build into, so it gets a `_$optmp`
+    // accumulator hoisted into `pre` and becomes a read of it. The statement shapes that DO
+    // own a destination (a decl / a return / a live assign) were already peeled off by
+    // expandOpChainStmt, so a chain reaching here is genuinely an operand. `pre` is
+    // statement-scoped by the caller (a seq for a scalar rhs, a block for a discarded call),
+    // so the accumulator dies at the semicolon. This arm precedes the `&&` / `||` one below:
+    // a CLASS `a && b` is an ordinary method call, with no short-circuit to preserve.
+    if (node->class_op_chain) {
+        widen::TypeRef C = node->inferred_type;
+        int file = node->file_id, tok = node->tok;
+        std::vector<std::unique_ptr<ast::Node>> chain_stmts, post;
+        ChainAcc acc = lowerOpChain(std::move(node), next_id, ChainAcc{}, nullptr,
+                                    chain_stmts, post);
+        // The accumulator's decl and op calls can carry nested rvalues of their own (a
+        // construction operand, a call, another chain) — lift those AHEAD of the statement
+        // that consumes them, so `pre` stays in evaluation order.
+        for (auto& s : chain_stmts) {
+            bool decl = s->kind == ast::Kind::kVarDeclStmt;
+            for (std::size_t i = decl ? 0 : 1; i < s->children.size(); i++)
+                liftSretCallExprs(s->children[i], pre, next_id,
+                                  /*root_intercepted=*/decl);
+            pre.push_back(std::move(s));
+        }
+        node = mintIdent(acc.name, acc.id, C, file, tok);
+        return;
+    }
     // A short-circuit `&&` / `||` evaluates its RHS conditionally. A construction in
     // the RHS must be lifted into the RHS's OWN sub-seq (done by lowerInPhrase's
     // && / || arm via lowerPhraseSlot), NOT hoisted into this (unconditional) phrase's
@@ -2002,6 +2288,129 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
     }
 }
 
+// Peel a class-operator chain off a statement that OWNS a destination for it, so the
+// accumulator can BE that destination (or, for a live one, a statement-scoped temp moved
+// in). `out` receives the resulting statement(s). A statement with no chain as its DIRECT
+// source passes through untouched — a chain nested deeper inside it has no destination to
+// elide into and is handled by liftSretCallExprs.
+void expandOpChainStmt(std::unique_ptr<ast::Node> stmt, int& next_id,
+                       widen::TypeRef fn_ret,
+                       std::vector<std::unique_ptr<ast::Node>>& out) {
+    ast::Kind k = stmt->kind;
+    int file = stmt->file_id, tok = stmt->tok;
+
+    // A DECLARATION of the chain's exact class: the declared local IS the accumulator, and
+    // the chain's construction value becomes its initializer. ZERO temporaries. No aliasing
+    // guard is needed — a variable cannot appear in its own initializer (`Acc c = c + 1;`
+    // is already "Use of uninitialized variable"), so a chain can never read the storage it
+    // is building into. The exact-type check is the only guard: a chain of a DIFFERENT class
+    // is a conversion, and classify already routed it through the binding funnel.
+    if (k == ast::Kind::kVarDeclStmt && !stmt->children.empty() && stmt->children[0]
+        && stmt->children[0]->class_op_chain && stmt->resolved_entry_id >= 0
+        && widen::deepStrip(stmt->children[0]->inferred_type)
+               == widen::deepStrip(stmt->return_type)) {
+        std::vector<std::unique_ptr<ast::Node>> pre, post;
+        std::unique_ptr<ast::Node> init;
+        ChainAcc dest{stmt->name, stmt->resolved_entry_id};
+        lowerOpChain(std::move(stmt->children[0]), next_id, dest, &init, pre, post);
+        stmt->children[0] = std::move(init);
+        // The DECLARATION goes first, then everything else in a BLOCK — so the declared
+        // variable outlives the block while any intermediate BUFFER inside it (a chain that
+        // cannot fuse needs one per un-fusable operand) dies at the block's end, which IS
+        // the semicolon. Emitting the buffers as plain siblings ahead of the decl instead
+        // would give them enclosing-scope lifetime, and they cannot be wrapped WITH the decl
+        // — that would scope the declared variable to the block too.
+        //
+        // Putting the decl first is safe precisely when there ARE buffers: the accumulator
+        // the destination becomes is the LAST one, created at a continuation, so its
+        // initializer is the class's default field tuple — no operands, nothing to sequence
+        // after the buffers. (A head construction with side-effecting ctor args only ever
+        // collapses into the FIRST accumulator, and when it does, there are no buffers.)
+        out.push_back(std::move(stmt));
+        if (pre.empty()) {
+            for (auto& s : post) out.push_back(std::move(s));
+            return;
+        }
+        auto block = std::make_unique<ast::Node>();
+        block->kind = ast::Kind::kBlockStmt;
+        block->file_id = file;
+        block->tok = tok;
+        for (auto& s : pre) block->children.push_back(std::move(s));
+        for (auto& s : post) block->children.push_back(std::move(s));
+        out.push_back(std::move(block));
+        return;
+    }
+
+    // A RETURN of the chain's exact class: build into a local and return that local.
+    // analyzeNrvo then aliases it to the sret slot — so the CALLER's storage is the
+    // accumulator and no temporary exists at all.
+    if (k == ast::Kind::kReturnStmt && !stmt->children.empty() && stmt->children[0]
+        && stmt->children[0]->class_op_chain
+        && widen::deepStrip(stmt->children[0]->inferred_type)
+               == widen::deepStrip(fn_ret)) {
+        std::vector<std::unique_ptr<ast::Node>> pre, post;
+        ChainAcc acc = lowerOpChain(std::move(stmt->children[0]), next_id, ChainAcc{},
+                                    nullptr, pre, post);
+        for (auto& s : pre) out.push_back(std::move(s));
+        stmt->children[0] = mintIdent(acc.name, acc.id, fn_ret, file, tok);
+        out.push_back(std::move(stmt));
+        return;
+    }
+
+    // A LIVE target — an assign to a variable, or a store through an lvalue. The target can
+    // never be the accumulator: making it one means re-running its constructor, and the op=
+    // seed would land on its OLD value (`s = String + a` would accumulate onto s). So build
+    // into a temp and MOVE it in. The whole thing is wrapped in a block, whose scope end IS
+    // the statement end — so the temp's destructor runs at the semicolon.
+    //
+    // The move is emitted as a CALL to the class's move operator (classify resolved it into
+    // op_move_eid), NOT as a bare move node. A move node would be lowered by codegen's fill
+    // funnel, and a transfer synthesized HERE never passed through classify's operator
+    // dispatch — so naming the operator is the only way to guarantee it runs. A whole-class
+    // transfer must ALWAYS run the class's move function.
+    bool assign = k == ast::Kind::kAssignStmt;
+    bool store  = k == ast::Kind::kStoreStmt;
+    std::size_t ri = store ? 1 : 0;
+    if ((assign || store) && g_in && ri < stmt->children.size() && stmt->children[ri]
+        && stmt->children[ri]->class_op_chain) {
+        // The target's type. An assign names a real symbol-table entry (a chain only ever
+        // comes from classify, so the target is a source variable, never a desugar-minted
+        // local whose id has no entry); a store carries its lvalue as children[0].
+        widen::TypeRef T = widen::kNoType;
+        if (assign && stmt->resolved_entry_id >= 0
+            && stmt->resolved_entry_id < static_cast<int>(g_in->entries.size()))
+            T = parse::entryType(*g_in, stmt->resolved_entry_id);
+        else if (store && !stmt->children.empty() && stmt->children[0])
+            T = stmt->children[0]->inferred_type;
+        if (T != widen::kNoType
+            && widen::deepStrip(stmt->children[ri]->inferred_type)
+                   == widen::deepStrip(T)) {
+            int move_eid = stmt->children[ri]->op_move_eid;
+            // Every class has a move operator — the user's op<--(Self^) or resolve's
+            // synthesized default — so classify always resolves one.
+            assert(move_eid >= 0 && "a class chain with no move operator");
+            std::vector<std::unique_ptr<ast::Node>> pre, post;
+            ChainAcc acc = lowerOpChain(std::move(stmt->children[ri]), next_id,
+                                        ChainAcc{}, nullptr, pre, post);
+            auto block = std::make_unique<ast::Node>();
+            block->kind = ast::Kind::kBlockStmt;
+            block->file_id = file;
+            block->tok = tok;
+            for (auto& s : pre) block->children.push_back(std::move(s));
+            std::vector<std::unique_ptr<ast::Node>> src;
+            src.push_back(mintIdent(acc.name, acc.id, T, file, tok));
+            auto dest = store
+                ? std::move(stmt->children[0])
+                : mintIdent(stmt->name, stmt->resolved_entry_id, T, file, tok);
+            block->children.push_back(
+                makeOpCall(move_eid, std::move(dest), T, std::move(src), file, tok));
+            out.push_back(std::move(block));
+            return;
+        }
+    }
+    out.push_back(std::move(stmt));
+}
+
 // Walk a statement list, lifting hook-returning calls out of inline (expression)
 // positions into preceding temp decls. Mirrors lowerAggregateList's structural
 // descent into compound statements. A call at a codegen-handled root (decl/assign/
@@ -2009,23 +2418,33 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
 // (e.g. a call as another call's argument) are lifted. Loop / if conditions and
 // store/move/swap operands are NOT lifted (a hook call there still errors at
 // codegen, pending a later increment).
-void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_id) {
+//
+// Each statement is first EXPANDED (expandOpChainStmt) — a class-operator chain with a
+// destination becomes an accumulator plus its op calls — and every statement that comes
+// back then runs the normal lift, so the generated op calls get their own nested rvalues
+// lifted exactly like hand-written ones.
+void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_id,
+                      widen::TypeRef fn_ret) {
     std::vector<std::unique_ptr<ast::Node>> out;
-    for (auto& stmt : stmts) {
-        if (!stmt) { out.push_back(nullptr); continue; }
+    std::vector<std::unique_ptr<ast::Node>> expanded;
+    for (auto& stmt0 : stmts) {
+        if (!stmt0) { out.push_back(nullptr); continue; }
+        expanded.clear();
+        expandOpChainStmt(std::move(stmt0), next_id, fn_ret, expanded);
+        for (auto& stmt : expanded) {
         ast::Kind k = stmt->kind;
         if (k == ast::Kind::kBlockStmt) {
-            liftSretCallList(stmt->children, next_id);
+            liftSretCallList(stmt->children, next_id, fn_ret);
         } else if (k == ast::Kind::kIfStmt || k == ast::Kind::kWhileStmt
                 || k == ast::Kind::kDoWhileStmt || k == ast::Kind::kForLongStmt) {
             for (std::size_t i = 1; i < stmt->children.size(); i++) {
                 if (!stmt->children[i]) continue;
                 if (stmt->children[i]->kind == ast::Kind::kBlockStmt) {
-                    liftSretCallList(stmt->children[i]->children, next_id);
+                    liftSretCallList(stmt->children[i]->children, next_id, fn_ret);
                 } else if (stmt->children[i]->kind == ast::Kind::kIfStmt) {
                     std::vector<std::unique_ptr<ast::Node>> one;
                     one.push_back(std::move(stmt->children[i]));
-                    liftSretCallList(one, next_id);
+                    liftSretCallList(one, next_id, fn_ret);
                     stmt->children[i] = std::move(one[0]);
                 }
             }
@@ -2035,7 +2454,7 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
                     && stmt->children[i]->children.size() > 1
                     && stmt->children[i]->children.back()) {
                     liftSretCallList(stmt->children[i]->children.back()->children,
-                                     next_id);
+                                     next_id, fn_ret);
                 }
             }
         }
@@ -2136,6 +2555,7 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
             for (auto& d : pre) out.push_back(std::move(d));
             out.push_back(std::move(stmt));
         }
+        }   // expanded
     }
     stmts = std::move(out);
 }
@@ -2651,6 +3071,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     // are done and constfold doesn't append, so entries.size() is frozen here; the
     // counter is never restarted per loop, so two lowered short-fors can't collide.
     int next_id = static_cast<int>(in.entries.size());
+    g_in = &in;   // the symbol table, for the ast passes that mint calls from entry ids
     // Compute the vtable slot map + per-class vtable globals BEFORE lowering, so
     // lowerMethodCall can stamp each virtual call's slot (via g_entry_slot).
     buildVtables(in, out);
@@ -2696,7 +3117,7 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
         if (!n || n->kind != ast::Kind::kProgram) continue;
         for (auto& fn : n->children) {
             if (!fn || fn->kind != ast::Kind::kFunctionDef) continue;
-            liftSretCallList(fn->children, next_id);
+            liftSretCallList(fn->children, next_id, fn->return_type);
         }
     }
     // Aggregate-copy lowering: rewrite every cross-form / leaf-widen aggregate

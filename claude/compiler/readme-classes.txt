@@ -124,9 +124,23 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     `@Outer__$copy` CALLS `@Inner__$copy`) and a primitive/pointer leaf bottoms out at a
     plain store/move/swap. desugar's methodSymbol renames op= / op<-- / op<--> (user OR
     synthesized) to `@<Class>__$copy` / `__$move` / `__$swap`, so definition and every call
-    agree; codegen just CALLS that symbol (`emitCopy`/`emitMove`; a hook-bearing tuple/array
-    goes PER LEAF via `emitAggregateTransfer`/`emitAggregateSwap`, so a class element runs
-    its op, not a byte blit). findClassOperator finds a same-type op= for EVERY class, but
+    agree; codegen just CALLS that symbol (`emitCopy`/`emitMove`; a tuple/array walks PER LEAF
+    via `emitAggregateTransfer`/`emitAggregateSwap`, so a class element runs its op).
+    THE TRANSFER INVARIANT: a whole-class transfer ALWAYS runs the class's transfer function.
+    NEVER a blit. The gate is STRUCTURAL — `widen::hasInPlaceClass` ("is a class physically in
+    this storage?") — at all THREE transfer sites (emitInitFill's move arm + its copy arm +
+    kSwapStmt). It used to be BEHAVIORAL (`typeNeedsHook`, "does a ctor body exist?"), and a
+    class can answer NO to that: a class with no ctor/dtor fell past the gate into an inline
+    load/store TWIN that re-implemented the transfer and silently skipped the class's operator
+    — so a hook-less class's user `op<--` never ran. Fixed 2026-07-12; the twins are
+    unreachable for a class-bearing type and only pure POD (no kSlid anywhere in the type)
+    still load/stores. A class transfer now has exactly ONE implementation — the operator body
+    — so there is no twin left to drift out of sync with it. Pinned by evaluate.sl's Triv (a
+    hook-less class whose op= / op<-- PRINT) and Sw (its op<--> too, plus a tuple of them:
+    hooks are irrelevant, aggregates walk per leaf). NOTE the contrast with CONSTRUCTION,
+    which stays gated on typeNeedsHook — that one really is asking "is there a ctor body to
+    call?", and a hook-less class truthfully has none. The two predicates are NOT
+    interchangeable. findClassOperator finds a same-type op= for EVERY class, but
     dispatchAssignInit ELIDES a synthesized one (returns false), AND — ELIDE-WHENEVER-POSSIBLE
     (2026-07-08) — elides a USER op too when a DECL-INIT's source is a same-type class RVALUE
     (`isBareLvalue==false && exact`): the call/construction builds in place, no op. A USER op
@@ -187,6 +201,64 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     unwinds the whole chain (the value is materialized first); `break`/`continue`
     unwind down to the target loop's boundary scope (LoopCtx.scope). [DEFERRED
     tests: the return/break/continue arms + the loop-VARIABLE case.]
+
+
+CLASS-OPERATOR CHAINS — MINIMUM TEMPORARIES (landed 2026-07-12; classify + desugar)
+canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
+
+  * THE SPLIT: classify RESOLVES a class binary and STAMPS it; DESUGAR LOWERS it. classify
+    leaves the kBinaryExpr in place (class_op_chain) carrying five resolved operator entry
+    ids — the 2-arg `op<OP>(lhs,rhs)`, the fuse `op<OP>=(rhs)`, the two seeds `op=(lhs)` /
+    `op=(rhs)`, and `op<--(Self^)` for the move — plus, as children[2], the result class's
+    DEFAULT field-init tuple (an accumulator's construction value, built by the ONE
+    construction funnel). WHY desugar owns the lowering: the ELIDE (letting the destination
+    BE the accumulator) needs the chain AND its destination together, and only a whole
+    statement carries both. classify::stampClassBinary replaced tryLowerClassBinary;
+    lowerClassOperatorTemp survives only for the arity-1 UNARY (still a `_$optmp` +
+    class_conversion lift — a missed elide, not a regression).
+  * WHERE THE ACCUMULATOR LIVES = the declarator funnel's existing question, "is this RAW
+    STORAGE being constructed, or a LIVE object being assigned?" (desugar::expandOpChainStmt):
+      - a DECLARATION of the chain's exact class -> the declared local IS the accumulator.
+        ZERO temps. No aliasing guard needed: a variable cannot appear in its own initializer
+        (`Acc c = c + 1` is already "Use of uninitialized variable"), so a chain can never
+        read the storage it builds into. The exact-type check is the only guard.
+      - a RETURN of the exact class -> build into a local and return it; analyzeNrvo aliases
+        that local to %sret.in, so the CALLER's storage is the accumulator. Zero temps.
+      - a LIVE target (assign / store through an lvalue) -> a temp accumulator, MOVED in via
+        a CALL to op_move_eid, all inside a BLOCK so the temp dies at the SEMICOLON. A live
+        target can NEVER be the accumulator: that means re-running its ctor, and the op= seed
+        would land on its OLD value.
+      - no destination at all (a call arg, a nested operand) -> a `_$optmp` lifted into the
+        statement's `pre` by liftSretCallExprs, statement-scoped by its existing wrap.
+  * THE LADDER (desugar::lowerOpChain, walking the left spine innermost-first):
+      1. a fresh `Class` / `Class()` / `Class(args)` at the HEAD COLLAPSES INTO the
+         accumulator — constructed with those args, never materialized as an operand.
+      2. first operand on a DEFAULT accumulator: prefer `op=` (cheaper on an empty object),
+         fall back to `op<OP>=`.
+      3. on an accumulator built WITH ARGS: `op<OP>=` ONLY — an op= would discard them.
+      4. a real operand PAIR at the head: the 2-arg `op<OP>(x,y)` in one call, else DECOMPOSE
+         to `acc.op=(x); acc.op<OP>=(y)`.
+      5. every later operand FUSES: `acc.op<OP>=(operand)` — with ITS OWN operator, so a
+         mixed chain (`a + b - c`) really subtracts.
+      6. a continuation with NO `op<OP>=` cannot fuse (`acc.op+(acc,c)` reads the accumulator
+         while writing it), so it starts a FRESH BUFFER: one extra object per un-fusable step,
+         and the accumulator the destination becomes is the LAST one. [DEFERRED: ping-pong —
+         two alternating buffers would need none of them.]
+    RECORDED CONSEQUENCE: the seed does not consult the head operator symbol, so
+    `Vec v = Vec - a - b` is `v.op=(a); v -= b` = `a - b`. Accepted (canon 6).
+  * EVERY operator a chain runs — seed, fuse, 2-arg head, AND the move — is emitted through
+    ONE helper (desugar::makeOpCall, from the entry id classify resolved), so none of them
+    can reach codegen as a bare transfer node. That matters: a transfer synthesized in DESUGAR
+    never passes through classify's operator dispatch, so naming the operator is the only way
+    to guarantee it runs (see THE TRANSFER INVARIANT above — a bare move node relied on a
+    codegen gate that blitted for a hook-less class).
+  * COUNTING LIVES IN evaluate.sl, NOT operator.sl. operator.sl's OpDefs/Sum have no
+    ctor/dtor, so a fuse and a no-fuse print identically there — which is exactly how the old
+    target-keyed chain fuse survived for months with green goldens. evaluate.sl's Acc / Str /
+    Buf / Triv / Sw PRINT their ctor/dtor (or their operators), and the golden IS the
+    assertion. J: 12 objects -> 7. K: the only-op+= ladder (canon 51-56). M: every remaining
+    destination + shape. N: the un-fusable buffer + its lifetime. O: the transfer gates. P:
+    destructure (values right, shape NOT minimal — see todo).
 
 
 CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)

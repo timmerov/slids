@@ -83,30 +83,188 @@ Acc:ctor: 2
 Acc:ctor: 3
 J1: depth-1 decl-init  jd = ja + jb
 Acc:ctor: 0
-Acc:ctor: 3
 J1 end jd=3
 J2: depth-2 chain      je = ja + jb + jc
 Acc:ctor: 0
-Acc:ctor: 0
-Acc:ctor: 6
 J2 end je=6
 J3: existing target    jf = ja + jb + jc
 Acc:ctor: 0
 Acc:ctor: 0
-Acc:ctor: 0
-Acc:ctor: 6
+Acc:op<--: 6
+Acc:dtor: 6
 J3 end jf=6
 J end (locals dtor next)
 Acc:dtor: 6
 Acc:dtor: 6
 Acc:dtor: 3
-Acc:dtor: 6
-Acc:dtor: 6
-Acc:dtor: 6
-Acc:dtor: 3
-Acc:dtor: 3
-Acc:dtor: 3
 Acc:dtor: 3
 Acc:dtor: 2
 Acc:dtor: 1
+K: only-op+= ladder
+Str:ctor: 1
+Str:ctor: 2
+K1: fresh head       Str kc = Str + ka + kb
+Str:ctor: 0
+K1 end kc=3
+K2: operand head     Str kd = ka + kb
+Str:ctor: 0
+K2 end kd=3
+K3: ctor-arg head    Str ke = Str(10) + ka + kb
+Str:ctor: 10
+K3 end ke=13
+K4: live target      kf = ka + kb
+Str:ctor: 0
+Str:ctor: 0
+Str:op<--: 3
+Str:dtor: 3
+K4 end kf=3
+K5: live, fresh head kf = Str + ka + kb
+Str:ctor: 0
+Str:op<--: 3
+Str:dtor: 3
+K5 end kf=3
+K6: return rhs       Str kg = chain_ret(ka, kb)
+Str:ctor: 0
+K6 end kg=3
+K end (locals dtor next)
+Str:dtor: 3
+Str:dtor: 3
+Str:dtor: 13
+Str:dtor: 3
+Str:dtor: 3
+Str:dtor: 2
+Str:dtor: 1
+L: trivial bucket (no ctor/dtor)
+L1: fresh target  Triv lc = la + lb
+Triv:op=: 1
+L1 end lc=3
+L2: live target   ld = la + lb
+Triv:op=: 1
+Triv:op<--: 3
+L2 end ld=3
+L3: hand-written  ld <-- lc; le = ld
+Triv:op<--: 3
+Triv:op=: 3
+L3 end le=3
+L end
+M: chain destinations and shapes
+Acc:ctor: 10
+Acc:ctor: 3
+Acc:ctor: 4
+M1: call arg      take(ma + mb)
+Acc:ctor: 0
+Acc:dtor: 13
+M1 end m1=13
+M2: deref store   mp^ = ma + mb
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:op<--: 13
+Acc:dtor: 13
+M2 end md=13
+M3: field store   mbox.a_ = ma + mb
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:op<--: 13
+Acc:dtor: 13
+M3 end mbox.a_=13
+M4: array store   marr[1] = ma + mb
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:op<--: 13
+Acc:dtor: 13
+M4 end marr[1]=13
+M5: mixed ops     me = ma + mb - mc
+Acc:ctor: 0
+M5 end me=9
+M6: ctor operand  mf = ma + Acc(7)
+Acc:ctor: 0
+Acc:ctor: 7
+Acc:dtor: 7
+M6 end mf=17
+M7: sub-chain     mg = ma + (mb + mc)
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:dtor: 7
+M7 end mg=17
+M8: loop body
+Acc:ctor: 0
+M8 body ml=13
+Acc:dtor: 13
+Acc:ctor: 0
+M8 body ml=13
+Acc:dtor: 13
+M8 end
+M end (locals dtor next)
+Acc:dtor: 17
+Acc:dtor: 17
+Acc:dtor: 9
+Acc:dtor: 13
+Acc:dtor: 0
+Acc:dtor: 13
+Acc:dtor: 0
+Acc:dtor: 13
+Acc:dtor: 4
+Acc:dtor: 3
+Acc:dtor: 10
+N: un-fusable chain (no op+=)
+Buf:ctor: 1
+Buf:ctor: 2
+Buf:ctor: 3
+N1: no buffer     Buf nd = na + nb
+Buf:ctor: 0
+N1 end nd=3
+N2: one buffer    Buf ne = na + nb + nc
+Buf:ctor: 0
+Buf:ctor: 0
+Buf:dtor: 3
+N2 end ne=6
+N3: live target   nf = na + nb + nc
+Buf:ctor: 0
+Buf:ctor: 0
+Buf:ctor: 0
+Buf:dtor: 6
+Buf:dtor: 3
+N3 end nf=6
+N end (locals dtor next)
+Buf:dtor: 6
+Buf:dtor: 6
+Buf:dtor: 3
+Buf:dtor: 3
+Buf:dtor: 2
+Buf:dtor: 1
+O: hook-less transfers
+O1: swap          oa <--> ob
+Sw:op<-->
+O1 end oa=2 ob=1
+O2: tuple COPY    ou = ot
+Sw:op=: 7
+Sw:op=: 8
+O2 end ou=7,8
+O3: tuple MOVE    ov <-- ot
+Sw:op<--: 7
+Sw:op<--: 8
+O3 end ov=7,8
+O end
+P: destructure slots
+Acc:ctor: 10
+Acc:ctor: 3
+Acc:ctor: 0
+Acc:ctor: 0
+P1: (pc, pd) = (pa + pb, pa + pa)
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 13
+Acc:ctor: 20
+P1 end pc=13 pd=20
+P end (locals dtor next)
+Acc:dtor: 20
+Acc:dtor: 13
+Acc:dtor: 20
+Acc:dtor: 13
+Acc:dtor: 20
+Acc:dtor: 13
+Acc:dtor: 3
+Acc:dtor: 10
 Class:dtor: 9

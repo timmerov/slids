@@ -903,19 +903,29 @@ Phase 5 — classes
         `a.op+(m,n); a.op+=(r)`, and it CLOBBERED `a` mid-expression (an operand evaluated
         later that reads `a` — e.g. `a = b + c + f()` — sees the half-built accumulator; the
         `referencesEntry` aliasing check could never catch an indirect read).
-    Every class binary now lowers bottom-up through the `_$optmp` construct-temp. Aliasing
-    (`a = a + b`) works for free — the temp reads the OLD `a`. Cost: one temp per binary.
+    Every class binary lowers bottom-up on its own operands. Aliasing (`a = a + b`) works for
+    free — the accumulator reads the OLD `a`.
 
-    DEFERRED — STAGE 3 PROPER (the fuse, done right): port v1's `isFreshSlidTemp` and lower
-    in DESUGAR (where operand types exist), keying the fuse on "is my LHS already a fresh
-    temp?" (canon 78-88: `temp + rhs -> temp.op+=(rhs)`), then elide-into-fresh / move-into-
-    existing. Fusing into an anonymous temp is safe (nobody can observe it); eliding into `a`
-    is valid only when `a` is written exactly once. Also: only-op+= seed / ping-pong /
-    copy-into-target. Baseline: test/class/evaluate.sl case J counts the temps TODAY — when
-    Stage 3 lands, those ctor/dtor counts shrink, and that is the test. (The temp-LIFETIME
-    half — a scalar-valued rhs's arg temp dies at the STATEMENT via a kSeqExpr wrap — LANDED
-    2026-07-11.) Also deferred: arity-2 comparison producing a class + reversed-operand
-    comparison. See [[project_operator_overloading]]; canon test/class/operator.sl.
+    EXPRESSION-TEMP ELIMINATION ("stage 3 proper") — LANDED 2026-07-12. A chain costs the
+    MINIMUM number of temporaries, and a survivor dies at the SEMICOLON. classify STAMPS the
+    resolved operator candidates on the kBinaryExpr (stampClassBinary replaced
+    tryLowerClassBinary; classify mints no operator temp); DESUGAR lowers the chain and owns
+    every temp decision, because the ELIDE needs the chain and its destination together and
+    only a whole statement has both. The accumulator's home is the declarator funnel's
+    EXISTING "raw storage vs live object" question: a declaration (or a return, via NRVO) of
+    the exact class IS the accumulator — zero temps; a LIVE target gets a statement-scoped
+    temp MOVED in (through a CALL to the class's op<--, not a bare move node). The ladder:
+    a head construction collapses into the accumulator; the first operand seeds with op= on a
+    default accumulator and with op<OP>= on one built with args; a real head pair takes the
+    2-arg op<OP> or decomposes; later operands FUSE with their own op<OP>=. Result: evaluate.sl
+    case J went 12 objects -> 7. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS";
+    the plan (with the decisions and their rationale) in plan-evaluate.txt.
+    STILL DEFERRED: ping-pong (a class with a 2-arg op+ but NO op+= cannot fuse, so each
+    un-fusable operand starts a fresh buffer — two alternating buffers would need none); the
+    arity-1 UNARY (`Class r = -a` still takes the old construct-temp path — a missed elide,
+    not a regression); destructure's non-minimal shape (todo.txt); arity-2 comparison
+    producing a class + reversed-operand comparison. See [[project_expr_temp_elimination]],
+    [[project_operator_overloading]]; canon test/class/evaluate.sl + operator.sl.
   * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +
     infer-from-default (all of which free functions already had) by routing both
     through ONE shared overload engine: a pure rankOverload(cands, args, recv_offset)

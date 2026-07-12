@@ -2288,12 +2288,16 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
         // the source's pointer leaves so it is left a valid moved-from husk.
         std::string src = emitLvalueAddr(init, syms, pool, out, diag,
                                          /*allow_partial=*/true);
-        // A whole-value move of a hook-bearing value dispatches PER LEAF through each
+        // A whole-value move of ANY class-bearing value dispatches PER LEAF through each
         // class's move function @<Class>__$move (the user op<-- if defined, else the
         // synthesized default) — a class, OR a tuple/array with a class element, runs its
-        // op<-- instead of a raw blit. A POD aggregate keeps the inline move below.
+        // op<--. NEVER a blit: a class transfer has exactly ONE implementation, the
+        // operator body, so there is no twin to drift out of sync with it. The gate is
+        // "contains a class", NOT "has hooks" — a class with no ctor/dtor still has a move
+        // function, and gating on hooks silently blitted right past a user's op<--. Only a
+        // pure-POD value takes the inline move below.
         widen::TypeRef sty = widen::strip(type);
-        if (typeNeedsHook(sty, /*ctor=*/true)
+        if (widen::hasInPlaceClass(sty)
             && widen::deepStrip(init.inferred_type) == widen::deepStrip(type)) {
             emitAggregateTransfer(addr, src, sty, /*is_move=*/true, out);
             return;
@@ -2316,15 +2320,16 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
         emitNullLeaves(src, init.inferred_type, out);
         return;
     }
-    // A whole-value copy from an LVALUE of a hook-bearing value dispatches PER LEAF
+    // A whole-value copy from an LVALUE of ANY class-bearing value dispatches PER LEAF
     // through each class's copy function @<Class>__$copy (the user op= if defined, else
     // the synthesized default) — a class, OR a tuple/array with a class element, runs its
-    // op= instead of a raw blit; mirrors the move branch. An rvalue source has no object
-    // to op=-assign from (it IS the value), so it falls through to materialize + store.
+    // op=. NEVER a blit; mirrors the move branch, including the "contains a class" gate (a
+    // hook-less class still has a copy function). An rvalue source has no object to
+    // op=-assign from (it IS the value), so it falls through to materialize + store.
     {
         widen::TypeRef sty = widen::strip(type);
         if (!is_move && isAstLvalue(init)
-            && typeNeedsHook(sty, /*ctor=*/true)
+            && widen::hasInPlaceClass(sty)
             && widen::deepStrip(init.inferred_type) == widen::deepStrip(type)) {
             std::string src = emitLvalueAddr(init, syms, pool, out, diag,
                                              /*allow_partial=*/true);
@@ -2558,12 +2563,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                                                 /*allow_partial=*/true);
             std::string addr_b = emitLvalueAddr(b, syms, pool, out, diag,
                                                 /*allow_partial=*/true);
-            // A hook-bearing value swaps PER LEAF through each class's swap op
+            // ANY class-bearing value swaps PER LEAF through each class's swap op
             // @<Class>__$swap (a user op<--> if defined, else the synthesized default) —
-            // a class, OR a tuple/array with a class element, runs its op<--> rather than
-            // a raw blit. A POD value keeps the inline whole-value exchange below.
+            // a class, OR a tuple/array with a class element, runs its op<-->. NEVER a
+            // blit; the gate is "contains a class", not "has hooks" (the third of the
+            // three transfer gates that used to fall through to a blit twin for a
+            // hook-less class). Only a pure-POD value keeps the inline exchange below.
             widen::TypeRef sty = widen::strip(a.inferred_type);
-            if (typeNeedsHook(sty, /*ctor=*/true)) {
+            if (widen::hasInPlaceClass(sty)) {
                 emitAggregateSwap(addr_a, addr_b, sty, out);
                 return;
             }

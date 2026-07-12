@@ -1,0 +1,183 @@
+EXPRESSION TEMP ELIMINATION — "stage 3 proper"
+==============================================
+
+canon:   test/class/evaluate.sl  (the USER's top comment block; nothing else is canon)
+also:    test/class/operator.sl  LOWERING CONTRACT + SIGNATURE VALIDATION sections
+memory:  [[project_expr_temp_elimination]], [[project_operator_overloading]],
+         [[project_declarator_cross_stage]]
+status:  LANDED 2026-07-12. Planned 2026-07-11/12, landed same week.
+where:   the shipped design is documented in readme-classes.txt "CLASS-OPERATOR CHAINS".
+         THIS file keeps the DECISIONS and their RATIONALE — the things that took a session
+         to reach and would otherwise get re-litigated.
+
+GOAL (met)
+  A class-operator chain costs the MINIMUM number of temporary objects, and any temporary
+  that does survive dies at the END OF THE STATEMENT, not at the end of the enclosing scope.
+
+WHAT MOVED (test/class/exp.evaluate, the J block)
+  BEFORE                                          AFTER
+  Acc jd = ja + jb;      1 temp                   0 temps
+  Acc je = ja + jb + jc; 2 temps                  0 temps
+  jf = ja + jb + jc;     3 temps                  1 temp, dead at the semicolon
+  12 ctor/dtor pairs, ALL leaking to block end    7 pairs
+
+WHY THE OLD FUSE IS GONE (do not re-derive it)
+  classify's tryLowerBinaryChain keyed the fuse on the ASSIGNMENT TARGET because it ran
+  BEFORE the infer loop and had no operand types. That inverted operator precedence (the
+  `=` chose the `+`) and re-associated the chain, clobbering the target mid-expression.
+  Deleted 2026-07-11 along with flattenLeftChain / referencesEntry / the context-steering
+  arm of tryLowerClassBinary. See plan.txt "BINARY SIGNATURE RULE".
+
+  A binary dispatches on the LHS OPERAND's class and nothing else (its first parameter MUST
+  be a reference to the enclosing class). That stayed true here. This design never lets a
+  destination choose an OPERATOR; it only chooses where the already-decided accumulator LIVES.
+
+
+------------------------------------------------------------------------------
+DECISION 1 — WHERE THE ACCUMULATOR LIVES  (reuse the funnel's existing question)
+------------------------------------------------------------------------------
+
+The declarator funnel already draws exactly the line this optimization needs:
+
+    IS THE DESTINATION RAW STORAGE BEING CONSTRUCTED, OR A LIVE OBJECT BEING ASSIGNED?
+
+  RAW STORAGE of the chain's exact class -> the accumulator IS the destination. ZERO temps.
+      a var-decl; a RETURN (the returned local NRVOs onto %sret.in, so the CALLER's storage
+      is the accumulator).
+  A LIVE OBJECT -> a temp accumulator, then a MOVE in. Wrapped in a BLOCK, so the temp dies
+      at the semicolon.
+      kAssignStmt, kStoreStmt (field / index / deref target).
+  NO destination, or a TYPE MISMATCH -> a lifted `_$optmp`, statement-scoped by the existing
+      liftSretCallList wrap.
+      a call argument, a nested operand; and `Other s = String + a` (result class String,
+      destination Other -> the binding funnel converts).
+
+WHY A LIVE TARGET CAN NEVER BE THE ACCUMULATOR (canon 12-16 says temp+move; here is why):
+  - Making it the accumulator means CONSTRUCTING it — running its ctor. You cannot
+    re-construct a live object.
+  - Even with a DEFAULT head it fails: the seed can FALL BACK to op+= (Decision 2), and
+    `s.op+=(a)` on a live s accumulates onto s's OLD VALUE — silently wrong.
+  - And `s = String + a + s` aliases.
+
+WHY A FRESH DECL TARGET NEEDS NO GUARD:
+  A variable cannot appear in its own initializer — `Acc c = c + 1;` already errors with
+  "Use of uninitialized variable 'c'." (verified). So eliding into a fresh declaration is
+  unconditionally safe. The only guard is the EXACT-TYPE check.
+
+
+------------------------------------------------------------------------------
+DECISION 2 — THE LADDER  (which operator each operand is applied with)
+------------------------------------------------------------------------------
+
+  1. A fresh CONSTRUCTION at the head — a bare `Class`, `Class()`, or `Class(args)` —
+     COLLAPSES INTO the accumulator, constructed with those args. Never an operand.
+  2. First application to a DEFAULT-constructed accumulator: prefer `acc.op=(rhs)`, fall back
+     to `acc.op<OP>=(rhs)`. This is canon 4-10 (String defines op= + op+= and NO 2-arg op+).
+     RATIONALE (the user's): the accumulator is ALWAYS a fully CONSTRUCTED object before any
+     operator runs — the funnel guarantees it. So nothing about construction forces op=;
+     op= is chosen because it is CHEAPER than op+= on an empty object.
+     RECORDED CONSEQUENCE: the seed does NOT consult the head operator symbol.
+     `Vec v = Vec - a - b` lowers to `v.op=(a); v -= b` -> `a - b` (not `-a - b`). Accepted.
+  3. First application to an accumulator constructed WITH ARGUMENTS: `acc.op<OP>=(rhs)` ONLY.
+     FORCED, not a preference: op= would DISCARD the construction arguments.
+     `Acc jd = Acc(5) + ja` must be `jd(5); jd += ja` -> 5+ja, never `jd = ja`.
+  4. Head is a real OPERAND PAIR: the 2-arg `op<OP>(x, y)` when defined — ONE call; else
+     DECOMPOSE to rules 2+5: `acc.op=(x); acc.op<OP>=(y)`. (The decompose is motivated by the
+     ABSENCE of a 2-arg operator, NOT by construction.)
+  5. Every LATER operand: `acc.op<OP>=(operand)` — the fuse, with ITS OWN operator, so a
+     mixed chain (`a + b - c`) really subtracts.
+  6. An un-fusable continuation (a 2-arg op<OP> but NO op<OP>=): fusing would self-alias
+     (`acc.op+(acc, c)` reads acc while writing it), so it starts a FRESH BUFFER. One extra
+     object per un-fusable step; the accumulator the destination becomes is the LAST one.
+     STILL DEFERRED — PING-PONG: two alternating buffers would need none of them.
+
+
+------------------------------------------------------------------------------
+DECISION 3 — WHICH STAGE  (classify STAMPS, desugar LOWERS)
+------------------------------------------------------------------------------
+
+Rejected: doing the fuse in classify. It would be CORRECT (bottom-up, operand-keyed, no
+precedence risk — unlike the deleted target-keyed one). But it re-thickens the pass we just
+thinned, and it leaves the ELIDE with nowhere to live: knowing whether the accumulator can
+occupy jd's slot requires seeing the chain and its destination TOGETHER, and desugar is the
+only pass that has the whole statement in one piece at lowering time.
+
+  CLASSIFY  stampClassBinary (was tryLowerClassBinary). Same resolution (result class = the
+    LHS OPERAND's class) but it RECORDS on the kBinaryExpr instead of rewriting it: five
+    operator entry ids (2-arg op<OP>, op<OP>=, op=(lhs), op=(rhs), op<--(Self^)) + the result
+    class's default field-init tuple as children[2]. Diagnostics STAY here: a class with no
+    viable ladder returns false and the existing clean error fires. It reads its own ROLE off
+    its lhs (continuation / collapsed head / real-operand head) and checks viability per role.
+  DESUGAR   expandOpChainStmt (destinations) + lowerOpChain (the ladder), running inside
+    liftSretCallList so the generated op calls get their own nested rvalues lifted like
+    hand-written ones. Precedent: tryDesugarAugAssign — classify stamps, desugar synthesizes.
+
+  DEVIATIONS FROM THE ORIGINAL PLAN (all deliberate):
+    - lowerClassOperatorTemp was NOT deleted: the arity-1 UNARY still uses it. Moving unary
+      too doubles the surface for a case not in canon. Missed elide, not a regression.
+    - classify still BUILDS the accumulator's construction value (classifyClassInit parks the
+      default field tuple as children[2]). Desugar cannot: default field values are classify's
+      job. This keeps construction on the ONE funnel.
+    - The MOVE into a live target is a CALL to the stamped op<--, not a bare move node. See
+      below — this is the one that bit.
+
+
+------------------------------------------------------------------------------
+THE BUG THIS LANDING FOUND — THE TRANSFER GATES
+------------------------------------------------------------------------------
+
+The first cut emitted a bare kMoveStmt for the live-target move. It was WRONG, and the way
+it was wrong is worth keeping:
+
+  Every HAND-WRITTEN transfer (`a <-- b`) is dispatched in CLASSIFY (dispatchAssignInit
+  rewrites it to a method call, and methodSymbol renames op<--(Self^) to @Class__$move). A
+  transfer synthesized in DESUGAR never passes through that. It falls to codegen — where all
+  three transfer sites (emitInitFill's move arm, its copy arm, kSwapStmt) gated the dispatch
+  on `typeNeedsHook` ("does a ctor body exist?"). A class can answer NO to that. A hook-less
+  class fell past the gate into an inline load/store TWIN that re-implemented the transfer and
+  SILENTLY SKIPPED THE CLASS'S OPERATOR.
+
+FIXED at both ends:
+  - the chain's move is emitted as a CALL through the stamped op<-- entry id (same makeOpCall
+    funnel as every other rung), so it names the operator and depends on no gate;
+  - the three gates now ask the STRUCTURAL question — `widen::hasInPlaceClass` ("is a class
+    physically in this storage?") — which a class can never answer no to. The blit twins are
+    unreachable for a class-bearing type; only pure POD load/stores.
+
+  A class transfer now has exactly ONE implementation: the operator body. THAT is the
+  invariant, and it is why this stops being a periodic discovery.
+
+  NOTE: `typeNeedsHook` is still RIGHT where it remains (emitConstructed, dtor registration,
+  the sret hook decisions) — those really are asking "is there a ctor body to call?". The two
+  predicates are NOT interchangeable. The bug was using the behavioral one for a structural
+  question.
+
+
+------------------------------------------------------------------------------
+COUNTING LIVES IN evaluate.sl
+------------------------------------------------------------------------------
+
+operator.sl's OpDefs/Sum have no ctor/dtor, so a fuse and a no-fuse print identically there —
+which is exactly how the old target-keyed chain fuse survived for months with green goldens.
+Coverage classes, all of which PRINT:
+  Acc   ctor/dtor + op= + op<-- + op+= + op-= + 2-arg op+   — the fuse and the mixed chain
+  Str   ctor/dtor + op= + op<-- + op+=, NO 2-arg op+        — the only-op+= ladder (canon 51-56)
+  Buf   ctor/dtor + op= + 2-arg op+, NO op+=                — the un-fusable buffer + lifetime
+  Triv  NO ctor/dtor, printing op= / op<-- / op+=           — the transfer gates
+  Sw    NO ctor/dtor, printing op= / op<-- / op<-->         — the SWAP gate + aggregates
+Blocks: J (the baseline, 12 -> 7), K (the ladder), L (the trivial bucket), M (every remaining
+destination + shape), N (the un-fusable buffer), O (the three gates), P (destructure).
+
+
+------------------------------------------------------------------------------
+STILL OPEN (all filed in todo.txt)
+------------------------------------------------------------------------------
+  - PING-PONG (Decision 2 rule 6): reuse two alternating buffers instead of one per step.
+  - The arity-1 UNARY still takes the old construct-temp path.
+  - DESTRUCTURE is not minimal: a non-bare-name source is spilled to a `_$dsrc` tuple temp,
+    so the chains are not the direct source of any assignment — 4 extra objects for 2 chains,
+    and the accumulators keep enclosing-scope lifetime (the same seq-wrap gap case 7 pins).
+  - NESTED FUNCTIONS: a chain there reaches codegen unlowered and asserts — because NONE of
+    desugar's statement passes descend into a nested function body. Pre-existing and much
+    wider than chains (`i++` in a nested fn asserts too). Filed under BUGS.
+  - Chains in a `.slh` / template context: unexercised.

@@ -101,6 +101,19 @@ struct Node {
                                  // construction (children[0] = the construction
                                  // tuple). desugar lifts it into a synthetic
                                  // kVarDeclStmt temp (destroyed at statement end).
+    bool ctor_no_args = false;   // kCallExpr[is_construction]: no ctor arguments were named
+                                 // (`Class` / `Class()`) — a DEFAULT construction. The chain
+                                 // lowering seeds a default accumulator with `op=`; one built
+                                 // WITH args must use `op<OP>=` (op= would discard the args).
+    bool class_op_chain = false; // kBinaryExpr: a class-PRODUCING binary operator, RESOLVED and
+                                 // STAMPED by classify but not lowered. inferred_type = the
+                                 // result class; children[2] = that class's default field-init
+                                 // tuple. desugar builds the accumulator + the op calls.
+    int op_bin_eid = -1;         // 2-arg `op<OP>(lhs, rhs)`  — the head pair in one call
+    int op_aug_eid = -1;         // 1-arg `op<OP>=(rhs)`      — the fuse
+    int op_eq_lhs_eid = -1;      // 1-arg `op=(lhs)`          — the seed of a decomposed head
+    int op_eq_rhs_eid = -1;      // 1-arg `op=(rhs)`          — the seed of a COLLAPSED head
+    int op_move_eid = -1;        // 1-arg `op<--(Self^)`      — the move INTO a live target
     bool class_conversion = false; // kConvertExpr: a `(Class = src)` conversion to a
                                  // class — children are [default-construct `_$cret`
                                  // decl, `_$cret.op=(src)` call]; resolved_entry_id is

@@ -78,14 +78,20 @@ BUGS
     PPID lowering. Result: inside a nested function, `++`/`--` ("inc/dec survived desugar's
     PPID pass"), a cross-form/leaf-widen aggregate COPY, and every CLASS TEMP (a
     `Class(args)` construction, a hook-returning call, a scalar OR aggregate value
-    conversion `(Class = src)` / `((Class,int) = t)`) reach codegen unlowered and hit the
-    `kConvertExpr needs 1 operand` / inc-dec asserts. Codegen already lifts nested fns to
-    top-level LLVM (collectNestedFunctions), but the AST passes run before that and miss
-    them. FIX = have each of the four desugar pass-loops process nested-function bodies
-    too, each with ITS OWN return type (collect all fn defs recursively, or add a
-    kFunctionDef-recurse to the list walkers). Pre-existing (class value conversions to a
-    scalar class already crash in a nested fn); surfaced while landing aggregate class-leaf
-    conversions — the canon neg_class_in_slot helper is written as a nested function.
+    conversion `(Class = src)` / `((Class,int) = t)`, and — since 2026-07-12 — a CLASS-
+    OPERATOR CHAIN, whose stamped kBinaryExpr reaches emitBinary with 3 children) reach
+    codegen unlowered and hit the `kConvertExpr needs 1 operand` / inc-dec / BinaryExpr
+    asserts. Codegen already lifts nested fns to top-level LLVM (collectNestedFunctions),
+    but the AST passes run before that and miss them. FIX = have each of the four desugar
+    pass-loops process nested-function bodies too, each with ITS OWN return type (collect
+    all fn defs recursively, or add a kFunctionDef-recurse to the list walkers); the
+    walkers already treat a nested kFunctionDef as an opaque statement and collectReturns
+    already stops at one, so processing each function as its own unit composes without
+    touching the pass bodies. NOTHING works in a nested body today, so no golden can move.
+    Pre-existing and NOT chain-specific — verified 2026-07-12 that a bare `i++` in a nested
+    function asserts ("inc/dec survived desugar's PPID pass") with no classes involved.
+    Surfaced twice: landing aggregate class-leaf conversions (the canon neg_class_in_slot
+    helper is a nested function), and landing the chain lowering.
 
   * CLASS-VALUED RHS ARG TEMP LEAKS TO ENCLOSING SCOPE — the seq-wrap that gives a
     nested arg / receiver temp STATEMENT lifetime in a var-decl / assign / return rhs
@@ -98,34 +104,40 @@ BUGS
     only. Pinned by test/class/evaluate.sl case 7. FIX = scope only the lifted PRE temps
     (not the in-place target) — destroy them right after the sret call completes, rather
     than wrapping the rhs value in a seq.
+    ALSO BITES DESTRUCTURE (see below): the `_$dsrc` spill's value is a class-bearing
+    tuple, so any chain accumulator lifted out of it keeps enclosing-scope lifetime too.
 
-  * ● Tuple op= (t = s where the slots are classes with a user op=):
-    - Today: the whole tuple is copied as one blob — load {{i32},{i32}} then store — a raw memory blit.
-    - So each slot's op= (and even the default @Elem__$copy) is skipped. Elem::op= fired never runs.
-    - Fine for trivial slots (the bytes are the value). Wrong for a slot whose copy is non-trivial — a heap-owning class
-    blits its pointer shallow → two owners → double-free.
-    - Deferred fix: lower a same-type tuple = per slot (t[i].op=(s[i]) / @Elem__$copy) instead of one blit, so each
-    element's copy semantics run.
+  * DESTRUCTURE IS NOT MINIMAL (values correct; shape pinned by evaluate.sl block P).
+    `(pc, pd) = (pa + pb, pa + pa)` costs FOUR extra objects where TWO would do. A
+    destructure whose source is not a bare NAME is SPILLED once into a `_$dsrc` tuple temp
+    (classify::desugarDestructure — deliberate, so a side-effecting source is not
+    re-evaluated per slot), and each slot is then a plain `pc = _$dsrc[0]` copy. So the
+    per-slot chains are NOT the direct source of any assignment: they sit inside the
+    spill's tuple LITERAL, take the no-destination path (one accumulator each), and are
+    then copied TWICE — once into the spill slot, once into the target. For a tuple
+    LITERAL the spill is pure overhead (each element is read exactly once). FIX = assign a
+    LITERAL source per slot without spilling; each slot then becomes a live-target chain
+    (one accumulator, MOVED in, dead at the semicolon) and the target's op<-- runs. The
+    spill stays for a non-literal source. Surfaced landing the chain lowering; the plan's
+    claim that "destructure needs no new code" was true for CORRECTNESS and wrong for COST.
 
 
 UNBLOCKED FEATURES
   * should we be able to take the address of a temporary variable?
 
-  * operator overloading — LANDED except two open areas:
-    - EXPRESSION-TEMP ELIMINATION (a.k.a. "stage 3 proper"): fuse a full
-      `String s = a + b + c + d` chain to ZERO temporaries. Active canon:
-      test/class/evaluate.sl (case J counts the temps TODAY — one `_$optmp` per binary; the
-      test IS that those ctor/dtor counts shrink when this lands).
-      HOW (the design, corrected 2026-07-11): lower binaries BOTTOM-UP in DESUGAR, where the
-      operand types exist, and key the fuse on THE LHS BEING A FRESH TEMP (port v1's
-      `isFreshSlidTemp`): `temp + rhs` -> `temp.op+=(rhs)`, canon 78-88. Fusing into an
-      anonymous temp is always safe. Eliding that temp into the assign target is a SEPARATE,
-      LATER step, legal only when the target is written exactly once. Then: copy-into-target
-      instead of move; only-op+= seed when no 2-arg op+; ping-pong two-buffer.
-      NOT how: the old target-keyed fuse (tryLowerBinaryChain, in CLASSIFY, pre-infer) is
-      DELETED — it inverted operator precedence (the `=` chose the `+`) and re-associated
-      the chain, clobbering the target mid-expression. Don't re-derive it. Lowering belongs
-      in desugar; classify only RESOLVES.
+  * operator overloading — LANDED, including EXPRESSION-TEMP ELIMINATION ("stage 3 proper",
+    2026-07-12: a chain costs the minimum temporaries and a survivor dies at the semicolon;
+    evaluate.sl case J went 12 objects -> 7). See readme-classes.txt "CLASS-OPERATOR CHAINS"
+    for the shipped design and plan-evaluate.txt for the decisions + rationale. Open:
+    - PING-PONG: a class with a 2-arg `op+` but NO `op+=` cannot fuse (`acc.op+(acc, c)`
+      would read the accumulator while writing it), so every un-fusable operand starts a
+      FRESH BUFFER — one extra object per step. Two ALTERNATING buffers would need none of
+      them. Pinned by evaluate.sl block N (class Buf); the buffers are correctly
+      statement-scoped, so this is efficiency only.
+    - ARITY-1 UNARY still takes the OLD path (`Class r = -a` builds a `_$optmp` +
+      class_conversion lift, then copies into r). lowerClassOperatorTemp survives ONLY for
+      it. A missed elide, not a regression; moving it onto the chain lowering doubles that
+      lowering's surface for a case canon doesn't exercise.
     - COMPARISON forms deferred by the user: arity-2 comparison PRODUCING a class (e.g. a
       SIMD mask `Mask m = a == b`), and reversed-operand comparison (`x < obj` -> `obj >= x`,
       `int == class`). See REACH GOALS below + [[project_operator_overloading]].
@@ -134,6 +146,11 @@ UNBLOCKED FEATURES
     in both forms, ambiguity reporting, no-invalid-IR guard, and the 2026-07-11 binary
     signature rule — param0 must be a ref to the enclosing class, so a binary dispatches on
     the LHS OPERAND alone) has landed with tests.
+    DON'T RE-DERIVE: the old target-keyed chain fuse (tryLowerBinaryChain, in CLASSIFY,
+    pre-infer) inverted operator precedence (the `=` chose the `+`) and re-associated the
+    chain, clobbering the target mid-expression. It is deleted. The fuse belongs in DESUGAR
+    because the ELIDE needs the chain and its destination together, and only a whole
+    statement carries both.
 
   * review swap-init.
     Primitive swap-init; = (tuple) op=; kStoreStmt-target op=.
@@ -456,3 +473,21 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     overload_fn.sl's no-match block was reworded to "single cast, subject to review".
     OPEN (user-deferred 2026-07-10): revisit whether it should be TWO casts (array ->
     int[] iterator, THEN int[] -> int^ iter->ref), which would REJECT fn(arr) -> fn(int^).
+
+  * int x = x + 1; is clearly an error because x on the rhs is not initialized. but
+    Class c = c + 1; c on the rhs *is* initialized. and therefore is a valid use.
+    so we *could* allow it. probably don't want to.
+    Class c += 1; would also be allowed.
+
+  * the is-pod? question is too strict. all classes are not-pod. but a class with no
+    ctor/dtor and no overloaded move/copy/swap operator is pod for that operation.
+    STATE (2026-07-12): the transfer gate is now STRUCTURAL — `hasInPlaceClass`, "is a class
+    physically in this storage?" — so EVERY class transfer calls `@Class__$copy` / `__$move`
+    / `__$swap`, and a class can never be treated as POD for a transfer. That was the fix: the
+    gate USED to be `typeNeedsHook` ("has a ctor body?"), which let a hook-less class fall
+    into a blit twin that silently skipped the author's op<--. This item is the OPTIMIZATION
+    on the other side of that fix: a class with no ctor/dtor AND only the SYNTHESIZED
+    copy/move/swap has a transfer function whose body IS a memberwise blit, so the call could
+    be inlined away at the site. Do it as a CODEGEN peephole keyed on "the class's op is
+    synthesized and its fields are all POD" — never by weakening the gate, which is what
+    reintroduces the bug. (LLVM already inlines these; measure before bothering.)

@@ -244,6 +244,31 @@ struct Node {
                                  // NOT a function call. resolve sets it; classify
                                  // builds the per-field construction tuple; desugar
                                  // lowers it to a synthetic kVarDeclStmt.
+    bool ctor_no_args = false;   // kCallExpr[is_construction]: the source named NO ctor
+                                 // arguments (`Class` / `Class()`), so the object is
+                                 // DEFAULT-constructed. Read by the operator-chain lowering:
+                                 // a DEFAULT head may be seeded with the cheaper `op=`, but a
+                                 // head built WITH args must use `op<OP>=` — an `op=` there
+                                 // would discard the very arguments it was constructed with.
+    bool class_op_chain = false; // kBinaryExpr: a class-PRODUCING binary operator. classify
+                                 // RESOLVES it and STAMPS it (the four candidate ids below +
+                                 // inferred_type = the result class = the LHS OPERAND's class)
+                                 // but does NOT lower it — desugar's chain lowering builds the
+                                 // accumulator and the op calls, because eliding the temp into
+                                 // the destination needs the chain AND its destination together
+                                 // and only a whole statement has both. children[2] = the result
+                                 // class's DEFAULT field-init tuple (the accumulator's
+                                 // construction value), parked here by classify.
+    int op_bin_eid = -1;         // 2-arg `op<OP>(lhs, rhs)`  — the head pair in one call
+    int op_aug_eid = -1;         // 1-arg `op<OP>=(rhs)`      — the fuse
+    int op_eq_lhs_eid = -1;      // 1-arg `op=(lhs)`          — the seed of a decomposed head
+    int op_eq_rhs_eid = -1;      // 1-arg `op=(rhs)`          — the seed of a COLLAPSED head
+    int op_move_eid = -1;        // 1-arg `op<--(Self^)`      — the move INTO a live target.
+                                 // Resolved here so desugar can CALL the operator by name.
+                                 // A transfer synthesized after classify has no other way to
+                                 // reach it: a bare move node would rely on codegen's funnel
+                                 // to dispatch, and a whole-class transfer must ALWAYS run
+                                 // the class's move function, never a blit twin.
     bool parenless = false;      // kCallStmt: a bare `Name;` statement (no `()`). Only
                                  // valid when Name is a class — a parenless default
                                  // construction (`Name` == `Name()`); resolveCallTarget

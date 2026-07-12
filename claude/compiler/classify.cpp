@@ -657,8 +657,8 @@ void lowerClassOperatorTemp(parse::Tree& tree, parse::Node& e, widen::TypeRef C,
 bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams);
 bool isArithBitBinaryOp(std::string const& op);
-bool tryLowerClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
-                         widen::TypeRef lref, diagnostic::Sink& diag);
+bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
+                      widen::TypeRef lref, diagnostic::Sink& diag);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
 
@@ -1980,6 +1980,11 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             return;
         }
         case parse::Kind::kBinaryExpr: {
+            // An already-STAMPED class binary is fully resolved and carries a third child
+            // (the accumulator's construction value). A statement arm may re-infer its rhs
+            // with a different context; there is nothing left to decide, and no context may
+            // steer it anyway — the result class is the lhs OPERAND's, full stop.
+            if (e.class_op_chain) return;
             assert(e.children.size() == 2 && "BinaryExpr needs 2 children");
             parse::Node& lhs = *e.children[0];
             parse::Node& rhs = *e.children[1];
@@ -1992,7 +1997,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // `Flags f = a && b` -> `f.op&&(a, b)`. Dispatch through the shared helper
                 // before the built-in bool-coercion path (which rejects a class operand).
                 // The compound form `f &&= a` already dispatches in the aug-assign arm.
-                if (tryLowerClassBinary(tree, e, op, lhs.inferred_type, diag)) {
+                if (stampClassBinary(tree, e, op, lhs.inferred_type, diag)) {
                     return;
                 }
                 if (lhs.inferred_type != widen::kNoType
@@ -2021,7 +2026,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // `Shift c = a << b` -> `c.op<<(a, b)`. Dispatch through the shared
                 // helper before the numeric path (which rejects a class lhs). The
                 // compound form `c <<= a` already dispatches in the aug-assign arm.
-                if (tryLowerClassBinary(tree, e, op, lhs.inferred_type, diag)) {
+                if (stampClassBinary(tree, e, op, lhs.inferred_type, diag)) {
                     return;
                 }
                 if (isAggregateType(lhs.inferred_type)) {
@@ -2075,14 +2080,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 return;
             }
 
-            // A class-PRODUCING arith/bitwise binary dispatches to op<op> (produce-self):
-            // build a temp, run `_$optmp.op<op>(lhs, rhs)` (canon 85-88). EVERY class binary
-            // reaches here — including a direct assign-statement target (`a = b + c`) and an
-            // aliasing one (`a = a + b`, whose temp correctly reads the OLD `a`). Dispatch is
-            // on the LHS OPERAND's class; a non-class lhs falls to the numeric path below.
-            // (Shift `<< >>` dispatches through the same helper in its own arm above.)
+            // A class-PRODUCING arith/bitwise binary is RESOLVED and STAMPED here (canon
+            // 85-88); desugar lowers it. EVERY class binary reaches here — including a direct
+            // assign-statement target (`a = b + c`) and an aliasing one (`a = a + b`, whose
+            // accumulator correctly reads the OLD `a`). Dispatch is on the LHS OPERAND's
+            // class; a non-class lhs falls to the numeric path below. (Shift `<< >>` and the
+            // logical binaries stamp through the same helper in their own arms above.)
             if (isArithBitBinaryOp(op)
-                && tryLowerClassBinary(tree, e, op, lref, diag)) {
+                && stampClassBinary(tree, e, op, lref, diag)) {
                 return;
             }
 
@@ -2192,7 +2197,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
 
             // A CLASS operand reaching here dispatched to NO operator — the arith/bitwise
-            // hook (tryLowerClassBinary) and the comparison rewrite above already had their
+            // hook (stampClassBinary) and the comparison rewrite above already had their
             // chance, and the shift / logical arms return earlier (each rejecting a class
             // cleanly). No built-in binary applies to a class value, and the commonType
             // path below would SILENTLY accept two identical class types and emit struct
@@ -3168,6 +3173,13 @@ void classifyConstruction(parse::Tree& tree, parse::Node& s,
             "Unknown class type '" + widen::spellOrEmpty(ctype) + "'.", {}});
         return;
     }
+    // A bare `Class` / `Class()` names NO ctor arguments — a DEFAULT construction. Record
+    // it BEFORE the args are wrapped away (the tuple is always full: defaults are filled
+    // in). The operator-chain lowering reads this to decide whether a collapsed head may
+    // be seeded with `op=` (empty object) or must fuse with `op<OP>=` (an op= would discard
+    // the very arguments the head was constructed with).
+    s.ctor_no_args = true;
+    for (auto& ch : s.children) if (ch) s.ctor_no_args = false;
     // Wrap the args into a kTupleExpr init slot (the declarator's `Type name(args)`
     // shape). An empty arg list -> `()` all-default.
     auto tup = std::make_unique<parse::Node>();
@@ -3970,6 +3982,16 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
     // them run. Only a USER op (which may observe / transform) dispatches through classify.
     if (tree.entries[op_id].synthesized) return false;
     int idx = expr_lhs ? 1 : 0;
+    // A stamped class-operator CHAIN of the target's EXACT class is lowered by desugar,
+    // which builds the accumulator IN the target (a fresh one) or in a statement-scoped
+    // temp it then MOVES in (a live one). Spilling it to a `_$cinit` here would materialize
+    // the very object the chain lowering exists to avoid, and dispatching op= on the spill
+    // would copy it a second time. Bail: the statement keeps the raw chain as its source.
+    // A chain of a DIFFERENT class still routes through the funnel — that IS a conversion.
+    if (idx < static_cast<int>(s.children.size()) && s.children[idx]
+        && s.children[idx]->class_op_chain
+        && widen::deepStrip(s.children[idx]->inferred_type) == widen::deepStrip(clsType))
+        return false;
     // ELIDE-WHENEVER-POSSIBLE (return-value site canon): a FRESH decl target
     // (needs_construct) initialized from a same-type class RVALUE builds in place —
     // RVO / field-init, NO operator — even though `=`/`<--` syntax is used and a user
@@ -4154,17 +4176,7 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     e.children.push_back(std::move(fill));
 }
 
-// Lower a class-PRODUCING operator expression (a binary `a op b`, or an arity-1 unary
-// `op a` producing self) in an EXPRESSION position into the construct-temp-then-op form
-// the desugar class_conversion lift hoists: a default-construct `_$optmp` of the RESULT
-// class C plus `_$optmp.op<sym>(operands)`. The node BECOMES a kConvertExpr
-// [class_conversion] carrying [construct, op-call] — structurally identical to a
-// `(Class = src)` conversion, so desugar lifts it with NO new arm and codegen builds the
-// temp then runs the op. C must define op<sym> at the operands' arity (the CALLER checks
-// via classHasOperatorArity). Mirrors lowerClassConversion. EVERY class binary/unary comes
-// through here — decl-init, assign target, aliasing, call args, nested operands alike.
-// A class-PRODUCING binary op (arith / bitwise / SHIFT) in an EXPRESSION position: build a
-// temp and run `_$optmp.op<op>(lhs, rhs)` (canon 85-88).
+// STAMP a class-PRODUCING binary `a op b` — RESOLVE it, but do NOT lower it.
 //
 // The RESULT class is the LHS OPERAND's class — full stop. A binary operator's first
 // parameter IS the enclosing class (validateOperatorSignatureTypes), so `a op b` can only
@@ -4177,19 +4189,125 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
 // reversed operands; both are gone. A non-class lhs simply returns false and falls to the
 // caller's numeric path (so `og = m + n` on ints is plain int arithmetic, then `op=`).
 //
-// Returns true iff it lowered; false leaves `e` untouched. Shared by the arith/bitwise hook
-// and the shift arm so both dispatch identically.
-bool tryLowerClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
-                         widen::TypeRef lref, diagnostic::Sink& diag) {
+// What is recorded (parse::Node): the four operator candidates a chain lowering can call —
+// the 2-arg `op<OP>(lhs, rhs)`, the 1-arg fuse `op<OP>=(rhs)`, and the two 1-arg seeds
+// `op=(lhs)` / `op=(rhs)` — plus, as children[2], the result class's DEFAULT field-init
+// tuple (the value an accumulator is constructed from). All of that is RESOLUTION, which is
+// this pass's job. WHICH candidates fire, and WHERE the accumulator lives, is decided in
+// DESUGAR: the elide (letting the destination BE the accumulator) needs the chain and its
+// destination together, and only a whole statement carries both.
+//
+// The node's ROLE in a chain is visible right here, bottom-up, from its own lhs — a
+// CONTINUATION (lhs is an already-stamped chain of C), a COLLAPSED HEAD (lhs is a fresh
+// `C(...)` construction, which becomes the accumulator itself), or a REAL-OPERAND HEAD.
+// Each role needs a different subset of the candidates, so viability is checked per role
+// and a class with no viable ladder simply returns false — the caller's existing
+// "Operator 'X' is not defined on class 'Y'." then fires, unchanged.
+//
+// Returns true iff it stamped. Shared by the arith/bitwise hook, the shift arm and the
+// logical arm so all three dispatch identically.
+bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
+                      widen::TypeRef lref, diagnostic::Sink& diag) {
+    if (e.class_op_chain) return true;    // inferExpr may revisit a node; stamp once
+    widen::TypeRef C = widen::strip(lref);
+    if (widen::form(C) != widen::Type::Form::kSlid) return false;
+    auto itc = tree.classes.find(C);
+    if (itc == tree.classes.end()) return false;
+    parse::Node& lhs = *e.children[0];
+    parse::Node& rhs = *e.children[1];
+
+    // The four candidates. findClassOperator ranks by the ARGUMENT's inferred type (both
+    // operands are already inferred here) and returns -1 when nothing matches.
     std::string opname = "op" + op;
-    if (widen::form(widen::strip(lref)) != widen::Type::Form::kSlid
-        || !classHasOperatorArity(tree, lref, opname, 2))
-        return false;
-    widen::TypeRef rc = lref;
-    std::vector<std::unique_ptr<parse::Node>> operands;
-    operands.push_back(std::move(e.children[0]));
-    operands.push_back(std::move(e.children[1]));
-    lowerClassOperatorTemp(tree, e, rc, opname, std::move(operands), diag);
+    int bin_id = -1;
+    if (classHasOperatorArity(tree, C, opname, 2)) {
+        // A 2-arg operator is ranked over BOTH operands, so it needs the full overload
+        // core rather than findClassOperator's arity-1 probe.
+        std::vector<int> cands;
+        for (int fr : parse::classAndBaseFrames(tree, C)) {
+            if (fr < 0) continue;
+            bool any_here = false;
+            for (std::size_t id = 0; id < tree.entries.size(); id++) {
+                parse::Entry const& en = tree.entries[id];
+                if (en.kind != parse::EntryKind::kFunction || !en.defined
+                    || en.owner_ns_frame != fr || en.name != opname)
+                    continue;
+                any_here = true;
+                if (en.param_types.size() != 3) continue;   // [_$recv, lhs, rhs]
+                cands.push_back((int)id);
+            }
+            if (any_here) break;
+        }
+        std::vector<parse::Node*> args{&lhs, &rhs};
+        OverloadRank r = rankOverload(tree, cands, args, 1);
+        if (r.tied.size() > 1) {
+            reportAmbiguity(tree, e.file_id, e.tok,
+                "Ambiguous operator '" + op + "': more than one overload of class '"
+                + widen::spellOrEmpty(C) + "' matches the operands equally well.",
+                r.tied, 1, diag);
+            return false;
+        }
+        bin_id = r.best;
+    }
+    int aug_id    = findClassOperator(tree, C, rhs, opname + "=", diag);
+    int eq_lhs_id = findClassOperator(tree, C, lhs, "op=", diag);
+    int eq_rhs_id = findClassOperator(tree, C, rhs, "op=", diag);
+    // The move INTO a live target. Its source is the accumulator — a value of C — so probe
+    // with a stand-in of that type. Resolving it HERE is what lets desugar CALL the class's
+    // move operator by name: a transfer synthesized after classify never passes through the
+    // binding funnel, so it must carry its operator with it. Every class has one (the user's
+    // op<--(Self^), else resolve's synthesized default), so this always resolves.
+    parse::Node self_val;
+    self_val.kind = parse::Kind::kIdentExpr;
+    self_val.inferred_type = itc->second.type;
+    self_val.file_id = e.file_id;
+    self_val.tok = e.tok;
+    int move_id = findClassOperator(tree, C, self_val, "op<--", diag);
+    if (aug_id    < 0) aug_id    = -1;    // -2 (ambiguous, already reported) reads as absent
+    if (eq_lhs_id < 0) eq_lhs_id = -1;
+    if (eq_rhs_id < 0) eq_rhs_id = -1;
+    if (move_id   < 0) move_id   = -1;
+
+    // Role, read straight off the lhs — bottom-up, operand-keyed, never target-keyed.
+    bool continuation = lhs.class_op_chain
+        && widen::deepStrip(lhs.inferred_type) == widen::deepStrip(C);
+    bool collapsed_head = lhs.kind == parse::Kind::kCallExpr && lhs.is_construction
+        && widen::deepStrip(lhs.inferred_type) == widen::deepStrip(C);
+    bool viable;
+    if (continuation) {
+        // Fuse with op<OP>=, or (no op<OP>=) start a fresh buffer via the 2-arg op<OP>.
+        viable = aug_id >= 0 || bin_id >= 0;
+    } else if (collapsed_head) {
+        // The construction IS the accumulator; the first operand applies to it. A head
+        // built WITH args must use op<OP>= (op= would discard those args).
+        viable = lhs.ctor_no_args ? (eq_rhs_id >= 0 || aug_id >= 0) : (aug_id >= 0);
+    } else {
+        // A real operand pair: one 2-arg call, or seed-then-fuse.
+        viable = bin_id >= 0 || (eq_lhs_id >= 0 && aug_id >= 0);
+    }
+    if (!viable) return false;
+
+    // Park the accumulator's construction value: the class's DEFAULT field-init tuple,
+    // built by the ONE construction funnel (classifyClassInit) so a chain accumulator is
+    // constructed exactly like any other default-constructed local.
+    auto dc = std::make_unique<parse::Node>();
+    dc->kind = parse::Kind::kVarDeclStmt;
+    dc->return_type = itc->second.type;
+    dc->file_id = e.file_id;
+    dc->tok = e.tok;
+    classifyClassInit(tree, *dc, itc->second, diag);
+    assert(!dc->children.empty() && dc->children[0]
+        && "classifyClassInit left no default field tuple");
+    e.children.push_back(std::move(dc->children[0]));
+
+    e.class_op_chain = true;
+    e.op_bin_eid = bin_id;
+    e.op_aug_eid = aug_id;
+    e.op_eq_lhs_eid = eq_lhs_id;
+    e.op_eq_rhs_eid = eq_rhs_id;
+    e.op_move_eid = move_id;
+    e.inferred_type = itc->second.type;
+    e.op_type = itc->second.type;
     return true;
 }
 

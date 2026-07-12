@@ -15,6 +15,61 @@ move (not copy) semantics should be used when possible.
     String s; s = String + a + b + c + d;
     temp = a; temp += b; temp += c; temp += d; s <-- temp;
 
+basic assumptions:
+
+    A a;
+    B b;
+    C c;
+    D d;
+    String:op=(String);
+    String:op<--(String);
+    String:op=(A);
+    String:op=(B);
+    String:op=(C);
+    String:op=(D);
+
+and we want to evaluate these chains:
+
+    String s1 = String + a + b + c + d;
+    String s2; s2 = String + a + b + c + d;
+    String s3;
+    String s4 = s3 + a + b + c + d;
+    String s5; s5 = s3 + a + b + c + d;
+
+String must define += or + operators or both.
+
+    String:op+=(A);
+    String:op+=(B);
+    String:op+=(C);
+    String:op+=(D);
+
+    String:op+(String, A);
+    String:op+(String, B);
+    String:op+(String, C);
+    String:op+(String, D);
+
+if only += then the chains become:
+
+    String s1 = a; s1 += b; s1 += c; s1 += d;
+    s2 = a; s2 += b; s2 += c; s2 += d;
+    String s4 = s3; s4 += b; s4 += c; s4 += d;
+    s5 = s3; s5 += b; s5 += c; s5 += d;
+
+if only + then the chains become (ignoring ping-pong):
+
+    temp1 = a + b; temp2 = temp1 + c; String s1 = temp2 + d;
+    temp1 = a + b; temp2 = temp1 + c; s2 = temp2 + d;
+    temp1 = s3 + a; temp2 = temp1 + b; temp3 = temp2 + c; String s4 = temp3 + d;
+    temp1 = s3 + a; temp2 = temp1 + b; temp3 = temp2 + c; s5 = temp3 + d;
+
+if both then the chains become:
+
+    String s1 = a + b; s1 += c; s1 += d;
+    s2 = a + b; s2 += c; s2 += d;
+    String s4 = s3 + b; s4 += c; s4 += d;
+    s5 = s3 + b; s5 += c; s5 += d;
+
+
 notes:
 
 some things deferred from other landings that might apply here:
@@ -73,20 +128,27 @@ iteration, no growth), 6 a pointer-valued rhs (the guard's kPointer arm), 7 the
 guard-negative boundary (a CLASS-valued rhs leaks its temp -- pinned as the
 current deferred behavior), 8 aug-assign (lowers to assign, so covered too).
 
-case J: the binary-chain TEMP BASELINE (class Acc, whose ctor/dtor print so temps are
-countable). `a + b + c` evaluates bottom-up -- ((a+b)+c) -- dispatching on the LHS
-OPERAND's class, one temp per binary. The old target-keyed chain fuse (classify's
-tryLowerBinaryChain) is DELETED: it selected the operator from the assignment target and
-re-associated the chain, both precedence failures. The in-place elision returns with
-Stage 3 proper (temp-keyed fuse, lowered in desugar); when it lands, J's ctor/dtor counts
-SHRINK -- that shrinkage is the test.
+cases J and K: the CHAIN LADDER. Classes Acc and Str print their ctor/dtor, so every
+temporary announces itself and the golden IS the temp count. Acc has a 2-arg op+ (plus
+op= and op+=); Str has ONLY op= and op+= -- the canon 51-56 class, and the only one that
+can exercise the seed decompose. Both blocks cost the MINIMUM: a chain bound to fresh
+storage builds straight into it (zero temps -- J1/J2, K1/K2/K3, and K6 through NRVO); a
+chain bound to a LIVE object takes exactly one temp, moved in and destroyed at the
+semicolon (J3, K4/K5). Dispatch is on the LHS OPERAND's class throughout -- the target
+never gets a say (that would invert precedence, which is what killed classify's old
+target-keyed tryLowerBinaryChain). J's counts were 12 ctor/dtor pairs before the ladder
+landed and are 7 now; that shrinkage was the test.
 
 deliberately NOT correct yet (still-broken / deferred; case 7 pins the first):
   - a var-decl / return rhs whose VALUE is a CLASS built in place
     (Class y = make(Class(80));) still leaks its arg temp -- the seq wrap is
     scalar-only (a class value takes the in-place sret path).
   - a bare construction discard (Class(5);) escapes to enclosing scope.
-  - the op+ chain (Class cd = ca + cb + cc) -- errors cleanly, not landed.
+  - ping-pong: a class with a 2-arg op+ but NO op+= can't fuse (acc.op+(acc,c) would
+    read acc while writing it), so each such step starts a fresh buffer -- one temp per
+    un-fusable operand. Two alternating buffers would need none.
+  - the move into a live target is the DEFAULT move; a user op<-- is not dispatched.
+  - an arity-1 unary (Class r = -a) still takes the old construct-temp-then-op path.
   - tuple-construct assignment (((a,b),c) = (...)) -- value-correct but
     spews redundant temps; not clean.
 */
@@ -137,8 +199,63 @@ Acc(int v_) {
     _() { __println("Acc:ctor: " + v_); }
     ~() { __println("Acc:dtor: " + v_); }
     op=(Acc^ r)         { v_ = r^.v_; }
+    op<--(mutable Acc^ r) { __println("Acc:op<--: " + r^.v_); v_ = r^.v_; }
     op+=(Acc^ r)        { v_ += r^.v_; }
+    op-=(Acc^ r)        { v_ -= r^.v_; }
     op+(Acc^ x, Acc^ y) { v_ = x^.v_ + y^.v_; }
+}
+
+// A class-typed FIELD, for a chain stored into `box.a_`.
+Box(Acc a_) { }
+
+int take(Acc^ a) { return a^.v_; }
+
+// The ONLY-op+= class of canon 39-56: op= and op+= and NO 2-arg op+. Acc cannot
+// exercise this -- with a 2-arg op+ the head pair is one call, so the seed decompose
+// (`acc.op=(x); acc.op+=(y)`) never runs. ctor/dtor PRINT, so temps stay countable.
+Str(int v_) {
+    _() { __println("Str:ctor: " + v_); }
+    ~() { __println("Str:dtor: " + v_); }
+    op=(Str^ r)  { v_ = r^.v_; }
+    op<--(mutable Str^ r) { __println("Str:op<--: " + r^.v_); v_ = r^.v_; }
+    op+=(Str^ r) { v_ += r^.v_; }
+}
+
+// A TRIVIAL class -- NO ctor, NO dtor. This is the bucket where codegen's transfer gates
+// used to ask "does this type run hooks?" and, hearing no, fall through to a BLIT TWIN that
+// re-implemented the transfer inline and silently skipped the class's operator. Acc and Str
+// cannot catch that: they have constructors, so they were on the dispatching side of the
+// gate all along. Triv has nothing but operators, and they PRINT -- so the golden pins that
+// a whole-class transfer runs the class's move/copy function even with no hooks at all.
+Triv(int v_) {
+    op=(Triv^ r)           { __println("Triv:op=: " + r^.v_); v_ = r^.v_; }
+    op<--(mutable Triv^ r) { __println("Triv:op<--: " + r^.v_); v_ = r^.v_; }
+    op+=(Triv^ r)          { v_ += r^.v_; }
+}
+
+// Buf: a 2-arg op+ but NO op+= -- a chain on it CANNOT fuse, because `acc.op+(acc, c)`
+// would read the accumulator while writing it. So every un-fusable operand starts a fresh
+// BUFFER: one extra object per step. Each buffer must die at the SEMICOLON. (Reusing two
+// alternating buffers -- "ping-pong" -- would need none of them; still deferred.)
+Buf(int v_) {
+    _() { __println("Buf:ctor: " + v_); }
+    ~() { __println("Buf:dtor: " + v_); }
+    op=(Buf^ r)         { v_ = r^.v_; }
+    op+(Buf^ x, Buf^ y) { v_ = x^.v_ + y^.v_; }
+}
+
+// Sw: hook-less, with a printing SWAP as well as copy/move -- the swap transfer gate has
+// no other test in the suite.
+Sw(int v_) {
+    op=(Sw^ r)            { __println("Sw:op=: " + r^.v_); v_ = r^.v_; }
+    op<--(mutable Sw^ r)  { __println("Sw:op<--: " + r^.v_); v_ = r^.v_; }
+    op<-->(mutable Sw^ r) { __println("Sw:op<-->"); int t = v_; v_ = r^.v_; r^.v_ = t; }
+}
+
+// A chain in a RETURN rhs: the accumulator is the returned local, which NRVO aliases
+// to the sret slot -- so the caller's variable IS the accumulator and no temp exists.
+Str chain_ret(Str^ x, Str^ y) {
+    return Str + x^ + y^;
 }
 
 int32 main() {
@@ -315,6 +432,251 @@ int32 main() {
         __println("J3 end jf=" + jf.v_);           // 6
 
         __println("J end (locals dtor next)");
+    }
+
+    // ---- K: THE LADDER (class Str -- op= and op+=, no 2-arg op+) ----
+    //
+    // Canon 51-56. Every chain here costs ZERO temps except K4/K5, whose target is a
+    // LIVE object: a live target can never BE the accumulator (making it one means
+    // re-running its constructor), so those take one temp and MOVE it in -- and the
+    // temp dies at the semicolon, not at the block end.
+    __println("K: only-op+= ladder");
+    {
+        Str ka = Str(1);
+        Str kb = Str(2);
+
+        // K1: a FRESH construction at the head collapses INTO the accumulator, which
+        //     is then seeded with op= (cheaper than op+= on an empty object) and fused
+        //     with op+= for every later operand.  kc(); kc = ka; kc += kb;
+        __println("K1: fresh head       Str kc = Str + ka + kb");
+        Str kc = Str + ka + kb;
+        __println("K1 end kc=" + kc.v_);           // 3
+
+        // K2: a real OPERAND at the head, with no 2-arg op+ to take the pair: the head
+        //     DECOMPOSES to the seed + one fuse.  kd(); kd = ka; kd += kb;
+        __println("K2: operand head     Str kd = ka + kb");
+        Str kd = ka + kb;
+        __println("K2 end kd=" + kd.v_);           // 3
+
+        // K3: a head constructed WITH ARGUMENTS -- op= is FORBIDDEN here (it would
+        //     discard the ctor args), so the first operand fuses with op+= too.
+        //     ke(10); ke += ka; ke += kb;
+        __println("K3: ctor-arg head    Str ke = Str(10) + ka + kb");
+        Str ke = Str(10) + ka + kb;
+        __println("K3 end ke=" + ke.v_);           // 13
+
+        // K4: a LIVE target -- one temp, moved in, destroyed at the semicolon (its
+        //     dtor prints BEFORE "K4 end").
+        __println("K4: live target      kf = ka + kb");
+        Str kf = Str(0);
+        kf = ka + kb;
+        __println("K4 end kf=" + kf.v_);           // 3
+
+        // K5: a LIVE target with a fresh head -- same one temp; the head construction
+        //     collapses into the TEMP, never into kf.
+        __println("K5: live, fresh head kf = Str + ka + kb");
+        kf = Str + ka + kb;
+        __println("K5 end kf=" + kf.v_);           // 3
+
+        // K6: a chain in a RETURN rhs -- NRVO makes kg the accumulator: zero temps.
+        __println("K6: return rhs       Str kg = chain_ret(ka, kb)");
+        Str kg = chain_ret(^ka, ^kb);
+        __println("K6 end kg=" + kg.v_);           // 3
+
+        __println("K end (locals dtor next)");
+    }
+
+    // ---- L: THE TRIVIAL BUCKET (class Triv -- no ctor, no dtor) ----
+    //
+    // A whole-class transfer ALWAYS runs the class's transfer operator. Never a blit. Triv
+    // has no hooks, so before the transfer gates were fixed every one of these went through
+    // an inline load/store twin and the operators below never ran -- a chain's move into a
+    // live target silently dropped the author's op<--. These prints are the proof they run.
+    __println("L: trivial bucket (no ctor/dtor)");
+    {
+        Triv la = Triv(1);
+        Triv lb = Triv(2);
+
+        // L1: a fresh target -- the chain builds straight into it. The seed runs op=.
+        __println("L1: fresh target  Triv lc = la + lb");
+        Triv lc = la + lb;
+        __println("L1 end lc=" + lc.v_);           // 3
+
+        // L2: a LIVE target -- the temp is MOVED in, through op<--, not blitted.
+        __println("L2: live target   ld = la + lb");
+        Triv ld = Triv(0);
+        ld = la + lb;
+        __println("L2 end ld=" + ld.v_);           // 3
+
+        // L3: a hand-written move + copy on a hook-less class -- the same operators.
+        __println("L3: hand-written  ld <-- lc; le = ld");
+        ld <-- lc;
+        Triv le = Triv(0);
+        le = ld;
+        __println("L3 end le=" + le.v_);           // 3
+
+        __println("L end");
+    }
+
+    // ---- M: THE REMAINING DESTINATIONS AND SHAPES ----
+    //
+    // Every place a chain can appear, and every shape it can take. Where there is fresh
+    // storage of the chain's class, the chain builds into it (zero temps); everywhere else
+    // it takes ONE accumulator that dies at the semicolon.
+    __println("M: chain destinations and shapes");
+    {
+        Acc ma = Acc(10);
+        Acc mb = Acc(3);
+        Acc mc = Acc(4);
+
+        // M1: a CALL ARGUMENT -- no destination at all, so the accumulator is a lifted
+        //     temp; its dtor prints BEFORE "M1 end".
+        __println("M1: call arg      take(ma + mb)");
+        int m1 = take(ma + mb);
+        __println("M1 end m1=" + m1);                // 13
+
+        // M2: a store through a DEREF -- the receiver of the move is `mp`, not `^(mp^)`.
+        __println("M2: deref store   mp^ = ma + mb");
+        Acc md = Acc(0);
+        Acc^ mp = ^md;
+        mp^ = ma + mb;
+        __println("M2 end md=" + md.v_);             // 13
+
+        // M3: a store into a class FIELD.
+        __println("M3: field store   mbox.a_ = ma + mb");
+        Box mbox = Box(Acc(0));
+        mbox.a_ = ma + mb;
+        __println("M3 end mbox.a_=" + mbox.a_.v_);   // 13
+
+        // M4: a store into an ARRAY ELEMENT.
+        __println("M4: array store   marr[1] = ma + mb");
+        Acc marr[2];
+        marr[1] = ma + mb;
+        __println("M4 end marr[1]=" + marr[1].v_);   // 13
+
+        // M5: MIXED operators -- each node of the chain fuses with ITS OWN compound
+        //     operator, so the `-` really subtracts. Zero temps.
+        __println("M5: mixed ops     me = ma + mb - mc");
+        Acc me = ma + mb - mc;
+        __println("M5 end me=" + me.v_);             // 9
+
+        // M6: a CONSTRUCTION as a NON-head operand. Only a HEAD construction collapses into
+        //     the accumulator; anywhere else it is an ordinary operand, materialized into a
+        //     temp that dies at the semicolon.
+        __println("M6: ctor operand  mf = ma + Acc(7)");
+        Acc mf = ma + Acc(7);
+        __println("M6 end mf=" + mf.v_);             // 17
+
+        // M7: a parenthesized SUB-CHAIN on the right. It is not part of the left spine, so
+        //     it lowers into its own temp first, which dies at the semicolon.
+        __println("M7: sub-chain     mg = ma + (mb + mc)");
+        Acc mg = ma + (mb + mc);
+        __println("M7 end mg=" + mg.v_);             // 17
+
+        // M8: a chain in a LOOP BODY -- built and destroyed per iteration, no growth.
+        __println("M8: loop body");
+        int mi = 0;
+        while (mi < 2) {
+            Acc ml = ma + mb;
+            __println("M8 body ml=" + ml.v_);        // 13
+            mi = mi + 1;
+        }
+        __println("M8 end");
+
+        __println("M end (locals dtor next)");
+    }
+
+    // ---- N: THE UN-FUSABLE CHAIN (class Buf -- a 2-arg op+, no op+=) ----
+    //
+    // With no compound operator there is nothing to fuse into, so each later operand starts
+    // a fresh BUFFER. The buffers are the cost; their LIFETIME is the test. Every one of
+    // them dies at the semicolon (its dtor prints before the "end" line), never at the
+    // enclosing scope -- which is what a buffer emitted as a plain sibling of the
+    // declaration would have done.
+    __println("N: un-fusable chain (no op+=)");
+    {
+        Buf na = Buf(1);
+        Buf nb = Buf(2);
+        Buf nc = Buf(3);
+
+        // N1: one operand pair -- the 2-arg op+ takes it, no buffer needed. Zero temps.
+        __println("N1: no buffer     Buf nd = na + nb");
+        Buf nd = na + nb;
+        __println("N1 end nd=" + nd.v_);             // 3
+
+        // N2: one un-fusable continuation -- ONE buffer, dead at the semicolon. The
+        //     declared variable is still the final accumulator.
+        __println("N2: one buffer    Buf ne = na + nb + nc");
+        Buf ne = na + nb + nc;
+        __println("N2 end ne=" + ne.v_);             // 6
+
+        // N3: the same chain into a LIVE target -- the buffer AND the accumulator are both
+        //     temps, both dead at the semicolon.
+        __println("N3: live target   nf = na + nb + nc");
+        Buf nf = Buf(0);
+        nf = na + nb + nc;
+        __println("N3 end nf=" + nf.v_);             // 6
+
+        __println("N end (locals dtor next)");
+    }
+
+    // ---- O: HOOK-LESS TRANSFERS THROUGH ALL THREE GATES ----
+    //
+    // A whole-class transfer ALWAYS runs the class's operator -- copy, move AND swap --
+    // whether the class has hooks or not, and whether it stands alone or sits inside an
+    // aggregate (the transfer walks per leaf). Sw has no ctor/dtor, so these prints are the
+    // only thing in the suite that would notice a gate falling back to a blit.
+    __println("O: hook-less transfers");
+    {
+        Sw oa = Sw(1);
+        Sw ob = Sw(2);
+
+        __println("O1: swap          oa <--> ob");
+        oa <--> ob;
+        __println("O1 end oa=" + oa.v_ + " ob=" + ob.v_);      // 2 1
+
+        __println("O2: tuple COPY    ou = ot");
+        (Sw, Sw) ot = (Sw(7), Sw(8));
+        (Sw, Sw) ou = (Sw(0), Sw(0));
+        ou = ot;
+        __println("O2 end ou=" + ou[0].v_ + "," + ou[1].v_);   // 7,8
+
+        __println("O3: tuple MOVE    ov <-- ot");
+        (Sw, Sw) ov = (Sw(0), Sw(0));
+        ov <-- ot;
+        __println("O3 end ov=" + ov[0].v_ + "," + ov[1].v_);   // 7,8
+
+        __println("O end");
+    }
+
+    // ---- P: DESTRUCTURE SLOTS ----
+    //
+    // Values are right; the SHAPE is pinned as-is, and it is NOT minimal. What actually
+    // happens: a destructure whose source is not a bare name is SPILLED once into a `_$dsrc`
+    // tuple temp (classify, so a side-effecting source is not re-evaluated per slot), and
+    // each slot is then a plain `pc = _$dsrc[0]` copy through op=. So the chains are NOT the
+    // direct source of any assignment -- they sit inside the spill's tuple literal, take the
+    // no-destination path (one accumulator each), and are copied twice: once into the spill
+    // slot, once into the target. Four extra objects for two chains, where two would do.
+    //
+    // Both costs are pre-existing and out of this landing's scope: for a tuple LITERAL the
+    // spill is pure overhead (each element is read exactly once), and the accumulators keep
+    // ENCLOSING-scope lifetime for the same reason case 7 does -- the statement-scoping seq
+    // wrap is scalar-only, and the spill's value is a class. A future fix assigns a literal
+    // source per slot without spilling, which would make each slot a live-target chain (one
+    // accumulator, moved in, dead at the semicolon) and land Acc:op<-- here.
+    __println("P: destructure slots");
+    {
+        Acc pa = Acc(10);
+        Acc pb = Acc(3);
+        Acc pc = Acc(0);
+        Acc pd = Acc(0);
+
+        __println("P1: (pc, pd) = (pa + pb, pa + pa)");
+        (pc, pd) = (pa + pb, pa + pa);
+        __println("P1 end pc=" + pc.v_ + " pd=" + pd.v_);      // 13 20
+
+        __println("P end (locals dtor next)");
     }
 
     return 0;
