@@ -171,9 +171,14 @@ Coverage classes, all of which PRINT:
   Triv  NO ctor/dtor, printing op= / op<-- / op+=           — the transfer gates
   Sw    NO ctor/dtor, printing op= / op<-- / op<-->         — the SWAP gate + aggregates
   Trk   ctor/dtor + printing op= + op<-- + op<-->            — the tuple-of-classes counts
-Two classes DON'T print, because two questions are not about a print order:
-  Ord   ctor WRITES its own field (v_ = 99)                  — the ORDER OF CONSTRUCTION (W).
-        A printing ctor shows a wrong ORDER; only a WRITING one shows a wrong ANSWER.
+Three classes DON'T print, because their questions are not about a print order:
+  Ord   ctor WRITES its own field (v_ = 99), NO operators    — the ORDER OF CONSTRUCTION (W).
+        A printing ctor shows a wrong ORDER; only a WRITING one shows a wrong ANSWER. It has
+        no operators on purpose: the DEFAULT copy was the broken path.
+  Zord  the same writing ctor, PLUS op= and a 2-arg op+      — the ORDER IN A SLOT (Z7). Ord
+        cannot be a chain operand (no operators), so the slot-wise explode needed its own
+        observer: a chain landing in a tuple slot must be CONSTRUCTED before it is written
+        into, or it reads back 99 instead of the sum.
   Val   silent, KEEPS its ctor argument                      — the SOURCE MODEL (Y). Y asks
         which source got read and how many times, so it reads VALUES back; Ord can't be used
         (its ctor deliberately overwrites what was passed).
@@ -190,7 +195,11 @@ nested destructure in all three forms), W (the ORDER of construction — every b
 an lvalue, read back as a VALUE), X (every spill dies at the SEMICOLON — each case prints the
 temp's dtor BEFORE its marker line), Y (the SOURCE MODEL — a nested rvalue source, a counted
 source evaluated exactly once, a spilling destructure per loop iteration, a discard slot whose
-element still runs, an array copy-init from an array lvalue, a copy-init in a NESTED function).
+element still runs, an array copy-init from an array lvalue, a copy-init in a NESTED function),
+Z (an operation on an AGGREGATE of classes -- tuple+tuple, array+array, the aug-assign's
+per-slot `op+=`, a scalar class BROADCAST, nested, and a spilled call operand; Acc prints, so
+the objects are countable: each slot costs one accumulator, moved in and dead at the semicolon)
+and Z7 (the ORDER of construction IN A SLOT, class Zord -- a wrong ANSWER, 99 not the sum).
 Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS".
 
 
@@ -201,6 +210,17 @@ STILL OPEN (all filed in todo.txt)
   - A class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
     constructed over — the ordering bug one level down, and NOT fixable the same way (see
     below). todo.txt.
+  - A function RETURNING A TUPLE of class LVALUES has the SAME ordering bug at its SRET SLOT
+    (`return (a, b);` fills each slot and then constructs it — a writing ctor reads back 99).
+    The scalar return is right (NRVO builds the local IN the caller's slot). The decl fix
+    cannot reach it: an sret slot is not a named variable, so classify has nothing to address;
+    the order has to be fixed at the per-slot FILL site. PRE-EXISTING — found while testing
+    the slot-wise explode, not caused by it. todo.txt.
+  - A CONSTRUCTION as the LEFT operand only dispatches when the class has the COMPOUND
+    operator (`Add(7) + a` with a 2-arg op+ and no op+= reports "not defined", while the same
+    construction on the RIGHT, and a CALL on the left, both work). The collapsed-head role
+    demands op<OP>= for a head built with args; with a 2-arg op<OP> available it should fall
+    back to being an ordinary operand. todo.txt.
   (A GLOBAL from a class LVALUE — `global Add gb = ga;` — had the same ordering bug and is now
   UNREACHABLE, not fixed: a global's initializer must be a CONSTANT, so it is rejected. See
   below.)

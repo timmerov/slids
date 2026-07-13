@@ -375,64 +375,6 @@ bool isIncDecable(widen::TypeRef t) {
     return isNumericType(t) && widen::deepStrip(t) != widen::intern("bool");
 }
 
-// Validate a slot-wise SHIFT (an array IS a homogeneous tuple). Every lhs leaf
-// must be numeric (the value shifted; a float leaf shifts as multiply). With a
-// SCALAR count (`cnt == kNoType` here), only the lhs leaves are checked — the
-// caller separately requires the scalar count be integer-class. With an AGGREGATE
-// count, the walk is lockstep: the shapes must match and each count leaf must be
-// integer-class. Returns false on the first violation (the caller reports).
-bool shiftLeavesOk(widen::TypeRef lhs, widen::TypeRef cnt) {
-    widen::TypeRef ls = widen::strip(lhs);
-    bool lAgg = isAggregateType(ls);
-    if (cnt == widen::kNoType) {                       // scalar count: lhs leaves only
-        if (!lAgg) return isNumericType(ls);
-        int n = aggregateSlotCount(ls);
-        for (int i = 0; i < n; i++) {
-            widen::TypeRef sl = aggregateSlotType(ls, i);   // capture before recurse
-            if (!shiftLeavesOk(sl, widen::kNoType)) return false;
-        }
-        return true;
-    }
-    widen::TypeRef cs = widen::strip(cnt);             // aggregate count: lockstep
-    bool cAgg = isAggregateType(cs);
-    if (lAgg != cAgg) return false;
-    if (!lAgg) return isNumericType(ls) && isIntegerClass(cs);
-    int ln = aggregateSlotCount(ls), cn = aggregateSlotCount(cs);
-    if (ln != cn) return false;
-    for (int i = 0; i < ln; i++) {
-        widen::TypeRef sl = aggregateSlotType(ls, i);  // capture before recurse
-        widen::TypeRef sc = aggregateSlotType(cs, i);
-        if (!shiftLeavesOk(sl, sc)) return false;
-    }
-    return true;
-}
-
-// Type + validate an AGGREGATE shift (`lhs << cnt` / `>>`, lhs is array/tuple).
-// The result keeps the lhs aggregate type; the count broadcasts (scalar) or
-// applies per slot (matching-shape aggregate of integer leaves).
-void checkAggregateShift(widen::TypeRef lhs, parse::Node const& rhs,
-                         int file, int tok, diagnostic::Sink& diag) {
-    widen::TypeRef rt = rhs.inferred_type;
-    bool rAgg = (rt != widen::kNoType) && isAggregateType(rt);
-    if (!rAgg) {
-        if (rt != widen::kNoType && !isIntegerClass(rt)) {
-            diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                "Shift count must be integer-class; got '"
-                + widen::spellOrEmpty(rt) + "'.", {}});
-        }
-        if (!shiftLeavesOk(lhs, widen::kNoType)) {
-            diagnostic::report(diag, {file, tok,
-                "Shift left-hand side must be numeric; got '"
-                + widen::spellOrEmpty(lhs) + "'.", {}});
-        }
-    } else if (!shiftLeavesOk(lhs, rt)) {
-        diagnostic::report(diag, {file, tok,
-            "A slot-wise shift needs a matching-shape count with integer-class "
-            "slots; got '" + widen::spellOrEmpty(lhs) + "' << '"
-            + widen::spellOrEmpty(rt) + "'.", {}});
-    }
-}
-
 // Validate a `(Type=src)` conversion against the value-conversion grid. LEAF
 // rule is the existing scalar grid (numeric<->numeric always; pointer<->{bool,
 // intptr} only). Recurses per-slot for tuple targets and per-element for array
@@ -676,6 +618,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
 void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
+// THE SLOT-WISE EXPLODE (defined below, next to the spill funnel it stands on). The
+// STATEMENT form (an aug-assign) is defined after classifyStmt, which it recurses into.
+bool explodeAggregateExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
+void explodeAggregateAug(parse::Tree& tree, parse::Node& s, widen::TypeRef fn_return_type,
+                         diagnostic::Sink& diag, bool is_shift);
 bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams);
 bool isArithBitBinaryOp(std::string const& op);
@@ -1157,142 +1104,6 @@ void checkArgAssign(parse::Tree& tree, widen::TypeRef param, parse::Node& arg,
     if (isTransitiveBase(tree, widen::strip(byref), widen::strip(arg.inferred_type)))
         return;   // a derived value into a base ref: an upcast, address-identical
     checkValueAssign(tree, byref, arg, diag);
-}
-
-// Element-wise arithmetic over two AGGREGATE operands (array and/or tuple),
-// shared by the kBinaryExpr arm and the kAugAssignStmt arith path so they never
-// diverge. Both operands must be aggregates (caller checks). Requires matching
-// shape (element/slot count, recursively for nested aggregate slots). Result form
-// is a TUPLE if EITHER operand is a tuple at this level (mixed -> tuple), else an
-// array rebuilt from the homogeneous per-slot result. Returns false (and reports)
-// on a shape mismatch, a missing per-slot common type, or a bitwise op on a float
-// slot.
-bool aggregateArithType(std::string const& op, widen::TypeRef lref,
-                        widen::TypeRef rref, int file, int tok,
-                        widen::TypeRef& out, diagnostic::Sink& diag) {
-    widen::TypeRef ls = widen::strip(lref), rs = widen::strip(rref);
-    bool ltup = widen::form(ls) == widen::Type::Form::kTuple;
-    bool rtup = widen::form(rs) == widen::Type::Form::kTuple;
-    // Per-operand slot list: a tuple's slots verbatim; an array's outer dim as N
-    // copies of the element-with-remaining-dims (so a multi-dim array recurses).
-    auto slotsOf = [](widen::TypeRef s, bool tup) {
-        std::vector<widen::TypeRef> v;
-        if (tup) { v = widen::get(s).slots; return v; }
-        widen::Type const& a = widen::get(s);          // kArray
-        int n = a.dims.empty() ? 0 : a.dims[0];
-        widen::TypeRef elem = a.elem;                   // copy before any intern
-        std::vector<int> rest(a.dims.begin() + (a.dims.empty() ? 0 : 1),
-                              a.dims.end());
-        widen::TypeRef slot = rest.empty() ? elem : widen::internArray(elem, rest);
-        v.assign(static_cast<std::size_t>(n < 0 ? 0 : n), slot);
-        return v;
-    };
-    // Rebuild the result type from the per-slot results: a tuple if this level is a
-    // tuple, else an array rebuilt from the (homogeneous) per-slot result.
-    auto rebuild = [](std::vector<widen::TypeRef> const& outs, bool tup) -> widen::TypeRef {
-        if (tup) return widen::internTuple(outs);
-        int n = static_cast<int>(outs.size());
-        widen::TypeRef e0 = outs.empty() ? widen::kNoType : outs[0];
-        if (widen::form(widen::strip(e0)) == widen::Type::Form::kArray) {
-            widen::Type const& a = widen::get(widen::strip(e0));
-            widen::TypeRef elem = a.elem;               // copy before intern
-            std::vector<int> dims;
-            dims.push_back(n);
-            for (int d : a.dims) dims.push_back(d);
-            return widen::internArray(elem, dims);
-        }
-        return widen::internArray(e0, std::vector<int>{n});
-    };
-
-    // BROADCAST: exactly one side is a scalar — repeat it per slot of the aggregate.
-    // The result keeps the AGGREGATE operand's form (array op scalar -> array,
-    // tuple op scalar -> tuple); a nested aggregate slot recurses (broadcast deeper).
-    bool lagg = isAggregateType(ls), ragg = isAggregateType(rs);
-    if (lagg != ragg) {
-        bool aggTup = lagg ? ltup : rtup;
-        widen::TypeRef scalT = lagg ? rs : ls;
-        std::vector<widen::TypeRef> aslots = slotsOf(lagg ? ls : rs, aggTup);
-        std::vector<widen::TypeRef> outs;
-        for (widen::TypeRef s : aslots) {
-            widen::TypeRef a = lagg ? s : scalT;        // preserve operand order
-            widen::TypeRef b = lagg ? scalT : s;
-            widen::TypeRef slotres;
-            if (isAggregateType(s)) {
-                if (!aggregateArithType(op, a, b, file, tok, slotres, diag))
-                    return false;
-            } else {
-                if (!widen::commonType(a, b, slotres)) {
-                    diagnostic::report(diag, {file, tok,
-                        "No common type for aggregate slot ('"
-                        + widen::spellOrEmpty(a) + "' and '"
-                        + widen::spellOrEmpty(b) + "').", {}});
-                    return false;
-                }
-                if ((op == "&" || op == "|" || op == "^") && isFloatType(slotres)) {
-                    diagnostic::report(diag, {file, tok,
-                        "Bitwise '" + op + "' not defined on a floating-point slot.",
-                        {}});
-                    return false;
-                }
-            }
-            outs.push_back(slotres);
-        }
-        out = rebuild(outs, aggTup);
-        return true;
-    }
-
-    std::vector<widen::TypeRef> lslots = slotsOf(ls, ltup);
-    std::vector<widen::TypeRef> rslots = slotsOf(rs, rtup);
-    if (lslots.size() != rslots.size()) {
-        diagnostic::report(diag, {file, tok,
-            "Aggregate shapes differ: '" + widen::spellOrEmpty(lref) + "' vs '"
-            + widen::spellOrEmpty(rref) + "'.", {}});
-        return false;
-    }
-    std::vector<widen::TypeRef> outs;
-    for (std::size_t i = 0; i < lslots.size(); i++) {
-        widen::TypeRef a = lslots[i], b = rslots[i];
-        bool aagg = isAggregateType(a), bagg = isAggregateType(b);
-        widen::TypeRef slotres;
-        if (aagg && bagg) {
-            if (!aggregateArithType(op, a, b, file, tok, slotres, diag)) return false;
-        } else if (aagg || bagg) {
-            diagnostic::report(diag, {file, tok,
-                "Aggregate shapes differ: '" + widen::spellOrEmpty(lref) + "' vs '"
-                + widen::spellOrEmpty(rref) + "'.", {}});
-            return false;
-        } else {
-            if (!widen::commonType(a, b, slotres)) {
-                diagnostic::report(diag, {file, tok,
-                    "No common type for aggregate slot " + std::to_string(i)
-                    + " ('" + widen::spellOrEmpty(a) + "' and '"
-                    + widen::spellOrEmpty(b) + "').", {}});
-                return false;
-            }
-            if ((op == "&" || op == "|" || op == "^") && isFloatType(slotres)) {
-                diagnostic::report(diag, {file, tok,
-                    "Bitwise '" + op + "' not defined on a floating-point slot.", {}});
-                return false;
-            }
-        }
-        outs.push_back(slotres);
-    }
-    // A tuple if either operand is a tuple at this level; else rebuild an array
-    // from the (homogeneous) per-slot result.
-    if (ltup || rtup) { out = widen::internTuple(outs); return true; }
-    int n = static_cast<int>(outs.size());
-    widen::TypeRef e0 = outs.empty() ? widen::kNoType : outs[0];
-    if (widen::form(widen::strip(e0)) == widen::Type::Form::kArray) {
-        widen::Type const& a = widen::get(widen::strip(e0));
-        widen::TypeRef elem = a.elem;                   // copy before intern
-        std::vector<int> dims;
-        dims.push_back(n);
-        for (int d : a.dims) dims.push_back(d);
-        out = widen::internArray(elem, dims);
-    } else {
-        out = widen::internArray(e0, std::vector<int>{n});
-    }
-    return true;
 }
 
 void inferExpr(parse::Tree& tree, parse::Node& e,
@@ -2015,6 +1826,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (op == "+" || op == "-" || op == "~" || op == "!") {
                 if (stampClassUnary(tree, e, op, operand.inferred_type, diag)) return;
             }
+            // An AGGREGATE operand is TAKEN APART — `-(a, b)` is `(-a, -b)`. This arm never
+            // had an aggregate path at all, in classify OR codegen, so it typed the result
+            // as the aggregate and then emitted `sub { i32, i32 } 0, %t` — invalid IR, with
+            // no class anywhere near it. `!` is excluded: a slot-wise `!` would yield a
+            // TUPLE OF BOOLS, which is the same open question as a slot-wise comparison.
+            if ((op == "+" || op == "-" || op == "~")
+                && isAggregateType(operand.inferred_type)) {
+                explodeAggregateExpr(tree, e, diag);
+                return;
+            }
             if (op == "!") {
                 if (operand.inferred_type != widen::kNoType
                     && !isCoercibleToBool(operand.inferred_type)) {
@@ -2080,9 +1901,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     return;
                 }
                 if (isAggregateType(lhs.inferred_type)) {
-                    // An array IS a homogeneous tuple — shift slot-wise (the result
-                    // keeps the lhs aggregate type; a scalar count broadcasts).
-                    checkAggregateShift(lhs.inferred_type, rhs, e.file_id, e.tok, diag);
+                    // An array IS a homogeneous tuple — shift SLOT-WISE. A slot's count is
+                    // checked by the ordinary scalar shift arm, per slot; the only rule left
+                    // HERE is the shape one, inside the explode. (A SCALAR lhs with an
+                    // aggregate count is not a shift at all — it falls to the arm below,
+                    // which rejects the count as not integer-class.)
+                    explodeAggregateExpr(tree, e, diag);
+                    return;
                 } else {
                     if (lhs.inferred_type != widen::kNoType
                         && !isNumericType(lhs.inferred_type)) {
@@ -2158,21 +1983,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     return;
                 }
                 // SCALAR BROADCAST: when exactly one side is a scalar, flex a literal
-                // scalar to the aggregate's leaf type (so `int8[3] + 1` keeps int8),
-                // then broadcast it per slot inside aggregateArithType. Both-aggregate
-                // is the matching-shape path. The result keeps the aggregate's form
-                // (array op scalar -> array, tuple op scalar -> tuple).
+                // scalar to the aggregate's leaf type (so `int8[3] + 1` keeps int8);
+                // the explode then clones it into every slot.
                 bool lagg = isAggregateType(lref), ragg = isAggregateType(rref);
                 if (lagg != ragg) {
                     widen::TypeRef leaf = aggregateLeafType(lagg ? lref : rref);
                     inferExpr(tree, lagg ? rhs : lhs, leaf, diag);
                 }
-                widen::TypeRef aggres;
-                if (!aggregateArithType(op, lhs.inferred_type, rhs.inferred_type,
-                                        e.file_id, e.tok, aggres, diag))
-                    return;
-                e.inferred_type = aggres;
-                e.op_type = aggres;
+                explodeAggregateExpr(tree, e, diag);
                 return;
             }
 
@@ -2914,50 +2732,6 @@ void checkAggregateShapeMatch(widen::TypeRef dest, widen::TypeRef src,
         widen::TypeRef sSlot = aggregateSlotType(ss, i);
         checkAggregateShapeMatch(dSlot, sSlot, rhs, diag);
     }
-}
-
-// Validate storing an aggregate VALUE `src` into aggregate `dest`, treating array
-// and tuple as the same shape (both decompose to slots) and applying the leaf
-// widen rule — so codegen's per-leaf convert stays pure. Unlike
-// checkAggregateShapeMatch this does NOT reject a cross-form (array<-tuple) store,
-// which is exactly what the aggregate aug-assign store-back needs (a mixed result
-// is a tuple, the lvalue may be an array). Shape is guaranteed by the caller (src
-// was built from dest's shape).
-void checkAggregateStoreWiden(widen::TypeRef dest, widen::TypeRef src,
-                              int file, int tok, diagnostic::Sink& diag) {
-    auto slotsOf = [](widen::TypeRef t) {
-        std::vector<widen::TypeRef> v;
-        widen::TypeRef s = widen::strip(t);
-        if (widen::form(s) == widen::Type::Form::kTuple) {
-            v = widen::get(s).slots;
-        } else if (widen::form(s) == widen::Type::Form::kArray) {
-            widen::Type const& a = widen::get(s);
-            int n = a.dims.empty() ? 0 : a.dims[0];
-            widen::TypeRef elem = a.elem;
-            std::vector<int> rest(a.dims.begin() + (a.dims.empty() ? 0 : 1),
-                                  a.dims.end());
-            widen::TypeRef slot = rest.empty() ? elem
-                                               : widen::internArray(elem, rest);
-            v.assign(static_cast<std::size_t>(n < 0 ? 0 : n), slot);
-        }
-        return v;
-    };
-    std::vector<widen::TypeRef> ds = slotsOf(dest), ss = slotsOf(src);
-    bool dleaf = ds.empty(), sleaf = ss.empty();
-    // Both sides are the same shape here (src was built from dest's shape by
-    // aggregateArithType), so they bottom out together — assert rather than
-    // silently truncate a mismatch.
-    assert(dleaf == sleaf
-        && "checkAggregateStoreWiden: aggregate/scalar shape mismatch");
-    if (dleaf) {                               // a scalar leaf on both sides
-        if (!isPtrLikeType(dest) && !isPtrLikeType(src))
-            checkValueWiden(dest, src, file, tok, diag);
-        return;
-    }
-    assert(ds.size() == ss.size()
-        && "checkAggregateStoreWiden: slot/element count mismatch");
-    for (std::size_t i = 0; i < ds.size(); i++)
-        checkAggregateStoreWiden(ds[i], ss[i], file, tok, diag);
 }
 
 bool checkArrayValueAssign(widen::TypeRef dest, parse::Node const& rhs,
@@ -4001,6 +3775,156 @@ std::unique_ptr<parse::Node> makeSlotPath(parse::Node const& path, std::size_t i
     return idx;
 }
 
+// ---------------------------------------------------------------------------
+// THE SLOT-WISE EXPLODE
+// ---------------------------------------------------------------------------
+//
+// A TUPLE DESUGARS TO THE OPERATION BY SLOT, ITERATIVELY AND RECURSIVELY — and an ARRAY
+// IS a homogeneous tuple, so this is every aggregate. `(a, b) + (c, d)` becomes the tuple
+// literal `(a + c, b + d)`. Each element is then classified as an ORDINARY operation, so
+// a class slot dispatches its operator, a literal flexes, a narrow widens, a chain joins
+// the chain machinery — with no aggregate-specific code downstream at all. A NESTED
+// aggregate slot re-enters this rewrite when its own element is classified, so the
+// recursion costs nothing. The result lands through the tuple-literal distribution the
+// declarator funnel already has: element i is built straight into slot i of the storage
+// that owns it.
+//
+// WHY IT HAS TO BE HERE AND NOT IN CODEGEN — the whole reason aggregates kept breaking.
+// A class operation needs an ADDRESS: a `^self` receiver and an sret destination. Codegen's
+// aggregate walkers work in the VALUE domain (extractvalue / insertvalue on SSA registers),
+// where a slot has no address, so they can only ever emit a NUMERIC instruction — and that
+// is what they did. A class-bearing aggregate emitted `add { i32 } %a, %b`, which is not
+// valid IR (widen::commonType SUCCEEDS for two identical class types, so nothing caught
+// it); the unary arm never had an aggregate walker at all, so even `-(1, 2)` emitted
+// `sub { i32, i32 } 0, %t`. Every aggregate bug we have had is an operation that was
+// hand-written for aggregates in the value domain instead of being TAKEN APART here, where
+// a slot is still an expression and can be anything the scalar path can be.
+//
+// EVALUATED ONCE. An operand is read by N slots, so it goes through the same trichotomy
+// the destructure's source model uses (THE SPILL FUNNEL): a tuple LITERAL is taken APART
+// (element i IS child i — moved, not re-evaluated); a re-readable lvalue is INDEXED per
+// slot; anything else SPILLS to a temp that is indexed instead. A SCALAR operand
+// BROADCASTS: cloned per slot when that is free (a literal / a re-readable lvalue),
+// spilled once when it is not. SEQ placement — the temp is read by this one expression,
+// so it dies at the SEMICOLON.
+//
+// Callers: the binary arith/bitwise arm, the shift arm, the unary arm, and the aug-assign
+// statement (which explodes into per-slot STATEMENTS, so a class slot gets its `op+=`
+// rather than an `op+`). Comparisons are deliberately NOT here — `(a,b) == (c,d)` is a
+// semantic question (a tuple of bools, or one all-slots-equal bool?), still open.
+
+// Safe to re-read once per slot with no temp: a literal, or a re-readable lvalue
+// (isReReadableLvalue — an ident/field/deref/const-index chain, which is also what the
+// destructure asks of its source).
+bool isReReadableOperand(parse::Node const& e) {
+    return isLiteralKind(e.kind)
+        || e.kind == parse::Kind::kNullptrLiteral
+        || isReReadableLvalue(e);
+}
+
+// One operand of an exploding operation, prepared so slot i can be produced on demand.
+struct AggOperand {
+    parse::Node* node = nullptr;   // what to read (the operand, or the spill temp)
+    bool aggregate = false;        // INDEX it per slot; otherwise BROADCAST (clone it)
+    bool literal = false;          // a tuple LITERAL: take child i APART
+};
+
+// Prepare one operand: decide how slot i will be produced, spilling if it must be
+// evaluated once. A spill decl is appended to `spills` for the caller to place (SEQ).
+AggOperand prepareOperand(parse::Tree& tree, std::unique_ptr<parse::Node>& child,
+                          int nslots,
+                          std::vector<std::unique_ptr<parse::Node>>& spills) {
+    AggOperand a;
+    widen::TypeRef t = widen::strip(child->inferred_type);
+    a.aggregate = isAggregateType(t);
+    // A tuple literal of the right arity is taken APART — no temp, no re-evaluation.
+    if (a.aggregate
+        && child->kind == parse::Kind::kTupleExpr
+        && static_cast<int>(child->children.size()) == nslots) {
+        a.literal = true;
+        a.node = child.get();
+        return a;
+    }
+    if (!isReReadableOperand(*child)) {
+        widen::TypeRef srcT = child->inferred_type;    // BEFORE the move
+        Spill sp = spillToTemp(tree, std::move(child), srcT, "_$agg");
+        spills.push_back(std::move(sp.decl));
+        child = std::move(sp.read);
+    }
+    a.node = child.get();
+    return a;
+}
+
+// Produce operand `a`'s value for slot i.
+std::unique_ptr<parse::Node> operandSlot(AggOperand& a, std::size_t i) {
+    if (a.literal) return std::move(a.node->children[i]);
+    if (!a.aggregate) return cloneExpr(*a.node);          // BROADCAST
+    widen::TypeRef st = aggregateSlotType(widen::strip(a.node->inferred_type),
+                                          static_cast<int>(i));
+    return makeSlotPath(*a.node, i, st);
+}
+
+// Explode `e` (a kBinaryExpr or kUnaryExpr with at least one AGGREGATE operand) into a
+// tuple literal of per-slot operations, then classify it. Returns false when no operand
+// is an aggregate (the ordinary scalar path owns the node).
+bool explodeAggregateExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
+    // Every AGGREGATE operand must have the same slot count — a scalar one broadcasts.
+    // This is the ONE shape rule now; the nested case needs no rule of its own, because a
+    // nested slot pair explodes in its turn and asks the same question there.
+    int n = -1;
+    for (auto& c : e.children) {
+        if (!c) continue;
+        widen::TypeRef t = widen::strip(c->inferred_type);
+        if (!isAggregateType(t)) continue;
+        int cnt = aggregateSlotCount(t);
+        if (n < 0) { n = cnt; continue; }
+        if (cnt != n) {
+            diagnostic::report(diag, {e.file_id, e.tok,
+                "Aggregate shapes differ: '"
+                + widen::spellOrEmpty(e.children[0]->inferred_type) + "' vs '"
+                + widen::spellOrEmpty(e.children[1]->inferred_type) + "'.", {}});
+            return true;
+        }
+    }
+    if (n <= 0) return false;
+
+    std::vector<std::unique_ptr<parse::Node>> spills;
+    std::vector<AggOperand> ops;
+    for (auto& c : e.children) ops.push_back(prepareOperand(tree, c, n, spills));
+
+    // One element per slot: the SAME operator, on the operands' slot i.
+    auto tup = std::make_unique<parse::Node>();
+    tup->kind = parse::Kind::kTupleExpr;
+    tup->file_id = e.file_id;
+    tup->tok = e.tok;
+    for (std::size_t i = 0; i < static_cast<std::size_t>(n); i++) {
+        auto slot = std::make_unique<parse::Node>();
+        slot->kind = e.kind;                  // kBinaryExpr / kUnaryExpr
+        slot->text = e.text;
+        slot->file_id = e.file_id;
+        slot->tok = e.tok;
+        for (auto& a : ops) slot->children.push_back(operandSlot(a, i));
+        tup->children.push_back(std::move(slot));
+    }
+
+    // Classify the tuple — each element takes the ORDINARY road (class dispatch, literal
+    // flex, widen), and a nested aggregate slot explodes in its turn.
+    inferExpr(tree, *tup, widen::kNoType, diag);
+    widen::TypeRef ty = tup->inferred_type;
+
+    // SEQ placement for each spill (outermost = evaluated first, so wrap in reverse):
+    // the temp is read by THIS expression alone, so desugar hoists it into the statement's
+    // seq and it dies at the semicolon.
+    std::unique_ptr<parse::Node> result = std::move(tup);
+    for (auto it = spills.rbegin(); it != spills.rend(); ++it) {
+        result = seqSpill(std::move(*it), std::move(result));
+        result->inferred_type = ty;
+    }
+    e = std::move(*result);
+    e.inferred_type = ty;
+    return true;
+}
+
 // A CLASS CAN ONLY BE COPIED INTO — it has to EXIST first.
 //
 // So a fresh binding whose initializer contains a same-type class-bearing LVALUE cannot
@@ -4022,15 +3946,29 @@ std::unique_ptr<parse::Node> makeSlotPath(parse::Node const& path, std::size_t i
 void splitTransferInit(parse::Tree& tree, std::unique_ptr<parse::Node>& init,
                        widen::TypeRef type, parse::Node const& path, bool is_move,
                        std::vector<std::unique_ptr<parse::Node>>& post,
-                       diagnostic::Sink& diag) {
+                       diagnostic::Sink& diag, bool is_root) {
     if (!init) return;
     widen::TypeRef S = widen::strip(type);
     if (!widen::hasInPlaceClass(S)) return;   // no class in here — nothing to order
-    // A whole-value TRANSFER of THIS storage. Only a BARE LVALUE is one: an rvalue (a
-    // construction, a call, a chain) has no object to copy FROM — it BUILDS the storage,
-    // which is the elide, and must stay exactly as it is.
-    if (isBareLvalue(*init)) {
-        inferExpr(tree, *init, type, diag);
+    // A whole-value TRANSFER of THIS storage. A BARE LVALUE is one: an rvalue (a
+    // construction, a call) has no object to copy FROM — it BUILDS the storage, which is
+    // the elide, and must stay exactly as it is.
+    //
+    // A class CHAIN (`p + q`) in a SLOT is the one rvalue that must ALSO be peeled, and the
+    // reason is a limit of desugar, not of the language: the tuple-literal distribution can
+    // hand a slot to a nested literal or to a construction, but NOT to a chain — a chain's
+    // accumulator home is answered per STATEMENT, and a slot of a literal is not one. So the
+    // chain lifts to a temp, the tuple is formed from the temps, and the whole VALUE fills
+    // the storage — after which the slot's ctor runs ON TOP of the copied value, which is
+    // exactly the bug this function exists to prevent, reached by a different road (a class
+    // whose ctor writes its own field read back 99, not the sum). Peeled, the slot is
+    // constructed and the chain is then assigned INTO it — an ordinary chain into a live
+    // target, which desugar already lowers with one statement-scoped accumulator, MOVED in.
+    // At the ROOT it must NOT be peeled: a decl whose whole rhs is a chain IS the
+    // accumulator (zero temps), and that is already correct.
+    bool chain_slot = !is_root && init->class_op_chain;
+    if (isBareLvalue(*init) || chain_slot) {
+        if (!chain_slot) inferExpr(tree, *init, type, diag);
         if (widen::deepStrip(init->inferred_type) == widen::deepStrip(type)) {
             auto st = std::make_unique<parse::Node>();
             st->file_id = init->file_id;
@@ -4080,7 +4018,7 @@ void splitTransferInit(parse::Tree& tree, std::unique_ptr<parse::Node>& init,
         if (!widen::hasInPlaceClass(widen::strip(slots[i]))) continue;
         auto slot_path = makeSlotPath(path, i, slots[i]);
         splitTransferInit(tree, init->children[i], slots[i], *slot_path, is_move, post,
-                          diag);
+                          diag, /*is_root=*/false);
     }
 }
 
@@ -4107,10 +4045,34 @@ void applyTransferSplit(parse::Tree& tree, parse::Node& s,
     path->inferred_type = s.return_type;
     path->file_id = s.file_id;
     path->tok = s.tok;
+    // THE SLOT-WISE EXPLODE wraps its result in an agg_conv_spill SEQ when an operand had to
+    // be evaluated exactly once (a call). That seq HIDES the tuple literal from the peel
+    // below — and merely looking THROUGH it would be wrong: the spill's decl rides on the
+    // decl's rhs, so the temp would die at the DECL's semicolon, before the peeled transfers
+    // that read it. Lift the spill decls out and re-place them as a GROUP (see THE SPILL
+    // FUNNEL): the decl (now defaults) goes to the prelude, and the spill and the transfers
+    // share ONE BLOCK — so the temp still dies at the statement's end, and the transfers can
+    // still see it.
+    std::vector<std::unique_ptr<parse::Node>> spills;
+    while (s.children[0] && s.children[0]->agg_conv_spill
+           && s.children[0]->children.size() == 2) {
+        auto seq = std::move(s.children[0]);
+        spills.push_back(std::move(seq->children[0]));
+        s.children[0] = std::move(seq->children[1]);
+    }
     std::vector<std::unique_ptr<parse::Node>> post;
     splitTransferInit(tree, s.children[0], s.return_type, *path, s.default_move_init,
-                      post, diag);
-    if (post.empty()) return;   // nothing is copied in — the decl BUILDS its object
+                      post, diag, /*is_root=*/true);
+    if (post.empty()) {
+        // Nothing is copied in — the decl BUILDS its object. Put the seq back exactly as it
+        // was (a class-free aggregate keeps its spill on the rhs, where desugar hoists it).
+        for (auto it = spills.rbegin(); it != spills.rend(); ++it) {
+            widen::TypeRef ty = s.children[0]->inferred_type;
+            s.children[0] = seqSpill(std::move(*it), std::move(s.children[0]));
+            s.children[0]->inferred_type = ty;
+        }
+        return;
+    }
     auto decl = std::make_unique<parse::Node>();
     decl->kind = parse::Kind::kVarDeclStmt;
     decl->name = s.name;
@@ -4121,6 +4083,24 @@ void applyTransferSplit(parse::Tree& tree, parse::Node& s,
     decl->tok = s.tok;
     decl->children.push_back(std::move(s.children[0]));
     prelude->push_back(std::move(decl));
+    // GROUP placement: a spilled source is read by the transfer STATEMENTS, so it and they
+    // share a block — the temp dies at the statement's end, not at the enclosing scope's.
+    if (!spills.empty()) {
+        std::vector<std::unique_ptr<parse::Node>> body;
+        for (auto& sp : spills) body.push_back(std::move(sp));
+        for (auto& p : post) {
+            classifyStmt(tree, *p, fn_return_type, diag, &body);
+            body.push_back(std::move(p));
+        }
+        s.kind = parse::Kind::kBlockStmt;
+        s.name.clear();
+        s.resolved_entry_id = -1;
+        s.return_type = widen::kNoType;
+        s.default_move_init = false;
+        s.children.clear();
+        for (auto& b : body) s.children.push_back(std::move(b));
+        return;
+    }
     for (std::size_t k = 0; k + 1 < post.size(); k++) {
         classifyStmt(tree, *post[k], fn_return_type, diag, prelude);
         prelude->push_back(std::move(post[k]));
@@ -5297,20 +5277,22 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (op == "<<" || op == ">>") {
                 inferExpr(tree, rhs, widen::kNoType, diag);
                 if (isAggregateType(s.return_type)) {
-                    // Slot-wise `lhs <<= cnt` — result keeps the lhs aggregate type.
-                    checkAggregateShift(s.return_type, rhs, s.file_id, s.tok, diag);
-                } else {
-                    if (!isNumericType(s.return_type)) {
-                        diagnostic::report(diag, {s.file_id, s.tok,
-                            "Shift left-hand side must be numeric; got '"
-                            + lvalue_type + "'.", {}});
-                    }
-                    if (rhs.inferred_type != widen::kNoType
-                        && !isIntegerClass(rhs.inferred_type)) {
-                        diagnostic::report(diag, {s.file_id, s.tok,
-                            "Shift count must be integer-class; got '"
-                            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
-                    }
+                    // Slot-wise `lhs <<= cnt` — TAKEN APART like every other aggregate
+                    // operation (the shared block below owns it; a shift's count is NOT
+                    // flexed to the leaf type, so it says so).
+                    explodeAggregateAug(tree, s, fn_return_type, diag, /*is_shift=*/true);
+                    return;
+                }
+                if (!isNumericType(s.return_type)) {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "Shift left-hand side must be numeric; got '"
+                        + lvalue_type + "'.", {}});
+                }
+                if (rhs.inferred_type != widen::kNoType
+                    && !isIntegerClass(rhs.inferred_type)) {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "Shift count must be integer-class; got '"
+                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
                 }
                 s.inferred_type = s.return_type;
                 s.op_type = s.return_type;
@@ -5343,24 +5325,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // into the lvalue is gated by the aggregate assignment relation, so a
             // per-element narrow is caught here, not in codegen.
             if (isAggregateType(s.return_type)) {
-                // rhs is an aggregate (matching shape) OR a SCALAR (broadcast — e.g.
-                // `arr += 1`). For a scalar, flex a literal to the lvalue's leaf type
-                // so a narrow-element aggregate keeps its width; aggregateArithType
-                // then broadcasts it per slot.
-                if (!isAggregateType(rhs.inferred_type)) {
-                    inferExpr(tree, rhs, aggregateLeafType(s.return_type), diag);
-                }
-                widen::TypeRef aggres;
-                if (!aggregateArithType(op, s.return_type, rhs.inferred_type,
-                                        s.file_id, s.tok, aggres, diag))
-                    return;
-                // Gate the store of the aggregate RESULT back into the lvalue:
-                // a per-leaf widen check across array/tuple form, so a narrowing
-                // aggregate aug-assign is caught here, not asserted in codegen.
-                checkAggregateStoreWiden(s.return_type, aggres, s.file_id, s.tok,
-                                         diag);
-                s.inferred_type = aggres;
-                s.op_type = aggres;
+                explodeAggregateAug(tree, s, fn_return_type, diag, /*is_shift=*/false);
                 return;
             }
             // Scalar: re-infer rhs with the lvalue type as context so a literal
@@ -6196,6 +6161,84 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
             }
         }
     }
+}
+
+// THE SLOT-WISE EXPLODE, STATEMENT FORM: an aug-assign on an AGGREGATE lvalue becomes
+// `t[i] op= u[i]` per slot, in a block. Per-slot STATEMENTS rather than one exploded
+// expression, because the operator the author wrote is the COMPOUND one — a class slot
+// must reach its own `op+=`, and rebuilding it out of `op+` would be a different program
+// (and impossible for a class that has only `op+=`). Each per-slot statement then goes
+// through classifyStmt exactly as if it had been written by hand, so a class slot
+// dispatches, a numeric slot widens, and a NESTED aggregate slot explodes again.
+//
+// The rhs is an aggregate of matching shape, or a SCALAR that BROADCASTS (`arr += 1`).
+// It is prepared by the same trichotomy the expression form uses (literal taken apart /
+// re-readable lvalue indexed / else spilled once) — GROUP placement here, since the temp
+// is read by sibling STATEMENTS: it and they share one block and it dies at the semicolon.
+void explodeAggregateAug(parse::Tree& tree, parse::Node& s, widen::TypeRef fn_return_type,
+                         diagnostic::Sink& diag, bool is_shift) {
+    parse::Node& rhs = *s.children.back();
+    std::string const op = s.text;
+    // A shift's COUNT is not a slot value — it stands alone (flexing it to the lhs leaf
+    // type would mis-type it). Any other scalar rhs flexes, so `int8[3] += 1` keeps int8.
+    if (!is_shift && !isAggregateType(rhs.inferred_type)) {
+        inferExpr(tree, rhs, aggregateLeafType(s.return_type), diag);
+    }
+    int nslots = aggregateSlotCount(widen::strip(s.return_type));
+    // The ONE shape rule (as in the expression form): an aggregate rhs must match the
+    // lvalue's slot count; a scalar rhs broadcasts. Everything else — leaf types, narrowing,
+    // bitwise-on-a-float, a non-integer shift count — is asked of each SLOT by the ordinary
+    // arms, since a slot is now an ordinary operation.
+    if (isAggregateType(rhs.inferred_type)
+        && aggregateSlotCount(widen::strip(rhs.inferred_type)) != nslots) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "Aggregate shapes differ: '" + widen::spellOrEmpty(s.return_type) + "' vs '"
+            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+        s.inferred_type = s.return_type;
+        s.op_type = s.return_type;
+        return;
+    }
+    // The lvalue as a PATH: the complex form already carries one; the bare-name form gets
+    // an ident naming the same entry.
+    std::unique_ptr<parse::Node> lvpath;
+    if (s.children.size() == 2) {
+        lvpath = cloneExpr(*s.children[0]);
+    } else {
+        lvpath = std::make_unique<parse::Node>();
+        lvpath->kind = parse::Kind::kIdentExpr;
+        lvpath->name = s.name;
+        lvpath->name_tok = s.name_tok;
+        lvpath->resolved_entry_id = s.resolved_entry_id;
+        lvpath->inferred_type = s.return_type;
+        lvpath->file_id = s.file_id;
+        lvpath->tok = s.tok;
+    }
+    std::vector<std::unique_ptr<parse::Node>> spills;
+    std::unique_ptr<parse::Node> rhsNode = std::move(s.children.back());
+    AggOperand ra = prepareOperand(tree, rhsNode, nslots, spills);
+
+    std::vector<std::unique_ptr<parse::Node>> body;
+    for (auto& sp : spills) body.push_back(std::move(sp));
+    for (int i = 0; i < nslots; i++) {
+        widen::TypeRef slotT = aggregateSlotType(widen::strip(s.return_type), i);
+        auto st = std::make_unique<parse::Node>();
+        st->kind = parse::Kind::kAugAssignStmt;
+        st->text = op;
+        st->file_id = s.file_id;
+        st->tok = s.tok;
+        st->children.push_back(makeSlotPath(*lvpath, (std::size_t)i, slotT));
+        st->children.push_back(operandSlot(ra, (std::size_t)i));
+        classifyStmt(tree, *st, fn_return_type, diag, &body);
+        body.push_back(std::move(st));
+    }
+    s.kind = parse::Kind::kBlockStmt;
+    s.text.clear();
+    s.name.clear();
+    s.resolved_entry_id = -1;
+    s.inferred_type = widen::kNoType;
+    s.op_type = widen::kNoType;
+    s.children.clear();
+    for (auto& b : body) s.children.push_back(std::move(b));
 }
 
 // Recursively complete every MEMBER function's signature (typeless-param infer +

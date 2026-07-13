@@ -568,5 +568,108 @@ Y4: discard effects=11 y4=1
 Y5: array=5 6
 Y6: nested copy=7
 Y end (locals dtor next)
+Z: aggregates of classes
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 10
+Acc:ctor: 20
+Z1: (Acc,Acc) zc = za + zb;
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:op<--: 11
+Acc:dtor: 11
+Acc:ctor: 0
+Acc:op<--: 22
+Acc:dtor: 22
+Z1 end zc=11 22
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 10
+Acc:ctor: 20
+Z2: Acc zf[2] = zd + ze;
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:dtor: 0
+Acc:dtor: 0
+Acc:ctor: 0
+Acc:op<--: 11
+Acc:dtor: 11
+Acc:ctor: 0
+Acc:op<--: 22
+Acc:dtor: 22
+Z2 end zf=11 22
+Z3: zd += ze;
+Z3 end zd=11 22
+Acc:ctor: 100
+Z4: (Acc,Acc) zg = za + zs;
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:op<--: 101
+Acc:dtor: 101
+Acc:ctor: 0
+Acc:op<--: 102
+Acc:dtor: 102
+Z4 end zg=101 102
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 3
+Z5: ((Acc,Acc),Acc) zo = zn + zn;
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:op<--: 2
+Acc:dtor: 2
+Acc:ctor: 0
+Acc:op<--: 4
+Acc:dtor: 4
+Acc:ctor: 0
+Acc:op<--: 6
+Acc:dtor: 6
+Z5 end zo=2 4 6
+Z6: (Acc,Acc) zp = mkAccPair() + za;
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 0
+Acc:op<--: 2
+Acc:dtor: 2
+Acc:ctor: 0
+Acc:op<--: 4
+Acc:dtor: 4
+Acc:dtor: 2
+Acc:dtor: 1
+Z6 end zp=2 4
+Z end (locals dtor next)
+Acc:dtor: 4
+Acc:dtor: 2
+Acc:dtor: 6
+Acc:dtor: 4
+Acc:dtor: 2
+Acc:dtor: 3
+Acc:dtor: 2
+Acc:dtor: 1
+Acc:dtor: 102
+Acc:dtor: 101
+Acc:dtor: 100
+Acc:dtor: 22
+Acc:dtor: 11
+Acc:dtor: 20
+Acc:dtor: 10
+Acc:dtor: 22
+Acc:dtor: 11
+Acc:dtor: 22
+Acc:dtor: 11
+Acc:dtor: 20
+Acc:dtor: 10
+Acc:dtor: 2
+Acc:dtor: 1
+Z7: aggregate chain zv=2 4
+Z7: scalar chain z8=3
 Class:dtor: 9
 Acc:dtor: 13

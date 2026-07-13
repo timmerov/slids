@@ -1037,6 +1037,36 @@ Phase 5 — classes
     rvalue aggregate), `_$dsrc` and `_$delem` (destructure) all die at the semicolon now.
     It also exposed a FIFTH hasInPlaceClass-vs-kSlid gate, in emitSeqEffects. Canon
     evaluate.sl block X.
+    THE SLOT-WISE EXPLODE (2026-07-13) — A TUPLE DESUGARS TO THE OPERATION BY SLOT,
+    ITERATIVELY AND RECURSIVELY. The user's rule, and it is not cleanup: it is the invariant
+    that keeps every operation in the family that can express a class. There was no tuple
+    PATH — there were about a dozen slot walkers in two families. The AST walkers (destructure,
+    the declarator funnel, the transfer split, emitAggCopyLeaves, the tuple-literal
+    distribution) rewrite an aggregate operation into per-slot STATEMENTS against ADDRESSES,
+    and they handle classes correctly because they have to: a class operation needs an address
+    (a `^self` receiver, an sret destination). The VALUE walkers in codegen
+    (emitAggregateArith / emitAggregateShift) extractvalue'd SSA registers, where a slot has
+    NO address — so they could only emit numeric instructions, and did: a class-bearing
+    aggregate emitted `add { i32 } %a, %b`, invalid IR, exit 0 (commonType SUCCEEDS for two
+    identical class types). And not only classes: the unary arm never had an aggregate walker
+    at all, so a pure-numeric `-(1, 2)` emitted `sub { i32, i32 } 0, %t`. A hand-written
+    per-operator value-domain walker is a special case that must be re-written for every
+    operator, and silently was not.
+    ONE rewrite in classify now takes any aggregate operation apart into a tuple literal of
+    per-slot operations (explodeAggregateExpr; the aug-assign explodes into per-slot
+    STATEMENTS, so a class slot reaches its own `op+=`). Each element is then an ORDINARY
+    operation — class dispatch, literal flex, widen, the chain machinery — and a nested slot
+    explodes in its turn. Operands are evaluated ONCE through the spill funnel. Both codegen
+    walkers, aggregateArithType, checkAggregateShift and checkAggregateStoreWiden are DELETED;
+    codegen ASSERTS an aggregate operand never reaches emitBinary. The only aggregate rule
+    left is the SHAPE one (matching slot counts; a scalar broadcasts) — leaf types, narrowing,
+    bitwise-on-a-float and shift counts are asked of each SLOT by the ordinary arms, so the
+    diagnostics now name the element's own type. Comparison stays out (an open semantic
+    question). It found and fixed one ordering bug of its own: a class CHAIN landing in a
+    tuple slot was filled-then-constructed (a writing ctor read back 99, not the sum) —
+    splitTransferInit now peels a chain in a SLOT like an lvalue, and a spilled source is
+    re-placed as a GROUP so the temp outlives the transfers that read it. Canon
+    tuple/anon.sl + array.sl + combined.sl (numeric), class/evaluate.sl block Z (classes).
     STILL DEFERRED: ping-pong (a class with a 2-arg op+ but NO op+= cannot fuse, so each
     un-fusable operand starts a fresh buffer — two alternating buffers would need none);
     arity-2 comparison producing a class + reversed-operand comparison. See

@@ -158,6 +158,17 @@ int32 main() {
     __println("np= " + np[0][0] + " " + np[0][1] + " "
               + np[1][0] + " " + np[1][1]);        // 11 22 33 44
 
+    /* MIXED and NESTED unary — the operation by slot, recursively, whatever the forms.
+       A unary had NO aggregate path at all (it emitted a numeric instruction on the whole
+       struct: invalid IR), which is what a per-operator, hand-written aggregate walker
+       buys you. There is one path now, so a unary needs no aggregate code of its own. */
+    int32 ua[2] = (1, 2);
+    (int32, int32) ut = -ua;                       // array operand, tuple result
+    __println("-ua= " + ut[0] + " " + ut[1]);      // -1 -2
+    (int, int) unp[2] = ((1,2), (3,4));            // array OF TUPLES
+    (int, int) unr[2] = -unp;
+    __println("-unp= " + unr[0][0] + " " + unr[1][1]);   // -1 -4
+
     /* SIMPLE cross-form copy — int[2] <-> (int,int). The copy is lowered BY SLOT
        (array index and tuple slot are the same i-th sub-component), in both
        directions and for both assign and move. */
@@ -465,7 +476,7 @@ int32 main() {
 
 /* a CROSS-FORM shift count of mismatched shape (a 3-element array count, a 2-slot
    tuple lhs) — the count must match the lhs shape regardless of form. */
-//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+//-EXPECT-ERROR: Aggregate shapes differ
 //int neg_crossform_shift() {
 //    (int, int) t = (1, 2);
 //    int cnt[3] = (1, 2, 3);

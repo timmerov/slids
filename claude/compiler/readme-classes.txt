@@ -274,6 +274,19 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
 CLASS-OPERATOR CHAINS — MINIMUM TEMPORARIES (landed 2026-07-12; classify + desugar)
 canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
 
+  * AN OPERATION ON AN AGGREGATE OF CLASSES IS THE OPERATION BY SLOT (landed 2026-07-13).
+    A class operator over a tuple / array of classes needs NO class-specific aggregate code:
+    classify's SLOT-WISE EXPLODE (readme.txt) rewrites `(a,b) + (c,d)` into the tuple literal
+    `(a+c, b+d)` BEFORE any of the machinery below runs, so each element is an ordinary class
+    binary — stamped, chained, lowered, exactly like a scalar one. Aug-assign explodes into
+    per-slot STATEMENTS so a class slot reaches its own `op+=`.
+    THIS IS WHY IT COULD NOT HAVE LIVED IN CODEGEN: a class operator needs an ADDRESS (its
+    `^self` receiver, its sret destination), and codegen's aggregate walkers worked on SSA
+    VALUES (extractvalue / insertvalue), where a slot has none. They could only emit numeric
+    instructions — so a class-bearing aggregate emitted `add { i32 } %a, %b`, INVALID IR that
+    slidsc accepted (widen::commonType succeeds for two identical class types). Both walkers
+    are deleted. Canon evaluate.sl block Z; the ORDER (a chain landing in a slot must be
+    constructed before it is written into) is block Z7.
   * THE SPLIT: classify RESOLVES a class operator and STAMPS it; DESUGAR LOWERS it. classify
     leaves the kBinaryExpr in place (class_op_chain) carrying five resolved operator entry
     ids — the 2-arg `op<OP>(lhs,rhs)`, the fuse `op<OP>=(rhs)`, the two seeds `op=(lhs)` /

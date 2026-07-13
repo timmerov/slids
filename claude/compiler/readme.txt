@@ -497,6 +497,20 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     only a copy is deferred), and to the whole value of any class-bearing target. It does NOT
     recurse into a class's FIELD tuple: a construction's args are field initializers and the
     ctor must SEE them, so that copy cannot be hoisted past it (readme-classes.txt / todo).
+    A class CHAIN in a SLOT is peeled too (`(A,A) t = p + q`), and the reason is a limit of
+    DESUGAR, not of the language: the tuple-literal distribution can hand a slot to a nested
+    literal or a construction, but NOT to a chain — a chain's accumulator home is answered per
+    STATEMENT, and a slot of a literal is not one. Unpeeled, the chain lifts to a temp, the
+    tuple is formed from the temps, and the whole VALUE fills the storage, after which each
+    slot's ctor runs ON TOP of the result (a writing ctor read back 99, not the sum). Peeled,
+    the slot is constructed and the chain is assigned INTO it — an ordinary chain into a live
+    target. At the ROOT a chain is NOT peeled: a decl whose whole rhs is a chain IS the
+    accumulator (zero temps), which was always right.
+    When the exploded rhs carries an agg_conv_spill SEQ (an operand that had to be evaluated
+    once), the spill decls are LIFTED OUT and re-placed as a GROUP: the decl (now defaults)
+    goes to the prelude, and the spill and the transfers share one BLOCK. Looking THROUGH the
+    seq instead would leave the spill riding on the decl's rhs, so the temp would die at the
+    DECL's semicolon — before the peeled transfers that read it.
     ONE SITE STILL HAS THE OLD WRONG ANSWER (todo.txt): that class FIELD. A GLOBAL also cannot
     be split (it has no statement list — `prelude` is null, hence the `is_global` guard — its
     initializer becomes a synth ctor instead), but it no longer needs to be: a global's
@@ -514,29 +528,43 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     a class-bearing aggregate filled from a tuple literal SLOT BY SLOT (emitTupleFromTuple /
     emitArrayFromTuple's class arm) rather than building one whole value and storing it — which
     would BLIT past each element's op=. See readme-classes.txt, THE TRANSFER INVARIANT.
-  * AGGREGATE ARITHMETIC — arrays and tuples are one homogeneous-aggregate shape and
-    share ONE slot-wise arith/bitwise path: `tuple op tuple`, `array op array`, and
-    mixed `array op tuple` / `tuple op array` (a mixed result is always a TUPLE — the
-    heterogeneous-capable shape; array op array stays an array), plus a scalar
-    BROADCAST into ANY aggregate (tuple or array). Matching shape required; nested aggregate slots RECURSE
-    (array-of-tuples op array-of-tuples); a per-element narrow is rejected at classify.
-    classify::aggregateArithType is the SINGLE inference — the kBinaryExpr arm AND the
-    kAugAssignStmt arith arm both call it, so `lhs op= rhs` can't diverge from
-    `lhs op rhs`; the op= store-back is gated by checkAggregateStoreWiden (cross-form
-    per-leaf widen, allowing array<-tuple). codegen::emitAggregateArith builds the
-    result via extractvalue/insertvalue (an array `[N x T]` aggregates like a struct),
-    recursing for a nested slot. NESTED cross-form arithmetic (array-of-tuples op
-    tuple-of-arrays) works — aggregateArithType is form-agnostic. SHIFT is slot-wise
-    too (`<<`/`>>`/`<<=`/`>>=`): an aggregate lhs shifts per slot, a scalar count
-    broadcasts and a matching-shape aggregate count applies per slot — but on its OWN
-    path (classify::checkAggregateShift + codegen::emitScalarShift/emitAggregateShift),
-    NOT aggregateArithType, since the result is the lhs type (the count doesn't widen
-    it) and the leaf op differs. Comparison on an aggregate is rejected. SCALAR
-    BROADCAST works for arrays too now (`array + 1`, `array += 1`, `tuple += 1`): the
-    binary arm AND the aug-assign arm route a one-aggregate-one-scalar op through
-    aggregateArithType's broadcast branch (the scalar repeats per slot, result keeps
-    the aggregate's form), and a literal scalar flexes to the aggregate's leaf type so
-    `int8[3] + 1` stays int8. INC/DEC on an aggregate (`++array` / `--tuple`) also
+  * THE SLOT-WISE EXPLODE — A TUPLE DESUGARS TO THE OPERATION BY SLOT, ITERATIVELY AND
+    RECURSIVELY (classify::explodeAggregateExpr / explodeAggregateAug). An ARRAY IS a
+    homogeneous tuple, so this is every aggregate, and it is the ONLY aggregate machinery:
+    `(a,b) + (c,d)` becomes the tuple literal `(a+c, b+d)`, and each element is then
+    classified as an ORDINARY operation — class dispatch, literal flex, widen, the chain
+    machinery — so NOTHING aggregate-specific survives past classify. A nested aggregate
+    slot re-enters the rewrite when its own element is classified, so recursion is free.
+    The result lands through the tuple-literal distribution the declarator funnel already
+    has: element i is built into slot i of the storage that owns it.
+    Covers `tuple op tuple`, `array op array`, mixed `array op tuple` (a mixed result is a
+    TUPLE — the heterogeneous-capable shape), a scalar BROADCAST into any aggregate
+    (`array + 1`, `100 - arr`, `tuple += 1`), SHIFT (an aggregate lhs shifts per slot; a
+    scalar count broadcasts), the AUG-ASSIGN (which explodes into per-slot STATEMENTS, not
+    one expression — the operator the author wrote is the COMPOUND one, so a class slot must
+    reach its own `op+=`), and UNARY `+ - ~`. COMPARISON is still rejected on an aggregate
+    (`(a,b) == (c,d)` is an open semantic question: a tuple of bools, or one all-slots-equal
+    bool?), and so is `!`, for the same reason.
+    THE ONE SHAPE RULE lives here: every aggregate operand must have the same slot count (a
+    scalar broadcasts). Everything else — leaf types, narrowing, bitwise-on-a-float, a
+    non-integer shift count — is asked of each SLOT by the ordinary arms, because a slot IS
+    an ordinary operation. A nested shape mismatch needs no rule of its own: the nested pair
+    explodes in its turn and asks the same question there.
+    EVALUATED ONCE: an operand is read by every slot, so it goes through THE SPILL FUNNEL
+    unless it is safe to re-read — the same trichotomy the destructure's source model uses (a
+    tuple LITERAL is taken apart, a re-readable lvalue is indexed, anything else spills; a
+    scalar broadcasts by cloning, or spills if it cannot).
+    WHY IT IS HERE AND NOT IN CODEGEN — the reason aggregates kept breaking. A class
+    operation needs an ADDRESS (a `^self` receiver, an sret destination). The old walkers
+    (codegen::emitAggregateArith / emitAggregateShift, both DELETED) worked in the VALUE
+    domain — extractvalue / insertvalue on SSA registers — where a slot has no address, so
+    they could only ever emit a numeric instruction. And they did: a class-bearing aggregate
+    emitted `add { i32 } %a, %b` — invalid IR, exit 0 (widen::commonType SUCCEEDS for two
+    identical class types, so nothing caught it) — while the unary arm had no aggregate
+    walker at all, so even `-(1, 2)` emitted `sub { i32, i32 } 0, %t`. Codegen now ASSERTS
+    that an aggregate operand never reaches emitBinary. Canon tuple/anon.sl + array.sl +
+    combined.sl (numeric), class/evaluate.sl block Z (classes).
+    INC/DEC on an aggregate (`++array` / `--tuple`) also
     works — codegen's kBumpExpr walks the leaves and applies the SAME per-leaf bump
     (numeric ±1, iterator one element) it uses for a scalar, so it steps every leaf
     recursively in every PPID position (statement/expression, pre/post, complex

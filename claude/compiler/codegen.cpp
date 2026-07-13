@@ -460,84 +460,6 @@ std::string emitArithInstr(std::string const& op, std::string const& lv,
     return tmp;
 }
 
-// Element-wise arithmetic over aggregate VALUES (array and/or tuple), recursing
-// for a nested aggregate slot/element and broadcasting a scalar operand. lv/rv are
-// SSA registers of types lt/rt; resT is the result aggregate (tuple or array,
-// decided by classify's aggregateArithType). extractvalue/insertvalue work on a
-// `[N x T]` array exactly like a struct. Returns the result SSA register.
-std::string emitAggregateArith(std::string const& op,
-                               std::string const& lv, widen::TypeRef lt,
-                               std::string const& rv, widen::TypeRef rt,
-                               widen::TypeRef resT, int file, int tok,
-                               std::ostream& out, diagnostic::Sink& diag) {
-    auto isAgg = [](widen::TypeRef t) {
-        widen::Type::Form f = widen::form(widen::strip(t));
-        return f == widen::Type::Form::kTuple || f == widen::Type::Form::kArray;
-    };
-    // The per-slot type of an aggregate at index i: a tuple's slot, or an array's
-    // element-with-remaining-dims (same for every i).
-    auto slotType = [](widen::TypeRef t, std::size_t i) -> widen::TypeRef {
-        widen::TypeRef s = widen::strip(t);
-        if (widen::form(s) == widen::Type::Form::kTuple) return widen::get(s).slots[i];
-        widen::Type const& a = widen::get(s);
-        widen::TypeRef elem = a.elem;                    // copy before any intern
-        std::vector<int> rest(a.dims.begin() + (a.dims.empty() ? 0 : 1),
-                              a.dims.end());
-        return rest.empty() ? elem : widen::internArray(elem, rest);
-    };
-    // Result slot types + count.
-    widen::TypeRef rsT = widen::strip(resT);
-    std::vector<widen::TypeRef> rslots;
-    bool resTup = widen::form(rsT) == widen::Type::Form::kTuple;
-    assert((resTup || widen::form(rsT) == widen::Type::Form::kArray)
-        && "emitAggregateArith: result type is not an aggregate");
-    if (resTup) {
-        rslots = widen::get(rsT).slots;
-    } else {
-        widen::Type const& a = widen::get(rsT);
-        int n = a.dims.empty() ? 0 : a.dims[0];
-        widen::TypeRef elem = a.elem;                    // copy before any intern
-        std::vector<int> rest(a.dims.begin() + (a.dims.empty() ? 0 : 1),
-                              a.dims.end());
-        widen::TypeRef slot = rest.empty() ? elem : widen::internArray(elem, rest);
-        rslots.assign(static_cast<std::size_t>(n < 0 ? 0 : n), slot);
-    }
-    std::string aggty = llvmForRef(resT);
-    std::string acc = "undef";
-    for (std::size_t i = 0; i < rslots.size(); i++) {
-        widen::TypeRef st = rslots[i];
-        // Each operand: extract slot i (aggregate) or broadcast the scalar.
-        std::string lslot = lv; widen::TypeRef lslotT = lt;
-        if (isAgg(lt)) {
-            std::string ex = newTmp("lx");
-            out << "  " << ex << " = extractvalue " << llvmForRef(lt) << " "
-                << lv << ", " << i << "\n";
-            lslot = ex; lslotT = slotType(lt, i);
-        }
-        std::string rslot = rv; widen::TypeRef rslotT = rt;
-        if (isAgg(rt)) {
-            std::string ex = newTmp("rx");
-            out << "  " << ex << " = extractvalue " << llvmForRef(rt) << " "
-                << rv << ", " << i << "\n";
-            rslot = ex; rslotT = slotType(rt, i);
-        }
-        std::string r;
-        if (isAgg(st)) {
-            r = emitAggregateArith(op, lslot, lslotT, rslot, rslotT, st,
-                                   file, tok, out, diag);
-        } else {
-            std::string lc = widen::convert(lslot, lslotT, st, file, tok, out, diag);
-            std::string rc = widen::convert(rslot, rslotT, st, file, tok, out, diag);
-            r = emitArithInstr(op, lc, rc, st, out);
-        }
-        std::string tmp = newTmp(resTup ? "tup" : "arr");
-        out << "  " << tmp << " = insertvalue " << aggty << " " << acc << ", "
-            << llvmForRef(st) << " " << r << ", " << i << "\n";
-        acc = tmp;
-    }
-    return acc;
-}
-
 // Scalar shift leaf — `lv << rv` / `lv >> rv` at the lhs type `lt`. A FLOAT lhs
 // shifts as `lv * (1<<rv)` / `lv / (1<<rv)` (per fold.sl); an integer lhs width-
 // matches the count to `lt` then shl / lshr (unsigned) / ashr (signed). Returns
@@ -584,13 +506,6 @@ std::string emitScalarShift(std::string const& op, std::string const& lv,
     return tmp;
 }
 
-// Slot-wise aggregate shift (an array IS a homogeneous tuple): shift each lhs
-// slot, recursing for a nested slot. A SCALAR count broadcasts (`rv` used at every
-// slot); an AGGREGATE count applies per slot (extractvalue rt, i). The result IS
-// the lhs aggregate type. Defined below (after cgAggSlotCount/cgAggSlotType).
-std::string emitAggregateShift(std::string const& op, std::string const& lv,
-                               widen::TypeRef lt, std::string const& rv,
-                               widen::TypeRef rt, std::ostream& out);
 
 std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                        strings::Pool& pool, std::ostream& out,
@@ -615,13 +530,13 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
         // Classify already validated the operands; nothing to recheck here.
         std::string lv = emitExpr(lhs, syms, pool, out, diag, lt);
         std::string rv = emitExpr(rhs, syms, pool, out, diag, rt);
-        // Aggregate lhs: shift each slot (a scalar count broadcasts, an aggregate
-        // count applies per slot). The result IS the lhs aggregate type, so no
-        // dest-type convert (dest_type == lt here).
-        widen::Type::Form lf = widen::form(widen::strip(lt));
-        if (lf == widen::Type::Form::kTuple || lf == widen::Type::Form::kArray) {
-            return emitAggregateShift(op, lv, lt, rv, rt, out);
-        }
+        // An AGGREGATE operand never reaches codegen: classify TAKES IT APART, slot by
+        // slot, into a tuple literal of scalar shifts (THE SLOT-WISE EXPLODE). It used to
+        // be walked HERE, in the value domain, which is why a class slot could never
+        // dispatch its operator — an extractvalue'd slot has no address to pass.
+        assert(widen::form(widen::strip(lt)) != widen::Type::Form::kTuple
+            && widen::form(widen::strip(lt)) != widen::Type::Form::kArray
+            && "emitBinary shift: an aggregate operand must have been exploded in classify");
         std::string r = emitScalarShift(op, lv, lt, rv, rt, out);
         return widen::convert(r, lt, dest_type, expr.file_id, expr.tok, out, diag);
     }
@@ -629,16 +544,12 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     widen::TypeRef opty = expr.op_type;
     assert(opty != widen::kNoType && "emitBinary: BinaryExpr missing op_type");
 
-    // Aggregate result (array and/or tuple): element-wise op via emitAggregateArith
-    // (extractvalue/insertvalue, a scalar operand broadcasts, nested slots recurse).
-    // dest_type == opty here, so the aggregate is returned directly.
-    if (widen::form(widen::strip(opty)) == widen::Type::Form::kTuple
-        || widen::form(widen::strip(opty)) == widen::Type::Form::kArray) {
-        std::string lv = emitExpr(lhs, syms, pool, out, diag, lhs.inferred_type);
-        std::string rv = emitExpr(rhs, syms, pool, out, diag, rhs.inferred_type);
-        return emitAggregateArith(op, lv, lhs.inferred_type, rv, rhs.inferred_type,
-                                  opty, expr.file_id, expr.tok, out, diag);
-    }
+    // An AGGREGATE result never reaches codegen — see the shift arm above. classify's
+    // slot-wise explode turned it into a tuple literal of per-slot operations, each of
+    // which is an ordinary scalar op (or a class-operator call, which is the whole point).
+    assert(widen::form(widen::strip(opty)) != widen::Type::Form::kTuple
+        && widen::form(widen::strip(opty)) != widen::Type::Form::kArray
+        && "emitBinary: an aggregate operand must have been exploded in classify");
 
     // Iterator arithmetic: `iter ± int` (GEP by element) and `iter - iter`
     // (element-count difference). op_type carries the iterator type; the generic
@@ -1094,43 +1005,6 @@ widen::TypeRef cgAggSlotType(widen::TypeRef t, int i) {
     return rest.empty() ? elem : widen::internArray(elem, rest);
 }
 
-std::string emitAggregateShift(std::string const& op, std::string const& lv,
-                               widen::TypeRef lt, std::string const& rv,
-                               widen::TypeRef rt, std::ostream& out) {
-    using F = widen::Type::Form;
-    F rf = widen::form(widen::strip(rt));
-    bool rAgg = (rf == F::kTuple || rf == F::kArray);   // aggregate count vs broadcast
-    int n = cgAggSlotCount(lt);
-    std::string lt_ll = llvmForRef(lt);
-    std::string rt_ll = llvmForRef(rt);
-    std::string acc = "undef";
-    for (int i = 0; i < n; i++) {
-        widen::TypeRef lSlot = cgAggSlotType(lt, i);    // capture before any intern
-        std::string slot_ll = llvmForRef(lSlot);
-        std::string lslot = newTmp("lsx");
-        out << "  " << lslot << " = extractvalue " << lt_ll << " " << lv
-            << ", " << i << "\n";
-        // The count: extract slot i (aggregate count) or broadcast the scalar.
-        std::string rslot = rv;
-        widen::TypeRef rSlot = rt;
-        if (rAgg) {
-            rSlot = cgAggSlotType(rt, i);
-            std::string ex = newTmp("rsx");
-            out << "  " << ex << " = extractvalue " << rt_ll << " " << rv
-                << ", " << i << "\n";
-            rslot = ex;
-        }
-        F lsf = widen::form(widen::strip(lSlot));
-        std::string r = (lsf == F::kTuple || lsf == F::kArray)
-            ? emitAggregateShift(op, lslot, lSlot, rslot, rSlot, out)
-            : emitScalarShift(op, lslot, lSlot, rslot, rSlot, out);
-        std::string tmp = newTmp("shf");
-        out << "  " << tmp << " = insertvalue " << lt_ll << " " << acc
-            << ", " << slot_ll << " " << r << ", " << i << "\n";
-        acc = tmp;
-    }
-    return acc;
-}
 
 std::string emitImplicitAggregateConvert(std::string const& src_val,
                                           widen::TypeRef src, widen::TypeRef dst,

@@ -45,5 +45,13 @@ int32 main() {
     //Class cls = Class + 1 + 2 + 3;
     //__println(cls.a_);
 
+    Shift(int a) {
+        op<<(Shift^ lhs, Shift^ rhs) {
+            a = lhs^.a << rhs^.a;
+        }
+    }
+    //(Shift, Shift) tuple = (Shift(2), Shift(3)) << Shift(1); tuple;
+    //Shift res = Shift(2) << Shift(1); res;
+
     return 0;
 }

@@ -270,6 +270,22 @@ Acc(int v_) {
 // A class-typed FIELD, for a chain stored into `box.a_`.
 Box(Acc a_) { }
 
+// A tuple-of-classes returning function: block Z6 spills it (an operand is read by EVERY
+// slot, so one that cannot be re-read must be evaluated exactly once).
+(Acc, Acc) mkAccPair() { return (Acc(1), Acc(2)); }
+
+// Block Z7's observer. Ord (the block-W observer) has no operators at all -- that is the
+// point of it -- so it cannot be a chain operand. Zord is the same idea with the operators
+// a chain needs: a ctor that WRITES its own field, so a slot that is FILLED and only then
+// constructed reads back 99 instead of the sum. It does not print; Z7 reads VALUES.
+Zord(int v_) {
+    _()  { v_ = 99; }
+    ~()  { }
+    op=(Zord^ r)           { v_ = r^.v_; }
+    op+(Zord^ x, Zord^ y)  { v_ = x^.v_ + y^.v_; }
+    int get() { return v_; }
+}
+
 // THE ORDER OF CONSTRUCTION (block W). Its ctor WRITES its own field, which is the only
 // thing that makes the order OBSERVABLE: if the ctor runs AFTER the copy it overwrites the
 // copied value, and the variable ends up holding 99 instead of what it was copied from.
@@ -1345,6 +1361,97 @@ int32 main() {
         yNestedHost();
 
         __println("Y end (locals dtor next)");
+    }
+
+    // ---- Z: AN OPERATION ON AN AGGREGATE OF CLASSES ----
+    //
+    // A TUPLE DESUGARS TO THE OPERATION BY SLOT, ITERATIVELY AND RECURSIVELY -- and an ARRAY
+    // is a homogeneous tuple, so this is every aggregate. `(a, b) + (c, d)` becomes the tuple
+    // literal `(a + c, b + d)` in classify, and each element is then an ORDINARY class binary:
+    // it dispatches the class's operator, joins the chain machinery, and costs what any other
+    // chain costs. Nothing about aggregates survives past classify.
+    //
+    // NONE of this used to work, and it did not FAIL either -- it emitted `add { i32 } %a, %b`
+    // and exited 0. The aggregate walkers lived in CODEGEN and worked in the VALUE domain
+    // (extractvalue / insertvalue on SSA registers), where a slot has NO ADDRESS -- and a class
+    // operation needs one, for its `^self` receiver and its sret destination. So they could
+    // only ever emit a numeric instruction, and widen::commonType SUCCEEDS for two identical
+    // class types, so nothing caught it. Both walkers are deleted; codegen now asserts an
+    // aggregate operand never reaches it.
+    __println("Z: aggregates of classes");
+    {
+        (Acc, Acc) za = (Acc(1), Acc(2));
+        (Acc, Acc) zb = (Acc(10), Acc(20));
+
+        // Z1: tuple + tuple. Acc prints, so the objects are countable: each slot is a chain
+        // with its own destination, and its accumulator dies at the semicolon.
+        __println("Z1: (Acc,Acc) zc = za + zb;");
+        (Acc, Acc) zc = za + zb;
+        __println("Z1 end zc=" + zc[0].v_ + " " + zc[1].v_);                    // 11 22
+
+        // Z2: ARRAY + ARRAY -- an array IS a homogeneous tuple, so it is the same road.
+        Acc zd[2] = (Acc(1), Acc(2));
+        Acc ze[2] = (Acc(10), Acc(20));
+        __println("Z2: Acc zf[2] = zd + ze;");
+        Acc zf[2] = zd + ze;
+        __println("Z2 end zf=" + zf[0].v_ + " " + zf[1].v_);                    // 11 22
+
+        // Z3: the AUG-ASSIGN explodes into per-slot STATEMENTS, not one exploded expression --
+        // the operator the author wrote is the COMPOUND one, so each slot must reach its own
+        // `op+=`. Rebuilding it out of `op+` would be a different program (and impossible for
+        // a class that has only `op+=`). A class `+=` with no matching operator was the
+        // ORIGINAL struct-add hole; the aggregate form was that hole one level up.
+        __println("Z3: zd += ze;");
+        zd += ze;
+        __println("Z3 end zd=" + zd[0].v_ + " " + zd[1].v_);                    // 11 22
+
+        // Z4: a SCALAR class operand BROADCASTS into every slot.
+        Acc zs = Acc(100);
+        __println("Z4: (Acc,Acc) zg = za + zs;");
+        (Acc, Acc) zg = za + zs;
+        __println("Z4 end zg=" + zg[0].v_ + " " + zg[1].v_);                    // 101 102
+
+        // Z5: NESTED -- a nested aggregate slot re-enters the rewrite when its own element is
+        // classified, so the recursion costs nothing and needs no code of its own.
+        ((Acc,Acc),Acc) zn = ((Acc(1),Acc(2)),Acc(3));
+        __println("Z5: ((Acc,Acc),Acc) zo = zn + zn;");
+        ((Acc,Acc),Acc) zo = zn + zn;
+        __println("Z5 end zo=" + zo[0][0].v_ + " " + zo[0][1].v_ + " " + zo[1].v_);  // 2 4 6
+
+        // Z6: the SOURCE IS EVALUATED ONCE. Every slot reads the operand, so one that cannot
+        // be re-read (a call) SPILLS to a temp that is indexed instead -- the same spill
+        // funnel the destructure uses. The (Acc,Acc) temp dies at the SEMICOLON.
+        __println("Z6: (Acc,Acc) zp = mkAccPair() + za;");
+        (Acc, Acc) zp = mkAccPair() + za;
+        __println("Z6 end zp=" + zp[0].v_ + " " + zp[1].v_);                    // 2 4
+
+        __println("Z end (locals dtor next)");
+    }
+
+    // ---- Z7: THE ORDER OF CONSTRUCTION, IN A SLOT ----
+    //
+    // The slot-wise explode created a NEW way to reach the fill-then-construct bug (block W):
+    // a class CHAIN landing in a tuple slot. Desugar's tuple-literal distribution can hand a
+    // slot to a nested literal or to a construction, but NOT to a chain -- a chain's
+    // accumulator home is answered per STATEMENT, and a slot of a literal is not one. So the
+    // chain lifted to a temp, the tuple was formed from the temps, and the whole VALUE filled
+    // the storage -- after which each slot's ctor ran ON TOP of the result. Ord's ctor WRITES
+    // its own field, so this read back 99, not the sum: a wrong ANSWER, which no printing class
+    // could show. splitTransferInit now peels a chain in a SLOT exactly as it peels an lvalue:
+    // the slot is constructed, then the chain is assigned into it. At the ROOT it must NOT be
+    // peeled -- a decl whose whole rhs is a chain IS the accumulator (zero temps), and that was
+    // always right, which is what z8 pins.
+    {
+        Zord z1(0);  z1.v_ = 1;
+        Zord z2(0);  z2.v_ = 2;
+        (Zord, Zord) zt = (z1, z2);
+        (Zord, Zord) zu = (z1, z2);
+
+        (Zord, Zord) zv = zt + zu;
+        __println("Z7: aggregate chain zv=" + zv[0].get() + " " + zv[1].get());     // 2 4
+
+        Zord z8 = z1 + z2;
+        __println("Z7: scalar chain z8=" + z8.get());                               // 3
     }
 
     return 0;

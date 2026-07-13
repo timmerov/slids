@@ -336,6 +336,17 @@ int32 main() {
         int bw[2] = (12, 12);
         bw &= (10, 6);
         __println("bw&= " + bw[0] + " " + bw[1]);                     // 8 4
+
+        // UNARY, element-wise — an operation on an array is the operation BY ELEMENT,
+        // and a unary is an operation. It used to type the result as the array and then
+        // emit a numeric instruction on the whole struct (invalid IR); now the array is
+        // TAKEN APART and each element negates on its own.
+        int ua[3] = (1, 2, 3);
+        int un[3] = -ua;
+        __println("-ua= " + un[0] + " " + un[1] + " " + un[2]);       // -1 -2 -3
+        int um[2][2] = ((1,2),(3,4));
+        int umn[2][2] = -um;                                          // multi-dim recurses
+        __println("-um= " + umn[0][0] + " " + umn[1][1]);             // -1 -4
     }
 
     /* SCALAR distribution over an array — broadcast a scalar to every element (an
@@ -615,8 +626,9 @@ int32 main() {
 //}
 
 /* a slot-wise array shift count of the wrong length (3-element count, 2-element
-   array) is rejected — the count must match the lhs shape. */
-//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+   array) is rejected — the count must match the lhs shape, the same rule every
+   aggregate operation asks. */
+//-EXPECT-ERROR: Aggregate shapes differ
 //int neg_array_shift_shape() {
 //    int a[2] = (1,2);
 //    int b[2] = a << (1,2,3);
@@ -680,8 +692,9 @@ int32 main() {
 //    return a[0];
 //}
 
-/* a bitwise op on a float element/slot. */
-//-EXPECT-ERROR: Bitwise '&' not defined on a floating-point slot
+/* a bitwise op on a float element/slot. The aggregate is TAKEN APART, so the rejection
+   comes from the ORDINARY scalar rule, naming the element's own type. */
+//-EXPECT-ERROR: Bitwise '&' not defined on floating-point type 'float32'
 //int neg_array_bitwise_float() {
 //    float32 a[2] = (1.0, 2.0);
 //    a &= (1.0, 1.0);

@@ -8,15 +8,55 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * this should compile but doesn't:
-    Shift(int a) { op<<(Shift^ lhs, Shift^ rhs) { a = lhs^.a << rhs^.a; } }
-    (Shift, Shift) tuple = (Shift(1), Shift(3)) << 1;
-    Today: "Shift left-hand side must be numeric; got '(Shift, Shift)'."
-    WHY: the left operand is a TUPLE, not a class, so the class-operator dispatch never
-    fires and the binary falls through to the numeric path, which rejects a tuple.
-    MISSING: an ELEMENT-WISE lowering of a class operator over an aggregate operand —
-    apply the operator to each element. Assignment and aug-assign already do this for
-    aggregates; a binary does not.
+  * A FUNCTION RETURNING A TUPLE OF CLASS LVALUES FILLS THE SRET SLOTS AND THEN CONSTRUCTS
+    THEM. A wrong ANSWER, and PRE-EXISTING (it has nothing to do with the slot-wise explode;
+    found while testing it). With a class whose ctor writes its own field:
+
+        Zord(int v_) { _() { v_ = 99; } ... }
+        (Zord,Zord) two() { Zord a(0); a.v_ = 1; Zord b(0); b.v_ = 2; return (a, b); }
+        (Zord,Zord) t = two();      // t reads back 99 99, not 1 2
+
+    The SCALAR return (`Zord one() { ...; return a; }`) is correct — NRVO builds the local IN
+    the caller's slot. The TUPLE return is not: the IR shows `@Zord__$move` into each sret
+    slot and THEN `@Zord__$ctor` on those same slots. It is exactly the bug block W fixed for
+    a DECL ("a class can only be copied into"), at the RETURN's sret slot: the storage is
+    FILLED (which IS the transfer) and only then FINALIZED.
+    WHY THE DECL FIX DOES NOT REACH IT: classify's applyTransferSplit peels the transfer off
+    a DECL and re-emits it against the constructed variable. A return's sret slot is not a
+    named variable — there is nothing for classify to address — so the split has no target.
+    FIX = the per-slot order at the fill site: a slot whose initializer is a class LVALUE must
+    be CONSTRUCTED and then transferred into, not filled and then constructed. That is
+    emitInitFill's class-bearing aggregate arm (emitTupleFromTuple / emitArrayFromTuple),
+    which today fills every slot and leaves emitConstructed to run the hooks over the whole
+    aggregate afterwards. A CONSTRUCTION element must keep the current order (its ctor has to
+    SEE its field initializers — evaluate.sl Q4).
+    NOT TESTED: a golden would pin 99. evaluate.sl block Z7 pins the DECL half (which is
+    correct); Z6 uses a class whose ctor does not write, so this stays invisible there.
+
+  * A CLASS-BEARING ARRAY DECL THAT IS SPLIT BUILDS AN EXTRA PAIR OF DEFAULTS (cost only,
+    values and balance are correct). evaluate.sl block Z2 (`Acc zf[2] = zd + ze;`) shows two
+    extra `Acc:ctor: 0` / `Acc:dtor: 0` objects that the TUPLE form (Z1) does not: the array
+    default-fill materializes the zero-value tuple as a temp instead of building it into the
+    elements. Every object is destroyed exactly once, so this is efficiency, not correctness.
+
+  * A CONSTRUCTION AS THE LEFT OPERAND OF A CLASS BINARY ONLY DISPATCHES IF THE CLASS HAS THE
+    COMPOUND OPERATOR. `Add(7) + a` reports "Operator '+' is not defined on class 'Add'" for
+    a class with a 2-arg `op+` and no `op+=`, while `mk() + a` (a CALL — the same rvalue) and
+    `a + Add(7)` (the same construction, on the right) both work. stampClassBinary's
+    COLLAPSED-HEAD role treats a construction head as the accumulator itself, so a head built
+    WITH args demands `op<OP>=` (op= would discard those args) and gives up when there is
+    none. The collapse is an OPTIMIZATION (it saves a temp); with a 2-arg `op<OP>` available
+    the construction should simply fall back to being a REAL OPERAND, materialized like any
+    other rvalue. FIX = in the collapsed-head arm, `if (!viable && bin_id >= 0)` drop the
+    collapse and take the real-operand path — but desugar re-derives the role from the AST
+    (lhs.kind == construction), so both ends have to agree; the stamp must carry the decision.
+    This is what stops test/misc/bug.sl's line from compiling even with the aggregate explode.
+
+  * SHOULD A WEAK LITERAL BIND TO A CLASS PARAMETER? `Shift s = 1;` field-fills a class in a
+    DECLARATION, but `1` does NOT convert to a `Shift^` parameter, so a class operator
+    `op<<(Shift^, Shift^)` cannot be called as `s << 1`. Open question, deferred: either the
+    operator is written `op<<(Shift^, int)` (works today), or an argument position gains the
+    same literal-to-class fill a declaration has. Needed by test/misc/bug.sl's line.
 
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
@@ -73,6 +113,9 @@ BUGS
     chain is safe to re-read, anything else spills), and the SPILL is classify's
     `spillToTemp` funnel (which also makes the temp's lifetime an explicit choice rather than
     an accident of where the decl is parked). These sites should use both.
+    The slot-wise explode is the THIRD site to ask the question and the second to answer it
+    right (`isReReadableOperand` + `prepareOperand` + `spillToTemp`); the two sites named here
+    are the ones still left over. Fold all of it into ONE take-the-source-apart helper.
     No bare-lvalue-with-side-effect test exists yet.
 
 

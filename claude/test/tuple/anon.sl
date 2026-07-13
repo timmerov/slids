@@ -114,6 +114,14 @@ int pick() {
     return 1;
 }
 
+// counts its calls — an operand of a slot-wise operation is read by EVERY slot, so one
+// that cannot be re-read (a call) must be spilled to a temp and evaluated exactly ONCE.
+global int bumps = 0;
+(int, int) bumped() {
+    bumps = bumps + 1;
+    return (1, 2);
+}
+
 int32 main() {
 
     (Dir, bool) pair = (Dir:kN, false);
@@ -182,6 +190,31 @@ int32 main() {
     /* bitwise, element-wise. */
     (int, int) bw = (12, 12) & (10, 6);
     __println("bw= " + bw[0] + " " + bw[1]);                  // 8 4
+
+    /* UNARY, element-wise. A tuple desugars to the operation BY SLOT — and a unary is an
+       operation, so `-(a, b)` is `(-a, -b)`. This arm never had an aggregate path at all,
+       in classify OR codegen: it typed the result as the tuple and then emitted
+       `sub { i32, i32 } 0, %t` — invalid IR, which llc rejected and slidsc did not.
+       Nothing here is a class; the aggregate walkers were simply hand-written per
+       operator, and this operator was never written. */
+    (int, int) un = -(1, 2);
+    __println("un= " + un[0] + " " + un[1]);                  // -1 -2
+
+    (int, int) uv = (3, 4);
+    (int, int) un2 = -uv;                                     // a VARIABLE operand
+    __println("un2= " + un2[0] + " " + un2[1]);               // -3 -4
+
+    (int, int) ub = ~(0, 1);                                  // bitwise NOT, per slot
+    __println("ub= " + ub[0] + " " + ub[1]);                  // -1 -2
+
+    ((int,int),(int,int)) unn = -((1,2),(3,4));               // nested: recurses
+    __println("unn= " + unn[0][0] + " " + unn[1][1]);         // -1 -4
+
+    /* the SOURCE IS EVALUATED ONCE, however many slots read it. A call operand cannot be
+       re-read per slot, so it spills to a temp that is indexed instead (the spill funnel).
+       `bumps` counts what a re-read would double. */
+    (int, int) once = bumped() + (10, 20);
+    __println("once= " + once[0] + " " + once[1] + " bumps= " + bumps);   // 11 22 bumps= 1
 
     /* landing 4 — tuple through functions */
 
@@ -375,8 +408,10 @@ int32 main() {
 //    return b[0];
 //}
 
-/* a slot-wise shift count must match the lhs shape (a 2-tuple shifted by a 3-tuple). */
-//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+/* a slot-wise shift count must match the lhs shape (a 2-tuple shifted by a 3-tuple) —
+   the SAME shape rule every aggregate operation asks, because a shift is taken apart by
+   slot like every other one. */
+//-EXPECT-ERROR: Aggregate shapes differ
 //int neg_shift_shape() {
 //    (int,int) a = (1,2);
 //    (int,int) b = a << (1,2,3);
@@ -400,8 +435,10 @@ int32 main() {
 //    return x;
 //}
 
-/* a count that matches at the TOP level but mismatches a NESTED slot is rejected. */
-//-EXPECT-ERROR: A slot-wise shift needs a matching-shape count
+/* a count that matches at the TOP level but mismatches a NESTED slot is rejected — and
+   needs no rule of its own: the nested slot pair explodes in its turn and asks the same
+   shape question there. */
+//-EXPECT-ERROR: Aggregate shapes differ
 //int neg_shift_nested_shape() {
 //    ((int,int),(int,int)) x = ((1,1),(1,1));
 //    ((int,int),(int,int)) y = x << ((1,1),(1,1,1));
