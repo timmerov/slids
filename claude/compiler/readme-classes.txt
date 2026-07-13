@@ -184,12 +184,13 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     the enclosing ctor the way a tuple slot's can — it has to land BETWEEN the field's own
     ctor and the enclosing ctor body, inside emitConstructed's hook recursion, where the
     initializer expressions no longer exist. todo.txt.
-    ALSO NOT DONE, and this one IS the same problem: a GLOBAL (`global Add gb = ga;`). It is
-    not that the rule differs — it is that a global declaration is not lowered here. Its
-    initializer becomes the body of a synthesized LAZY CTOR (desugar's collectGlobals), so
-    there is no statement list at the declaration for the transfer to be split into; that is
-    what classify's `is_global` guard says, and lifting the guard changes nothing. The split
-    has to be made where the lazy ctor's body is built. todo.txt.
+    A GLOBAL had the same wrong answer (`global Add gb = ga;` read back the ctor's value, not
+    ga's) and CANNOT be fixed the same way — a global declaration is not lowered here at all;
+    its initializer becomes the body of a synthesized LAZY CTOR (desugar's collectGlobals), so
+    there is no statement list to split the transfer into. That is what classify's `is_global`
+    guard says. It no longer needs fixing: a global's initializer must be a CONSTANT (readme.txt,
+    the globals section), so `= ga` is now rejected outright and a global class can only be
+    built from a constant field list — BUILT IN PLACE. The bug is unreachable, not repaired.
   * WHAT DECIDES WHETHER A COPY HAPPENS AT ALL IS THE SOURCE — never who wrote the operator,
     and never the shape of the target. dispatchAssignInit dispatches EVERY matching op, user
     or synthesized (findClassOperator finds a same-type op= for every class). The one thing

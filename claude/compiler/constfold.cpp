@@ -990,6 +990,24 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     if (decl.children.empty()) return false;        // grammar should have rejected
     parse::Node const& rhs = *decl.children[0];
 
+    // A COMPOUND global (array / tuple / class) is LAZY — built by a synthesized ctor
+    // (desugar::needsSynth), never static-initialized — so it has no literal to capture,
+    // and RANGE-CHECKING its initializer against its declared type asks a nonsense
+    // question: `global Add a = 5;` reported "Constant 'a' value '5' does not fit
+    // declared type 'Add'." 5 is not meant to fit Add; it is Add's FIRST FIELD, which is
+    // what the identical LOCAL declaration does with it. The routing must key on the
+    // declared TYPE (what desugar asks), not on whether the initializer happened to fold
+    // to a literal (what this function used to ask, because it is the CONST capture,
+    // reused). A scalar or pointer global stays static and still captures here.
+    if (entry.kind == parse::EntryKind::kGlobalVar
+        && entry.slids_type != widen::kNoType) {
+        widen::Type::Form f = widen::form(widen::strip(entry.slids_type));
+        if (f == widen::Type::Form::kArray || f == widen::Type::Form::kTuple
+            || f == widen::Type::Form::kSlid) {
+            return false;
+        }
+    }
+
     // Typeless const: infer slids_type from the folded rhs before the capture
     // below range-checks against it. A strong rhs (carried a typed const) takes
     // that type; a bare literal is WEAK — present the preferred default spelling,

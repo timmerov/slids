@@ -497,11 +497,11 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     only a copy is deferred), and to the whole value of any class-bearing target. It does NOT
     recurse into a class's FIELD tuple: a construction's args are field initializers and the
     ctor must SEE them, so that copy cannot be hoisted past it (readme-classes.txt / todo).
-    TWO SITES STILL HAVE THE OLD WRONG ANSWER, both filed in todo.txt: that class FIELD, and a
-    GLOBAL — a global has no statement list to split into (`prelude` is null, hence the
-    `is_global` guard), and its initializer is lowered into a synthesized LAZY CTOR by desugar's
-    collectGlobals, which still fills and then finalizes. The split has to be made where that
-    ctor's body is BUILT, not at the declaration.
+    ONE SITE STILL HAS THE OLD WRONG ANSWER (todo.txt): that class FIELD. A GLOBAL also cannot
+    be split (it has no statement list — `prelude` is null, hence the `is_global` guard — its
+    initializer becomes a synth ctor instead), but it no longer needs to be: a global's
+    initializer must be a CONSTANT (see the globals section), so a global class can only be
+    built from a constant field list — BUILT IN PLACE, no copy to order wrongly.
   * A TUPLE OF CLASSES IS BUILT INTO THE STORAGE THAT OWNS IT — never materialized twice.
     Two halves. (1) DESUGAR: liftSretCallExprs, in an INTERCEPTED position (a decl / a return —
     storage the statement owns RAW), DISTRIBUTES a tuple literal instead of lifting its
@@ -625,7 +625,42 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
       plain namespace `$glazy<id>` whose bodies resolve the members bare up the frame
       chain. After it, everything downstream sees only plain globals / named groups.
 
-  STATIC vs LAZY:
+  A GLOBAL'S INITIALIZER IS DATA, AND DATA IS CONSTANT (classify's `isConstantInit`, asked
+  at the TOP of the kVarDeclStmt arm, of EVERY global, whatever its type and whatever scope
+  it is declared in — file / namespace / class / function-internal / group member). A
+  literal, `nullptr`, or a tuple literal of those. constfold has already run, so folded
+  arithmetic, a substituted const and an enum member ARE literals by now.
+    * NOT a CONSTRUCTION EXPRESSION: `global Widget w = Widget(5);` is an error, though the
+      identical LOCAL is fine. Its arguments are constant, but a construction is exactly the
+      thing that RUNS CODE. A class global takes its fields as DATA — `global Widget w(5);`
+      (the declarator form: `(5)` is the FIELD LIST), or the same fill spelled `= 5` /
+      `= (7, 9)`. That holds at any depth: a construction as a field's value or as an
+      aggregate element is rejected too; the field-list spelling (`= ((5,7), 2)`,
+      `= ((1,2),(3,4))`) is the one that builds them.
+    * NOT a read of another variable (`= other_global`, `= ^g`) and NOT a call (`= f()`,
+      `Widget w(f())`).
+    * The CLASS is never policed beyond the initializer: its field DEFAULTS and its CTOR
+      BODY are code and may do whatever they like (allocate, call, touch other globals —
+      canon does all three). That is what the lazy gate is for, and it is where a global
+      built FROM another global belongs: `global (Widget c) { _() { c = w_; } ~() {} }`.
+    * This is POLICY, not soundness — the first-touch gate orders cross-global reads
+      correctly (a global's ctor touching another fires that one's gate first). It is
+      rejected because an initializer that quietly reads another global looks like data and
+      behaves like code. Say it in a ctor instead.
+    * It also makes the class-copy-into-a-global ordering bug UNREACHABLE: a global class
+      can only come from a constant field list, which BUILDS IN PLACE, so no copy exists to
+      order wrongly (see "A CLASS CAN ONLY BE COPIED INTO" — the LOCAL's fix does not reach
+      a global, whose initializer is lowered into a synth ctor rather than statements).
+    Canon test/assign/global.sl (its positives AND the eleven `is not a constant expression`
+    negatives).
+
+  STATIC vs LAZY — the routing keys on the DECLARED TYPE, never on the shape of the
+  initializer. (constfold's `tryCaptureConst` used to ask the latter: it is the CONST
+  capture, reused for a global's static init, so ANY global whose rhs folded to a literal
+  was dragged onto the static path and range-checked against its declared type — and
+  `global Widget w = 5;` reported "Constant 'w' value '5' does not fit declared type
+  'Widget'". 5 was never meant to fit a Widget; it is the Widget's first FIELD. It now bails
+  for an array / tuple / class global, matching what `needsSynth` says below.)
     * A scalar with a foldable constant init is STATICALLY allocated (`@sym = internal
       global <ty> <const>`); constfold captures the literal. A global is static iff it
       carries NO touch gate (`touch_symbol` empty — the sole codegen discriminator for

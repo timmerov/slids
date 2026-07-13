@@ -349,8 +349,9 @@ Hook(int v_, Acc a_, Acc b_) {
     ~() { Acc t = a_ + b_;  __println("Hook:dtor chain: " + t.v_); }
 }
 
-// A GLOBAL as a chain destination (a live target -- one temp, moved in).
-global Acc gacc = Acc(100);
+// A GLOBAL as a chain destination (a live target -- one temp, moved in). A global takes its
+// fields as DATA (`gacc(100)`); `= Acc(100)` is a construction EXPRESSION and is rejected.
+global Acc gacc(100);
 
 // The BLAST RADIUS of "a derived value binds to a base reference param". Two overloads, one
 // taking the BASE and one the DERIVED: an EXACT derived param must still WIN. The new rung-2

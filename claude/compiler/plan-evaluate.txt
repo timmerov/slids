@@ -201,12 +201,9 @@ STILL OPEN (all filed in todo.txt)
   - A class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
     constructed over — the ordering bug one level down, and NOT fixable the same way (see
     below). todo.txt.
-  - A GLOBAL initialized from a class LVALUE (`global Add gb = ga;`) — the SAME ordering bug at
-    a third site, and for a different reason: a global's initializer is lowered into a
-    synthesized LAZY CTOR (desugar's collectGlobals), so the declarator split never reaches it
-    (there is no statement list to split into — hence classify's `is_global` guard, whose
-    removal changes nothing). Fixable the same way, but where the lazy ctor's body is BUILT.
-    Deliberately UNTESTED: a golden here would pin the wrong answer. todo.txt.
+  (A GLOBAL from a class LVALUE — `global Add gb = ga;` — had the same ordering bug and is now
+  UNREACHABLE, not fixed: a global's initializer must be a CONSTANT, so it is rejected. See
+  below.)
 
 THE ORDER OF CONSTRUCTION — FIXED 2026-07-13 (it was filed here as a deferred wart, and was
                                               in fact a WRONG ANSWER)
@@ -229,10 +226,17 @@ THE ORDER OF CONSTRUCTION — FIXED 2026-07-13 (it was filed here as a deferred 
   a field's copy past the enclosing ctor breaks that (Q4 caught it, printing 0 instead of 3).
   The copy has to land BETWEEN the field's own ctor and the enclosing ctor body — inside
   emitConstructed's hook recursion, where the initializer expressions no longer exist. Left.
-  THE OTHER PLACE IT DOES NOT REACH: a GLOBAL. Not because the rule differs — it is the same
-  fix — but because a global declaration is not lowered where locals are. Its initializer
-  becomes the body of a synthesized lazy ctor in desugar, and there is no statement list at the
-  declaration to split the transfer into. Found while writing block Y's tests; left, filed.
+  THE OTHER PLACE IT DID NOT REACH: a GLOBAL (`global Add gb = ga;` read back 205, not 105).
+  Not because the rule differs, but because a global declaration is not lowered where locals
+  are: its initializer becomes the body of a synthesized lazy ctor in desugar, and there is no
+  statement list at the declaration to split the transfer into. Found while writing block Y's
+  tests. CLOSED 2026-07-13 by REJECTION, not repair: a global's initializer must be a CONSTANT
+  EXPRESSION — data, not code — so a global class can only be built from a constant field list,
+  which builds IN PLACE. There is no copy left to order wrongly. The lesson is worth keeping:
+  the fix for a bug is not always in the machinery that produces the wrong answer. Ask first
+  whether the shape that reaches it should exist. (plan.txt, A GLOBAL'S INITIALIZER IS DATA.)
+  Block R3's `gacc` moved to the declarator form (`global Acc gacc(100);`) — `= Acc(100)` is a
+  construction EXPRESSION and is no longer a legal global initializer. Same object, same golden.
 
 DESTRUCTURE'S COST — CLOSED 2026-07-13 (was the open item here)
   Block P used to build 4 objects where 2 would do, because a non-bare-name source was spilled

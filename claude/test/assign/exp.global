@@ -15,6 +15,15 @@ grid1=99
 combo=7,true
 widget:ctor
 wid=42,7
+widget:ctor
+wid2=42,7
+widget:ctor
+wid3=7,9
+widget:ctor
+widget:ctor
+wgrid=1,2 3,4
+widget:ctor
+cfg=42,7
 fromconst=8
 f32=1.5
 big=5000000000
@@ -165,4 +174,9 @@ tank:dtor
 back:dtor
 front:dtor
 depot:dtor
+widget:dtor
+widget:dtor
+widget:dtor
+widget:dtor
+widget:dtor
 widget:dtor

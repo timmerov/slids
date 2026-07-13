@@ -994,11 +994,25 @@ Phase 5 — classes
     transfer off the declaration and re-emits it against the constructed object, PER SLOT — so
     a construction slot still builds in place and only a copy is deferred. It does not touch
     the elide: what decides whether a copy happens at all is the SOURCE. Canon evaluate.sl
-    block W (class Ord). TWO SITES STILL HAVE IT (both todo.txt): a class FIELD from an lvalue —
-    not the same problem, a ctor must SEE its field initializers, so that copy cannot be hoisted
-    past it — and a GLOBAL, which IS the same problem but is not lowered here at all: its
-    initializer becomes a synthesized lazy ctor (desugar), so there is no statement list at the
-    declaration to split the transfer into.
+    block W (class Ord). ONE SITE STILL HAS IT (todo.txt): a class FIELD from an lvalue — not the
+    same problem, a ctor must SEE its field initializers, so that copy cannot be hoisted past it.
+    A GLOBAL had it too and cannot be split either (its initializer becomes a synthesized lazy
+    ctor, so there is no statement list at the declaration) — but it no longer needs to be: a
+    global's initializer must now be a CONSTANT, so a global class is only ever built from a
+    constant field list, in place. See A GLOBAL'S INITIALIZER IS DATA below.
+    A GLOBAL'S INITIALIZER IS DATA, AND DATA IS CONSTANT (2026-07-13) — a literal, `nullptr`, or
+    a tuple literal of those, asked of EVERY global at every scope (classify's isConstantInit).
+    NOT a construction expression: `global Widget w = Widget(5);` is an error though the local is
+    fine — its args are constant, but a construction is exactly the thing that runs code. A class
+    global takes its fields as DATA: `global Widget w(5);` (canon), or `= 5` / `= (7, 9)`. NOT a
+    read of another global (`= g`, `= ^g`) and NOT a call. The CLASS is not policed beyond that —
+    field defaults and the ctor BODY are code and may do anything, which is where a global built
+    from another global belongs (`global (Widget c) { _() { c = w_; } ~() {} }`).
+    The rule was enforced only for PRIMITIVE globals, so every class / array / tuple global
+    skipped it. And the STATIC-vs-LAZY routing keyed on whether the initializer FOLDED rather
+    than on the declared TYPE, so a class global with a literal init was range-checked against
+    its class type ("Constant 'w' value '5' does not fit declared type 'Widget'"). Both fixed;
+    the second is why `global Widget w = 5;` compiles at all now. Canon assign/global.sl.
     A CLASS RVALUE INTO LIVE STORAGE (2026-07-13) — the other half of the same sentence, and
     it closed four negatives. `x = Op(11)`, `x <-- mkOp()`, `arr[0] = mkClass()`,
     `r^ = Class(2)` were all REJECTED ("Constructing a class in this position" / "Returning a

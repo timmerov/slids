@@ -29,6 +29,32 @@ bool isLiteralKind(parse::Kind k) {
         || k == parse::Kind::kFloatLiteral;
 }
 
+// A GLOBAL'S INITIALIZER IS DATA, AND DATA IS CONSTANT. A literal, or an aggregate of
+// literals — nothing else. constfold has already run, so a constant scalar (folded
+// arithmetic, a substituted const, an enum member) IS a literal node by now.
+// A CONSTRUCTION EXPRESSION IS NOT DATA — `global Widget w = Widget(5);` is an error.
+// It is tempting to admit it because its ARGUMENTS are constant, but a construction is
+// exactly the thing that runs code, so admitting it lets the one expression form the
+// rule exists to exclude back in. The DECLARATOR form `global Widget w(5);` remains the
+// spelling for a class global with field values: `(5)` there is the FIELD LIST — data —
+// not an rhs expression. `= 5` and `= (7, 9)` are the same fill.
+// The class is never policed beyond that: its field DEFAULTS and its CTOR BODY are code
+// and may do whatever they like. That is what the lazy first-touch gate is for, and it
+// is where a global built from another global belongs — say it out loud, in a ctor:
+// `global (Widget c) { _() { c = w_; } ~() {} }`.
+// Rejecting a non-constant initializer is not a soundness fix (the gate orders
+// cross-global reads correctly); it is language policy. An initializer that quietly
+// reads another global looks like data and behaves like code.
+bool isConstantInit(parse::Node const& e) {
+    if (isLiteralKind(e.kind)) return true;
+    if (e.kind == parse::Kind::kNullptrLiteral) return true;
+    if (e.kind != parse::Kind::kTupleExpr) return false;
+    for (auto const& c : e.children) {
+        if (c && !isConstantInit(*c)) return false;
+    }
+    return true;
+}
+
 // A BARE LVALUE expression: one that names an existing storage location (an
 // address), as opposed to a computed rvalue (a call / op / construction / literal).
 // The distinction drives the copy-vs-elide and spread-vs-spill decisions: a bare
@@ -4840,6 +4866,26 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                   std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr) {
     switch (s.kind) {
         case parse::Kind::kVarDeclStmt: {
+            // A GLOBAL initializes to a CONSTANT EXPRESSION, whatever its type. This is
+            // the FIRST thing asked of a global declaration — before any type-specific
+            // arm below can rewrite the rhs (a construction becomes its arg tuple, a
+            // class init becomes a field tuple), and so before the class arm can return
+            // early, which is how a class global used to miss this rule entirely. It
+            // used to be asked only of a PRIMITIVE-typed global, on the reasoning that a
+            // compound one is built by a synthesized ctor rather than folded — so every
+            // class / array / tuple global skipped it, and `global Class b = a;` compiled
+            // (and then filled b from a before running b's ctor ON TOP of the copy — the
+            // wrong answer that made the hole visible). Rejecting the whole shape closes
+            // that by construction: a global class can only come from a construction or a
+            // constant aggregate, both of which BUILD IN PLACE, so no copy exists to
+            // mis-order.
+            if (s.is_global && !s.children.empty() && s.children[0]
+                && !isConstantInit(*s.children[0])) {
+                diagnostic::report(diag, {s.file_id, s.name_tok,
+                    "Initializer for '" + s.name
+                    + "' is not a constant expression.", {}});
+                return;
+            }
             // DECL-INIT swap (`Class a <--> rhs`): default-construct `a` (spliced as a
             // prelude), then rewrite THIS statement into an existing-var swap `a <--> rhs`
             // — which the kSwapStmt handler dispatches to a user op<--> or the default
@@ -5097,25 +5143,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                             + "' is not a constant expression.", {}});
                     }
                 }
-                // A GLOBAL scalar is static-initialized, so its initializer must fold
-                // to a constant. constfold has run, so a constant primitive init is now
-                // a literal node; a non-constant one (e.g. referring to another global,
-                // which is never substituted) is not. Report it here instead of letting
-                // codegen's static-fold hit an assert. A COMPOUND global (array / tuple
-                // / class) is built by a synthesized ctor, not folded — so this is scoped
-                // to a PRIMITIVE-typed global with an initializer present. The const path
-                // above is the analog for a const; kGlobalVar was never routed through it.
-                if (s.is_global && !s.children.empty() && s.children[0]
-                    && s.resolved_entry_id >= 0) {
-                    widen::TypeRef t = tree.entries[s.resolved_entry_id].slids_type;
-                    if (t != widen::kNoType
-                        && widen::form(widen::strip(t)) == widen::Type::Form::kPrimitive
-                        && !isLiteralKind(s.children[0]->kind)) {
-                        diagnostic::report(diag, {s.file_id, s.name_tok,
-                            "Initializer for '" + s.name
-                            + "' is not a constant expression.", {}});
-                    }
-                }
+                // (The global constant-initializer rule is asked at the TOP of this arm,
+                // for EVERY type — see isConstantInit.)
                 // A for-tuple LITERAL spill temp must be homogeneous — the loop
                 // iterates by an iterator strided by slot 0's type, so a mixed
                 // tuple would misread the other slots. (A tuple VARIABLE is checked

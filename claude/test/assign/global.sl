@@ -27,7 +27,7 @@ the first time any variable of the global slid is accessed,
 the sentinel is set, the ctor is called, and the dtor is
 registered. see below.
 
-as with class fields, global variables are initialized
+as with class fields, global variables must be initialized
 to a foldable constant expression.
 the type of a global variable may be inferred from its initializer.
 
@@ -170,6 +170,9 @@ within any code block:
     global int x_ = 0;  -->
     global (int x_ = 0) { }
 
+as with the long form, global variables must be initialized
+to a foldable constant expression.
+
 if the special slid function main does not explicitly
 instantiate global, then the compiler will automagically
 insert it for you.
@@ -306,8 +309,10 @@ synthesizes a ctor (fills the array/tuple init or the class construction args + 
 defaults, then fires the ctors on first touch) and, for a class-containing type, a dtor
 (at program exit, LIFO). This reuses the whole lazy-group machinery (sentinel / touch /
 registry). Scalars keep their static constant init. Construction with args is ordinary
-field-fill (there are no separate ctor parameters), so `global Widget w = Widget(42)`
-works exactly like the local form. Exercised below (`grid_`, `combo_`, `w_`).
+field-fill (there are no separate ctor parameters), so a class global takes its fields as
+DATA: `global Widget w(42)`, or the same fill written `= 42` / `= (7, 9)`. A CONSTRUCTION
+EXPRESSION is not data — `global Widget w = Widget(42)` is a compile error, unlike the
+local form. Exercised below (`grid_`, `combo_`, `w_`).
 
 CLASS-TYPED MEMBERS IN A GROUP — a group (named or anon) whose members are BY-VALUE
 class values. The group's single first-touch gate constructs EVERY compound member (in
@@ -465,15 +470,45 @@ void tick() {
 }
 
 /* CLASS-by-value global — a "global slid": lazily constructed (ctor on first access),
-   destructed at program exit (LIFO with the other lazy groups). Construction fills
-   fields positionally from the args and defaults the rest — here `id_` from the arg,
-   `tag_` from its default (construction is field-fill; there are no separate ctor
-   parameters), exactly as for a local `Widget w = Widget(42)`. */
+   destructed at program exit (LIFO with the other lazy groups). A global's initializer is
+   DATA, so a class global takes its FIELDS: the declarator form `w_(42)` fills `id_` from
+   the arg and defaults `tag_` (construction is field-fill; there are no separate ctor
+   parameters). A CONSTRUCTION EXPRESSION is not data — `= Widget(42)` is rejected here,
+   though the local `Widget w = Widget(42)` is fine. See the negatives. */
 Widget(int id_ = 100, int tag_ = 7) {
     _() { __println("widget:ctor"); }
     ~() { __println("widget:dtor"); }
 }
-global Widget w_ = Widget(42);
+global Widget w_(42);
+
+/* The same field fill spelled with `=` and a bare value: `= 42` fills `id_` and defaults
+   `tag_`. It is the ONLY spelling available without the `global` keyword (at file scope
+   `Widget x(42);` is a FUNCTION declaration), and it used to be rejected outright — a
+   global whose initializer folded to a literal was dragged onto the STATIC path and
+   range-checked against its declared type: "Constant 'wid2_' value '42' does not fit
+   declared type 'Widget'". 42 was never meant to fit a Widget; it is the Widget's first
+   FIELD. The routing has to key on the declared TYPE (a class is lazy), not on the shape
+   of the initializer. */
+global Widget wid2_ = 42;
+
+/* ...and the third spelling of the same field fill: an explicit FIELD TUPLE. */
+global Widget wid3_ = (7, 9);
+
+/* An ARRAY of class globals, each element a constant FIELD LIST. The nested-CONSTRUCTION
+   spelling `= (Widget(1), Widget(2))` is rejected by the same rule — a construction is
+   not data — so the field-list form is the one spelling, and it is the same objects. */
+global Widget wgrid_[2] = ((1, 2), (3, 4));
+
+/* THE ESCAPE HATCH. A global's INITIALIZER must be constant, so `global Widget copy_ = w_;`
+   is rejected — but a CONSTRUCTOR is code and may do whatever it likes, so this is how a
+   global is built from another global. It is the answer the rule gives, so it is pinned
+   here: the assignment runs after `cfg_` is constructed (a class can only be copied INTO),
+   and touching `cfg_` first pulls `w_` in through its own gate, so the order is right no
+   matter which is touched first. */
+global (Widget cfg_) {
+    _() { cfg_ = w_; }
+    ~() { }
+}
 
 /* POINTER-typed global — a static null init (a pointer is a foldable constant, so
    it stays static, not lazy). Read + null-compared in main. */
@@ -681,8 +716,8 @@ Dial(int d_ = 0) {
     _() { __println("dial:ctor"); }
     ~() { __println("dial:dtor"); }
 }
-global Dial dial_ = Dial(20);            /* first access is a METHOD CALL */
-global Dial knob_ = Dial(5);             /* first access is ADDRESS-OF */
+global Dial dial_(20);                   /* first access is a METHOD CALL */
+global Dial knob_(5);                    /* first access is ADDRESS-OF */
 global int addr_ = 50;                   /* scalar: `^addr_` writes through */
 
 int32 main() {
@@ -732,6 +767,13 @@ int32 main() {
     __println("grid1=" + grid_[1]);          // 99
     __println("combo=" + combo_[0] + "," + combo_[1]);                 // 7,true
     __println("wid=" + w_.id_ + "," + w_.tag_);   // widget:ctor, then 42,7 (arg + default)
+    __println("wid2=" + wid2_.id_ + "," + wid2_.tag_);  // widget:ctor, then 42,7 — `= 42`
+                                                        // is the same field-fill
+    __println("wid3=" + wid3_.id_ + "," + wid3_.tag_);  // widget:ctor, then 7,9
+    __println("wgrid=" + wgrid_[0].id_ + "," + wgrid_[0].tag_
+              + " " + wgrid_[1].id_ + "," + wgrid_[1].tag_);   // 1,2 3,4
+    __println("cfg=" + cfg_.id_ + "," + cfg_.tag_);     // 42,7 — copied from w_ in the
+                                                        // group's ctor
 
     /* scalar-kind breadth + const-into-global; and a pointer global (null) */
     __println("fromconst=" + fromconst_);    // 8 (kBonus + 3, const substituted)
@@ -945,10 +987,85 @@ int32 main() {
 //-EXPECT-ERROR: does not fit
 //global int8 toobig_ = 999;
 
-/* a global's scalar initializer must be a constant — `shots_` is a global (never
-   substituted), so `shots_ + 1` is not constant-foldable. */
+/* A GLOBAL INITIALIZES TO A CONSTANT EXPRESSION — its DATA is constant. Its
+   CONSTRUCTOR is code and may do whatever it likes (that is what the lazy first-touch
+   gate is for), so a class's field defaults and ctor body are never in question here;
+   only the expression written to the right of the `=` is. Everything below reads a
+   variable or calls a function, and none of it is type-specific: the rule used to be
+   asked only of a PRIMITIVE global, so a class / array / tuple global skipped it
+   entirely. `global Widget copy_ = w_;` then compiled, and FILLED copy_ from w_ before
+   running copy_'s ctor on top of the copy — a wrong answer. Rejecting the shape closes
+   that by construction: a class global can only come from a construction or a constant
+   field list, both of which BUILD IN PLACE, so there is no copy left to mis-order.
+   When you do want a global built from another one, say so in a ctor, where the order
+   is visible: `global (Widget c) { _() { c = w_; } ~() {} }`. */
+
+/* a scalar — `shots_` is a global (never substituted), so `shots_ + 1` doesn't fold. */
 //-EXPECT-ERROR: is not a constant expression
 //global int nc_ = shots_ + 1;
+
+/* a CLASS global copy-initialized from another global. */
+//-EXPECT-ERROR: is not a constant expression
+//global Widget copy_ = w_;
+
+/* a CLASS global from a call. */
+//-EXPECT-ERROR: is not a constant expression
+//Widget mkw() { return Widget(1); }
+//global Widget called_ = mkw();
+
+/* a CONSTRUCTION EXPRESSION on the rhs — the form that makes the rule bite. Its
+   ARGUMENTS are constant, and it is still not DATA: a construction is exactly the thing
+   that runs code. The LOCAL `Widget w = Widget(42);` is fine; the global takes its fields
+   instead — `global Widget w_(42);` (canon), or `= 42` / `= (7, 9)`. */
+//-EXPECT-ERROR: is not a constant expression
+//global Widget ctor_ = Widget(42);
+
+/* ...at any depth: a construction nested as a class FIELD's value... */
+//-EXPECT-ERROR: is not a constant expression
+//Box(Widget bw_ = Widget(3), int n_ = 0) { _() {} ~() {} }
+//global Box ncbox_ = ((Widget(5)), 2);
+
+/* ...or as an ELEMENT of an aggregate. (`= ((1,2), (3,4))` is the field-list form that
+   works — see `wgrid_` above.) */
+//-EXPECT-ERROR: is not a constant expression
+//global Widget ncarr2_[2] = (Widget(1), Widget(2));
+
+/* an ARRAY global with a non-constant element. */
+//-EXPECT-ERROR: is not a constant expression
+//global int ncarr_[2] = (shots_, 2);
+
+/* a TUPLE global with a non-constant slot. */
+//-EXPECT-ERROR: is not a constant expression
+//global (int, int) nctup_ = (shots_, 2);
+
+/* a POINTER global initialized to the ADDRESS of another global. `^shots_` is a
+   link-time constant in C's model; it is still a READ of another global here, and the
+   rule does not carve out exceptions. */
+//-EXPECT-ERROR: is not a constant expression
+//global int^ ncptr_ = ^shots_;
+
+/* a TYPELESS global — the rule is asked of the INITIALIZER, so it does not wait for a
+   type to be inferred. */
+//-EXPECT-ERROR: is not a constant expression
+//global ncloose_ = shots_ + 1;
+
+/* every SCOPE a global can be declared in gets the same rule: a FUNCTION-INTERNAL
+   static... */
+//-EXPECT-ERROR: is not a constant expression
+//void ncfunc() { global int ncs_ = shots_; __println("s=" + ncs_); }
+
+/* ...a NAMED GROUP member (the long form)... */
+//-EXPECT-ERROR: is not a constant expression
+//global ncgrp( int nca_ = shots_ ) { }
+
+/* ...and a global declared inside a CLASS. */
+//-EXPECT-ERROR: is not a constant expression
+//NcHolder() { global int ncg_ = shots_; _() {} ~() {} }
+
+/* a MOVE-init (and the same for `<-->`): the rule is asked BEFORE the move/swap-init
+   rewrite, so a non-constant source cannot slip in through the other init spellings. */
+//-EXPECT-ERROR: is not a constant expression
+//global Widget ncmove_ <-- w_;
 
 /* a function-internal global is invisible outside its body: a function is not a
    namespace, so another body cannot qualify into it. */

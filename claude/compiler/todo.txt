@@ -58,23 +58,6 @@ BUGS
     Pinned in the OTHER direction by evaluate.sl Q4 (class Hook): hoisting the field copies
     past the ctor makes Hook's ctor read 0 instead of 3 — so a naive fix here is caught.
 
-  * A GLOBAL CLASS INITIALIZED FROM A CLASS LVALUE IS CONSTRUCTED OVER THE TOP OF THE COPY.
-    The SAME wrong answer as the class-field case above, at a different site. Repro: with a
-    class whose ctor writes its own field (`Add(int v_) { _() { v_ = v_ + 100; } }`),
-
-        global Add ga(5);
-        global Add gb = ga;        // gb.v_ reads back 205, not 105
-
-    A LOCAL `Add lb = ga;` is now correct (105) — the transfer is peeled off the declarator
-    and re-emitted against the constructed object (classify's splitTransferInit). A GLOBAL
-    never reaches that: it has no enclosing statement list to split into (`prelude` is null),
-    and its initializer is lowered into a synthesized LAZY CTOR by desugar's collectGlobals,
-    which still FILLS and then FINALIZES. Lifting classify's `is_global` guard changes
-    nothing — the split has to happen where the lazy ctor's body is BUILT, not at the decl.
-    FIX = have the global's synth ctor emit the same three steps a local does now: default-
-    construct (hooks), then the transfer. NOT TESTED — a golden here would pin 205, which is
-    the wrong answer; evaluate.sl block W is the local half and would extend to cover this.
-
   * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
     access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
     class-field aggregate spread treat any BARE LVALUE source (`isBareLvalue`:
@@ -172,7 +155,9 @@ BLOCKED FEATURES
     an immutable global; route it through the same storage instead of rejecting.
     The const + global file-scope registration arms already share addVarEntry;
     the remaining work is routing the const arm's non-scalar case through the
-    global-storage path rather than erroring.
+    global-storage path rather than erroring. NOTE: such a const then inherits the
+    global constant-initializer rule for free (classify's isConstantInit) — which is
+    no constraint at all on a const, whose initializer is constant by definition.
 
   * is this overload allowed?
     void fn(mutable int^ p);

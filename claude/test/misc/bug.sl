@@ -40,15 +40,10 @@ int fn(Class^ cls) {
     return cls^.a_;
 }
 
-global Class a(5);
-global Class b = a;
-
 int32 main() {
 
     //Class cls = Class + 1 + 2 + 3;
     //__println(cls.a_);
-
-    Class c = 5;
 
     return 0;
 }
