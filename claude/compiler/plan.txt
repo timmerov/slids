@@ -406,8 +406,13 @@ Phase 4 — types beyond primitives
         local directly]; an existing POD var OVERWRITES in place; an existing hook var
         / non-exact takes a temp + default-move fallback; a discarded call builds a
         temp and destroys it. A hook call in an INLINE (expression) position is lifted
-        to a `_$cret` temp decl in desugar [liftSretCallList]; the remaining inline
-        positions [store-rhs, loop/if condition, move/swap operand] error cleanly
+        to a `_$cret` temp decl in desugar [liftSretCallList], and that temp dies at the
+        SEMICOLON: the rhs is wrapped in a kSeqExpr, for EVERY rhs value form since
+        2026-07-13 [it was SCALAR-only — a class-valued rhs builds in place and the sret
+        paths matched the RAW call, so wrapping it would have forced a copy; codegen now
+        OPENS the seq at those statements (openRhsSeq) and hands the sret path the seq's
+        VALUE, so in-place construction and statement lifetime hold at once]. The remaining
+        inline positions [store-rhs, loop/if condition, move/swap operand] error cleanly
         pending a later lift. POD-aggregate returns ride the same sret ABI
         (behavior-neutral vs the old by-value return).
     Net: `Class x = mkClass()` is a single construct/destruct; ctor/dtor counts

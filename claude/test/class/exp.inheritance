@@ -21,6 +21,8 @@ A:ctor 3
 B:ctor 4
 A:ctor 3
 B:ctor 4
+B:dtor 4
+A:dtor 3
 holder.v = 4
 A:ctor 1
 ovd = 3 7
@@ -28,8 +30,6 @@ A:ctor 1
 local.lv = 9
 A:dtor 1
 A:dtor 1
-B:dtor 4
-A:dtor 3
 B:dtor 4
 A:dtor 3
 B:dtor 7

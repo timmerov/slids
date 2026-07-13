@@ -124,9 +124,20 @@ scalar-decl paths. cases 1-8: the seq-wrap fix across statement kinds and edges
 -- 1 assign rhs, 2 return rhs (temp dies before the fn unwinds its locals), 3a/3b
 a ++ in the value child / in the temp's construction arg (the lowerInPhrase
 assert-relaxation path), 4 two reverse-ordered temps, 5 a loop-body decl (per-
-iteration, no growth), 6 a pointer-valued rhs (the guard's kPointer arm), 7 the
-guard-negative boundary (a CLASS-valued rhs leaks its temp -- pinned as the
-current deferred behavior), 8 aug-assign (lowers to assign, so covered too).
+iteration, no growth), 6 a pointer-valued rhs, 7 a CLASS-valued rhs -- once the
+boundary where the wrap gave up, now covered too, 8 aug-assign (lowers to assign,
+so covered too).
+
+THE RHS TEMP SEQ IS NO LONGER SCALAR-ONLY (case 7). A nested arg temp in a var-decl /
+assign / return rhs is STATEMENT-scoped whatever the rhs VALUE is. It used to be scalar-
+only, because a CLASS-valued rhs is built IN PLACE by the statement's sret paths and those
+matched on the RAW call node -- wrapping it in a seq hid the call and forced an extra copy,
+so the wrap was declined and the temp fell back to enclosing-scope lifetime. Codegen now
+OPENS the seq at those three statements (openRhsSeq): it constructs the temps, hands the
+sret path the seq's VALUE child, and destroys the temps after -- so construction in place
+and statement-scoped temps hold at ONCE. Case 7 pins it, and block P got the same fix for
+free (its `_$dsrc` spill is a class-bearing tuple, so its accumulators had leaked for
+exactly the same reason).
 
 cases J and K: the CHAIN LADDER. Classes Acc and Str print their ctor/dtor, so every
 temporary announces itself and the golden IS the temp count. Acc has a 2-arg op+ (plus
@@ -151,14 +162,18 @@ U5 as a call arg, U7 over a sub-chain). The old path built a `_$optmp` in classi
 it into the destination -- an extra object at every site, a copy where the author's op<--
 belonged, and a temp that outlived its statement.
 
-deliberately NOT correct yet (still-broken / deferred; case 7 pins the first):
-  - a var-decl / return rhs whose VALUE is a CLASS built in place
-    (Class y = make(Class(80));) still leaks its arg temp -- the seq wrap is
-    scalar-only (a class value takes the in-place sret path).
-  - a bare construction discard (Class(5);) escapes to enclosing scope.
+NOT a defect -- SPEC (see nameless.sl): a bare `Class(5);` statement is FORM 1, an unnamed
+local VARIABLE. It is initialized at site, its ctor runs, and its dtor runs at the END OF
+SCOPE, exactly like a named local. Only the EXPRESSION form (form 2 -- a construction used
+inline as a receiver / arg / field read) is a temporary that dies at the statement.
+
+deliberately NOT correct yet (still-broken / deferred):
   - ping-pong: a class with a 2-arg op+ but NO op+= can't fuse (acc.op+(acc,c) would
     read acc while writing it), so each such step starts a fresh buffer -- one temp per
     un-fusable operand. Two alternating buffers would need none.
+  - destructure's COST (block P): a non-bare-name source is spilled to a `_$dsrc` tuple
+    temp, so the per-slot chains are copied twice -- 4 extra objects where 2 would do.
+    Values and (since the case-7 fix) LIFETIMES are right; only the count is not.
   - tuple-construct assignment (((a,b),c) = (...)) -- value-correct but
     spews redundant temps; not clean.
 */
@@ -492,16 +507,18 @@ int32 main() {
         __println("6 end q=" + q^);                // dtor 61 BEFORE this
     }
 
-    // 7: guard-negative BOUNDARY -- a CLASS-valued rhs (built in place) does NOT
-    //    seq-wrap its arg temp, so the temp keeps ENCLOSING-scope lifetime: its
-    //    dtor (81) runs at the BLOCK end, AFTER "7 end", together with y (181, in
-    //    reverse). Pins the current deferred behavior; a future class-rhs fix will
-    //    move dtor 81 up to the statement.
-    __println("7: class-valued rhs (temp leaks to enclosing scope)");
+    // 7: a CLASS-valued rhs (built IN PLACE) and its arg temp, which is STATEMENT-scoped
+    //    like every other: dtor 81 runs BEFORE "7 end", and y (181) lives to the block
+    //    end. Both halves at once is the whole point -- y is still constructed in place
+    //    (two ctors, no extra copy), because codegen OPENS the temp seq (openRhsSeq) and
+    //    hands the sret path the seq's VALUE, rather than desugar declining to wrap a
+    //    class-valued rhs at all. That decline was the old behavior this case used to pin:
+    //    the temp fell back to ENCLOSING-scope lifetime and died at the block end.
+    __println("7: class-valued rhs (arg temp dies at the statement)");
     {
         Class y = make(Class(80));
-        __println("7 end y=" + y.a_);              // dtor 81 does NOT run yet
-    }                                              // block end: dtor 181, dtor 81
+        __println("7 end y=" + y.a_);              // dtor 81 ALREADY ran
+    }                                              // block end: dtor 181 (y)
 
     // 8: augmented assignment on a scalar -- lowers to a plain assign before the
     //    lift pass, so its arg temp is seq-wrapped too and dies at the statement.
@@ -783,12 +800,13 @@ int32 main() {
     // no-destination path (one accumulator each), and are copied twice: once into the spill
     // slot, once into the target. Four extra objects for two chains, where two would do.
     //
-    // Both costs are pre-existing and out of this landing's scope: for a tuple LITERAL the
-    // spill is pure overhead (each element is read exactly once), and the accumulators keep
-    // ENCLOSING-scope lifetime for the same reason case 7 does -- the statement-scoping seq
-    // wrap is scalar-only, and the spill's value is a class. A future fix assigns a literal
-    // source per slot without spilling, which would make each slot a live-target chain (one
-    // accumulator, moved in, dead at the semicolon) and land Acc:op<-- here.
+    // The LIFETIME half is now right: the accumulators inside the spill die at the SEMICOLON
+    // (their dtors print before "P1 end"), which came free with the case-7 fix -- the spill's
+    // value is a class-bearing tuple, and it was the class-valued-rhs seq gap that had given
+    // them enclosing-scope lifetime. What remains is COST: for a tuple LITERAL the spill is
+    // pure overhead (each element is read exactly once). A future fix assigns a literal source
+    // per slot without spilling, making each slot a live-target chain (one accumulator, moved
+    // in, dead at the semicolon) and landing Acc:op<-- here.
     __println("P: destructure slots");
     {
         Acc pa = Acc(10);

@@ -2519,19 +2519,16 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
             if (!stmt->children.empty())
                 liftSretCallExprs(stmt->children[0], pre, next_id,
                                   /*root_intercepted=*/true);
-            // Only wrap when the rhs VALUE is a scalar. A class / aggregate (sret-
-            // form) rhs is built IN PLACE by the statement's sret fast paths (which
-            // need the raw rhs node, not a seq around it); a seq would also force an
-            // extra copy. An unknown (kNoType) rhs stays unwrapped too — no regression.
-            if (!pre.empty() && !stmt->children.empty() && stmt->children[0]) {
-                ast::Node const& rhs = *stmt->children[0];
-                using F = widen::Type::Form;
-                widen::TypeRef rt = (rhs.kind == ast::Kind::kCallExpr)
-                    ? rhs.return_type : rhs.inferred_type;
-                F rf = widen::form(widen::strip(rt));
-                wrap_rhs_seq = (rf == F::kPrimitive || rf == F::kPointer
-                             || rf == F::kIterator || rf == F::kAnyptr);
-            }
+            // Wrap whenever anything was lifted — the rhs VALUE's form does not matter.
+            // It used to: a CLASS-valued rhs was left UNWRAPPED because it is built IN
+            // PLACE by the statement's sret fast paths, and those matched on the RAW call
+            // node — a seq around it would hide the call and force an extra copy. The cost
+            // was that its arg temps fell back to ENCLOSING-scope lifetime (evaluate.sl
+            // case 7). Codegen now OPENS the seq at those three statements (openRhsSeq):
+            // it emits the temps, hands the sret path the seq's VALUE child, and destroys
+            // the temps after — so in-place construction and statement-scoped temps hold
+            // at once, and this form test is gone.
+            wrap_rhs_seq = !pre.empty() && !stmt->children.empty() && stmt->children[0];
         } else if (k == ast::Kind::kCallStmt || k == ast::Kind::kCallExpr) {
             // The statement IS a (discarded) call codegen handles; lift its args
             // (incl. a lowered method call's receiver = AddrOf(temp)). A discarded

@@ -67,12 +67,12 @@ Class:dtor: 52
 Class:ctor: 60
 Class:dtor: 61
 6 end q=5
-7: class-valued rhs (temp leaks to enclosing scope)
+7: class-valued rhs (arg temp dies at the statement)
 Class:ctor: 80
 Class:ctor: 181
+Class:dtor: 81
 7 end y=181
 Class:dtor: 181
-Class:dtor: 81
 8: aug-assign rhs
 Class:ctor: 90
 Class:dtor: 91
@@ -164,6 +164,7 @@ M2 end md=13
 M3: field store   mbox.a_ = ma + mb
 Acc:ctor: 0
 Acc:ctor: 0
+Acc:dtor: 0
 Acc:ctor: 0
 Acc:op<--: 13
 Acc:dtor: 13
@@ -203,7 +204,6 @@ Acc:dtor: 9
 Acc:dtor: 13
 Acc:dtor: 0
 Acc:dtor: 13
-Acc:dtor: 0
 Acc:dtor: 13
 Acc:dtor: 4
 Acc:dtor: 3
@@ -263,10 +263,10 @@ Acc:ctor: 0
 Acc:ctor: 0
 Acc:ctor: 13
 Acc:ctor: 20
-P1 end pc=13 pd=20
-P end (locals dtor next)
 Acc:dtor: 20
 Acc:dtor: 13
+P1 end pc=13 pd=20
+P end (locals dtor next)
 Acc:dtor: 20
 Acc:dtor: 13
 Acc:dtor: 20
@@ -366,12 +366,12 @@ Acc:ctor: 0
 Acc:ctor: 0
 Acc:ctor: 13
 Acc:ctor: 20
+Acc:dtor: 20
+Acc:dtor: 13
 Acc:ctor: 0
 Acc:ctor: 0
 S4 end sp=13 sq=20
 S end (locals dtor next)
-Acc:dtor: 20
-Acc:dtor: 13
 Acc:dtor: 20
 Acc:dtor: 13
 Acc:dtor: 20

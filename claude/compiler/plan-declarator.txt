@@ -112,8 +112,15 @@ TWO FEED PATHS reach the three helpers, and EVERY nameless site was once hand-ro
       "CLASS-OPERATOR CHAINS". Verified: a `(Money = 5)` conversion emits @Money__$ctor + the
       op= fill + a REGISTERED dtor at scope end — exactly like a named local. A
       lifted temp that is a NESTED arg / receiver in a var-decl / assign / return rhs
-      whose VALUE is a SCALAR instead folds into a kSeqExpr wrapping the rhs (statement
-      lifetime, register_dtor=false — codegen's kSeqExpr owns teardown), 2026-07-11.
+      instead folds into a kSeqExpr wrapping the rhs (statement lifetime,
+      register_dtor=false — the seq owns teardown), 2026-07-11. That fold was SCALAR-rhs
+      only until 2026-07-13: a CLASS-valued rhs is built IN PLACE by the statement's sret
+      paths, which matched the RAW call node, so a seq around it would have forced an extra
+      copy — the wrap was declined and the temp fell back to ENCLOSING-scope lifetime.
+      Codegen now OPENS the seq at those three statements (openRhsSeq / closeRhsSeq): it
+      constructs the temps, hands the sret path the seq's VALUE child, then destroys them.
+      In-place construction AND statement lifetime, both. See
+      [[project_stmt_scoped_rhs_temps]]; canon evaluate.sl case 7.
 The path-2 class temps were funneled by an EARLIER session (the lift IS their fold);
 `new` (its own kNewExpr codegen) and the call-arg temp (inline in emitCall) were the
 two hand-rolled DIRECT sites THIS work folded. The umbrella is now COMPLETE — every

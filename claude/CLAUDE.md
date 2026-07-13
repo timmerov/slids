@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+It describes HOW TO WORK HERE — not how the compiler works. Nothing in this file describes
+code, so nothing in it goes stale when code changes. For anything technical, read the file
+that owns it (see "Where the truth lives"). Do not copy compiler internals back into here.
+
 ## Rules
 
 Three modes govern how I work. The user sets the mode by what they ask for. I default to Discussion when the mode is unclear or has just shifted.
@@ -50,6 +54,10 @@ Tests are **not** canon — only the user's comment is. Tests still go first in 
 
 Slids is a compiled, systems-level programming language. Source files (`.sl`) compile to LLVM IR (`.ll`), then to native object files via `llc`, then linked with `g++`. The compiler (`slidsc`) is written in C++17.
 
+```
+.sl source → lex → grammar → resolve → constfold → classify → desugar → codegen → LLVM IR (.ll)
+```
+
 ## Build commands
 
 ```bash
@@ -74,40 +82,32 @@ g++ foo.o -o foo
 
 Test nothing other than the test files in scope.
 
-## Compiler pipeline
+A positive test compares its output byte-for-byte against `exp.<name>` in the same directory;
+a negative case is an `//-EXPECT-ERROR:` marker followed by a `//`-commented block that the
+runner uncomments. Before regenerating any `exp.*` golden, diff the SORTED line multiset
+against the old one: a pure reordering means a lifetime moved (often the point of the change),
+but a changed count means an object was lost or double-destroyed — a bug, not a new golden.
 
-```
-.sl source → Lexer → Token stream → Parser → AST → Codegen → LLVM IR (.ll)
-```
+## Where the truth lives
 
-see readme.txt.
+Read the owner before reasoning about a subsystem. These files are maintained with the code;
+this one is not the place to duplicate them.
 
-## Language concepts
+- `compiler/readme.txt` — the pipeline and each stage's internals (lex → codegen), the type arena, the symbol table, diagnostics.
+- `compiler/readme-classes.txt` — classes, inheritance, virtuals, operators, the class-operator chains, construction/destruction and temp lifetimes.
+- `compiler/plan.txt` — the main quest: what has landed, phase by phase, with the rationale. `plan-declarator.txt`, `plan-evaluate.txt` — the deep design records for those two landings.
+- `compiler/todo.txt` — everything OPEN: bugs, deferred items, reach goals. Landed items are removed.
+- `slids_reference.md` — the language: full syntax and semantics.
+- `v1/v1.md` — v1's designs. **v1 is a different compiler.** Nothing described there exists in v2 unless v2's own docs say so.
 
-**Slids** are the one unified construct — every function, class, method, and constructor is a slid. Calling a slid executes its body and returns an instance of itself. Nested slids are methods.
+**Three invariants are load-bearing.** Read readme-classes.txt before touching construction,
+assignment, or transfer code — the *declarator funnel* (every site that materializes a value
+into storage goes through one set of helpers), the *destructor-balance invariant* (every
+instance destroyed exactly once, in reverse order, on every exit), and the *transfer
+invariant* (a whole-class copy/move/swap always calls the class's operator, never a blit).
+Breaking one produces a leak, a double-free, or a silently skipped user operator.
 
-**Pointer types:** `^` is a reference (no arithmetic); `[]` is an iterator (arithmetic allowed). Dereference with `^` suffix: `ptr^.field`.
+## Not implemented — do not assume otherwise
 
-**Memory:** `new Type(init)` / `new Type[n]` for heap allocation. `delete ptr` nullifies pointer after freeing. Destructors are called in reverse declaration order on return.
-
-**File model:** No forward declarations are needed within a `.sl` file — resolve does a names pass, then a bodies pass. `import <module>;` is a LEXER-level textual include of `<module>.slh` (lex.cpp). The full cross-TU model (`.slh` as a public contract, `.sl` as a private implementation, declare-only headers, symbol visibility) is **plan.txt Phase 8, NOT landed** — the orphan check still rejects any declared-but-never-defined function regardless of file.
-
-**Templates: NOT IMPLEMENTED.** plan.txt Phase 9, unstarted. There is no template machinery in this compiler — no `template_funcs_`, no `.sli` files, no `--instantiate`. (v1 HAD a full cross-TU template system; that design is preserved in `v1/v1.md` → "Templates", with the source in `v1/compiler/codegen_template.cpp`. Do not assume any of it exists here.)
-
-**Enums, operator overloading, nested functions with capture, and labeled break/continue** are all supported. See `slids_reference.md` for full syntax.
-
-## Codegen internals
-
-Codegen is NODE-DRIVEN and string-free: every ident / lvalue carries a `resolved_entry_id` stamped by classify, and its structured type rides on `widen::TypeRef`. State is passed down, not held on a class:
-- `SymTab` = `std::map<int, VarInfo>` keyed by `parse::Tree::entries` index (NOT by name). `VarInfo` = `{ alloca_name, llvm_type, slids_type, touch_symbol }`; `alloca_name` is either a local `%x.<id>` or a global `@__global_x`, both `ptr`, so load/store/GEP treat them identically. `touch_symbol` is a lazy global's first-touch thunk.
-- `DtorScope` — a chain of `{ objs, outer }`; a hook-bearing local registers here at construction and the scope emits its dtors in reverse at exit (a `return` unwinds the whole chain; `break`/`continue` unwind to the target loop's boundary). This is the destructor-balance invariant.
-- Nested functions are lifted to top-level LLVM by `collectNestedFunctions`; captures are passed as extra by-reference params (the host alloca's address).
-
-The declarator codegen funnel — every site that MATERIALIZES A VALUE INTO STORAGE constructs / assigns through this one set of helpers, so field-init, ctor hooks, and dtor registration can never drift apart per site (the destructor-balance invariant, enforced structurally). This is NOT limited to NAMED declarators: named bindings (var-decl, sret return slot, global, the assignment forms) AND nameless construct/temp sites route through it. `new` is routed at every shape (delete owns the dtor, so `register_dtor=false, scope=nullptr`): a single object `new T(init)` calls `emitConstructAt`; an array with a size-matched initializer `new T[k](...)` (literal `k`) is typed `T[k]` in classify and built with ONE whole-array `emitConstructAt` (the array↔tuple bridge distributes it — same path as the stack `T arr[k](...)`, no new init semantics); a no-initializer array keeps the evaluate-once default broadcast, finalized per element via `emitConstructed`. The call-arg rvalue pass temp in `emitCall` also fills via `emitInitFill` (no dtor — a transient temp freed by the stacksave/stackrestore bracket), so every construct/fill site — named declarators and nameless temps alike — now routes through the funnel. Two feed paths reach the helpers: DIRECT codegen construct sites (var-decl / sret / global / `new` / call-arg temp) call them, and nameless class temps (a `(Type=src)` conversion `_$cret`, an inline `Class(args)`, an arity-1 unary's `_$optmp`) reach them VIA the desugar lift (`liftSretCallExprs` rewrites each into a named `kVarDeclStmt` that takes the var-decl route). A class-operator CHAIN's accumulator is NOT one of these — desugar's chain lowering (`expandOpChainStmt` / `lowerOpChain`) either makes the DESTINATION the accumulator (zero temps) or mints a statement-scoped `_$optmp` var-decl itself; see readme-classes.txt "CLASS-OPERATOR CHAINS".
-- `emitInitFill(addr, type, llty, init, is_move, ...)` — FILL storage from an initializer: the array↔tuple bridge (`emitArrayFromTuple`), a per-leaf aggregate widen (`emitImplicitAggregateConvert`), a same-type transfer from an lvalue, or a whole-value store. No hooks, no registration. Shared by construction and the live-storage assign sites (`kAssignStmt` / `kStoreStmt` / `kMoveStmt`). A same-type transfer of a CLASS-BEARING value from an lvalue dispatches PER LEAF through the class's `@__$copy` / `@__$move` (see the transfer invariant below) — only pure POD is a whole-value load/store.
-- `emitConstructed(addr, type, register_dtor, scope)` — FINALIZE raw storage as a constructed object: run the recursive ctor hooks (`emitConstructHooks`) and register the destructor in `scope`, unless the caller owns destruction (`register_dtor`=false: an sret return slot / NRVO local / a global whose dtor runs through the global registry). The SINGLE place hooks and registration are paired — one `typeNeedsHook` flag governs both, so they can't diverge into a leak or an orphan dtor.
-- `emitConstructAt(addr, type, llty, init, is_move, sret_in_place, register_dtor, scope, ...)` — CONSTRUCT into raw storage: an exact-typed sret CALL init builds in place (the callee's ctor runs at `addr`, only the dtor is registered) when `sret_in_place`; otherwise `emitInitFill` then `emitConstructed`. `init`==nullptr default-constructs (no field-init, ctor still runs).
-
-**The transfer invariant:** a whole-class copy / move / swap ALWAYS calls the class's `@<Class>__$copy` / `__$move` / `__$swap` — NEVER a blit. Every class has one (the user's `op=`/`op<--`/`op<-->(Self^)`, else resolve's synthesized memberwise default; `methodSymbol` renames both to the same symbol). The gate at all three transfer sites (`emitInitFill`'s move arm, its copy arm, `kSwapStmt`) is STRUCTURAL — `widen::hasInPlaceClass`, "is a class physically in this storage?" — not behavioral (`typeNeedsHook`, "does a ctor body exist?"), which a hook-less class answers NO to. Corollary: a transfer synthesized AFTER classify (in desugar/codegen) must NAME the operator, never emit a bare move/copy node. `typeNeedsHook` is still correct where it remains (`emitConstructed`, dtor registration, the sret hook decisions) — those really are asking "is there a ctor body to call?". The two predicates are NOT interchangeable.
-
-Type mapping: `int` → `i32`, `int64` → `i64`, `bool` → `i1`, `float32` → `float`, `float64` → `double`, pointer types → `ptr`, slid type name → `%struct.<Name>`, anonymous tuple `(t1,t2,...)` → literal struct `{ llvm(t1), llvm(t2), ... }`.
+- **Templates.** plan.txt Phase 9, unstarted. There is no template machinery in this compiler. (v1 had a full cross-TU template system; that is v1's, and it is not here.)
+- **The cross-TU model.** plan.txt Phase 8, not landed. `import <module>;` is a LEXER-level textual include of `<module>.slh` — nothing more. There are no declare-only headers: the orphan check rejects any declared-but-never-defined function regardless of file.

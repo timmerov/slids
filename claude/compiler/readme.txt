@@ -370,10 +370,18 @@ NON-PRIMITIVE RETURN — sret + RVO / NRVO (landed; [[project_aggregate_return_r
     - INLINE (expression) position (`g(mk())`, a nested call): desugar::liftSretCallList
       hoists the hook-returning call to a `_$cret = call;` temp decl (codegen's
       kVarDeclStmt sret-intercept then owns it), replacing the call with an ident.
-      LIFETIME: when the enclosing var-decl / assign / return rhs VALUE is a SCALAR,
-      the lifted temp is folded into a kSeqExpr wrapping the rhs so it dies at the
-      STATEMENT (liftSretCallList, 2026-07-11); a CLASS-valued rhs keeps the scope-end
-      lifetime the kVarDeclStmt sret-intercept gives it (the seq wrap is scalar-only).
+      LIFETIME: the lifted temp is folded into a kSeqExpr wrapping the rhs, so it dies at
+      the STATEMENT (liftSretCallList, 2026-07-11) — for EVERY rhs value form since
+      2026-07-13. It used to be SCALAR-only: a CLASS-valued rhs is built IN PLACE by the
+      statement's sret fast paths (kVarDeclStmt sret-intercept / kReturnStmt sret /
+      kAssignStmt case 2/3), and those matched on the RAW call node, so a seq around it
+      would hide the call and force an extra copy — the wrap was declined and the arg temp
+      fell back to enclosing-scope lifetime (evaluate.sl case 7). Codegen now OPENS the seq
+      at those three statements (`openRhsSeq` / `closeRhsSeq`, codegen.cpp): it constructs
+      the seq's temps, hands the sret path the seq's VALUE child, then destroys them — so
+      in-place construction and statement-scoped temps hold AT ONCE, and the form test is
+      gone. The seq's effect children are emitted by one shared `emitSeqEffects`, so an
+      expression seq and a statement-rhs seq give a temp the same lifetime.
       Positions the lift does NOT cover yet — a store target, a loop / if condition, a
       move/swap operand — are REJECTED at codegen (emitCall, value position) with
       "Returning a class by value in an expression position is not yet supported"

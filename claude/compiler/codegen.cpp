@@ -75,6 +75,18 @@ bool isAstLvalue(ast::Node const& n);
 std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
                            strings::Pool& pool, std::ostream& out,
                            diagnostic::Sink& diag, bool allow_partial = false);
+// A kSeqExpr's PHRASE-SCOPED class temps: constructed with the seq's effect children,
+// destroyed after its value is consumed. The pair is {address, class type}.
+using SeqTemps = std::vector<std::pair<std::string, widen::TypeRef>>;
+void emitSeqEffects(ast::Node const& seq, std::size_t begin, std::size_t end,
+                    SeqTemps& temps, SymTab const& syms, strings::Pool& pool,
+                    std::ostream& out, diagnostic::Sink& diag);
+void emitSeqTeardown(SeqTemps const& temps, std::ostream& out);
+ast::Node const* openRhsSeq(ast::Node const* rhs, ast::Node const*& seq,
+                            SeqTemps& temps, SymTab const& syms, strings::Pool& pool,
+                            std::ostream& out, diagnostic::Sink& diag);
+void closeRhsSeq(ast::Node const* seq, SeqTemps& temps, SymTab const& syms,
+                 strings::Pool& pool, std::ostream& out, diagnostic::Sink& diag);
 int cgAggSlotCount(widen::TypeRef t);
 widen::TypeRef cgAggSlotType(widen::TypeRef t, int i);
 std::string emitConvertWalk(std::string const& src_val,
@@ -1824,63 +1836,14 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             assert(expr.value_index >= 0
                 && expr.value_index < static_cast<int>(expr.children.size())
                 && "kSeqExpr: value_index out of range");
-            std::string result;
-            // A class temp lifted into this seq (a condition's construction/sret-call
-            // receiver) is CONSTRUCTED here and DESTROYED after the value — so it is
-            // scoped to the phrase's evaluation and rebuilt each time the seq runs
-            // (each loop iteration).
-            std::vector<std::pair<std::string, widen::TypeRef>> seq_temps;
-            for (size_t i = 0; i < expr.children.size(); i++) {
-                ast::Node const& ch = *expr.children[i];
-                if (static_cast<int>(i) == expr.value_index) {
-                    result = emitExpr(ch, syms, pool, out, diag, dest_type);
-                } else if (ch.kind == ast::Kind::kVarDeclStmt) {
-                    auto it = syms.find(ch.resolved_entry_id);
-                    assert(it != syms.end() && "kSeqExpr: temp alloca not hoisted");
-                    if (widen::form(widen::strip(ch.return_type))
-                            == widen::Type::Form::kSlid) {
-                        // A `_$cret` class temp: build it into its hoisted alloca. An
-                        // sret CALL init builds-in-place (the callee runs the ctor); a
-                        // construction TUPLE init field-inits then runs the ctor.
-                        widen::TypeRef T = ch.return_type;
-                        std::string addr = it->second.alloca_name;
-                        // Construct through the shared funnel: an sret CALL init
-                        // builds in place, a construction TUPLE init field-inits
-                        // then runs the ctor. register_dtor=false — this temp's
-                        // teardown is phrase-scoped (the seq_temps loop below),
-                        // not block-scoped, so the funnel registers no dtor.
-                        if (!ch.children.empty()) {
-                            emitConstructAt(addr, T, it->second.llvm_type,
-                                            ch.children[0].get(), /*is_move=*/false,
-                                            /*sret_in_place=*/true,
-                                            /*register_dtor=*/false, /*scope=*/nullptr,
-                                            syms, pool, out, diag);
-                        }
-                        seq_temps.push_back({addr, widen::strip(T)});
-                    } else {
-                        // `_$lv` plain reference: emit only the address store (its
-                        // alloca was hoisted by collectVarDecls).
-                        std::string a = emitExpr(*ch.children[0], syms, pool, out, diag,
-                                                 it->second.slids_type);
-                        out << "  store " << it->second.llvm_type << " " << a
-                            << ", ptr " << it->second.alloca_name << "\n";
-                    }
-                } else if ((ch.kind == ast::Kind::kCallExpr
-                            || ch.kind == ast::Kind::kCallStmt)
-                           && widen::form(ch.return_type)
-                                  == widen::Type::Form::kVoid) {
-                    // A discarded VOID effect call lifted into the seq — e.g. a class
-                    // conversion's `_$cret.op=(src)` dispatch when the conversion sits
-                    // in a CONDITION phrase (lifted via lowerPhraseSlot, not the
-                    // statement-pre path). emitExpr would assert on a void value; emit
-                    // it for its side effect and drop the absent result.
-                    emitCall(ch, syms, pool, out, diag);
-                } else {
-                    emitExpr(ch, syms, pool, out, diag, widen::kNoType);
-                }
-            }
-            for (auto rit = seq_temps.rbegin(); rit != seq_temps.rend(); ++rit)
-                emitDestructHooks(rit->first, rit->second, out);
+            std::size_t vi = static_cast<std::size_t>(expr.value_index);
+            SeqTemps temps;
+            emitSeqEffects(expr, 0, vi, temps, syms, pool, out, diag);
+            std::string result =
+                emitExpr(*expr.children[vi], syms, pool, out, diag, dest_type);
+            emitSeqEffects(expr, vi + 1, expr.children.size(), temps,
+                           syms, pool, out, diag);
+            emitSeqTeardown(temps, out);
             return result;
         }
         case ast::Kind::kBumpExpr: {
@@ -2382,6 +2345,88 @@ void emitConstructed(std::string const& addr, widen::TypeRef type,
     }
 }
 
+// Emit a kSeqExpr's EFFECT children in [begin, end) — every child but the value.
+// A class temp decl (`_$cret` / a lifted construction) is CONSTRUCTED into its hoisted
+// alloca and recorded in `temps`, so its teardown is PHRASE-scoped (emitSeqTeardown),
+// not block-scoped — hence register_dtor=false, scope=nullptr through the funnel. The
+// other shapes: a `_$lv` address binding (a complex post-inc's address-once leaf), a
+// discarded VOID effect call (a class conversion's `_$cret.op=(src)` dispatch), a PPID
+// bump. Shared by the expression seq (emitExpr) and the statement-rhs seq (openRhsSeq),
+// so a temp gets the same lifetime whichever position its seq sits in.
+void emitSeqEffects(ast::Node const& seq, std::size_t begin, std::size_t end,
+                    SeqTemps& temps, SymTab const& syms, strings::Pool& pool,
+                    std::ostream& out, diagnostic::Sink& diag) {
+    for (std::size_t i = begin; i < end && i < seq.children.size(); i++) {
+        ast::Node const& ch = *seq.children[i];
+        if (ch.kind == ast::Kind::kVarDeclStmt) {
+            auto it = syms.find(ch.resolved_entry_id);
+            assert(it != syms.end() && "kSeqExpr: temp alloca not hoisted");
+            if (widen::form(widen::strip(ch.return_type))
+                    == widen::Type::Form::kSlid) {
+                widen::TypeRef T = ch.return_type;
+                std::string addr = it->second.alloca_name;
+                if (!ch.children.empty()) {
+                    emitConstructAt(addr, T, it->second.llvm_type,
+                                    ch.children[0].get(), /*is_move=*/false,
+                                    /*sret_in_place=*/true,
+                                    /*register_dtor=*/false, /*scope=*/nullptr,
+                                    syms, pool, out, diag);
+                }
+                temps.push_back({addr, widen::strip(T)});
+            } else {
+                std::string a = emitExpr(*ch.children[0], syms, pool, out, diag,
+                                         it->second.slids_type);
+                out << "  store " << it->second.llvm_type << " " << a
+                    << ", ptr " << it->second.alloca_name << "\n";
+            }
+        } else if ((ch.kind == ast::Kind::kCallExpr
+                    || ch.kind == ast::Kind::kCallStmt)
+                   && widen::form(ch.return_type) == widen::Type::Form::kVoid) {
+            emitCall(ch, syms, pool, out, diag);
+        } else {
+            emitExpr(ch, syms, pool, out, diag, widen::kNoType);
+        }
+    }
+}
+
+// The phrase-exit teardown: destroy the seq's class temps in REVERSE construction order.
+void emitSeqTeardown(SeqTemps const& temps, std::ostream& out) {
+    for (auto rit = temps.rbegin(); rit != temps.rend(); ++rit)
+        emitDestructHooks(rit->first, rit->second, out);
+}
+
+// OPEN a statement rhs that desugar wrapped in a temp seq (a var-decl / assign / return
+// whose rhs carried nested class temps): emit the temps, and hand back the seq's VALUE
+// child as the real rhs. THAT is what keeps the two halves compatible — the in-place sret
+// paths below see the RAW call node and build straight into the destination, while the arg
+// temps still die at the SEMICOLON (closeRhsSeq, after the value is consumed). Before this,
+// the seq wrap was scalar-rhs-only: a CLASS-valued rhs took the in-place path and its arg
+// temps fell back to ENCLOSING-scope lifetime. Returns `rhs` unchanged when it is no seq.
+ast::Node const* openRhsSeq(ast::Node const* rhs, ast::Node const*& seq,
+                            SeqTemps& temps, SymTab const& syms, strings::Pool& pool,
+                            std::ostream& out, diagnostic::Sink& diag) {
+    seq = nullptr;
+    if (!rhs || rhs->kind != ast::Kind::kSeqExpr) return rhs;
+    assert(rhs->value_index >= 0
+        && rhs->value_index < static_cast<int>(rhs->children.size())
+        && "openRhsSeq: value_index out of range");
+    seq = rhs;
+    emitSeqEffects(*seq, 0, static_cast<std::size_t>(seq->value_index), temps,
+                   syms, pool, out, diag);
+    return seq->children[seq->value_index].get();
+}
+
+// CLOSE it: run the trailing effects (a post-inc's bump) and destroy the temps. Call this
+// AFTER the value has been consumed — and, in a return, BEFORE the scope unwind, so a
+// statement temp dies ahead of the function's named locals.
+void closeRhsSeq(ast::Node const* seq, SeqTemps& temps, SymTab const& syms,
+                 strings::Pool& pool, std::ostream& out, diagnostic::Sink& diag) {
+    if (seq)
+        emitSeqEffects(*seq, static_cast<std::size_t>(seq->value_index) + 1,
+                       seq->children.size(), temps, syms, pool, out, diag);
+    emitSeqTeardown(temps, out);
+}
+
 // CONSTRUCT a value into raw storage at `addr`: fill from `init` (nullptr =
 // default-construct — no field-init, ctor still runs), then finalize (hooks +
 // dtor registration). `sret_in_place` lets an exact-typed sret CALL initializer
@@ -2441,10 +2486,19 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // CALLER owns its destruction (register_dtor=false).
             ast::Node const* init =
                 stmt.children.empty() ? nullptr : stmt.children[0].get();
+            // The rhs may be a statement-temp SEQ (nested class temps + the value).
+            // Open it: the temps are constructed now, and `init` becomes the seq's VALUE
+            // child — so the sret in-place path below still sees the raw call and builds
+            // straight into this variable's storage. The temps die at closeRhsSeq, i.e.
+            // at the SEMICOLON, while the declared variable keeps its scope lifetime.
+            SeqTemps temps;
+            ast::Node const* seq = nullptr;
+            init = openRhsSeq(init, seq, temps, syms, pool, out, diag);
             emitConstructAt(it->second.alloca_name, it->second.slids_type,
                             it->second.llvm_type, init, stmt.default_move_init,
                             /*sret_in_place=*/true, /*register_dtor=*/!stmt.nrvo,
                             scope, syms, pool, out, diag);
+            closeRhsSeq(seq, temps, syms, pool, out, diag);
             return;
         }
         case ast::Kind::kAssignStmt: {
@@ -2454,31 +2508,36 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             assert(it != syms.end()
                 && "kAssignStmt: entry not in SymTab (alloca never emitted?)");
             emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
+            // Open a statement-temp seq around the rhs (see openRhsSeq): its temps are
+            // constructed now and destroyed at closeRhsSeq — the SEMICOLON — while `rhs`
+            // below is the seq's VALUE, so the in-place sret paths still see a raw call.
+            SeqTemps atemps;
+            ast::Node const* aseq = nullptr;
+            ast::Node const* rhs = stmt.children.empty() ? nullptr
+                                                         : stmt.children[0].get();
+            rhs = openRhsSeq(rhs, aseq, atemps, syms, pool, out, diag);
             // sret CALL into an existing var (`obj = fn()`). Phase B case 2 — an
             // existing POD target (no leaf ctor) of the exact type is OVERWRITTEN in
             // place: the callee builds straight into it, no temp.
-            if (!stmt.children.empty()
-                && stmt.children[0]->kind == ast::Kind::kCallExpr
+            if (rhs && rhs->kind == ast::Kind::kCallExpr
                 && isSretReturn(it->second.slids_type)
                 && !typeNeedsHook(it->second.slids_type, /*ctor=*/true)
                 && widen::deepStrip(it->second.slids_type)
-                       == widen::deepStrip(stmt.children[0]->return_type)) {
-                emitCall(*stmt.children[0], syms, pool, out, diag,
-                         it->second.alloca_name);
+                       == widen::deepStrip(rhs->return_type)) {
+                emitCall(*rhs, syms, pool, out, diag, it->second.alloca_name);
+                closeRhsSeq(aseq, atemps, syms, pool, out, diag);
                 return;
             }
             // case 3 FALLBACK — a hook target is already constructed, so it can't be
             // rebuilt in place: temp + default-move-ASSIGN (whole-value overwrite +
             // null source), then destroy the temp husk.
-            if (!stmt.children.empty()
-                && stmt.children[0]->kind == ast::Kind::kCallExpr
+            if (rhs && rhs->kind == ast::Kind::kCallExpr
                 && typeNeedsHook(it->second.slids_type, /*ctor=*/true)) {
                 widen::TypeRef T = it->second.slids_type;
                 // The callee writes its return type into `slot` (sized as T); a class
                 // never converts, so the two must be identical. A non-exact hook
                 // assign would silently store the wrong layout — assert, don't.
-                assert(widen::deepStrip(T)
-                           == widen::deepStrip(stmt.children[0]->return_type)
+                assert(widen::deepStrip(T) == widen::deepStrip(rhs->return_type)
                     && "hook sret assign must be exact-typed (no class conversion)");
                 std::string Tll = it->second.llvm_type;
                 // The result temp is reclaimed each time (stacksave/restore) so this
@@ -2487,7 +2546,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 out << "  " << sp << " = call ptr @llvm.stacksave.p0()\n";
                 std::string slot = newTmp("rettmp");
                 out << "  " << slot << " = alloca " << Tll << "\n";
-                emitCall(*stmt.children[0], syms, pool, out, diag, slot);
+                emitCall(*rhs, syms, pool, out, diag, slot);
                 // Assign the temp into the target: this is the `=` form, so a whole CLASS
                 // goes through its COPY function @<Class>__$copy (runs op= if defined);
                 // a non-class aggregate does a whole-value blit. Then destroy the temp.
@@ -2503,15 +2562,18 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 }
                 emitDestructHooks(slot, sT, out);
                 out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
+                closeRhsSeq(aseq, atemps, syms, pool, out, diag);
                 return;
             }
             // Fill the existing variable's storage through the shared funnel: an
             // array<->tuple bridge, a per-leaf aggregate widen, or a whole-value copy
             // (a cross-form aggregate assign is lowered by slot in desugar). The
             // target is live storage, so no ctor hooks / dtor registration.
+            assert(rhs && "kAssignStmt: no rhs");
             emitInitFill(it->second.alloca_name, it->second.slids_type,
-                         it->second.llvm_type, *stmt.children[0], /*is_move=*/false,
+                         it->second.llvm_type, *rhs, /*is_move=*/false,
                          syms, pool, out, diag);
+            closeRhsSeq(aseq, atemps, syms, pool, out, diag);
             return;
         }
         case ast::Kind::kStoreStmt: {
@@ -2759,13 +2821,24 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 out << "  ret void\n";
                 return;
             }
-            ast::Node const& rv = *stmt.children[0];
+            // Open a statement-temp seq around the returned value (see openRhsSeq): the
+            // temps are constructed now, `rv` becomes the seq's VALUE (so a returned CALL
+            // still forwards %sret.in and builds in place), and closeRhsSeq destroys them
+            // BEFORE the scope unwind — a statement temp dies ahead of the function's
+            // named locals, which is exactly what case 2 pins.
+            SeqTemps rtemps;
+            ast::Node const* rseq = nullptr;
+            ast::Node const& rv = *openRhsSeq(stmt.children[0].get(), rseq, rtemps,
+                                              syms, pool, out, diag);
             std::string llty = llvmForRef(fn_return_type);
             if (isSretReturn(fn_return_type)) {
                 // NRVO: the returned local WAS built directly in %sret.in (its
                 // storage is the slot) and is not in our dtor scope — nothing to
-                // move or construct; just unwind the OTHER locals and return.
+                // move or construct; just unwind the OTHER locals and return. (An
+                // NRVO'd return is a bare local read, so it carries no seq — close
+                // anyway rather than depend on that.)
                 if (stmt.nrvo) {
+                    closeRhsSeq(rseq, rtemps, syms, pool, out, diag);
                     emitUnwindDtors(scope, nullptr, out);
                     out << "  ret void\n";
                     return;
@@ -2794,6 +2867,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 emitConstructAt("%sret.in", fn_return_type, llty, &rv,
                                 /*is_move=*/true, /*sret_in_place=*/true,
                                 /*register_dtor=*/false, scope, syms, pool, out, diag);
+                closeRhsSeq(rseq, rtemps, syms, pool, out, diag);
                 emitUnwindDtors(scope, nullptr, out);
                 out << "  ret void\n";
                 return;
@@ -2802,6 +2876,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // desugar (lowerAggCopyStmt materializes a `_$ret` temp of the return
             // type), so what reaches here matches the return type — emit it directly.
             std::string val = emitExpr(rv, syms, pool, out, diag, fn_return_type);
+            closeRhsSeq(rseq, rtemps, syms, pool, out, diag);
             emitUnwindDtors(scope, nullptr, out);
             out << "  ret " << llty << " " << val << "\n";
             return;

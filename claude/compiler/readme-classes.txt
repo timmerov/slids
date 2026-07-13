@@ -535,16 +535,23 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     rewrite). A CONSTRUCTION receiver / nested arg in a method call (`Class(2).m()`)
     is lifted to a `_$cret` temp; WHERE its dtor fires depends on position. A
     discarded kCallStmt/kExprStmt block-wraps the temp with the statement (SEMICOLON).
-    A nested arg / receiver temp in a var-decl / assign / return rhs whose VALUE is a
-    SCALAR is folded into a kSeqExpr wrapping the rhs, so it too dies at the STATEMENT
-    (liftSretCallList, 2026-07-11) — while a rhs whose value is a CLASS built in place
-    keeps enclosing-scope lifetime (the seq wrap is scalar-only; see todo.txt). A
+    A nested arg / receiver temp in a var-decl / assign / return rhs is folded into a
+    kSeqExpr wrapping the rhs, so it too dies at the STATEMENT (liftSretCallList,
+    2026-07-11) — for EVERY rhs value form since 2026-07-13. It used to be SCALAR-only:
+    a CLASS-valued rhs is built IN PLACE by the statement's sret fast paths, and those
+    matched on the RAW call node, so a seq around it would hide the call and force an extra
+    copy — the wrap was declined and the arg temp fell back to ENCLOSING-scope lifetime.
+    Codegen now OPENS the seq at those three statements (openRhsSeq / closeRhsSeq): it
+    constructs the temps, hands the sret path the seq's VALUE child, then destroys them —
+    so construction in place and statement-scoped temps hold AT ONCE. Pinned by evaluate.sl
+    case 7; block P (destructure) got it for free, its `_$dsrc` spill being a class-bearing
+    tuple that had leaked its chain accumulators for exactly the same reason. A
     CONDITION (if/while/for/switch) lifts into the condition's PPID seq (kSeqExpr),
     constructed at phrase entry and DESTROYED after the value — so a loop receiver is
-    rebuilt+destroyed each iteration and an if-temp dies before the body. Codegen's
-    kSeqExpr builds/destroys the class temp; desugar's lowerPhraseSlot lifts
-    constructions for conditions (lift_constructions), liftSretCallList wraps the
-    scalar-rhs case. A `&&`/`||` short-circuit RHS lifts into its OWN sub-seq
+    rebuilt+destroyed each iteration and an if-temp dies before the body. ONE shared
+    emitSeqEffects emits a seq's effect children whether the seq sits in an EXPRESSION or
+    at a statement rhs, so a temp gets the same lifetime either way; desugar's
+    lowerPhraseSlot lifts constructions for conditions (lift_constructions). A `&&`/`||` short-circuit RHS lifts into its OWN sub-seq
     (lowerPhraseSlot recurses per short-circuit operand), so a skipped branch runs no
     ctor/dtor; the unconditional LHS lifts into the condition pre. Still
     todo.txt: a construction in a store-target / move operand (rejected). Detail:

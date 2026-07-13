@@ -185,8 +185,10 @@ STILL OPEN (all filed in todo.txt)
 ------------------------------------------------------------------------------
   - PING-PONG (Decision 2 rule 6): reuse two alternating buffers instead of one per step.
   - DESTRUCTURE is not minimal: a non-bare-name source is spilled to a `_$dsrc` tuple temp,
-    so the chains are not the direct source of any assignment — 4 extra objects for 2 chains,
-    and the accumulators keep enclosing-scope lifetime (the same seq-wrap gap case 7 pins).
+    so the chains are not the direct source of any assignment — 4 extra objects for 2 chains.
+    COST only now: the accumulators used to keep enclosing-scope lifetime (the same seq-wrap
+    gap case 7 pinned), and that half was FIXED 2026-07-13 — they die at the semicolon; see
+    [[project_stmt_scoped_rhs_temps]].
   (NOT a gap: TEMPLATES. v2 has NO template machinery at all — plan.txt Phase 9, unstarted.
    CLAUDE.md used to describe v1's template system as if it existed here, which is why earlier
    drafts of this plan listed ".slh / template context" as an untested surface. Corrected

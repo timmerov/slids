@@ -11,11 +11,12 @@ BUGS
   * this should compile but doesn't:
     Shift(int a) { op<<(Shift^ lhs, Shift^ rhs) { a = lhs^.a << rhs^.a; } }
     (Shift, Shift) tuple = (Shift(1), Shift(3)) << 1;
-    STATE (2026-07-13, still reproduces): "Shift left-hand side must be numeric; got
-    '(Shift, Shift)'." The lhs OPERAND is a TUPLE, not a class, so the class-operator
-    dispatch never fires and the binary falls to the numeric arm. An ELEMENT-WISE
-    lowering of a class operator over an aggregate operand (the aggregate arms of
-    assign / aug-assign already do this) is what's missing.
+    Today: "Shift left-hand side must be numeric; got '(Shift, Shift)'."
+    WHY: the left operand is a TUPLE, not a class, so the class-operator dispatch never
+    fires and the binary falls through to the numeric path, which rejects a tuple.
+    MISSING: an ELEMENT-WISE lowering of a class operator over an aggregate operand —
+    apply the operator to each element. Assignment and aug-assign already do this for
+    aggregates; a binary does not.
 
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
@@ -35,19 +36,16 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * TUPLE/ARRAY-OF-CLASS INLINE LITERAL — extra copy + late temp destruction.
-    Initializing an aggregate of class VALUES from an inline literal —
-    `(Tracked, Tracked) t = (Tracked(1), Tracked(2));` — materializes each element as a
-    temporary and then COPY-constructs it into the destination slot (no RVO into the
-    aggregate: 4 ctors where 2 would do), AND the element temporaries are destroyed at
-    BLOCK exit rather than at the initializing statement's seam. It is BALANCED (every
-    ctor has a matching dtor — no leak / double-free), so this is a lifetime / efficiency
-    bug, not a crash. Contrast a FUNCTION-returned tuple-of-class (sret), which move-
-    constructs into the slot and destroys the source husks promptly — the clean shape.
-    Root is in emitExpr's tuple-literal-of-class lowering, NOT the declarator construct
-    funnel. Observed while adding the destructure-into-class-slots coverage test
-    (tuple/destructure.sl), which sidesteps it by using a tuple-returning function as the
-    destructure source.
+  * A TUPLE / ARRAY OF CLASSES BUILT FROM A LITERAL COPIES EVERY ELEMENT.
+    `(Tracked, Tracked) t = (Tracked(1), Tracked(2));` runs FOUR constructors. Two would
+    do: each element is built as a temporary and then COPY-constructed into its slot,
+    instead of being built in the slot to begin with.
+    The clean shape to copy is a tuple-of-class RETURNED BY A FUNCTION — that one
+    constructs straight into the destination.
+    FIX belongs in emitExpr's tuple-literal-of-class lowering (build each element directly
+    into its destination slot), NOT in the declarator funnel.
+    Values and lifetimes are correct; this is purely the extra copy. tuple/destructure.sl
+    sidesteps it by destructuring from a tuple-returning function instead.
 
   * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
     access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
@@ -63,56 +61,48 @@ BUGS
     Surfaced reviewing the return_fn elide work; `sp = ((Amt,Amt) = mkpair())` (call
     source) already asserts spill-once, but no bare-lvalue-with-side-effect test exists.
 
-  * CLASS-VALUED RHS ARG TEMP LEAKS TO ENCLOSING SCOPE — the seq-wrap that gives a
-    nested arg / receiver temp STATEMENT lifetime in a var-decl / assign / return rhs
-    (liftSretCallList, 2026-07-11) is SCALAR-VALUED-rhs only: when the rhs value is a
-    CLASS built in place (`Class y = make(Class(80));`), its arg temp still registers its
-    dtor in the ENCLOSING scope instead of dying at the statement. The class-valued rhs
-    takes the in-place sret fast paths (kVarDeclStmt sret-intercept / kReturnStmt sret /
-    kAssignStmt case-2/3), which need the RAW rhs node — a seq around it would defeat
-    in-place and force an extra copy. BALANCED (no leak/double-free), a lifetime bug
-    only. Pinned by test/class/evaluate.sl case 7. FIX = scope only the lifted PRE temps
-    (not the in-place target) — destroy them right after the sret call completes, rather
-    than wrapping the rhs value in a seq.
-    ALSO BITES DESTRUCTURE (see below): the `_$dsrc` spill's value is a class-bearing
-    tuple, so any chain accumulator lifted out of it keeps enclosing-scope lifetime too.
-
-  * DESTRUCTURE IS NOT MINIMAL (values correct; shape pinned by evaluate.sl block P).
-    `(pc, pd) = (pa + pb, pa + pa)` costs FOUR extra objects where TWO would do. A
-    destructure whose source is not a bare NAME is SPILLED once into a `_$dsrc` tuple temp
-    (classify::desugarDestructure — deliberate, so a side-effecting source is not
-    re-evaluated per slot), and each slot is then a plain `pc = _$dsrc[0]` copy. So the
-    per-slot chains are NOT the direct source of any assignment: they sit inside the
-    spill's tuple LITERAL, take the no-destination path (one accumulator each), and are
-    then copied TWICE — once into the spill slot, once into the target. For a tuple
-    LITERAL the spill is pure overhead (each element is read exactly once). FIX = assign a
-    LITERAL source per slot without spilling; each slot then becomes a live-target chain
-    (one accumulator, MOVED in, dead at the semicolon) and the target's op<-- runs. The
-    spill stays for a non-literal source. Surfaced landing the chain lowering; the plan's
-    claim that "destructure needs no new code" was true for CORRECTNESS and wrong for COST.
+  * A DESTRUCTURE BUILDS TWICE AS MANY OBJECTS AS IT NEEDS.
+    `(pc, pd) = (pa + pb, pa + pa)` builds four objects. Two would do.
+    WHY: when the source of a destructure is not a plain name, classify first copies the
+    WHOLE source into a hidden tuple temp (`_$dsrc`), so that a source with a side effect
+    runs once rather than once per slot. Each slot then reads its value back out of that
+    temp — `pc = _$dsrc[0]`. Every value is therefore copied TWICE: once into the temp,
+    once into the target.
+    FIX: when the source is a tuple LITERAL, the temp buys nothing — each element is
+    written once and read once — so assign each element straight to its slot. Each slot
+    then builds in place: one accumulator, moved into the target, destroyed at the
+    semicolon. As a bonus the target's `op<--` runs, which today it never does. Keep the
+    temp for any source that is not a literal.
+    Values and lifetimes are correct; this is purely the object count. Pinned by
+    evaluate.sl block P.
 
 
 UNBLOCKED FEATURES
 
   * should we be able to take the address of a temporary variable?
 
-  * EXPRESSION-TEMP ELIMINATION — PING-PONG, THE LAST ELIDE. Operator overloading, the chain
-    lowering (2026-07-12) and the arity-1 UNARY (2026-07-13, now a chain node like any other)
-    have LANDED: a chain costs the minimum temporaries and a survivor dies at the semicolon.
-    Shipped design: readme-classes.txt "CLASS-OPERATOR CHAINS". Decisions + rationale:
-    plan-evaluate.txt. Landed-feature record (incl. the binary signature rule and WHY the old
-    target-keyed fuse was deleted — don't re-derive it): plan.txt. What remains:
+  * EXPRESSION-TEMP ELIMINATION — PING-PONG, THE LAST ELIDE.
+    a chain costs the minimum temporaries and a survivor dies at the semicolon.
     - PING-PONG: a class with a 2-arg `op+` but NO `op+=` cannot fuse (`acc.op+(acc, c)`
       would read the accumulator while writing it), so every un-fusable operand starts a
       FRESH BUFFER — one extra object per step. Two ALTERNATING buffers would need none of
       them. Pinned by evaluate.sl block N (class Buf); the buffers are correctly
       statement-scoped, so this is efficiency only.
-    The other two deferrals from this work are filed elsewhere: DESTRUCTURE IS NOT MINIMAL
-    under BUGS above, and the two COMPARISON forms (arity-2 comparison producing a class;
-    reversed-operand comparison) under REACH GOALS below.
 
-  * review swap-init.
-    Primitive swap-init; = (tuple) op=; kStoreStmt-target op=.
+  * SWAP-INIT ON A PRIMITIVE IS REJECTED. `int b <--> a;` errors "Swap-initialization
+    requires a class type". Swap-init default-constructs the target and then re-dispatches
+    as an ordinary swap statement, and only the construct half is class-only.
+
+  * A DECLARATION FROM A TUPLE IGNORES THE CLASS'S op=. Given a class with a matching
+    `op=((int,int)^)`, `Pair p = (1, 2);` SILENTLY FIELD-INITS (p is 1,2 — the operator
+    never runs), while the assignment form `q = (3, 4);` on an existing object dispatches
+    the operator correctly. A silent wrong answer, not a missing feature.
+    WHY: grammar gives a `(args)` construction and a `= (tuple)` initializer the SAME shape
+    (one tuple child), so the declaration cannot tell "construct from these field values"
+    apart from "assign me this tuple", and the operator dispatch is turned off for a tuple
+    child rather than guess.
+    FIX: mark the two forms apart in the parser, then let a declaration from a tuple take
+    the same op= dispatch an assignment does.
 
 
 BLOCKED FEATURES
@@ -150,10 +140,9 @@ BLOCKED FEATURES
     needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
     not worth it. prerequisite: a 1-tuple spelling (none planned).
 
-  * FOR-CLASS — classes have LANDED (incl. inheritance / re-open / virtual); what
-    remains is the for-each PROTOCOL (op[]/size or begin/end/next, Phase 5). No longer
-    blocked on operator overloading — `op[]` now parses AND dispatches (read + write,
-    incl. an array-backed body). Remaining work is DESIGNING the protocol (which
+  * FOR-CLASS — what
+    remains is the for-each PROTOCOL (op[]/size or begin/end/next, Phase 5).
+    Remaining work is DESIGNING the protocol (which
     operators/methods an iterable must provide) and lowering it to a kForLongStmt in
     desugar like the others.
 
@@ -180,16 +169,16 @@ BLOCKED FEATURES
     void fn(const int^ p);
     void fn((const int)^ p);
     if it is then overload matching needs an update.
-    NOTE (2026-07-10): overload matching now ranks mut->const as EXACT (rung 0,
-    recursive to the leaf — see argConvertCost / overload_fn.sl canon), so these three
-    would be MUTUALLY AMBIGUOUS today. The "update" is to reject the overload set (or add
-    a const-distinguishing tiebreak) once const is enforced — deferred with const (Phase 6).
-    NOTE (2026-07-13): the REJECTION now has a home — checkOverloadDefaultCollisions
-    (classify) is the declaration-time overload-set check, which today rejects only a
-    default-parameter arity-range collision. A const tie is the same SHAPE of error (the
-    set is undecidable, whatever the call), so it belongs in that pass. Still gated on
-    const enforcement: the three param types are DISTINCT handles today, so nothing
-    structural fires — the collision is only visible to the RANKER.
+    TODAY: overload matching ranks mutable->const as an EXACT match (recursively, down to
+    the leaf — see argConvertCost / overload_fn.sl), so all three would be MUTUALLY
+    AMBIGUOUS. The update is either to REJECT such an overload set outright, or to add a
+    tiebreak that lets const distinguish them.
+    WHERE A REJECTION WOULD GO: checkOverloadDefaultCollisions (classify) already rejects
+    an undecidable overload SET at its declaration — today only when default parameters
+    make two candidates match the same call. A const tie is the same shape of error, so it
+    belongs in that pass. Note nothing fires there today: the three parameter types are
+    distinct type handles, so the collision is visible only to the RANKER.
+    Gated on const enforcement (Phase 6) — decide the policy with that work.
 
   longer term features:
 
@@ -282,9 +271,7 @@ BLOCKED FEATURES
 
   * OPENED-SCOPE NAME AMBIGUITY (not unique to inheritance — applies to ANY opened
     scope). resolveNameDetail flags a name found in two OPENED frames ("Reference to
-    'X' is ambiguous"). Single inheritance HAS LANDED and opens the whole base chain
-    (resolve pushBaseChain, same mechanism as `alias Ns;`). FIELDS and METHODS shadow
-    correctly (derived-first lookup / `self._$base` rewrite), so the live residue is
+    'X' is ambiguous"). the live residue is
     STATICS: a derived `const/alias/enum` with the SAME NAME as a base one is flagged
     ambiguous BARE — `inheritance.sl` pins this as a negative. WORKAROUND IN PLACE:
     qualify it (`Sa:kBase` / `Sd:kBase`), which `tryResolveBaseQualifier` now defers to
@@ -295,9 +282,7 @@ BLOCKED FEATURES
     only from multiple co-equal imports, and a derived static shadows its base's.
 
   * QUALIFIED-NAME COLLISIONS — DEFER ENTIRELY until a TRULY UNRESOLVABLE example
-    surfaces. Inheritance landed using exactly this policy: NO special collision logic
-    — a class qualifier opens its hoisted members + its base chain, and NORMAL scoping
-    (greedy per-segment, inner shadows outer) resolves `A:B:C:D`. No case that normal
+    surfaces. No case that normal
     scoping can't resolve deterministically has surfaced; revisit only when one does.
 
 
@@ -339,26 +324,6 @@ REACH GOALS
       - NESTED OVERLOADING — nested functions do NOT overload; a same-name nested
         pair is a "Duplicate declaration". classifyCall restricts candidates to
         file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
-    NO LONGER A LIMIT (2026-07-12): a nested function may be declared in ANY SCOPE of its
-    host — a block, an if-arm, a loop body, a switch case — not just the body's top level.
-    It lives in the frame it is WRITTEN in (visible there, incl. before its own definition;
-    gone when the scope closes) and captures that scope's locals; two same-named nested
-    functions in disjoint if/else arms are not a duplicate. This was never a designed
-    restriction, just an UNHANDLED SHAPE: resolve's signature pre-pass and its deferred-body
-    pass both scanned a function body's DIRECT children, so a block-nested function was
-    silently unregistered — calling it said "Unknown function 'X'", and NOT calling it left
-    its body entirely unresolved and CRASHED classify on an unstamped identifier (nothing in
-    the body was checked at all). Both passes now run per SCOPE, out of resolveStmtList,
-    exactly like the local-class pre-pass beside them. Desugar/codegen needed no change (both
-    already recurse into blocks).
-    ALSO ACCEPTED (2026-07-12): a function may be nested in a FUNCTION, a METHOD or an
-    OPERATOR (and in a ctor/dtor) — all of them ARE functions, so all take the same path, and
-    this needed no code beyond the per-scope fix. There is no "method nested in a method": a
-    nested function inside a method is just a FUNCTION, one that INHERITS `self` IF IT NEEDS
-    TO — it names a field (a bare `v_` rewrites to `self.v_`) or names `self` outright, and
-    either way `self` is an ordinary local of the method's frame that captures like any other.
-    Pinned in nested_fn.sl (Meth / Space:Inner / local_class_method).
-    See [[project_nested_fn_desugar]].
 
   * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
     enum, a bare member name on the rhs should resolve against that enum's

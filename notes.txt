@@ -6,7 +6,7 @@ things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.
 check for frame scope violations/shortcuts and stored canonical names.
 what test coverage gaps remain ?
-update readme*.txt, plan*.txt, and memories.
+update readme*.txt, plan*.txt, claude.md, and memories.
 remove landed items from todo.txt. update stale entries.
 
 one of claude's current favorite fuck-ups is to use default move
