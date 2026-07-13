@@ -650,15 +650,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
 void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
 void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
-void lowerClassOperatorTemp(parse::Tree& tree, parse::Node& e, widen::TypeRef C,
-                            std::string const& opname,
-                            std::vector<std::unique_ptr<parse::Node>> operands,
-                            diagnostic::Sink& diag);
 bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams);
 bool isArithBitBinaryOp(std::string const& op);
 bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
                       widen::TypeRef lref, diagnostic::Sink& diag);
+bool stampClassUnary(parse::Tree& tree, parse::Node& e, std::string const& op,
+                     widen::TypeRef oref, diagnostic::Sink& diag);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
 
@@ -1949,6 +1947,10 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             return;
         }
         case parse::Kind::kUnaryExpr: {
+            // A STAMPED class unary is already resolved and typed, and carries a second
+            // child (the accumulator's field tuple) — inferExpr may revisit a node, so
+            // leave it alone. Mirrors stampClassBinary's stamp-once guard.
+            if (e.class_op_chain) return;
             assert(e.children.size() == 1 && "UnaryExpr needs 1 child");
             parse::Node& operand = *e.children[0];
             std::string const& op = e.text;
@@ -1975,28 +1977,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 inferMethodCall(tree, e, diag);
                 return;
             }
-            // ARITY-1 unary produce-self: `Class r = -a` -> `r.op-(a)` (canon 103-104,
-            // 208-212). Build a temp and run `_$optmp.op<op>(operand)` — the same
-            // expression-temp lower as a class-producing binary. RESULT class = the
-            // expected type (context) if it defines op<op>/1 (cross-class), else the
-            // OPERAND's own class (the common case; also reaches call-arg / inferred-decl
-            // positions with no threaded context).
+            // ARITY-1 unary produce-self: `Class r = -a` -> `r.op-(a)` (canon 103-104).
+            // It PRODUCES a class value, exactly as a class binary does, so it takes the
+            // same road: classify RESOLVES and STAMPS it, desugar's chain lowering decides
+            // where the accumulator lives (the destination itself when that is raw storage,
+            // a statement-scoped temp when it is a live object). Dispatch is on the OPERAND's
+            // class alone — the old arm let the CONTEXT (the assignment target) pick the
+            // result class, the same precedence inversion that killed the target-keyed
+            // binary fuse. A cross-class destination now converts through the binding funnel
+            // like any other, instead of steering the operator.
             if (op == "+" || op == "-" || op == "~" || op == "!") {
-                widen::TypeRef rc = widen::kNoType;
-                if (widen::form(widen::strip(context)) == widen::Type::Form::kSlid
-                    && classHasOperatorArity(tree, context, "op" + op, 1))
-                    rc = context;
-                else if (widen::form(widen::strip(operand.inferred_type))
-                             == widen::Type::Form::kSlid
-                    && classHasOperatorArity(tree, operand.inferred_type, "op" + op, 1))
-                    rc = operand.inferred_type;
-                if (rc != widen::kNoType) {
-                    std::vector<std::unique_ptr<parse::Node>> operands;
-                    operands.push_back(std::move(e.children[0]));
-                    lowerClassOperatorTemp(tree, e, rc, "op" + op,
-                                           std::move(operands), diag);
-                    return;
-                }
+                if (stampClassUnary(tree, e, op, operand.inferred_type, diag)) return;
             }
             if (op == "!") {
                 if (operand.inferred_type != widen::kNoType
@@ -4338,43 +4329,54 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
     return true;
 }
 
-void lowerClassOperatorTemp(parse::Tree& tree, parse::Node& e, widen::TypeRef C,
-                            std::string const& opname,
-                            std::vector<std::unique_ptr<parse::Node>> operands,
-                            diagnostic::Sink& diag) {
-    auto itc = tree.classes.find(widen::strip(C));
-    assert(itc != tree.classes.end()
-        && "lowerClassOperatorTemp: class absent from tree.classes");
-    int f = e.file_id, tk = e.tok;
-    parse::Entry ce;
-    ce.kind = parse::EntryKind::kLocalVar;
-    ce.name = "_$optmp";
-    ce.slids_type = widen::strip(C);
-    ce.file_id = f;
-    ce.tok = tk;
-    int cid = static_cast<int>(tree.entries.size());
-    tree.entries.push_back(std::move(ce));
+// An ARITY-1 UNARY on a class (`-a`) is a PRODUCER, like a class binary: it yields a whole
+// class value that needs a home. So it is stamped, never lowered here — desugar answers the
+// "raw storage or live object?" question with the whole statement in hand, and a unary at a
+// chain's HEAD collapses into the accumulator exactly as a head construction does.
+// The result class is the OPERAND's, and nothing else. children become [operand, default
+// field-init tuple]; op_un_eid is the only operator a unary runs (it writes the whole value,
+// so there is no seed and nothing to fuse).
+bool stampClassUnary(parse::Tree& tree, parse::Node& e, std::string const& op,
+                     widen::TypeRef oref, diagnostic::Sink& diag) {
+    if (e.class_op_chain) return true;    // inferExpr may revisit a node; stamp once
+    widen::TypeRef C = widen::strip(oref);
+    if (widen::form(C) != widen::Type::Form::kSlid) return false;
+    auto itc = tree.classes.find(C);
+    if (itc == tree.classes.end()) return false;
+    parse::Node& operand = *e.children[0];
+
+    // The arity-1 `op<OP>(Self^)`. findClassOperator ranks the [_$recv, one param] shapes,
+    // so a class carrying BOTH a 2-arg (binary) and a 1-arg (unary) `op-` picks the unary.
+    int un_id = findClassOperator(tree, C, operand, "op" + op, diag);
+    if (un_id < 0) return false;          // -2 (ambiguous, already reported) reads as absent
+    // The move INTO a live target, resolved HERE so desugar can CALL it by name — a transfer
+    // synthesized after classify reaches the class's move operator no other way.
+    parse::Node self_val;
+    self_val.kind = parse::Kind::kIdentExpr;
+    self_val.inferred_type = itc->second.type;
+    self_val.file_id = e.file_id;
+    self_val.tok = e.tok;
+    int move_id = findClassOperator(tree, C, self_val, "op<--", diag);
+    if (move_id < 0) move_id = -1;
+
+    // The accumulator's construction value: the class's DEFAULT field-init tuple, built by
+    // the ONE construction funnel, so a chain accumulator is born like any other local.
     auto dc = std::make_unique<parse::Node>();
     dc->kind = parse::Kind::kVarDeclStmt;
-    dc->name = "_$optmp";
-    dc->name_tok = tk;
-    dc->resolved_entry_id = cid;
-    dc->return_type = C;
-    dc->file_id = f;
-    dc->tok = tk;
+    dc->return_type = itc->second.type;
+    dc->file_id = e.file_id;
+    dc->tok = e.tok;
     classifyClassInit(tree, *dc, itc->second, diag);
-    auto fill = makeOpCallStmt(tree, "_$optmp", cid, C, opname,
-                               std::move(operands), f, tk, diag);
-    e.kind = parse::Kind::kConvertExpr;
-    e.class_conversion = true;
-    e.return_type = C;
-    e.inferred_type = C;
-    e.resolved_entry_id = cid;
-    e.name.clear();
-    e.text.clear();
-    e.children.clear();
-    e.children.push_back(std::move(dc));
-    e.children.push_back(std::move(fill));
+    assert(!dc->children.empty() && dc->children[0]
+        && "classifyClassInit left no default field tuple");
+    e.children.push_back(std::move(dc->children[0]));
+
+    e.class_op_chain = true;
+    e.op_un_eid = un_id;
+    e.op_move_eid = move_id;
+    e.inferred_type = itc->second.type;
+    e.op_type = itc->second.type;
+    return true;
 }
 
 // Lower an AGGREGATE-target conversion `(AggType = src)` BY SLOT — the same way tuples

@@ -953,10 +953,17 @@ Phase 5 — classes
     2-arg op<OP> or decomposes; later operands FUSE with their own op<OP>=. Result: evaluate.sl
     case J went 12 objects -> 7. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS";
     the plan (with the decisions and their rationale) in plan-evaluate.txt.
+    THE ARITY-1 UNARY JOINED IT (2026-07-13). `-a` produces a whole class value, so it is a
+    chain node too: stampClassUnary stamps the kUnaryExpr (op_un_eid = the 1-arg op, op<--,
+    the default field tuple) and desugar places the accumulator — fresh storage IS it (zero
+    temps), a live target gets one temp moved in through op<--, and a unary at a chain HEAD
+    collapses into the accumulator like a head construction. Dispatch is on the OPERAND's
+    class alone (the old arm let the assignment TARGET pick the result class — the same
+    precedence inversion as the deleted target-keyed fuse). classify's lowerClassOperatorTemp
+    is DELETED. Canon evaluate.sl block U.
     STILL DEFERRED: ping-pong (a class with a 2-arg op+ but NO op+= cannot fuse, so each
-    un-fusable operand starts a fresh buffer — two alternating buffers would need none); the
-    arity-1 UNARY (`Class r = -a` still takes the old construct-temp path — a missed elide,
-    not a regression); destructure's non-minimal shape (todo.txt); arity-2 comparison
+    un-fusable operand starts a fresh buffer — two alternating buffers would need none);
+    destructure's non-minimal shape (todo.txt); arity-2 comparison
     producing a class + reversed-operand comparison. See [[project_expr_temp_elimination]],
     [[project_operator_overloading]]; canon test/class/evaluate.sl + operator.sl.
   * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +

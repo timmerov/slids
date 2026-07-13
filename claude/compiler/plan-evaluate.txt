@@ -115,6 +115,11 @@ only pass that has the whole statement in one piece at lowering time.
   DEVIATIONS FROM THE ORIGINAL PLAN (all deliberate):
     - lowerClassOperatorTemp was NOT deleted: the arity-1 UNARY still uses it. Moving unary
       too doubles the surface for a case not in canon. Missed elide, not a regression.
+      CLOSED 2026-07-13 — the unary IS on the chain road now (stampClassUnary + a unary head
+      in lowerOpChain; the spine walk stops at a unary so `-(a+b)` cannot self-alias), and
+      lowerClassOperatorTemp is deleted. It cost MORE than a missed elide: the `_$optmp` was
+      COPIED into the destination (so a live target never ran the author's op<--) and it kept
+      ENCLOSING-scope lifetime. Canon evaluate.sl block U (class Neg).
     - classify still BUILDS the accumulator's construction value (classifyClassInit parks the
       default field tuple as children[2]). Desugar cannot: default field values are classify's
       job. This keeps construction on the ONE funnel.
@@ -179,7 +184,6 @@ Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAIN
 STILL OPEN (all filed in todo.txt)
 ------------------------------------------------------------------------------
   - PING-PONG (Decision 2 rule 6): reuse two alternating buffers instead of one per step.
-  - The arity-1 UNARY still takes the old construct-temp path.
   - DESTRUCTURE is not minimal: a non-bare-name source is spilled to a `_$dsrc` tuple temp,
     so the chains are not the direct source of any assignment — 4 extra objects for 2 chains,
     and the accumulators keep enclosing-scope lifetime (the same seq-wrap gap case 7 pins).

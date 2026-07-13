@@ -516,6 +516,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->agg_conv_spill = p.agg_conv_spill;
     node->class_op_chain = p.class_op_chain;
     node->op_bin_eid = p.op_bin_eid;
+    node->op_un_eid = p.op_un_eid;
     node->op_aug_eid = p.op_aug_eid;
     node->op_eq_lhs_eid = p.op_eq_lhs_eid;
     node->op_eq_rhs_eid = p.op_eq_rhs_eid;
@@ -1485,6 +1486,7 @@ std::unique_ptr<ast::Node> cloneAstExpr(ast::Node const& n) {
     c->agg_conv_spill = n.agg_conv_spill;
     c->class_op_chain = n.class_op_chain;
     c->op_bin_eid = n.op_bin_eid;
+    c->op_un_eid = n.op_un_eid;
     c->op_aug_eid = n.op_aug_eid;
     c->op_eq_lhs_eid = n.op_eq_lhs_eid;
     c->op_eq_rhs_eid = n.op_eq_rhs_eid;
@@ -2059,9 +2061,17 @@ std::unique_ptr<ast::Node> makeAccDecl(ChainAcc const& acc, widen::TypeRef C,
 // spine is the left edge. Walking it is not the deleted flattenLeftChain: nothing here
 // consults a destination, and nothing re-associates. The order of application is the
 // source's order, unchanged.
+//
+// A UNARY chain node ENDS the spine: it is a producer, so it can only ever be the HEAD
+// (`-a + b` -> the unary writes the accumulator, then `+ b` fuses onto it). The walk does
+// NOT continue into its operand — `-(a + b)` must not put the inner chain on this spine,
+// because applying the unary to the accumulator afterwards would be `acc.op-(acc)`: reading
+// the accumulator while writing it, the same self-alias the un-fusable rule 6 refuses. The
+// operand is an ordinary nested rvalue, lowered into its own temp by liftSretCallExprs.
 void collectChainSpine(ast::Node* n, std::vector<ast::Node*>& spine) {
     while (true) {
         spine.push_back(n);
+        if (n->kind == ast::Kind::kUnaryExpr) break;
         ast::Node* l = n->children.empty() ? nullptr : n->children[0].get();
         if (l && l->class_op_chain
             && widen::deepStrip(l->inferred_type) == widen::deepStrip(n->inferred_type))
@@ -2120,32 +2130,42 @@ ChainAcc lowerOpChain(std::unique_ptr<ast::Node> chain, int& next_id,
 
     // ---- the HEAD ----
     ast::Node* n0 = spine[0];
-    std::unique_ptr<ast::Node> head = std::move(n0->children[0]);
-    std::unique_ptr<ast::Node> rhs0 = std::move(n0->children[1]);
-    bool collapsed = head->is_construction
-        && widen::deepStrip(head->inferred_type) == widen::deepStrip(C);
-    if (collapsed) {
-        // Rule 1: the construction never exists as an operand — it IS the accumulator.
-        // Rules 2/3: seed with op= only on a DEFAULT (empty) accumulator; a head built with
-        // arguments must fuse, or op= would throw those arguments away.
-        assert(!head->children.empty() && head->children[0]
-            && "a construction lost its field-init tuple");
-        newAcc(std::move(head->children[0]));
-        int seed = (head->ctor_no_args && n0->op_eq_rhs_eid >= 0)
-                       ? n0->op_eq_rhs_eid : n0->op_aug_eid;
-        emit(makeAccOpCall(seed, acc, C, args1(std::move(rhs0)), file, tok));
-    } else if (n0->op_bin_eid >= 0) {
-        // Rule 4: the head pair in one 2-arg call.
-        newAcc(std::move(n0->children[2]));
-        std::vector<std::unique_ptr<ast::Node>> two;
-        two.push_back(std::move(head));
-        two.push_back(std::move(rhs0));
-        emit(makeAccOpCall(n0->op_bin_eid, acc, C, std::move(two), file, tok));
+    if (n0->kind == ast::Kind::kUnaryExpr) {
+        // Rule 1', the UNARY head: an arity-1 unary WRITES THE WHOLE accumulator
+        // (`acc.op-(a)`), so it collapses into it exactly as a head construction does —
+        // there is no seed, and nothing to fuse it with. children are [operand, field tuple].
+        std::unique_ptr<ast::Node> operand = std::move(n0->children[0]);
+        newAcc(std::move(n0->children[1]));
+        emit(makeAccOpCall(n0->op_un_eid, acc, C, args1(std::move(operand)), file, tok));
     } else {
-        // Rule 4, decomposed: no 2-arg operator, so seed then fuse.
-        newAcc(std::move(n0->children[2]));
-        emit(makeAccOpCall(n0->op_eq_lhs_eid, acc, C, args1(std::move(head)), file, tok));
-        emit(makeAccOpCall(n0->op_aug_eid, acc, C, args1(std::move(rhs0)), file, tok));
+        std::unique_ptr<ast::Node> head = std::move(n0->children[0]);
+        std::unique_ptr<ast::Node> rhs0 = std::move(n0->children[1]);
+        bool collapsed = head->is_construction
+            && widen::deepStrip(head->inferred_type) == widen::deepStrip(C);
+        if (collapsed) {
+            // Rule 1: the construction never exists as an operand — it IS the accumulator.
+            // Rules 2/3: seed with op= only on a DEFAULT (empty) accumulator; a head built
+            // with arguments must fuse, or op= would throw those arguments away.
+            assert(!head->children.empty() && head->children[0]
+                && "a construction lost its field-init tuple");
+            newAcc(std::move(head->children[0]));
+            int seed = (head->ctor_no_args && n0->op_eq_rhs_eid >= 0)
+                           ? n0->op_eq_rhs_eid : n0->op_aug_eid;
+            emit(makeAccOpCall(seed, acc, C, args1(std::move(rhs0)), file, tok));
+        } else if (n0->op_bin_eid >= 0) {
+            // Rule 4: the head pair in one 2-arg call.
+            newAcc(std::move(n0->children[2]));
+            std::vector<std::unique_ptr<ast::Node>> two;
+            two.push_back(std::move(head));
+            two.push_back(std::move(rhs0));
+            emit(makeAccOpCall(n0->op_bin_eid, acc, C, std::move(two), file, tok));
+        } else {
+            // Rule 4, decomposed: no 2-arg operator, so seed then fuse.
+            newAcc(std::move(n0->children[2]));
+            emit(makeAccOpCall(n0->op_eq_lhs_eid, acc, C, args1(std::move(head)),
+                               file, tok));
+            emit(makeAccOpCall(n0->op_aug_eid, acc, C, args1(std::move(rhs0)), file, tok));
+        }
     }
 
     // ---- every LATER operand ----

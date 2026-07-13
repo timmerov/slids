@@ -96,21 +96,17 @@ UNBLOCKED FEATURES
 
   * should we be able to take the address of a temporary variable?
 
-  * EXPRESSION-TEMP ELIMINATION — THE TWO REMAINING ELIDES. Operator overloading and the
-    chain lowering have LANDED (2026-07-12: a chain costs the minimum temporaries and a
-    survivor dies at the semicolon; evaluate.sl case J went 12 objects -> 7). Shipped design:
-    readme-classes.txt "CLASS-OPERATOR CHAINS". Decisions + rationale: plan-evaluate.txt.
-    Landed-feature record (incl. the binary signature rule and WHY the old target-keyed fuse
-    was deleted — don't re-derive it): plan.txt. Still open:
+  * EXPRESSION-TEMP ELIMINATION — PING-PONG, THE LAST ELIDE. Operator overloading, the chain
+    lowering (2026-07-12) and the arity-1 UNARY (2026-07-13, now a chain node like any other)
+    have LANDED: a chain costs the minimum temporaries and a survivor dies at the semicolon.
+    Shipped design: readme-classes.txt "CLASS-OPERATOR CHAINS". Decisions + rationale:
+    plan-evaluate.txt. Landed-feature record (incl. the binary signature rule and WHY the old
+    target-keyed fuse was deleted — don't re-derive it): plan.txt. What remains:
     - PING-PONG: a class with a 2-arg `op+` but NO `op+=` cannot fuse (`acc.op+(acc, c)`
       would read the accumulator while writing it), so every un-fusable operand starts a
       FRESH BUFFER — one extra object per step. Two ALTERNATING buffers would need none of
       them. Pinned by evaluate.sl block N (class Buf); the buffers are correctly
       statement-scoped, so this is efficiency only.
-    - ARITY-1 UNARY still takes the OLD path (`Class r = -a` builds a `_$optmp` +
-      class_conversion lift, then copies into r). lowerClassOperatorTemp survives ONLY for
-      it (classify.cpp, the one call site). A missed elide, not a regression; moving it onto
-      the chain lowering doubles that lowering's surface for a case canon doesn't exercise.
     The other two deferrals from this work are filed elsewhere: DESTRUCTURE IS NOT MINIMAL
     under BUGS above, and the two COMPARISON forms (arity-2 comparison producing a class;
     reversed-operand comparison) under REACH GOALS below.

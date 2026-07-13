@@ -250,16 +250,22 @@ struct Node {
                                  // a DEFAULT head may be seeded with the cheaper `op=`, but a
                                  // head built WITH args must use `op<OP>=` — an `op=` there
                                  // would discard the very arguments it was constructed with.
-    bool class_op_chain = false; // kBinaryExpr: a class-PRODUCING binary operator. classify
-                                 // RESOLVES it and STAMPS it (the four candidate ids below +
-                                 // inferred_type = the result class = the LHS OPERAND's class)
-                                 // but does NOT lower it — desugar's chain lowering builds the
+    bool class_op_chain = false; // kBinaryExpr / kUnaryExpr: a class-PRODUCING operator.
+                                 // classify RESOLVES it and STAMPS it (the candidate ids below +
+                                 // inferred_type = the result class = the OPERAND's class — the
+                                 // LHS operand of a binary) but does NOT lower it — desugar's
+                                 // chain lowering builds the
                                  // accumulator and the op calls, because eliding the temp into
                                  // the destination needs the chain AND its destination together
-                                 // and only a whole statement has both. children[2] = the result
-                                 // class's DEFAULT field-init tuple (the accumulator's
-                                 // construction value), parked here by classify.
+                                 // and only a whole statement has both. The last child is the
+                                 // result class's DEFAULT field-init tuple (the accumulator's
+                                 // construction value), parked here by classify: children[2] on
+                                 // a binary [lhs, rhs, tuple], children[1] on a UNARY
+                                 // [operand, tuple]. A unary runs exactly one operator
+                                 // (op_un_eid) — it produces the accumulator's whole value — so
+                                 // the seed / fuse / 2-arg ids below are unused on it.
     int op_bin_eid = -1;         // 2-arg `op<OP>(lhs, rhs)`  — the head pair in one call
+    int op_un_eid = -1;          // 1-arg `op<OP>(operand)`   — an arity-1 UNARY produce-self
     int op_aug_eid = -1;         // 1-arg `op<OP>=(rhs)`      — the fuse
     int op_eq_lhs_eid = -1;      // 1-arg `op=(lhs)`          — the seed of a decomposed head
     int op_eq_rhs_eid = -1;      // 1-arg `op=(rhs)`          — the seed of a COLLAPSED head

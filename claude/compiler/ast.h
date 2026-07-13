@@ -105,11 +105,14 @@ struct Node {
                                  // (`Class` / `Class()`) — a DEFAULT construction. The chain
                                  // lowering seeds a default accumulator with `op=`; one built
                                  // WITH args must use `op<OP>=` (op= would discard the args).
-    bool class_op_chain = false; // kBinaryExpr: a class-PRODUCING binary operator, RESOLVED and
-                                 // STAMPED by classify but not lowered. inferred_type = the
-                                 // result class; children[2] = that class's default field-init
-                                 // tuple. desugar builds the accumulator + the op calls.
+    bool class_op_chain = false; // kBinaryExpr / kUnaryExpr: a class-PRODUCING operator,
+                                 // RESOLVED and STAMPED by classify but not lowered.
+                                 // inferred_type = the result class; the LAST child is that
+                                 // class's default field-init tuple — children[2] on a binary
+                                 // [lhs, rhs, tuple], children[1] on a UNARY [operand, tuple].
+                                 // desugar builds the accumulator + the op calls.
     int op_bin_eid = -1;         // 2-arg `op<OP>(lhs, rhs)`  — the head pair in one call
+    int op_un_eid = -1;          // 1-arg `op<OP>(operand)`   — an arity-1 UNARY produce-self
     int op_aug_eid = -1;         // 1-arg `op<OP>=(rhs)`      — the fuse
     int op_eq_lhs_eid = -1;      // 1-arg `op=(lhs)`          — the seed of a decomposed head
     int op_eq_rhs_eid = -1;      // 1-arg `op=(rhs)`          — the seed of a COLLAPSED head

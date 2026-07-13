@@ -99,9 +99,17 @@ TWO FEED PATHS reach the three helpers, and EVERY nameless site was once hand-ro
   (1) DIRECT — a codegen construct site calls them itself: var-decl / sret / global /
       `new` / the call-arg pass temp.
   (2) VIA THE LIFT — classify+desugar rewrite a nameless class temp (`_$cret`
-      conversion, `_$optmp` op-result, an inline `Class(args)`) into a NAMED
+      conversion, an inline `Class(args)`) into a NAMED
       kVarDeclStmt (liftSretCallExprs, desugar.cpp), which then takes path (1)'s
-      var-decl route. Verified: a `(Money = 5)` conversion emits @Money__$ctor + the
+      var-decl route.
+      NOT the operator-result `_$optmp` — not any more. classify used to lower a class
+      operator into a `_$optmp` + a class_conversion lift (lowerClassOperatorTemp), and
+      that reached the funnel through THIS path. Since the chain lowering (2026-07-12,
+      and the arity-1 UNARY with it 2026-07-13 — lowerClassOperatorTemp is deleted),
+      DESUGAR mints the accumulator itself as a named kVarDeclStmt (lowerOpChain /
+      makeAccDecl), so it takes the var-decl route directly — and often there is no temp
+      at all, because the DESTINATION is the accumulator. See readme-classes.txt
+      "CLASS-OPERATOR CHAINS". Verified: a `(Money = 5)` conversion emits @Money__$ctor + the
       op= fill + a REGISTERED dtor at scope end — exactly like a named local. A
       lifted temp that is a NESTED arg / receiver in a var-decl / assign / return rhs
       whose VALUE is a SCALAR instead folds into a kSeqExpr wrapping the rhs (statement

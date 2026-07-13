@@ -139,6 +139,18 @@ never gets a say (that would invert precedence, which is what killed classify's 
 target-keyed tryLowerBinaryChain). J's counts were 12 ctor/dtor pairs before the ladder
 landed and are 7 now; that shrinkage was the test.
 
+case U: the ARITY-1 UNARY, on the SAME road as the binary. `-a` PRODUCES a class value, so
+it is a chain node too: classify stamps it (the operand's class picks the operator -- never
+the assignment target, which would invert precedence exactly as the deleted target-keyed
+fuse did), and desugar's lowering answers the one question that matters, where the
+accumulator lives. Fresh storage IS the accumulator (U1 decl, U6 return through NRVO): zero
+temps. A LIVE target takes one temp, moved in through the class's op<-- and dead at the
+semicolon (U2). A unary at a chain's HEAD collapses into the accumulator like a head
+construction (U3); anywhere else it is an ordinary operand with its own temp (U4 in a chain,
+U5 as a call arg, U7 over a sub-chain). The old path built a `_$optmp` in classify and COPIED
+it into the destination -- an extra object at every site, a copy where the author's op<--
+belonged, and a temp that outlived its statement.
+
 deliberately NOT correct yet (still-broken / deferred; case 7 pins the first):
   - a var-decl / return rhs whose VALUE is a CLASS built in place
     (Class y = make(Class(80));) still leaks its arg temp -- the seq wrap is
@@ -147,8 +159,6 @@ deliberately NOT correct yet (still-broken / deferred; case 7 pins the first):
   - ping-pong: a class with a 2-arg op+ but NO op+= can't fuse (acc.op+(acc,c) would
     read acc while writing it), so each such step starts a fresh buffer -- one temp per
     un-fusable operand. Two alternating buffers would need none.
-  - the move into a live target is the DEFAULT move; a user op<-- is not dispatched.
-  - an arity-1 unary (Class r = -a) still takes the old construct-temp-then-op path.
   - tuple-construct assignment (((a,b),c) = (...)) -- value-correct but
     spews redundant temps; not clean.
 */
@@ -336,6 +346,29 @@ Sw(int v_) {
 // to the sret slot -- so the caller's variable IS the accumulator and no temp exists.
 Str chain_ret(Str^ x, Str^ y) {
     return Str + x^ + y^;
+}
+
+// Neg: an ARITY-1 UNARY producer. `-a` yields a whole class value, exactly as a binary does,
+// so it takes the binary's road -- stamped in classify, lowered in desugar -- and the
+// destination is the accumulator wherever that destination is raw storage. It used to build a
+// `_$optmp` in classify and COPY it into the target: an extra object, a copy where the class's
+// move belonged, and a temp that outlived its statement. ctor/dtor PRINT, so the count is the
+// assertion, as everywhere else in this file.
+Neg(int v_) {
+    _() { __println("Neg:ctor: " + v_); }
+    ~() { __println("Neg:dtor: " + v_); }
+    op=(Neg^ r)           { v_ = r^.v_; }
+    op<--(mutable Neg^ r) { __println("Neg:op<--: " + r^.v_); v_ = r^.v_; }
+    op+=(Neg^ r)          { v_ += r^.v_; }
+    op-(Neg^ x)           { v_ = 0 - x^.v_; }
+}
+
+int take_neg(Neg^ n) { return n^.v_; }
+
+// A unary in a RETURN rhs -- NRVO aliases the accumulator to the sret slot, so the CALLER's
+// variable is the accumulator and no temporary exists at all.
+Neg neg_ret(Neg^ x) {
+    return -x^;
 }
 
 int32 main() {
@@ -939,6 +972,67 @@ int32 main() {
         __println("T4 end tq=" + tq.p_^);                      // 42
 
         __println("T end");
+    }
+
+    // ---- U: THE ARITY-1 UNARY ----
+    //
+    // A unary PRODUCES a class value, so it is a chain node like a binary: the destination is
+    // the accumulator wherever it is raw storage (zero temps), and a LIVE target takes exactly
+    // one temp, moved in through the class's op<--, dead at the semicolon. A unary at a chain's
+    // HEAD collapses into the accumulator exactly as a head construction does. Dispatch is on
+    // the OPERAND's class alone -- the old path let the assignment TARGET's type pick the
+    // operator, the same precedence inversion that killed the target-keyed binary fuse.
+    __println("U: arity-1 unary");
+    {
+        Neg ua = Neg(5);
+        Neg ub = Neg(2);
+
+        // U1: a fresh decl -- uc IS the accumulator. ZERO temps: one ctor, and it is uc's.
+        //     This used to cost a second object and a COPY into uc, whose dtor then ran at
+        //     the block end rather than here.
+        __println("U1: fresh decl     Neg uc = -ua");
+        Neg uc = -ua;
+        __println("U1 end uc=" + uc.v_);              // -5
+
+        // U2: a LIVE target -- one temp, MOVED in through op<-- (which prints), dead at the
+        //     semicolon. The old path COPIED, so the author's op<-- never ran.
+        __println("U2: live target    ud = -ua");
+        Neg ud = Neg(0);
+        ud = -ua;
+        __println("U2 end ud=" + ud.v_);              // -5
+
+        // U3: the unary at a chain HEAD -- it writes the accumulator, then `+ ub` fuses onto
+        //     it with op+=. Zero temps.
+        __println("U3: chain head     Neg ue = -ua + ub");
+        Neg ue = -ua + ub;
+        __println("U3 end ue=" + ue.v_);              // -3
+
+        // U4: the unary as a NON-head operand -- an ordinary operand, so it materializes into
+        //     its own accumulator, dead at the semicolon.
+        __println("U4: chain operand  Neg uf = ua + -ub");
+        Neg uf = ua + -ub;
+        __println("U4 end uf=" + uf.v_);              // 3
+
+        // U5: a CALL ARG -- no destination at all, so a lifted temp, dead at the semicolon.
+        __println("U5: call arg       take_neg(-ua)");
+        int u5 = take_neg(-ua);
+        __println("U5 end u5=" + u5);                 // -5
+
+        // U6: a RETURN rhs -- NRVO makes ug the accumulator: zero temps.
+        __println("U6: return rhs     Neg ug = neg_ret(ua)");
+        Neg ug = neg_ret(^ua);
+        __println("U6 end ug=" + ug.v_);              // -5
+
+        // U7: a unary over a parenthesized SUB-CHAIN. The spine STOPS at the unary, so the
+        //     inner chain is an ordinary nested rvalue -- one temp for it, dead at the
+        //     semicolon -- while the unary itself still collapses into uh. Walking the spine
+        //     through the unary instead would apply it to the accumulator: `acc.op-(acc)`,
+        //     reading the accumulator while writing it (the un-fusable rule's self-alias).
+        __println("U7: sub-chain      Neg uh = -(ua + ub)");
+        Neg uh = -(ua + ub);
+        __println("U7 end uh=" + uh.v_);              // -7
+
+        __println("U end (locals dtor next)");
     }
 
     return 0;

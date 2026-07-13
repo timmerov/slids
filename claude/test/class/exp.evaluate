@@ -390,5 +390,46 @@ T4: pointer-field move
 Ptr:op<--
 T4 end tq=42
 T end
+U: arity-1 unary
+Neg:ctor: 5
+Neg:ctor: 2
+U1: fresh decl     Neg uc = -ua
+Neg:ctor: 0
+U1 end uc=-5
+U2: live target    ud = -ua
+Neg:ctor: 0
+Neg:ctor: 0
+Neg:op<--: -5
+Neg:dtor: -5
+U2 end ud=-5
+U3: chain head     Neg ue = -ua + ub
+Neg:ctor: 0
+U3 end ue=-3
+U4: chain operand  Neg uf = ua + -ub
+Neg:ctor: 0
+Neg:ctor: 0
+Neg:dtor: -2
+U4 end uf=3
+U5: call arg       take_neg(-ua)
+Neg:ctor: 0
+Neg:dtor: -5
+U5 end u5=-5
+U6: return rhs     Neg ug = neg_ret(ua)
+Neg:ctor: 0
+U6 end ug=-5
+U7: sub-chain      Neg uh = -(ua + ub)
+Neg:ctor: 0
+Neg:ctor: 0
+Neg:dtor: 7
+U7 end uh=-7
+U end (locals dtor next)
+Neg:dtor: -7
+Neg:dtor: -5
+Neg:dtor: 3
+Neg:dtor: -3
+Neg:dtor: -5
+Neg:dtor: -5
+Neg:dtor: 2
+Neg:dtor: 5
 Class:dtor: 9
 Acc:dtor: 13

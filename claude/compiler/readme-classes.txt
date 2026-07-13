@@ -206,16 +206,33 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
 CLASS-OPERATOR CHAINS — MINIMUM TEMPORARIES (landed 2026-07-12; classify + desugar)
 canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
 
-  * THE SPLIT: classify RESOLVES a class binary and STAMPS it; DESUGAR LOWERS it. classify
+  * THE SPLIT: classify RESOLVES a class operator and STAMPS it; DESUGAR LOWERS it. classify
     leaves the kBinaryExpr in place (class_op_chain) carrying five resolved operator entry
     ids — the 2-arg `op<OP>(lhs,rhs)`, the fuse `op<OP>=(rhs)`, the two seeds `op=(lhs)` /
     `op=(rhs)`, and `op<--(Self^)` for the move — plus, as children[2], the result class's
     DEFAULT field-init tuple (an accumulator's construction value, built by the ONE
     construction funnel). WHY desugar owns the lowering: the ELIDE (letting the destination
     BE the accumulator) needs the chain AND its destination together, and only a whole
-    statement carries both. classify::stampClassBinary replaced tryLowerClassBinary;
-    lowerClassOperatorTemp survives only for the arity-1 UNARY (still a `_$optmp` +
-    class_conversion lift — a missed elide, not a regression).
+    statement carries both. classify::stampClassBinary replaced tryLowerClassBinary.
+  * THE ARITY-1 UNARY IS A CHAIN NODE TOO (2026-07-13). `-a` PRODUCES a whole class value,
+    exactly as a binary does, so it takes the same road: classify::stampClassUnary stamps the
+    kUnaryExpr (class_op_chain, children [operand, default field tuple], op_un_eid = the 1-arg
+    `op<OP>(Self^)`, op_move_eid = op<--), and desugar's lowering places the accumulator. It
+    runs ONE operator — it writes the accumulator's whole value — so there is no seed and
+    nothing to fuse it with. Consequences, all of them inherited rather than re-implemented:
+    fresh storage IS the accumulator (a decl, a return via NRVO — zero temps); a LIVE target
+    takes one temp MOVED in through op<--; a unary at a chain's HEAD collapses into the
+    accumulator exactly as a head construction does (`-a + b` = `acc.op-(a); acc.op+=(b)`);
+    anywhere else it is an ordinary operand with its own statement-scoped temp. The spine walk
+    STOPS at a unary (collectChainSpine): continuing into its operand would put `-(a+b)`'s
+    inner chain on the spine and then apply the unary to the accumulator — `acc.op-(acc)`,
+    reading the accumulator while writing it, the same self-alias the un-fusable rule refuses.
+    Dispatch is on the OPERAND's class ALONE: the old arm let the CONTEXT (the assignment
+    target) pick the result class, the same precedence inversion that killed the target-keyed
+    binary fuse; a cross-class destination now converts through the binding funnel like any
+    other. lowerClassOperatorTemp — the classify-side `_$optmp` + class_conversion lift this
+    replaced, and the last elide the chain landing left behind — is DELETED. Canon evaluate.sl
+    block U (class Neg).
   * WHERE THE ACCUMULATOR LIVES = the declarator funnel's existing question, "is this RAW
     STORAGE being constructed, or a LIVE object being assigned?" (desugar::expandOpChainStmt):
       - a DECLARATION of the chain's exact class -> the declared local IS the accumulator.
@@ -274,7 +291,7 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
   * COUNTING LIVES IN evaluate.sl, NOT operator.sl. operator.sl's OpDefs/Sum have no
     ctor/dtor, so a fuse and a no-fuse print identically there — which is exactly how the old
     target-keyed chain fuse survived for months with green goldens. evaluate.sl's Acc / Str /
-    Buf / Triv / Sw PRINT their ctor/dtor (or their operators), and the golden IS the
+    Buf / Triv / Sw / Neg PRINT their ctor/dtor (or their operators), and the golden IS the
     assertion. The blocks:
       J  the baseline — 12 objects -> 7.
       K  the only-op+= ladder (canon 51-56; class Str, no 2-arg op+).
@@ -299,6 +316,11 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
          class with a POINTER field moves through its operator and leaves a husk (T4). T1 and
          T3 are the ones that would fail SILENTLY — the wrong overload, or a static call where
          a virtual one was meant — so nothing else in the suite would notice them.
+      U  the ARITY-1 UNARY (class Neg), now on the binary's road: a fresh decl and an NRVO'd
+         return cost ZERO temps (U1/U6), a live target one temp moved in through op<-- (U2), a
+         unary at a chain HEAD collapses into the accumulator (U3), and elsewhere it is an
+         ordinary operand with its own statement-scoped temp (U4 in a chain, U5 as a call arg,
+         U7 over a sub-chain).
     NEGATIVE: neg_aug_no_op — `+=` on a class with no op+= (the aug-assign guard).
 
 
