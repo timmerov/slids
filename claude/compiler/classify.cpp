@@ -3548,18 +3548,69 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude);
 
+// A RE-READABLE LVALUE: storage we can name once per slot without re-running a side
+// effect — an ident, a field select, a deref, or an index by a literal / a variable,
+// bottoming out in an ident. This is `isBareLvalue` plus evaluation-count safety (see
+// its comment): a destructure reads its source once PER SLOT, so `f()^` — an lvalue,
+// but one that calls f each time — must not qualify.
+bool isReReadableLvalue(parse::Node const& n) {
+    parse::Kind k = n.kind;
+    if (k == parse::Kind::kIdentExpr) return true;
+    if (k == parse::Kind::kFieldExpr || k == parse::Kind::kDerefExpr) {
+        return !n.children.empty() && n.children[0]
+            && isReReadableLvalue(*n.children[0]);
+    }
+    if (k == parse::Kind::kIndexExpr) {
+        return n.children.size() == 2 && n.children[0] && n.children[1]
+            && isReReadableLvalue(*n.children[0])
+            && (n.children[1]->kind == parse::Kind::kIntLiteral
+                || n.children[1]->kind == parse::Kind::kIdentExpr);
+    }
+    return false;
+}
+
+// Collect the entry ids a destructure's slots BIND (recursing into nested slots).
+void collectDestructureTargets(parse::Node const& node, std::set<int>& ids) {
+    for (std::size_t i = 1; i < node.children.size(); i++) {
+        parse::Node const* slot = node.children[i].get();
+        if (!slot) continue;
+        if (slot->kind == parse::Kind::kDestructureStmt) {
+            collectDestructureTargets(*slot, ids);
+        } else if (slot->resolved_entry_id >= 0) {
+            ids.insert(slot->resolved_entry_id);
+        }
+    }
+}
+
+// Does `n` READ any of `ids`?
+bool readsAny(parse::Node const& n, std::set<int> const& ids) {
+    if (n.kind == parse::Kind::kIdentExpr && n.resolved_entry_id >= 0
+        && ids.count(n.resolved_entry_id)) return true;
+    for (auto const& ch : n.children)
+        if (ch && readsAny(*ch, ids)) return true;
+    return false;
+}
+
 // Desugar EVERY destructure — COPY (`=`) / MOVE (`<--`) / SWAP (`<-->`) — into per-slot
 // statements against the source, so each slot binds through the ORDINARY assignment path
 // (dispatching a user op= / op<-- / op<-->, or the default when none). Applies BY SLOT,
 // iteratively AND recursively:
-//   (a, b)      = src   ->   a = src[0];   b = src[1];        (per-slot kStoreStmt)
-//   ((a,b), c)  = src   ->   (a,b) = src[0];  c = src[1];     (nested recurses)
-// COPY uses kStoreStmt (which dispatches op= like any store) and, because indexing a
-// value repeatedly would re-run a side-effecting / rvalue source, SPILLS a non-bare-ident
-// source into a temp local first (evaluated once; also aliasing-safe). MOVE/SWAP need to
-// null / exchange the source IN PLACE, so they REQUIRE a bare-lvalue source and stay FLAT
-// (nested move/swap deferred). A declaring slot (`int a`) emits a no-init decl (default-
-// construct) ahead of its per-slot statement.
+//   (a, b)      = src   ->   a = src[0];   b = src[1];        (per-slot kAssignStmt)
+//   ((a,b), c) <-- src  ->   (a,b) <-- src[0];  c <-- src[1]; (nested recurses)
+//
+// THE SOURCE MODEL. Every form reads the source slot by slot, so the source has to be
+// something we can take apart that many times. Three shapes, in preference order:
+//   LITERAL  `(x, y)`  — take element i straight OUT of the literal (COPY only). Each
+//            element is then built directly into its slot: no tuple is materialized.
+//   LVALUE   `t` / `t[0]` / `p^.f` — clone it and index per slot. A MOVE/SWAP nulls or
+//            exchanges through the REAL storage, which is exactly why it needs one.
+//   rvalue   — a COPY spills it to a temp local (evaluated once) and indexes that; a
+//            MOVE/SWAP has nothing to move out of, so it is an error.
+// A NESTED slot recurses with `src[i]` as its source, which is an lvalue whenever the
+// outer source was one — so nesting needs no machinery of its own, works for all three
+// forms, and mints no per-level temp.
+// A declaring slot (`int a`) emits a no-init decl (default-construct) ahead of its
+// per-slot statement.
 void desugarDestructure(parse::Tree& tree, parse::Node& s,
                         widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                         std::vector<std::unique_ptr<parse::Node>>& prelude) {
@@ -3574,44 +3625,6 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
     parse::Node& rhs0 = *s.children[0];
     inferExpr(tree, rhs0, widen::kNoType, diag);
     widen::TypeRef srcType = rhs0.inferred_type;
-    std::string srcName;
-    int srcId;
-    if (!is_copy) {
-        if (rhs0.kind != parse::Kind::kIdentExpr) {
-            diagnostic::report(diag, {s.file_id, s.tok,
-                "A move/swap destructure requires a named (lvalue) source.", {}});
-            return;
-        }
-        srcName = rhs0.name;
-        srcId = rhs0.resolved_entry_id;
-    } else if (rhs0.kind == parse::Kind::kIdentExpr) {
-        srcName = rhs0.name;               // a bare local — index it in place
-        srcId = rhs0.resolved_entry_id;
-    } else {
-        // Spill a non-bare-ident COPY source to a temp local (evaluated once), then index
-        // the temp — same idiom as the class-init `_$cinit` spill. A bare entry is enough
-        // (resolve is done; the id just needs to sit below desugar's minted-id range).
-        parse::Entry e;
-        e.kind = parse::EntryKind::kLocalVar;
-        e.name = "_$dsrc";
-        e.slids_type = srcType;
-        e.file_id = f;
-        e.tok = tk;
-        srcId = static_cast<int>(tree.entries.size());
-        srcName = "_$dsrc";
-        tree.entries.push_back(std::move(e));
-        auto spill = std::make_unique<parse::Node>();
-        spill->kind = parse::Kind::kVarDeclStmt;
-        spill->name = "_$dsrc";
-        spill->resolved_entry_id = srcId;
-        spill->return_type = srcType;
-        spill->file_id = f;
-        spill->tok = tk;
-        spill->name_tok = tk;
-        spill->children.push_back(std::move(s.children[0]));
-        classifyStmt(tree, *spill, fn_return_type, diag, &prelude);
-        prelude.push_back(std::move(spill));
-    }
 
     std::vector<widen::TypeRef> slots = destructureSlots(srcType);
     std::size_t ntargets = s.children.size() - 1;
@@ -3629,15 +3642,65 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
         return;
     }
 
-    // `src[i]` — the source indexed at slot i (bare local or spilled temp).
-    auto makeSrcIndex = [&](std::size_t i) {
-        auto srcIdent = std::make_unique<parse::Node>();
-        srcIdent->kind = parse::Kind::kIdentExpr;
-        srcIdent->name = srcName;
-        srcIdent->resolved_entry_id = srcId;
-        srcIdent->inferred_type = srcType;
-        srcIdent->file_id = f;
-        srcIdent->tok = tk;
+    // Pick the source shape (see THE SOURCE MODEL above). `srcExpr` is the expression the
+    // per-slot statements read from: the literal itself (elements move out of it), the
+    // lvalue (cloned per slot), or an ident naming the spill temp.
+    //
+    // A literal that READS A TARGET must NOT be taken apart: per-slot statements run in
+    // order, so slot 0's store would be visible to slot 1's read. The whole source is
+    // evaluated FIRST — that is what makes `(sa, sb) = (sb, sa)` a swap — so such a
+    // literal SPILLS, like any other source that must be evaluated once up front.
+    bool src_literal = is_copy
+        && rhs0.kind == parse::Kind::kTupleExpr
+        && rhs0.children.size() == ntargets;
+    if (src_literal) {
+        std::set<int> targets;
+        collectDestructureTargets(s, targets);
+        if (!targets.empty() && readsAny(rhs0, targets)) src_literal = false;
+    }
+    std::unique_ptr<parse::Node> srcExpr;
+    if (src_literal || isReReadableLvalue(rhs0)) {
+        srcExpr = std::move(s.children[0]);
+    } else if (!is_copy) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "A move/swap destructure requires an addressable (lvalue) source.", {}});
+        return;
+    } else {
+        // Spill an rvalue COPY source to a temp local (evaluated once), then index the
+        // temp — same idiom as the class-init `_$cinit` spill. A bare entry is enough
+        // (resolve is done; the id just needs to sit below desugar's minted-id range).
+        parse::Entry e;
+        e.kind = parse::EntryKind::kLocalVar;
+        e.name = "_$dsrc";
+        e.slids_type = srcType;
+        e.file_id = f;
+        e.tok = tk;
+        int srcId = static_cast<int>(tree.entries.size());
+        tree.entries.push_back(std::move(e));
+        auto spill = std::make_unique<parse::Node>();
+        spill->kind = parse::Kind::kVarDeclStmt;
+        spill->name = "_$dsrc";
+        spill->resolved_entry_id = srcId;
+        spill->return_type = srcType;
+        spill->file_id = f;
+        spill->tok = tk;
+        spill->name_tok = tk;
+        spill->children.push_back(std::move(s.children[0]));
+        classifyStmt(tree, *spill, fn_return_type, diag, &prelude);
+        prelude.push_back(std::move(spill));
+        srcExpr = std::make_unique<parse::Node>();
+        srcExpr->kind = parse::Kind::kIdentExpr;
+        srcExpr->name = "_$dsrc";
+        srcExpr->resolved_entry_id = srcId;
+        srcExpr->inferred_type = srcType;
+        srcExpr->file_id = f;
+        srcExpr->tok = tk;
+    }
+
+    // Slot i's source: the literal's element i (moved out — used exactly once), else a
+    // fresh `src[i]` over a clone of the source lvalue.
+    auto makeSrcElem = [&](std::size_t i) -> std::unique_ptr<parse::Node> {
+        if (src_literal) return std::move(srcExpr->children[i]);
         auto lit = std::make_unique<parse::Node>();
         lit->kind = parse::Kind::kIntLiteral;
         lit->text = std::to_string(i);
@@ -3647,7 +3710,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
         idx->kind = parse::Kind::kIndexExpr;
         idx->file_id = f;
         idx->tok = tk;
-        idx->children.push_back(std::move(srcIdent));
+        idx->children.push_back(cloneExpr(*srcExpr));
         idx->children.push_back(std::move(lit));
         return idx;
     };
@@ -3655,28 +3718,40 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
     std::vector<std::unique_ptr<parse::Node>> pending;
     for (std::size_t i = 0; i < ntargets; i++) {
         parse::Node* slot = s.children[i + 1].get();
-        if (!slot) continue;   // discard slot
-        if (slot->kind == parse::Kind::kDestructureStmt) {
-            if (!is_copy) {
-                diagnostic::report(diag, {slot->file_id, slot->tok,
-                    "A nested move/swap destructure is not yet supported.", {}});
-                return;
+        if (!slot) {
+            // Discard slot. A literal's element still has to be EVALUATED (it may have
+            // side effects, and nothing else reads it) — the other shapes evaluate the
+            // whole source anyway, so there is nothing to emit for them.
+            if (src_literal) {
+                auto es = std::make_unique<parse::Node>();
+                es->kind = parse::Kind::kExprStmt;
+                es->file_id = f;
+                es->tok = tk;
+                es->children.push_back(makeSrcElem(i));
+                pending.push_back(std::move(es));
             }
-            // Nested COPY: recurse with `src[i]` as the sub-source. The nested slot holds
-            // its sub-slots in children[1..]; children[0] is the (unused) rhs placeholder
-            // — set it to src[i] and re-classify as a copy destructure (recurses here).
+            continue;
+        }
+        if (slot->kind == parse::Kind::kDestructureStmt) {
+            // Nested: recurse with element i as the sub-source, carrying the FORM down
+            // (copy / move / swap). The nested slot holds its sub-slots in children[1..];
+            // children[0] is the rhs placeholder — fill it and re-classify (recurses here).
             auto sub = std::move(s.children[i + 1]);
             if (sub->children.empty()) sub->children.push_back(nullptr);
-            sub->children[0] = makeSrcIndex(i);
+            sub->children[0] = makeSrcElem(i);
+            sub->default_move_init = is_move;
+            sub->default_swap_init = is_swap;
             pending.push_back(std::move(sub));
             continue;
         }
         widen::TypeRef slot_ty = slots[i];
         std::string tname = slot->name;
         int tid = slot->resolved_entry_id;
-        if (slot->kind == parse::Kind::kVarDeclStmt) {
-            // Declaring slot: fix its (maybe inferred) type + register, then a no-init
-            // decl that allocates + default-constructs it before the per-slot statement.
+        std::unique_ptr<parse::Node> elem = makeSrcElem(i);
+        bool declaring = slot->kind == parse::Kind::kVarDeclStmt;
+        if (declaring) {
+            // Declaring slot: fix its (maybe inferred) type + register, then a decl that
+            // allocates it before the per-slot statement.
             if (slot->return_type == widen::kNoType) {
                 slot->return_type = slot_ty;
                 if (tid >= 0) tree.entries[tid].slids_type = slot_ty;
@@ -3690,11 +3765,51 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             decl->return_type = slot_ty;
             decl->file_id = slot->file_id;
             decl->tok = slot->tok;
+            if (src_literal) {
+                // A FRESH slot taking a LITERAL's element: the element is the decl's INIT,
+                // so it is built DIRECTLY into the slot by the declarator funnel — one
+                // construction, no tuple, no temp, no copy. This is the whole reason the
+                // literal is taken apart rather than spilled.
+                decl->children.push_back(std::move(elem));
+                pending.push_back(std::move(decl));
+                continue;
+            }
+            // Otherwise a NO-INIT decl (default-construct) ahead of the per-slot statement.
             pending.push_back(std::move(decl));
         } else {
             slot_ty = parse::entryType(tree, tid);
         }
         if (is_copy) {
+            // A LIVE target cannot be assigned FROM a construction — it has no fresh slot
+            // to build into (see dispatchAssignInit). Materialize such an element into its
+            // own temp first, then copy that in. Only a literal source can produce one.
+            if (elem->kind == parse::Kind::kCallExpr && elem->is_construction) {
+                parse::Entry te;
+                te.kind = parse::EntryKind::kLocalVar;
+                te.name = "_$delem";
+                te.slids_type = slot_ty;
+                te.file_id = f;
+                te.tok = tk;
+                int teid = static_cast<int>(tree.entries.size());
+                tree.entries.push_back(std::move(te));
+                auto tdecl = std::make_unique<parse::Node>();
+                tdecl->kind = parse::Kind::kVarDeclStmt;
+                tdecl->name = "_$delem";
+                tdecl->resolved_entry_id = teid;
+                tdecl->return_type = slot_ty;
+                tdecl->file_id = f;
+                tdecl->tok = tk;
+                tdecl->name_tok = tk;
+                tdecl->children.push_back(std::move(elem));
+                pending.push_back(std::move(tdecl));
+                elem = std::make_unique<parse::Node>();
+                elem->kind = parse::Kind::kIdentExpr;
+                elem->name = "_$delem";
+                elem->resolved_entry_id = teid;
+                elem->inferred_type = slot_ty;
+                elem->file_id = f;
+                elem->tok = tk;
+            }
             // COPY: a bare-name assignment `tname = src[i]`. kAssignStmt dispatches the
             // slot type's op= (or stores a primitive) — kStoreStmt is deref/index-only, so
             // a NAMED slot must go through kAssignStmt (target in name, rhs in child 0).
@@ -3705,7 +3820,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             as->resolved_entry_id = tid;
             as->file_id = f;
             as->tok = tk;
-            as->children.push_back(makeSrcIndex(i));
+            as->children.push_back(std::move(elem));
             pending.push_back(std::move(as));
         } else {
             // MOVE / SWAP: children [target-ident, src[i]] — the kMoveStmt / kSwapStmt shape.
@@ -3722,7 +3837,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             st->file_id = f;
             st->tok = tk;
             st->children.push_back(std::move(tgt));
-            st->children.push_back(makeSrcIndex(i));
+            st->children.push_back(std::move(elem));
             pending.push_back(std::move(st));
         }
     }

@@ -137,7 +137,18 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     still load/stores. A class transfer now has exactly ONE implementation — the operator body
     — so there is no twin left to drift out of sync with it. Pinned by evaluate.sl's Triv (a
     hook-less class whose op= / op<-- PRINT) and Sw (its op<--> too, plus a tuple of them:
-    hooks are irrelevant, aggregates walk per leaf). NOTE the contrast with CONSTRUCTION,
+    hooks are irrelevant, aggregates walk per leaf).
+    A FOURTH site had the same hole, by OMISSION rather than by a wrong gate: a class-bearing
+    aggregate filled from a tuple LITERAL (`(Trk, Trk) t = (a, b);`). Neither transfer arm
+    fires — a literal is not an lvalue — so it fell through to the WHOLE-VALUE store at the
+    bottom of emitInitFill, which builds one struct value (loading each element) and stores
+    it: a blit, right past every element's op=. The whole-tuple form (`t = u`) dispatched
+    correctly, so the two spellings disagreed. Fixed by making the literal a DISTRIBUTED fill:
+    emitTupleFromTuple (and emitArrayFromTuple's class-element arm) GEPs each slot and
+    recurses into emitInitFill, putting every element back on the funnel — an lvalue element
+    runs its op= / op<--, a CONSTRUCTION element builds directly in the slot. Gated on
+    hasInPlaceClass, so a POD aggregate keeps the cheap whole-value path. Pinned by
+    evaluate.sl block V. NOTE the contrast with CONSTRUCTION,
     which stays gated on typeNeedsHook — that one really is asking "is there a ctor body to
     call?", and a hook-less class truthfully has none. The two predicates are NOT
     interchangeable. findClassOperator finds a same-type op= for EVERY class, but

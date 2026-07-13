@@ -966,11 +966,30 @@ Phase 5 — classes
     class alone (the old arm let the assignment TARGET pick the result class — the same
     precedence inversion as the deleted target-keyed fuse). classify's lowerClassOperatorTemp
     is DELETED. Canon evaluate.sl block U.
+    A TUPLE OF CLASSES IS EVALUATED INTO THE STORAGE THAT OWNS IT (2026-07-13) — the last of
+    the temp-elimination work, and it landed as a SOURCE MODEL, not as new machinery. Two
+    halves. (1) A tuple LITERAL is taken APART: in a position that owns RAW storage (a decl, a
+    return, a field of something being constructed), desugar DISTRIBUTES it slot by slot and a
+    construction element is built DIRECTLY in its slot — `((C(1), C(2)), C(3))` costs THREE
+    constructions, not three temps plus three copies. It generalized past tuples: a
+    construction as a class FIELD and inside a RETURNED tuple build in place for the same
+    reason. A LIVE target is excluded — its slots are already objects, so each element is
+    constructed as a statement-scoped temp and TRANSFERRED in. (2) THE DESTRUCTURE'S SOURCE is
+    now an EXPRESSION, cloned and indexed per slot (isReReadableLvalue = an lvalue that is also
+    safe to re-read), spilled ONLY when it must be evaluated once (an rvalue, or a literal that
+    reads a target — `(sa, sb) = (sb, sa)` must swap). NESTED MOVE/SWAP fell out of that with
+    no new code: `src[i]` is real storage, so `<--` nulls the real leaf and `<-->` exchanges
+    with it at any depth. The old ident-only source test was stricter than its own reason. Cost:
+    block P's 4 extra objects -> 0 (op<-- finally runs there), a nested copy 5 objects -> 3.
+    It also closed a TRANSFER-INVARIANT hole: a tuple literal of class LVALUES used to build one
+    whole struct value and store it — a BLIT past every element's op= (readme-classes.txt).
+    Canon evaluate.sl block V.
     STILL DEFERRED: ping-pong (a class with a 2-arg op+ but NO op+= cannot fuse, so each
-    un-fusable operand starts a fresh buffer — two alternating buffers would need none);
-    destructure's non-minimal shape (todo.txt); arity-2 comparison
-    producing a class + reversed-operand comparison. See [[project_expr_temp_elimination]],
-    [[project_operator_overloading]]; canon test/class/evaluate.sl + operator.sl.
+    un-fusable operand starts a fresh buffer — two alternating buffers would need none); a
+    copy-init runs op= and THEN the ctor (the funnel fills, then finalizes — todo.txt); arity-2
+    comparison producing a class + reversed-operand comparison. See
+    [[project_expr_temp_elimination]], [[project_operator_overloading]]; canon
+    test/class/evaluate.sl + operator.sl.
   * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +
     infer-from-default (all of which free functions already had) by routing both
     through ONE shared overload engine: a pure rankOverload(cands, args, recv_offset)

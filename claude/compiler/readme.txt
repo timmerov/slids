@@ -443,6 +443,40 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     arm dispatches to emitArrayLiteralValue when the literal's type is an array (an
     array has no `.slots`, so the tuple-struct path would index empty). See
     [[project_v2_array_types]].
+  * DESTRUCTURE — THE SOURCE MODEL (classify::desugarDestructure). Every form — COPY (`=`),
+    MOVE (`<--`), SWAP (`<-->`) — lowers to PER-SLOT statements against the source, so each
+    slot binds through the ordinary assignment path (dispatching a user op= / op<-- / op<-->).
+    A destructure therefore reads its source ONCE PER SLOT, and the source's SHAPE decides how:
+      - a tuple LITERAL is taken APART — element i binds to slot i directly, no temp. A
+        DECLARING slot takes the element as its INIT (built in place); a LIVE slot is assigned
+        from it. Elements keep their own nature: a LITERAL element flexes into the slot exactly
+        as `int8 a = 1;` does (nothing is frozen at `int` first), and a CONSTRUCTION element
+        bound to a live slot is materialized into a `_$delem` temp, since a live target cannot
+        be assigned FROM a construction (no fresh slot to build into — see dispatchAssignInit).
+      - an LVALUE source is INDEXED per slot — `src[i]`, cloned from the source EXPRESSION
+        (cloneExpr), not re-minted from a name. So a NESTED slot recurses with `src[i]` as its
+        sub-source and needs no machinery of its own: nesting works at any depth in ALL THREE
+        forms, and mints no per-level temp. MOVE/SWAP require such a source (they null /
+        exchange through the REAL storage); the predicate is isReReadableLvalue — isBareLvalue
+        PLUS evaluation-count safety (an ident/field/deref/const-index chain), since `f()^` is
+        an lvalue but re-runs f per slot.
+      - anything else (a call, a chain) SPILLS to a `_$dsrc` temp: it must be evaluated exactly
+        once. So must a LITERAL THAT READS A TARGET — per-slot stores run in order, so slot 0's
+        store would be visible to slot 1's read, and `(sa, sb) = (sb, sa)` must SWAP. The alias
+        guard (collectDestructureTargets / readsAny) is what keeps that true.
+    Canon tuple/destructure.sl (semantics) + class/evaluate.sl blocks P/S4/V (object counts).
+  * A TUPLE OF CLASSES IS BUILT INTO THE STORAGE THAT OWNS IT — never materialized twice.
+    Two halves. (1) DESUGAR: liftSretCallExprs, in an INTERCEPTED position (a decl / a return —
+    storage the statement owns RAW), DISTRIBUTES a tuple literal instead of lifting its
+    elements: a CONSTRUCTION element is unwrapped to its per-field tuple (the same unwrap
+    liftSretCallList does for a root construction) and interception passes DOWN, so a nested
+    literal of constructions never mints a temp. It does NOT pass to a live ASSIGN target — its
+    slots are already objects, so they must be transferred INTO (op=), not built over. This
+    generalizes past tuples: a construction as a class FIELD (`Holder h( B(3,4) )`) and inside
+    a RETURNED tuple build in place for the same reason. (2) CODEGEN: emitInitFill distributes
+    a class-bearing aggregate filled from a tuple literal SLOT BY SLOT (emitTupleFromTuple /
+    emitArrayFromTuple's class arm) rather than building one whole value and storing it — which
+    would BLIT past each element's op=. See readme-classes.txt, THE TRANSFER INVARIANT.
   * AGGREGATE ARITHMETIC — arrays and tuples are one homogeneous-aggregate shape and
     share ONE slot-wise arith/bitwise path: `tuple op tuple`, `array op array`, and
     mixed `array op tuple` / `tuple op array` (a mixed result is always a TUPLE — the

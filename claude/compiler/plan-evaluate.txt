@@ -170,13 +170,17 @@ Coverage classes, all of which PRINT:
   Buf   ctor/dtor + op= + 2-arg op+, NO op+=                — the un-fusable buffer + lifetime
   Triv  NO ctor/dtor, printing op= / op<-- / op+=           — the transfer gates
   Sw    NO ctor/dtor, printing op= / op<-- / op<-->         — the SWAP gate + aggregates
+  Trk   ctor/dtor + printing op= + op<-- + op<-->            — the tuple-of-classes counts
 Blocks: J (the baseline, 12 -> 7), K (the ladder), L (the trivial bucket), M (destinations +
 shapes), N (the un-fusable buffer + its lifetime), O (the three transfer gates), P (destructure
-— not minimal), Q (where the operator comes from: inherited / virtual / method body / ctor+dtor
-body), R (the other kinds: shift, logical; + a global target, a cross-class destination, switch
-and do-while bodies), S (for-long + for-ranged bodies, a heap target and a heap-deref operand,
-destructure into declaring slots), T (the blast radius of the derived->base bind: exact beats
-the upcast, a base-only overload is reachable, virtual dispatch survives, a pointer-field move).
+from a literal: one accumulator per slot, moved in), Q (where the operator comes from: inherited
+/ virtual / method body / ctor+dtor body), R (the other kinds: shift, logical; + a global target,
+a cross-class destination, switch and do-while bodies), S (for-long + for-ranged bodies, a heap
+target and a heap-deref operand, destructure into declaring slots), T (the blast radius of the
+derived->base bind: exact beats the upcast, a base-only overload is reachable, virtual dispatch
+survives, a pointer-field move), U (the arity-1 unary as a chain node), V (a tuple of classes:
+built in place from a literal of constructions, op= per element from a literal of lvalues, and
+nested destructure in all three forms).
 Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS".
 
 
@@ -184,11 +188,23 @@ Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAIN
 STILL OPEN (all filed in todo.txt)
 ------------------------------------------------------------------------------
   - PING-PONG (Decision 2 rule 6): reuse two alternating buffers instead of one per step.
-  - DESTRUCTURE is not minimal: a non-bare-name source is spilled to a `_$dsrc` tuple temp,
-    so the chains are not the direct source of any assignment — 4 extra objects for 2 chains.
-    COST only now: the accumulators used to keep enclosing-scope lifetime (the same seq-wrap
-    gap case 7 pinned), and that half was FIXED 2026-07-13 — they die at the semicolon; see
-    [[project_stmt_scoped_rhs_temps]].
+  - A COPY-INIT RUNS op= AND THEN THE CTOR. The funnel FILLS storage and then FINALIZES it
+    (emitInitFill, then emitConstructed's hooks), so `Class x = y;` prints op= BEFORE ctor.
+    Uniform, value-correct, and nothing observes the storage in between — but it is backwards,
+    and a ctor that read its own fields would see the copy rather than the initializer. Pinned
+    by evaluate.sl V2. A SEMANTICS decision, not a bug to fix quietly: changing the order moves
+    every class copy-init golden.
+
+DESTRUCTURE'S COST — CLOSED 2026-07-13 (was the open item here)
+  Block P used to build 4 objects where 2 would do, because a non-bare-name source was spilled
+  to a `_$dsrc` tuple temp and each chain was then copied TWICE (into the spill slot, then into
+  the target). The fix was not in the chain machinery at all — it was the destructure's SOURCE
+  MODEL (readme.txt, DESTRUCTURE — THE SOURCE MODEL): a tuple LITERAL is now taken apart and
+  each element binds straight to its slot, so each slot is a chain with a destination. A LIVE
+  slot gets one statement-scoped accumulator MOVED in (op<-- finally runs here); a DECLARING
+  slot IS the accumulator and costs nothing at all (block S4). The spill survives only where it
+  earns its keep — an rvalue source, or a literal that reads a target (`(sa, sb) = (sb, sa)`
+  must swap). The LIFETIME half had already been fixed by [[project_stmt_scoped_rhs_temps]].
   (NOT a gap: TEMPLATES. v2 has NO template machinery at all — plan.txt Phase 9, unstarted.
    CLAUDE.md used to describe v1's template system as if it existed here, which is why earlier
    drafts of this plan listed ".slh / template context" as an untested surface. Corrected

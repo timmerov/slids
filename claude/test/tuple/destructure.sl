@@ -96,6 +96,19 @@ int32 main() {
     (int hx, bool hy, float hz) = (1, true, 2.5);
     __println("hetero: hx= " + hx + " hy= " + hy + " hz= " + hz);   // 1 true 2.5
 
+    /* a LITERAL source is bound ELEMENT BY ELEMENT, so each element is still a literal
+       when it meets its slot — and a literal has no type of its own. `int8 nb = 1;` is
+       exact, so the slot `int8 nb` is too: nothing narrows, because there is no `int` in
+       between. (It used to be REJECTED. The source was spilled into a temp tuple first,
+       which froze every literal at its default `int`, and the copy out of that temp then
+       narrowed — the diagnostic named a type the author never wrote. A source that really
+       IS an `int` tuple still narrows and is still rejected: neg_type_mismatch below.)
+       A REUSED int8 takes a literal element the same way. */
+    int8 wr = 0;
+    (int8 wb, int ww) = (1, 2);
+    (wr, ) = (100, 200);
+    __println("narrow: wb= " + wb + " ww= " + ww + " wr= " + wr);   // 1 2 100
+
     /* the rhs may be a FUNCTION returning a tuple. */
     (int fa, int fb) = makePair();
     __println("func: fa= " + fa + " fb= " + fb);           // 11 22
@@ -147,12 +160,13 @@ int32 main() {
     return 0;
 }
 
-/* a REUSED variable whose type doesn't match its tuple element is rejected too
-   (the same check as a typed slot, on the existing variable's type). */
+/* a REUSED variable is checked the same way: a tuple VALUE's element narrows into it and
+   is rejected; a LITERAL's element binds to it (again, see "narrow" above). */
 //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
 //int32 neg_reuse_mismatch() {
 //    int8 rm = 0;
-//    (rm, ) = (100, 200);
+//    (int, int) rs = (100, 200);
+//    (rm, ) = rs;
 //    return rm;
 //}
 
@@ -190,10 +204,14 @@ int32 main() {
 //    return p + q;
 //}
 
-/* a typed slot or a reused variable must match its tuple element's type. */
+/* a typed slot or a reused variable must match its tuple element's type -- when the
+   element HAS a type. A source that is a tuple VALUE does: narrowing it is rejected,
+   exactly as assigning that value to the slot would be. (A tuple LITERAL's elements are
+   literals, which have no type of their own and bind to the slot -- see "narrow" above.) */
 //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
 //int32 neg_type_mismatch() {
-//    (int8 p, int q) = (1, 2);
+//    (int, int) src = (1, 2);
+//    (int8 p, int q) = src;
 //    return p + q;
 //}
 

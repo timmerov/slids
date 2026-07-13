@@ -164,8 +164,6 @@ M2 end md=13
 M3: field store   mbox.a_ = ma + mb
 Acc:ctor: 0
 Acc:ctor: 0
-Acc:dtor: 0
-Acc:ctor: 0
 Acc:op<--: 13
 Acc:dtor: 13
 M3 end mbox.a_=13
@@ -260,15 +258,13 @@ Acc:ctor: 0
 Acc:ctor: 0
 P1: (pc, pd) = (pa + pb, pa + pa)
 Acc:ctor: 0
-Acc:ctor: 0
-Acc:ctor: 13
-Acc:ctor: 20
-Acc:dtor: 20
+Acc:op<--: 13
 Acc:dtor: 13
+Acc:ctor: 0
+Acc:op<--: 20
+Acc:dtor: 20
 P1 end pc=13 pd=20
 P end (locals dtor next)
-Acc:dtor: 20
-Acc:dtor: 13
 Acc:dtor: 20
 Acc:dtor: 13
 Acc:dtor: 3
@@ -364,16 +360,8 @@ Acc:dtor: 13
 S4: destructure, declaring slots
 Acc:ctor: 0
 Acc:ctor: 0
-Acc:ctor: 13
-Acc:ctor: 20
-Acc:dtor: 20
-Acc:dtor: 13
-Acc:ctor: 0
-Acc:ctor: 0
 S4 end sp=13 sq=20
 S end (locals dtor next)
-Acc:dtor: 20
-Acc:dtor: 13
 Acc:dtor: 20
 Acc:dtor: 13
 Acc:dtor: 16
@@ -431,5 +419,79 @@ Neg:dtor: -5
 Neg:dtor: -5
 Neg:dtor: 2
 Neg:dtor: 5
+V: tuple of classes
+V1: ((Trk,Trk),Trk) vt = ((Trk(1), Trk(2)), Trk(3))
+Trk:ctor: 1
+Trk:ctor: 2
+Trk:ctor: 3
+V1 end
+Trk:ctor: 1
+Trk:ctor: 2
+V2: (Trk,Trk) vl = (v1, v2)
+Trk:op=: 1
+Trk:op=: 2
+Trk:ctor: 1
+Trk:ctor: 2
+V2 end vl=1,2
+V3: ((Trk va, Trk vb), Trk vc) = vt
+Trk:ctor: 0
+Trk:op=: 1
+Trk:ctor: 0
+Trk:op=: 2
+Trk:ctor: 0
+Trk:op=: 3
+V3 end 1 2 3
+Trk:dtor: 3
+Trk:dtor: 2
+Trk:dtor: 1
+V4: ((Trk vd, Trk ve), Trk vf) <-- vt
+Trk:ctor: 0
+Trk:op<--: 1
+Trk:ctor: 0
+Trk:op<--: 2
+Trk:ctor: 0
+Trk:op<--: 3
+V4 end 1 2 3
+Trk:dtor: 3
+Trk:dtor: 2
+Trk:dtor: 1
+V4 src vt=0 0 0
+Trk:ctor: 4
+Trk:ctor: 5
+Trk:ctor: 6
+V5: ((Trk vg, Trk vh), Trk vi) <--> vs
+Trk:ctor: 0
+Trk:op<-->: 4
+Trk:ctor: 0
+Trk:op<-->: 5
+Trk:ctor: 0
+Trk:op<-->: 6
+V5 end 4 5 6
+Trk:dtor: 6
+Trk:dtor: 5
+Trk:dtor: 4
+V5 src vs=0 0 0
+V6: vs = ((Trk(7), Trk(8)), Trk(9))   [live target]
+Trk:ctor: 7
+Trk:ctor: 8
+Trk:ctor: 9
+Trk:op=: 7
+Trk:op=: 8
+Trk:op=: 9
+Trk:dtor: 9
+Trk:dtor: 8
+Trk:dtor: 7
+V6 end vs=7 8 9
+V end (locals dtor next)
+Trk:dtor: 9
+Trk:dtor: 8
+Trk:dtor: 7
+Trk:dtor: 2
+Trk:dtor: 1
+Trk:dtor: 2
+Trk:dtor: 1
+Trk:dtor: 0
+Trk:dtor: 0
+Trk:dtor: 0
 Class:dtor: 9
 Acc:dtor: 13

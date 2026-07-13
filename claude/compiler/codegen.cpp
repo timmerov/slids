@@ -2195,25 +2195,64 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
 // node is emitted in the ELEMENT type's context (a scalar flexes/widens; a tuple
 // element builds its aggregate) and stored at flat offset i — the array's element
 // type drives the GEP stride, so a tuple element stays a `{...}` aggregate.
+// An element that physically HOLDS A CLASS recurses through emitInitFill instead —
+// see emitTupleFromTuple for why (the transfer invariant).
 void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
-                        ast::Node const& rhs, SymTab const& syms,
+                        ast::Node const& rhs, bool is_move, SymTab const& syms,
                         strings::Pool& pool, std::ostream& out,
                         diagnostic::Sink& diag) {
     widen::Type const& at = widen::get(widen::strip(arrType));
     widen::TypeRef elem = at.elem;
     std::string elem_ll = llvmForRef(elem);
     bool elem_array = widen::form(widen::strip(elem)) == widen::Type::Form::kArray;
+    bool elem_class = widen::hasInPlaceClass(widen::strip(elem));
     std::vector<ast::Node const*> elems;
     collectArrayElementNodesAst(rhs, at.dims, 0, elems);
     for (std::size_t i = 0; i < elems.size(); i++) {
-        // A nested ARRAY element is built as an array value (not a tuple).
-        std::string v = (elem_array && elems[i]->kind == ast::Kind::kTupleExpr)
-            ? emitArrayLiteralValue(elem, *elems[i], syms, pool, out, diag)
-            : emitExpr(*elems[i], syms, pool, out, diag, elem);
         std::string gep = newTmp("aelt");
+        std::string v;
+        if (!elem_class) {
+            // A nested ARRAY element is built as an array value (not a tuple).
+            v = (elem_array && elems[i]->kind == ast::Kind::kTupleExpr)
+                ? emitArrayLiteralValue(elem, *elems[i], syms, pool, out, diag)
+                : emitExpr(*elems[i], syms, pool, out, diag, elem);
+        }
         out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
             << alloca_name << ", i64 " << i << "\n";
+        if (elem_class) {
+            emitInitFill(gep, elem, elem_ll, *elems[i], is_move, syms, pool, out, diag);
+            continue;
+        }
         out << "  store " << elem_ll << " " << v << ", ptr " << gep << "\n";
+    }
+}
+
+// Initialize a TUPLE from a tuple LITERAL, slot by slot — the tuple twin of
+// emitArrayFromTuple, used when the destination physically HOLDS A CLASS.
+// A whole-value build (insertvalue each element, one store) would LOAD every class
+// element and BLIT it into the slot, right past that class's op= / op<-- — the
+// transfer invariant, which says a class copy/move has exactly ONE implementation.
+// Recursing through emitInitFill per slot puts each element back on the funnel: an
+// LVALUE element dispatches its copy/move operator, a CONSTRUCTION element fills its
+// fields directly in the slot (its ctor runs later, with the whole object's, in
+// emitConstructed — no temp, no copy), and a nested aggregate re-enters the matching
+// bridge. A POD tuple keeps the cheaper whole-value path (emitInitFill's gate).
+void emitTupleFromTuple(std::string const& addr, widen::TypeRef tupType,
+                        ast::Node const& rhs, bool is_move, SymTab const& syms,
+                        strings::Pool& pool, std::ostream& out,
+                        diagnostic::Sink& diag) {
+    std::vector<widen::TypeRef> const& slots =
+        widen::get(widen::strip(tupType)).slots;
+    std::string tup_ll = llvmForRef(tupType);
+    assert(rhs.children.size() == slots.size()
+        && "emitTupleFromTuple: slot count != literal element count (classify validated)");
+    for (std::size_t i = 0; i < slots.size(); i++) {
+        widen::TypeRef sty = slots[i];
+        std::string gep = newTmp("telt");
+        out << "  " << gep << " = getelementptr inbounds " << tup_ll << ", ptr "
+            << addr << ", i32 0, i32 " << i << "\n";
+        emitInitFill(gep, sty, llvmForRef(sty), *rhs.children[i], is_move,
+                     syms, pool, out, diag);
     }
 }
 
@@ -2246,7 +2285,19 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
     // An array filled from a tuple LITERAL flows through the array<->tuple bridge.
     if (dform == widen::Type::Form::kArray
         && init.kind == ast::Kind::kTupleExpr) {
-        emitArrayFromTuple(addr, type, init, syms, pool, out, diag);
+        emitArrayFromTuple(addr, type, init, is_move, syms, pool, out, diag);
+        return;
+    }
+    // A TUPLE filled from a tuple LITERAL, when the tuple physically HOLDS A CLASS:
+    // distribute the literal SLOT BY SLOT so every class element goes back through the
+    // funnel (its op= / op<--, or an in-place construction) instead of being loaded and
+    // blitted in as part of one whole-value store. The gate is the STRUCTURAL "is a class
+    // in this storage?" — a POD tuple has nothing to dispatch and keeps the whole-value
+    // path below.
+    if (dform == widen::Type::Form::kTuple
+        && init.kind == ast::Kind::kTupleExpr
+        && widen::hasInPlaceClass(widen::strip(type))) {
+        emitTupleFromTuple(addr, type, init, is_move, syms, pool, out, diag);
         return;
     }
     // Both sides aggregate but the leaf types differ: a per-leaf widening copy

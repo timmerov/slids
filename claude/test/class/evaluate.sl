@@ -167,15 +167,30 @@ local VARIABLE. It is initialized at site, its ctor runs, and its dtor runs at t
 SCOPE, exactly like a named local. Only the EXPRESSION form (form 2 -- a construction used
 inline as a receiver / arg / field read) is a temporary that dies at the statement.
 
+A TUPLE OF CLASSES IS EVALUATED SLOT BY SLOT, into the storage that already owns it. The
+source shape decides how (classify's destructure source model + codegen's tuple<->literal
+bridge), and NO shape materializes the tuple twice:
+  - a tuple LITERAL is taken APART: element i is built directly into slot i. A construction
+    element runs ONE ctor, in place (block V) -- it is not built as a temp and copied in.
+    An lvalue element dispatches that class's op= into the slot (the transfer invariant: a
+    class copy is its operator, never a blit -- a whole-value build would have loaded and
+    blitted every element right past a user's op=).
+  - an LVALUE source is INDEXED per slot -- `src[i]`, cloned, no temp. Nesting recurses on
+    it, so a nested slot needs no sub-tuple temp of its own, and COPY / MOVE / SWAP all
+    work at any depth (block V): a move nulls the real leaf, a swap exchanges with it.
+  - only an RVALUE source (a call, a chain) still spills to `_$dsrc`, because it must be
+    evaluated exactly once. So must a literal that READS A TARGET: `(sa, sb) = (sb, sa)` is
+    a swap, and per-slot stores would alias (tuple/destructure.sl pins it).
+
 deliberately NOT correct yet (still-broken / deferred):
   - ping-pong: a class with a 2-arg op+ but NO op+= can't fuse (acc.op+(acc,c) would
     read acc while writing it), so each such step starts a fresh buffer -- one temp per
     un-fusable operand. Two alternating buffers would need none.
-  - destructure's COST (block P): a non-bare-name source is spilled to a `_$dsrc` tuple
-    temp, so the per-slot chains are copied twice -- 4 extra objects where 2 would do.
-    Values and (since the case-7 fix) LIFETIMES are right; only the count is not.
-  - tuple-construct assignment (((a,b),c) = (...)) -- value-correct but
-    spews redundant temps; not clean.
+  - a copy-INIT runs op= and THEN the ctor: the funnel FILLS storage and then finalizes it
+    (emitInitFill, then emitConstructed's hooks), so `Class x = y;` prints op= before ctor,
+    and a class copied into a fresh slot is constructed after it already holds the value.
+    Uniform (V2 pins it), value-correct, and nothing observes the storage in between -- but
+    it is backwards, and a ctor that reads its own fields would see the copy, not the init.
 */
 
 Class(int a_) {
@@ -238,6 +253,23 @@ Acc(int v_) {
 
 // A class-typed FIELD, for a chain stored into `box.a_`.
 Box(Acc a_) { }
+
+// The TUPLE-OF-CLASSES counter (block V). Every lifecycle op prints, including all three
+// transfers -- a tuple slot filled by a blit instead of by the operator is then VISIBLE
+// (a missing Trk:op= line), which is what the transfer invariant is about. A move husks
+// its source so V4 can show the source really was emptied.
+Trk(int v_) {
+    _()  { __println("Trk:ctor: " + v_); }
+    ~()  { __println("Trk:dtor: " + v_); }
+    op=(Trk^ r)             { __println("Trk:op=: " + r^.v_); v_ = r^.v_; }
+    op<--(mutable Trk^ r)   { __println("Trk:op<--: " + r^.v_); v_ = r^.v_; r^.v_ = 0; }
+    op<-->(mutable Trk^ r)  {
+        __println("Trk:op<-->: " + r^.v_);
+        int t = v_;
+        v_ = r^.v_;
+        r^.v_ = t;
+    }
+}
 
 int take(Acc^ a) { return a^.v_; }
 
@@ -792,21 +824,20 @@ int32 main() {
 
     // ---- P: DESTRUCTURE SLOTS ----
     //
-    // Values are right; the SHAPE is pinned as-is, and it is NOT minimal. What actually
-    // happens: a destructure whose source is not a bare name is SPILLED once into a `_$dsrc`
-    // tuple temp (classify, so a side-effecting source is not re-evaluated per slot), and
-    // each slot is then a plain `pc = _$dsrc[0]` copy through op=. So the chains are NOT the
-    // direct source of any assignment -- they sit inside the spill's tuple literal, take the
-    // no-destination path (one accumulator each), and are copied twice: once into the spill
-    // slot, once into the target. Four extra objects for two chains, where two would do.
+    // A tuple LITERAL source is taken APART -- element i is assigned to slot i directly, with
+    // no `_$dsrc` spill tuple in between. Each slot is then a chain with a LIVE destination:
+    // one statement-scoped accumulator, MOVED in (Acc:op<--), dead at the semicolon. Two
+    // objects for two chains. It used to spill the literal and copy each chain TWICE (once
+    // into the spill slot, once into the target) -- four extra objects -- because the chains
+    // sat inside the spill's tuple literal and so were nobody's direct source.
     //
-    // The LIFETIME half is now right: the accumulators inside the spill die at the SEMICOLON
-    // (their dtors print before "P1 end"), which came free with the case-7 fix -- the spill's
-    // value is a class-bearing tuple, and it was the class-valued-rhs seq gap that had given
-    // them enclosing-scope lifetime. What remains is COST: for a tuple LITERAL the spill is
-    // pure overhead (each element is read exactly once). A future fix assigns a literal source
-    // per slot without spilling, making each slot a live-target chain (one accumulator, moved
-    // in, dead at the semicolon) and landing Acc:op<-- here.
+    // The spill is not gone, just no longer paid for nothing: an RVALUE source (a call) still
+    // spills, since it must be evaluated exactly once. So does a literal that reads a target
+    // -- `(sa, sb) = (sb, sa)` is a SWAP, and per-slot stores would alias.
+    //
+    // Compare S4 (DECLARING slots): a fresh slot IS the accumulator, so it costs no temp and
+    // no move at all -- the same "raw storage vs live object" question the declarator funnel
+    // asks everywhere else.
     __println("P: destructure slots");
     {
         Acc pa = Acc(10);
@@ -1051,6 +1082,70 @@ int32 main() {
         __println("U7 end uh=" + uh.v_);              // -7
 
         __println("U end (locals dtor next)");
+    }
+
+    // ---- V: A TUPLE OF CLASSES ----
+    //
+    // Every object here PRINTS, so the counts are the assertion.
+    __println("V: tuple of classes");
+    {
+        // V1: a nested tuple built from a LITERAL of constructions costs exactly ONE ctor
+        // per object -- each element is constructed IN ITS SLOT. It used to build every
+        // element as a temp and copy it into the slot: six ctors for three objects.
+        __println("V1: ((Trk,Trk),Trk) vt = ((Trk(1), Trk(2)), Trk(3))");
+        ((Trk, Trk), Trk) vt = ((Trk(1), Trk(2)), Trk(3));
+        __println("V1 end");
+
+        // V2: a literal of class LVALUES dispatches op= per element, INTO the slot. A
+        // whole-value build would have loaded each element and blitted it in, silently
+        // skipping the operator -- the transfer invariant. (The trailing ctor per slot is
+        // the funnel's fill-then-finalize order; see the header's deferred list.)
+        Trk v1 = Trk(1);
+        Trk v2 = Trk(2);
+        __println("V2: (Trk,Trk) vl = (v1, v2)");
+        (Trk, Trk) vl = (v1, v2);
+        __println("V2 end vl=" + vl[0].v_ + "," + vl[1].v_);        // 1,2
+
+        // V3: a NESTED destructure, COPY. The source is an lvalue, so it is INDEXED per slot
+        // -- `vt[0][0]` -- and the nested slot recurses on that. No sub-tuple temp: three
+        // slots, three op= calls. It used to spill an intermediate (Trk,Trk) temp per level.
+        __println("V3: ((Trk va, Trk vb), Trk vc) = vt");
+        {
+            ((Trk va, Trk vb), Trk vc) = vt;
+            __println("V3 end " + va.v_ + " " + vb.v_ + " " + vc.v_);   // 1 2 3
+        }
+
+        // V4: a NESTED destructure, MOVE. Same indexing, so `<--` reaches every depth -- it
+        // was rejected outright ("a nested move/swap destructure is not yet supported")
+        // because the source had to be a bare NAME, and `vt[0]` is not one. Each slot's
+        // op<-- nulls the REAL leaf: the source is left a husk of zeros.
+        __println("V4: ((Trk vd, Trk ve), Trk vf) <-- vt");
+        {
+            ((Trk vd, Trk ve), Trk vf) <-- vt;
+            __println("V4 end " + vd.v_ + " " + ve.v_ + " " + vf.v_);   // 1 2 3
+        }
+        __println("V4 src vt=" + vt[0][0].v_ + " " + vt[0][1].v_ + " " + vt[1].v_);  // 0 0 0
+
+        // V5: a NESTED destructure, SWAP -- exchanges with the real leaves, so the source
+        // ends up holding what the slots had (the slots are fresh, hence zeros).
+        ((Trk, Trk), Trk) vs = ((Trk(4), Trk(5)), Trk(6));
+        __println("V5: ((Trk vg, Trk vh), Trk vi) <--> vs");
+        {
+            ((Trk vg, Trk vh), Trk vi) <--> vs;
+            __println("V5 end " + vg.v_ + " " + vh.v_ + " " + vi.v_);   // 4 5 6
+        }
+        __println("V5 src vs=" + vs[0][0].v_ + " " + vs[0][1].v_ + " " + vs[1].v_);  // 0 0 0
+
+        // V6: the same literal of constructions, but into a LIVE tuple. Its slots are
+        // already objects, so they cannot be BUILT over (V1's in-place path) -- each
+        // element is constructed as a statement-scoped temp and TRANSFERRED in through
+        // op=, and the temps die at the semicolon. Only raw storage (a decl, a return
+        // slot, a field of something being constructed) takes the build-in-place path.
+        __println("V6: vs = ((Trk(7), Trk(8)), Trk(9))   [live target]");
+        vs = ((Trk(7), Trk(8)), Trk(9));
+        __println("V6 end vs=" + vs[0][0].v_ + " " + vs[0][1].v_ + " " + vs[1].v_);  // 7 8 9
+
+        __println("V end (locals dtor next)");
     }
 
     return 0;

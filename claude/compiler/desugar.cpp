@@ -2275,6 +2275,28 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
         node = std::move(tuple);
         return;
     }
+    // A TUPLE LITERAL in an INTERCEPTED position is DISTRIBUTED, slot by slot, into
+    // storage the statement already owns (a decl's alloca, a return's sret slot, an
+    // enclosing construction's field). A CONSTRUCTION element is therefore built
+    // DIRECTLY into its slot — unwrap it to its per-field tuple (the same unwrap
+    // liftSretCallList does for a root construction) and keep intercepting downward, so a
+    // nested tuple of constructions never mints a temp: `((C(1), C(2)), C(3))` costs THREE
+    // constructions, not three temps plus three copies. Interception passes only to the
+    // elements that OWN a slot this way (a nested literal, a construction); any other
+    // element — a call, a chain, an operand — is an ordinary rvalue and still lifts.
+    if (root_intercepted && node->kind == ast::Kind::kTupleExpr) {
+        for (auto& ch : node->children) {
+            if (!ch) continue;
+            bool builds_in_slot = ch->kind == ast::Kind::kTupleExpr
+                || ch->is_construction;
+            if (ch->is_construction) {
+                assert(!ch->children.empty() && "construction lost its tuple");
+                ch = std::move(ch->children[0]);   // its per-field tuple
+            }
+            liftSretCallExprs(ch, pre, next_id, builds_in_slot);
+        }
+        return;
+    }
     for (auto& ch : node->children)
         liftSretCallExprs(ch, pre, next_id, false);
     // A `Class(args)` construction used inline (e.g. a method receiver) is a
@@ -2516,9 +2538,22 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
             }
             // The direct rhs call is constructed in place by codegen — leave it
             // (root_intercepted), but lift any NESTED call in its args.
+            //
+            // A tuple LITERAL rhs is DISTRIBUTED slot by slot into the target's storage, so
+            // interception would build its constructions directly in those slots. Only a
+            // DECL / RETURN owns that storage RAW. A live ASSIGN target is ALREADY an object:
+            // its slots must be transferred INTO — each element through the class's op= —
+            // never built over. So a live target's literal keeps lifting its constructions to
+            // temps, and each temp is then copied in by the operator.
+            bool owns_storage = true;
+            if (k == ast::Kind::kAssignStmt && !stmt->children.empty()
+                && stmt->children[0]
+                && stmt->children[0]->kind == ast::Kind::kTupleExpr) {
+                owns_storage = false;
+            }
             if (!stmt->children.empty())
                 liftSretCallExprs(stmt->children[0], pre, next_id,
-                                  /*root_intercepted=*/true);
+                                  /*root_intercepted=*/owns_storage);
             // Wrap whenever anything was lifted — the rhs VALUE's form does not matter.
             // It used to: a CLASS-valued rhs was left UNWRAPPED because it is built IN
             // PLACE by the statement's sret fast paths, and those matched on the RAW call

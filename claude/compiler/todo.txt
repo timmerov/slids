@@ -36,16 +36,18 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * A TUPLE / ARRAY OF CLASSES BUILT FROM A LITERAL COPIES EVERY ELEMENT.
-    `(Tracked, Tracked) t = (Tracked(1), Tracked(2));` runs FOUR constructors. Two would
-    do: each element is built as a temporary and then COPY-constructed into its slot,
-    instead of being built in the slot to begin with.
-    The clean shape to copy is a tuple-of-class RETURNED BY A FUNCTION — that one
-    constructs straight into the destination.
-    FIX belongs in emitExpr's tuple-literal-of-class lowering (build each element directly
-    into its destination slot), NOT in the declarator funnel.
-    Values and lifetimes are correct; this is purely the extra copy. tuple/destructure.sl
-    sidesteps it by destructuring from a tuple-returning function instead.
+  * A COPY-INITIALIZATION RUNS THE COPY OPERATOR AND THEN THE CONSTRUCTOR.
+    `Class x = y;` prints `op=` and THEN `ctor` — the object is constructed after it
+    already holds the copied value.
+    WHY: every binding site FILLS storage and then FINALIZES it (the declarator funnel:
+    fill the fields, then run the ctor hooks and register the dtor). For a fresh slot
+    taking a copy, the fill IS the copy, so the ctor arrives last.
+    Uniform, value-correct, and nothing can observe the storage in between — but it is
+    backwards, and a constructor that READ its own fields would see the copy rather than
+    whatever it meant to initialize them to.
+    Fixing it means constructing before filling at every binding site, which reorders the
+    output of every class copy-init — a SEMANTICS decision to make deliberately, not a
+    quiet cleanup. Pinned by evaluate.sl V2.
 
   * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
     access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
@@ -55,26 +57,12 @@ BUGS
     `(Agg = get()^.f)`) is CLONED per slot, so the side effect runs N times instead of
     once. Balanced/correct-valued, just a duplicated effect. Only a CALL/op source is
     spilled-once today; a lvalue with a side-effecting subscript/deref/base is not.
-    Pre-existing for kIndexExpr/kDerefExpr; kFieldExpr joined the set with the
-    isBareLvalue dedup (2026-07-08). FIX = spill any source whose access path is not
-    provably side-effect-free (only a bare-ident chain is), not just non-lvalues.
-    Surfaced reviewing the return_fn elide work; `sp = ((Amt,Amt) = mkpair())` (call
-    source) already asserts spill-once, but no bare-lvalue-with-side-effect test exists.
-
-  * A DESTRUCTURE BUILDS TWICE AS MANY OBJECTS AS IT NEEDS.
-    `(pc, pd) = (pa + pb, pa + pa)` builds four objects. Two would do.
-    WHY: when the source of a destructure is not a plain name, classify first copies the
-    WHOLE source into a hidden tuple temp (`_$dsrc`), so that a source with a side effect
-    runs once rather than once per slot. Each slot then reads its value back out of that
-    temp — `pc = _$dsrc[0]`. Every value is therefore copied TWICE: once into the temp,
-    once into the target.
-    FIX: when the source is a tuple LITERAL, the temp buys nothing — each element is
-    written once and read once — so assign each element straight to its slot. Each slot
-    then builds in place: one accumulator, moved into the target, destroyed at the
-    semicolon. As a bonus the target's `op<--` runs, which today it never does. Keep the
-    temp for any source that is not a literal.
-    Values and lifetimes are correct; this is purely the object count. Pinned by
-    evaluate.sl block P.
+    FIX = spill any source whose access path is not provably side-effect-free, not just
+    non-lvalues. The predicate already exists: classify's `isReReadableLvalue` (the
+    destructure asks the identical question — it reads its source once PER SLOT — and
+    answers it correctly: an ident/field/deref/const-index chain is safe to re-read;
+    anything else spills). These sites should share it. No bare-lvalue-with-side-effect
+    test exists yet.
 
 
 UNBLOCKED FEATURES
@@ -440,3 +428,12 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     be inlined away at the site. Do it as a CODEGEN peephole keyed on "the class's op is
     synthesized and its fields are all POD" — never by weakening the gate, which is what
     reintroduces the bug. (LLVM already inlines these; measure before bothering.)
+
+  * what should (a,b) = (b,a) do? IT SWAPS — the whole right side is evaluated BEFORE any
+    target is written, so both slots read the OLD values. This is no longer an accident of
+    how the source happened to be materialized: a destructure now binds its slots one at a
+    time, so a literal that READS A TARGET is deliberately spilled to a temp first (an
+    alias guard), precisely to keep the swap true. Pinned by tuple/destructure.sl.
+    OPEN only as a SPEC question: confirm that is the wanted semantics. The alternative
+    (store each slot as it is computed, so `(a,b) = (b,a)` leaves both equal to the old b)
+    is what the per-slot lowering would do on its own, and it is cheaper by one temp.

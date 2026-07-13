@@ -6,6 +6,7 @@ discard-tail: g= 100
 discard-mid: h= 1 k= 3
 from-var: m= 7 n= 8
 hetero: hx= 1 hy= true hz= 2.5
+narrow: wb= 1 ww= 2 wr= 100
 func: fa= 11 fb= 22
 swap: sa= 2 sb= 1
 inner: oa= 10 ob= 20
@@ -16,10 +17,6 @@ nested2: ra= 4 rd= 6
 rows: 1 2 3 4
 Tracked ctor 1
 Tracked ctor 2
-Tracked ctor 1
-Tracked ctor 2
-Tracked dtor 2
-Tracked dtor 1
 Tracked ctor -1
 Tracked ctor -1
 class: ct0= 1 ct1= 2
