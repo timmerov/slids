@@ -101,12 +101,12 @@ Class:ctor: 3
 Class:ctor: 4
 Class:ctor: 5
 Class:ctor: 6
-Class:ctor: 1
-Class:ctor: 2
-Class:ctor: 3
-Class:ctor: 4
-Class:ctor: 5
-Class:ctor: 6
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
+Class:ctor: 42
 cpy: 1 2 3 | 4 5 6
 expect dtors (copy 6..1 then src 6..1) after
 Class:dtor: 6

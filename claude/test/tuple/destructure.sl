@@ -215,6 +215,16 @@ int32 main() {
 //    return p + q;
 //}
 
+/* a MOVE (or SWAP) destructure needs somewhere to move FROM. A COPY from an rvalue is
+   fine -- the source spills to a temp and each slot is copied out of it -- but a move
+   HUSKS its source, and a call's returned temp has no addressable home to husk. */
+//-EXPECT-ERROR: A move/swap destructure requires an addressable (lvalue) source.
+//int32 neg_move_rvalue() {
+//    int p = 0; int q = 0;
+//    (p, q) <-- makePair();
+//    return p + q;
+//}
+
 /* one name per destructure: a repeated target is rejected whether it would
    declare a fresh local or reuse an existing variable. */
 //-EXPECT-ERROR: Duplicate destructure target 'y'

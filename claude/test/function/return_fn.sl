@@ -508,48 +508,42 @@ int32 main() {
         /* hook call result in an expression (an arg) — lifted to a temp. */
         __println("ho= " + idOf(mkClass()));                    // 7
     }
+
+    /* A CLASS RVALUE TRANSFERRED INTO LIVE STORAGE. These were negatives: a live target has
+       no fresh slot to BUILD into, so a class-returning CALL (and a construction) as the rhs
+       of an assign / move / store was rejected. But a live target does not want to be built
+       — it wants to be TRANSFERRED into, and the source only has to be materialized first.
+       It becomes a temporary, the target's operator copies / moves from it, and the temp dies
+       at the SEMICOLON. Op's operators PRINT and add 100 / 200, so it is visible that the
+       author's operator really ran (rather than a field-init over the live object). */
+    {
+        __println("-- rvalue into live storage --");
+        Op x(1);
+        x = mkOp();                                            // call, into an existing var
+        __println("x= " + x.v_);                                // 107 (op= added 100)
+        Op y(2);
+        y <-- mkOp();                                          // call, moved in
+        __println("y= " + y.v_);                                // 207 (op<-- added 200)
+        Op z(3);
+        z = Op(33);                                            // construction, into a live var
+        __println("z= " + z.v_);                                // 133
+        Op w(4);
+        w <-- Op(44);                                          // construction, moved in
+        __println("w= " + w.v_);                                // 244
+        Op arr[2] = (5, 6);
+        arr[0] = mkOp();                                       // into a store target
+        __println("arr0= " + arr[0].v_);                        // 107
+    }
     __println("-- done --");
     return 0;
 }
 
-/* compile errors — each uncommented in isolation by the negative runner. A hook-
-   returning call in an expression position the lift does NOT cover yet (a store
-   target, a loop / if condition, a move/swap operand) is rejected cleanly rather
-   than miscompiled. These flip to positives when those positions are lowered. */
+/* compile errors — each uncommented in isolation by the negative runner. */
 
-/* store target: `arr[i] = mkClass()`. */
-//-EXPECT-ERROR: Returning a class by value in an expression position is not yet supported
-//int neg_store_rhs() {
-//    Class arr[2] = (1, 2);
-//    arr[0] = mkClass();
-//    return arr[0].id_;
-//}
-
-/* a hook-returning call in a CONDITION (if/while/for/switch) IS supported now: the
-   returned temp is lifted into the condition's seq and destroyed per evaluation
-   (a loop rebuilds it each iteration). */
-
-/* a move operand. */
-//-EXPECT-ERROR: Returning a class by value in an expression position is not yet supported
-//int neg_move_rhs() {
-//    Class a(1);
-//    a <-- mkClass();
-//    return a.id_;
-//}
-
-/* CONSTRUCT-INTO-EXISTING BOUNDARY — constructing a class as an assign / move RHS into
-   an EXISTING variable (no fresh slot to build into) is a clean error (declare a fresh
-   variable instead), NOT the segfault a regression would reintroduce by spilling an
-   unbuildable rvalue. (A fresh decl from a construction rvalue elides in place.) */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//int neg_copy_construct_existing() {
-//    Op x(1);
-//    x = Op(11);
-//    return x.v_;
-//}
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//int neg_move_construct_existing() {
-//    Op x(1);
-//    x <-- Op(11);
-//    return x.v_;
-//}
+/* A CLASS RVALUE INTO LIVE STORAGE IS SUPPORTED (the positives above): a store target
+   (`arr[0] = mkClass()`), a move operand (`a <-- mkClass()`), and a construction into an
+   existing variable (`x = Op(11)` / `x <-- Op(11)`) all materialize the source as a
+   temporary and TRANSFER it in through the target's operator. They used to be rejected on
+   the grounds that a live target has no fresh slot to build into — which is the reason for
+   the ELIDE, not a reason to refuse the transfer. A hook-returning call in a CONDITION is
+   supported too (lifted into the condition's seq, rebuilt per evaluation). */

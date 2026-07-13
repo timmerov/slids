@@ -984,10 +984,48 @@ Phase 5 — classes
     It also closed a TRANSFER-INVARIANT hole: a tuple literal of class LVALUES used to build one
     whole struct value and store it — a BLIT past every element's op= (readme-classes.txt).
     Canon evaluate.sl block V.
+    A CLASS CAN ONLY BE COPIED INTO (2026-07-13) — so it must EXIST first: every binding is
+    alloc, init, ctor, THEN the transfer. The funnel does NOT produce that order on its own —
+    it FILLS storage and then FINALIZES it — so a fresh decl from an lvalue had its CONSTRUCTOR
+    RUN ON TOP OF THE COPY and threw it away: `D dx = dy;` on a class whose ctor writes its own
+    field yielded the ctor's value, not dy's. A WRONG ANSWER, live, and invisible to the whole
+    suite because every counting class only PRINTS in its ctor (a printing ctor shows a wrong
+    ORDER; only a WRITING one shows a wrong ANSWER). classify's applyTransferSplit peels the
+    transfer off the declaration and re-emits it against the constructed object, PER SLOT — so
+    a construction slot still builds in place and only a copy is deferred. It does not touch
+    the elide: what decides whether a copy happens at all is the SOURCE. Canon evaluate.sl
+    block W (class Ord). TWO SITES STILL HAVE IT (both todo.txt): a class FIELD from an lvalue —
+    not the same problem, a ctor must SEE its field initializers, so that copy cannot be hoisted
+    past it — and a GLOBAL, which IS the same problem but is not lowered here at all: its
+    initializer becomes a synthesized lazy ctor (desugar), so there is no statement list at the
+    declaration to split the transfer into.
+    A CLASS RVALUE INTO LIVE STORAGE (2026-07-13) — the other half of the same sentence, and
+    it closed four negatives. `x = Op(11)`, `x <-- mkOp()`, `arr[0] = mkClass()`,
+    `r^ = Class(2)` were all REJECTED ("Constructing a class in this position" / "Returning a
+    class by value in an expression position") because a live target has no fresh slot to
+    BUILD into. True — and that is the reason for the ELIDE, not a reason to refuse the
+    TRANSFER. The source is materialized as a temporary and copied / moved in through the
+    target's operator. Two bails went: the SYNTHESIZED-op bail (which elided a default copy
+    but not a user one, so `arr[0] = mkClass()` compiled for a class with a user op= and was
+    rejected for a class without one) and the CONSTRUCTION-into-live-storage bail. The temp is
+    NOT spilled by classify — that gave it enclosing-BLOCK lifetime; it is left as the
+    operator call's ARGUMENT, and desugar's ordinary argument lift makes it, so it dies at the
+    SEMICOLON. Canon nameless.sl block 34 + return_fn.sl.
+    THE SPILL FUNNEL (2026-07-13) — the generalization of that last point, and it found three
+    more. A SPILL materializes a source that must be evaluated ONCE but is READ MORE THAN ONCE.
+    Four sites hand-rolled the identical twenty lines, and the temp's LIFETIME was a side
+    effect of where each one happened to park the decl: park it on the node and desugar hoists
+    it into the statement's seq (dies at the semicolon); push it into the `prelude` and it is
+    just another local of the enclosing BLOCK (dies at the end of the SCOPE). Nobody chose;
+    three of five got it wrong. `spillToTemp` is now the one funnel, with the placement — SEQ
+    (read by one expression) or GROUP (read by sibling statements: a block, with declaring
+    slots hoisted out) — as the caller's single explicit decision. `_$cinit` (class from an
+    rvalue aggregate), `_$dsrc` and `_$delem` (destructure) all die at the semicolon now.
+    It also exposed a FIFTH hasInPlaceClass-vs-kSlid gate, in emitSeqEffects. Canon
+    evaluate.sl block X.
     STILL DEFERRED: ping-pong (a class with a 2-arg op+ but NO op+= cannot fuse, so each
-    un-fusable operand starts a fresh buffer — two alternating buffers would need none); a
-    copy-init runs op= and THEN the ctor (the funnel fills, then finalizes — todo.txt); arity-2
-    comparison producing a class + reversed-operand comparison. See
+    un-fusable operand starts a fresh buffer — two alternating buffers would need none);
+    arity-2 comparison producing a class + reversed-operand comparison. See
     [[project_expr_temp_elimination]], [[project_operator_overloading]]; canon
     test/class/evaluate.sl + operator.sl.
   * METHOD / FUNCTION PARITY — LANDED. methods get overloading + default params +

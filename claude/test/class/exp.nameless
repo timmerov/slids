@@ -196,3 +196,25 @@ NoInitClass:dtor
 NoInitClass:dtor
 NoInitClass:dtor
 NoInitClass:dtor
+== 34: a construction transferred into live storage ==
+Class:ctor: 1
+Class:ctor: 11
+Class:dtor: 11
+34 assign: w= 11
+Class:ctor: 2
+Class:ctor: 22
+Class:dtor: 22
+34 move: m= 22
+Class:ctor: 33
+Class:dtor: 33
+34 deref: w= 33
+Class:ctor: 4
+Class:ctor: 5
+Class:ctor: 44
+Class:dtor: 44
+34 element: arr= 44 5
+-- end 34 --
+Class:dtor: 5
+Class:dtor: 44
+Class:dtor: 22
+Class:dtor: 33

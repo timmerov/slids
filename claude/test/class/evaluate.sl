@@ -182,15 +182,31 @@ bridge), and NO shape materializes the tuple twice:
     evaluated exactly once. So must a literal that READS A TARGET: `(sa, sb) = (sb, sa)` is
     a swap, and per-slot stores would alias (tuple/destructure.sl pins it).
 
+A CLASS CAN ONLY BE COPIED INTO -- so it has to EXIST first. Every binding is alloc, init,
+ctor, THEN the transfer (block W). It used to FILL the storage from the source and only THEN
+run the ctor hooks, so the constructor landed on top of the copied value: a ctor that WRITES
+its own field silently threw the copy away (`D dx = dy;` yielded the ctor's value, not dy's).
+Every class in this file only PRINTS in its ctor, which is why it lived here so long -- a
+printing ctor shows a wrong ORDER, and only a WRITING one (class Ord) shows a wrong ANSWER.
+classify peels the transfer off the declaration (applyTransferSplit) and re-emits it against
+the constructed object, per SLOT -- so `(Ord(1), wa)` still BUILDS slot 0 in place and only
+copies into slot 1. What decides whether a copy happens at all is the SOURCE: an rvalue has
+no object to copy FROM, so it elides and builds in place, exactly as before.
+
 deliberately NOT correct yet (still-broken / deferred):
   - ping-pong: a class with a 2-arg op+ but NO op+= can't fuse (acc.op+(acc,c) would
     read acc while writing it), so each such step starts a fresh buffer -- one temp per
     un-fusable operand. Two alternating buffers would need none.
-  - a copy-INIT runs op= and THEN the ctor: the funnel FILLS storage and then finalizes it
-    (emitInitFill, then emitConstructed's hooks), so `Class x = y;` prints op= before ctor,
-    and a class copied into a fresh slot is constructed after it already holds the value.
-    Uniform (V2 pins it), value-correct, and nothing observes the storage in between -- but
-    it is backwards, and a ctor that reads its own fields would see the copy, not the init.
+  - a class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
+    constructed over -- the same bug one level down, and NOT fixable the same way. A
+    construction's arguments are FIELD INITIALIZERS, and a ctor must see its fields ALREADY
+    INITIALIZED (Q4's Hook computes `a_ + b_` in its ctor body and must read what was passed,
+    not the defaults). So a field's copy cannot be hoisted past the enclosing ctor the way a
+    tuple slot's can: it has to land BETWEEN the field's own ctor and the enclosing ctor body.
+  - a GLOBAL class initialized from a class LVALUE (`global Add gb = ga;`) is still FILLED and
+    then constructed over -- the same wrong answer at a third site. A global's initializer is
+    lowered into a synthesized LAZY CTOR (desugar), so the declarator split that fixed the
+    local never reaches it. Untested on purpose: a golden here would pin the wrong answer.
 */
 
 Class(int a_) {
@@ -254,10 +270,29 @@ Acc(int v_) {
 // A class-typed FIELD, for a chain stored into `box.a_`.
 Box(Acc a_) { }
 
+// THE ORDER OF CONSTRUCTION (block W). Its ctor WRITES its own field, which is the only
+// thing that makes the order OBSERVABLE: if the ctor runs AFTER the copy it overwrites the
+// copied value, and the variable ends up holding 99 instead of what it was copied from.
+// Every counting class in this file merely PRINTS in its ctor, which is exactly why the bug
+// lived here for so long -- a printing ctor shows a wrong ORDER, a writing ctor shows a
+// wrong ANSWER. It has no operators at all: the DEFAULT copy/move is the path that was
+// broken (a user op= was already dispatched as `x.op=(y)` AFTER the construct, and so was
+// always right), and it deliberately does not print -- W reads VALUES back.
+Ord(int v_) {
+    _()  { v_ = 99; }
+    ~()  { }
+    int get() { return v_; }
+}
+
 // The TUPLE-OF-CLASSES counter (block V). Every lifecycle op prints, including all three
 // transfers -- a tuple slot filled by a blit instead of by the operator is then VISIBLE
 // (a missing Trk:op= line), which is what the transfer invariant is about. A move husks
 // its source so V4 can show the source really was emptied.
+// A class whose FIELDS are classes, and a tuple-of-classes returning function: block X spills
+// the returned tuple and spreads it across the fields.
+Trkpair(Trk a_, Trk b_) { }
+(Trk, Trk) mkTrkTup() { return (Trk(1), Trk(2)); }
+
 Trk(int v_) {
     _()  { __println("Trk:ctor: " + v_); }
     ~()  { __println("Trk:dtor: " + v_); }
@@ -387,6 +422,33 @@ Sw(int v_) {
     op=(Sw^ r)            { __println("Sw:op=: " + r^.v_); v_ = r^.v_; }
     op<--(mutable Sw^ r)  { __println("Sw:op<--: " + r^.v_); v_ = r^.v_; }
     op<-->(mutable Sw^ r) { __println("Sw:op<-->"); int t = v_; v_ = r^.v_; r^.v_ = t; }
+}
+
+// Block Y's class. It is SILENT (the block reads VALUES back, not a print order) and -- unlike
+// Ord -- it KEEPS its constructor argument, because Y is about WHICH source got read and HOW
+// MANY TIMES, not about the construct-vs-copy order that Ord's overwriting ctor exists to catch.
+Val(int v_) {
+    _()  { }
+    ~()  { }
+    int get() { return v_; }
+}
+global int y_calls = 0;      // how many times the source EXPRESSION was evaluated
+global int y_effects = 0;    // the side effects of the source's elements
+((Val, Val), Val) mkValNest() { return ((Val(1), Val(2)), Val(3)); }
+(Val, Val) valCounted() { y_calls = y_calls + 1; return (Val(4), Val(5)); }
+Val valBump(int n) { y_effects = y_effects + n; return Val(n); }
+
+// A copy-init inside a NESTED function. A nested function's body is a STATEMENT in its host, so
+// it reaches the desugar passes only through the host -- the copy-into ordering (block W) has to
+// hold there too, and it is the one place a pass that walks program-scope functions would miss.
+void yNestedHost() {
+    Val a = Val(1);
+    a.v_ = 7;
+    void inner() {
+        Val b = a;
+        __println("Y6: nested copy=" + b.get());                                   // 7
+    }
+    inner();
 }
 
 // A chain in a RETURN rhs: the accumulator is the returned local, which NRVO aliases
@@ -1098,8 +1160,8 @@ int32 main() {
 
         // V2: a literal of class LVALUES dispatches op= per element, INTO the slot. A
         // whole-value build would have loaded each element and blitted it in, silently
-        // skipping the operator -- the transfer invariant. (The trailing ctor per slot is
-        // the funnel's fill-then-finalize order; see the header's deferred list.)
+        // skipping the operator -- the transfer invariant. Each slot is CONSTRUCTED first
+        // (its ctor prints 0, the field default) and only then copied into -- block W.
         Trk v1 = Trk(1);
         Trk v2 = Trk(2);
         __println("V2: (Trk,Trk) vl = (v1, v2)");
@@ -1146,6 +1208,142 @@ int32 main() {
         __println("V6 end vs=" + vs[0][0].v_ + " " + vs[0][1].v_ + " " + vs[1].v_);  // 7 8 9
 
         __println("V end (locals dtor next)");
+    }
+
+    // ---- W: THE ORDER OF CONSTRUCTION ----
+    //
+    // A class can only be COPIED INTO, so it has to EXIST first: alloc, init, ctor, THEN the
+    // transfer. Every binding here copies from an LVALUE, and Ord's ctor WRITES its own field
+    // (v_ = 99) -- so if the ctor ran after the copy, as it used to, each of these would read
+    // back 99 instead of the value it was copied from. Every one is a wrong ANSWER, not an
+    // ordering nicety, and none of the printing counters above could see it.
+    __println("W: order of construction");
+    {
+        Ord wa = Ord(1);  wa.v_ = 7;
+        Ord wb = Ord(1);  wb.v_ = 8;
+
+        // W1: the scalar copy-init and move-init.
+        Ord w1 = wa;
+        Ord w2 <-- wb;
+        __println("W1: copy-init w1=" + w1.get() + " move-init w2=" + w2.get());   // 7 8
+
+        // W2: a tuple LITERAL of class lvalues -- per SLOT, each slot constructed then
+        // copied into. (Block V2 counts the operators; this reads the values back.)
+        Ord wc = Ord(1);  wc.v_ = 5;
+        (Ord, Ord) w3 = (wa, wc);
+        __println("W2: tuple literal w3=" + w3[0].get() + " " + w3[1].get());      // 7 5
+
+        // W3: the WHOLE-value copy of a class-bearing tuple -- one transfer, after the
+        // whole aggregate is constructed.
+        (Ord, Ord) w4 = w3;
+        __println("W3: tuple copy w4=" + w4[0].get() + " " + w4[1].get());         // 7 5
+
+        // W4: an ARRAY of classes from a literal, and a NESTED literal. Same rule at every
+        // layer -- the slot exists before anything is copied into it.
+        Ord w5[2] = (wa, wc);
+        ((Ord, Ord), Ord) w6 = ((wa, wc), wa);
+        __println("W4: array w5=" + w5[0].get() + " " + w5[1].get()
+                  + " nested w6=" + w6[0][0].get() + " " + w6[0][1].get() + " " + w6[1].get());
+        // 7 5 / 7 5 7
+
+        // W5: a MIXED literal -- slot 0 is a CONSTRUCTION and still BUILDS IN PLACE (its ctor
+        // writes 99 and nothing copies over it); slot 1 is a copy. The decision is per slot.
+        (Ord, Ord) w7 = (Ord(1), wa);
+        __println("W5: mixed w7=" + w7[0].get() + " " + w7[1].get());              // 99 7
+
+        // W6: the BUILD-IN-PLACE forms are untouched -- an rvalue source has no object to
+        // copy FROM, so it elides and the ctor's own write stands.
+        Ord w8 = Ord(3);
+        __println("W6: build-in-place w8=" + w8.get());                            // 99
+
+        __println("W end (locals dtor next)");
+    }
+
+    // ---- X: EVERY SPILL DIES AT THE SEMICOLON ----
+    //
+    // A SPILL materializes a source that must be evaluated ONCE but is read MORE than once
+    // (indexed per slot, spread per field). It is a TEMPORARY, so it dies at the SEMICOLON --
+    // and each of these used to live to the END OF THE BLOCK instead, because classify pushed
+    // its declaration into the prelude, where it is just another local of the enclosing scope.
+    // Nobody chose that: the lifetime was a side effect of where the decl got parked, and four
+    // sites hand-rolled the same twenty lines and answered it differently. They now share one
+    // funnel (spillToTemp), which makes the placement -- and so the lifetime -- the one thing
+    // the caller has to decide.
+    //
+    // Each case prints the temp's dtor BEFORE its marker line. A dtor printing after the
+    // marker means the temp outlived its statement.
+    __println("X: spills die at the semicolon");
+    {
+        // X1: a CLASS from an rvalue AGGREGATE -- the source tuple is spilled and spread
+        // across the fields. SEQ placement: the temp is read by this decl's rhs alone.
+        __println("X1: Trkpair xp = mkTrkTup();");
+        Trkpair xp = mkTrkTup();
+        __println("X1 end (the (Trk,Trk) temp is already dead)");
+
+        // X2: a DESTRUCTURE from an rvalue source -- spilled, then indexed per slot. GROUP
+        // placement: the temp is read by several sibling statements, so it and they go in a
+        // block, and the DECLARING slots are hoisted out of it (their names outlive it).
+        __println("X2: (Trk xa, Trk xb) = mkTrkTup();");
+        {
+            (Trk xa, Trk xb) = mkTrkTup();
+            __println("X2 end xa=" + xa.v_ + " xb=" + xb.v_);   // 1 2
+        }
+
+        // X3: a CONSTRUCTION element bound to a LIVE destructure slot -- it cannot be built
+        // in the slot (the slot is already an object), so it is materialized and copied in.
+        Trk xc = Trk(8);
+        Trk xd = Trk(9);
+        __println("X3: (xc, xd) = (Trk(80), Trk(90));");
+        (xc, xd) = (Trk(80), Trk(90));
+        __println("X3 end xc=" + xc.v_ + " xd=" + xd.v_);       // 80 90
+
+        __println("X end (locals dtor next)");
+    }
+
+    // ---- Y: THE SOURCE MODEL ----
+    //
+    // A destructure evaluates its source EXACTLY ONCE and then reads it apart: a tuple LITERAL
+    // is taken apart element by element, a re-readable LVALUE is indexed per slot, and anything
+    // else -- a call, a chain, a nested rvalue -- SPILLS to a temp that is indexed instead.
+    // Block X pins where the spill DIES; this block pins that the right thing was read, once.
+    // Val is silent, so these are VALUES, not a print order.
+    __println("Y: the source model");
+    {
+        // Y1: a NESTED destructure from an rvalue. The spill goes in a block, but the nested
+        // slots' DECLARATIONS have to escape it -- they outlive it. When they did not, the
+        // inner stores were hoisted out ahead of the spill and read an unwritten source.
+        ((Val y1a, Val y1b), Val y1c) = mkValNest();
+        __println("Y1: nested=" + y1a.get() + " " + y1b.get() + " " + y1c.get());  // 1 2 3
+
+        // Y2: the source is evaluated ONCE, however many slots read it.
+        (Val y2a, Val y2b) = valCounted();
+        __println("Y2: once calls=" + y_calls + " " + y2a.get() + " " + y2b.get());// 1 4 5
+
+        // Y3: a spilling destructure in a LOOP body. The temp is rebuilt and destroyed on each
+        // iteration -- the source is evaluated once PER ITERATION, not once per statement --
+        // and Trk's prints show the pairs balance. (Trk here, not Val: this one IS a lifetime.)
+        for (i : 0..2) {
+            __println("Y3: iter " + i);
+            (Trk y3a, Trk y3b) = mkTrkTup();
+            __println("Y3: iter " + i + " = " + y3a.v_ + " " + y3b.v_);            // 1 2
+        }
+
+        // Y4: a DISCARD slot drops its element's VALUE, not its EFFECTS -- the element is still
+        // evaluated (and its temp still destroyed).
+        (Val y4, ) = (valBump(1), valBump(10));
+        __println("Y4: discard effects=" + y_effects + " y4=" + y4.get());         // 11 1
+
+        // Y5: an ARRAY copy-init from an array LVALUE -- the whole aggregate, element by
+        // element, each element constructed before it is copied into.
+        Val y5src[2] = (Val(1), Val(2));
+        y5src[0].v_ = 5;  y5src[1].v_ = 6;
+        Val y5dst[2] = y5src;
+        __println("Y5: array=" + y5dst[0].get() + " " + y5dst[1].get());           // 5 6
+
+        // Y6: a copy-init inside a NESTED function.
+        yNestedHost();
+
+        __println("Y end (locals dtor next)");
     }
 
     return 0;

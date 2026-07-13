@@ -3569,6 +3569,80 @@ bool isReReadableLvalue(parse::Node const& n) {
     return false;
 }
 
+// ── THE SPILL FUNNEL ───────────────────────────────────────────────────────
+// A SPILL materializes a source that must be evaluated exactly ONCE but is READ MORE THAN
+// ONCE — indexed per slot, spread per field — into a temp local. Every spill mints the same
+// three things (an Entry, a bare kVarDeclStmt, an ident that reads the temp back), and this
+// is the one place that mints them. Four sites used to hand-roll it.
+//
+// THE TEMP'S LIFETIME IS THE CALLER'S ONE DECISION — and it is a decision, not a side effect
+// of where the decl happens to get parked. A spill is a TEMPORARY: it must die at the
+// SEMICOLON. There are exactly two ways to place `decl` so that it does:
+//   SEQ   — the temp is read by ONE expression (the statement's rhs). Park the decl ON THE
+//           NODE (`agg_conv_spill`, children = [decl, value]) and let desugar hoist it into
+//           the statement's kSeqExpr, whose teardown destroys it at the semicolon.
+//   GROUP — the temp is read by SEVERAL SIBLING STATEMENTS (a destructure's per-slot stores).
+//           Put the decl and those statements in a BLOCK — and hoist any DECLARING slot OUT
+//           of it, because a declared name has to outlive the block.
+// Pushing the decl straight into the `prelude` is the third way, and it is WRONG: a prelude
+// statement is just another local in the ENCLOSING block, so the temp lives to the end of the
+// SCOPE. Three sites did exactly that, each having re-derived the lifetime by accident — the
+// duplication is what let them disagree.
+struct Spill {
+    std::unique_ptr<parse::Node> decl;   // the temp's declaration — the caller PLACES it
+    std::unique_ptr<parse::Node> read;   // an ident naming the temp
+};
+Spill spillToTemp(parse::Tree& tree, std::unique_ptr<parse::Node> src,
+                  widen::TypeRef type, char const* name) {
+    int f = src->file_id, tk = src->tok;
+    // A bare entry is enough: resolve is done, so the id only needs to sit below desugar's
+    // minted-id range (seeded at entries.size()).
+    parse::Entry e;
+    e.kind = parse::EntryKind::kLocalVar;
+    e.name = name;
+    e.slids_type = type;
+    e.file_id = f;
+    e.tok = tk;
+    int id = static_cast<int>(tree.entries.size());
+    tree.entries.push_back(std::move(e));
+    Spill sp;
+    sp.decl = std::make_unique<parse::Node>();
+    sp.decl->kind = parse::Kind::kVarDeclStmt;
+    sp.decl->name = name;
+    sp.decl->resolved_entry_id = id;
+    sp.decl->return_type = type;
+    sp.decl->file_id = f;
+    sp.decl->tok = tk;
+    sp.decl->name_tok = tk;
+    sp.decl->children.push_back(std::move(src));
+    sp.read = std::make_unique<parse::Node>();
+    sp.read->kind = parse::Kind::kIdentExpr;
+    sp.read->name = name;
+    sp.read->resolved_entry_id = id;
+    sp.read->inferred_type = type;
+    sp.read->file_id = f;
+    sp.read->tok = tk;
+    return sp;
+}
+
+// The SEQ placement: wrap `value` in a node carrying [spill decl, value] that desugar's
+// liftSretCallExprs hoists — the decl into the statement's `pre` (and so into its kSeqExpr),
+// the node becoming `value`. So the temp is constructed with the statement's other temps and
+// destroyed with them, at the semicolon.
+std::unique_ptr<parse::Node> seqSpill(std::unique_ptr<parse::Node> decl,
+                                      std::unique_ptr<parse::Node> value) {
+    auto w = std::make_unique<parse::Node>();
+    w->kind = parse::Kind::kConvertExpr;
+    w->agg_conv_spill = true;
+    w->inferred_type = value->inferred_type;
+    w->return_type = value->return_type;
+    w->file_id = value->file_id;
+    w->tok = value->tok;
+    w->children.push_back(std::move(decl));
+    w->children.push_back(std::move(value));
+    return w;
+}
+
 // Collect the entry ids a destructure's slots BIND (recursing into nested slots).
 void collectDestructureTargets(parse::Node const& node, std::set<int>& ids) {
     for (std::size_t i = 1; i < node.children.size(); i++) {
@@ -3659,6 +3733,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
         if (!targets.empty() && readsAny(rhs0, targets)) src_literal = false;
     }
     std::unique_ptr<parse::Node> srcExpr;
+    std::unique_ptr<parse::Node> spill_decl;   // GROUP-placed below, if a spill was needed
     if (src_literal || isReReadableLvalue(rhs0)) {
         srcExpr = std::move(s.children[0]);
     } else if (!is_copy) {
@@ -3666,35 +3741,12 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             "A move/swap destructure requires an addressable (lvalue) source.", {}});
         return;
     } else {
-        // Spill an rvalue COPY source to a temp local (evaluated once), then index the
-        // temp — same idiom as the class-init `_$cinit` spill. A bare entry is enough
-        // (resolve is done; the id just needs to sit below desugar's minted-id range).
-        parse::Entry e;
-        e.kind = parse::EntryKind::kLocalVar;
-        e.name = "_$dsrc";
-        e.slids_type = srcType;
-        e.file_id = f;
-        e.tok = tk;
-        int srcId = static_cast<int>(tree.entries.size());
-        tree.entries.push_back(std::move(e));
-        auto spill = std::make_unique<parse::Node>();
-        spill->kind = parse::Kind::kVarDeclStmt;
-        spill->name = "_$dsrc";
-        spill->resolved_entry_id = srcId;
-        spill->return_type = srcType;
-        spill->file_id = f;
-        spill->tok = tk;
-        spill->name_tok = tk;
-        spill->children.push_back(std::move(s.children[0]));
-        classifyStmt(tree, *spill, fn_return_type, diag, &prelude);
-        prelude.push_back(std::move(spill));
-        srcExpr = std::make_unique<parse::Node>();
-        srcExpr->kind = parse::Kind::kIdentExpr;
-        srcExpr->name = "_$dsrc";
-        srcExpr->resolved_entry_id = srcId;
-        srcExpr->inferred_type = srcType;
-        srcExpr->file_id = f;
-        srcExpr->tok = tk;
+        // Spill an rvalue COPY source to a temp (evaluated once), then index the temp. GROUP
+        // placement (see THE SPILL FUNNEL): the temp is read by the per-slot statements, so
+        // it and they go in a BLOCK and it dies at the semicolon.
+        Spill sp = spillToTemp(tree, std::move(s.children[0]), srcType, "_$dsrc");
+        spill_decl = std::move(sp.decl);
+        srcExpr = std::move(sp.read);
     }
 
     // Slot i's source: the literal's element i (moved out — used exactly once), else a
@@ -3716,6 +3768,10 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
     };
 
     std::vector<std::unique_ptr<parse::Node>> pending;
+    // Which pending statements DECLARE a slot: a declared name must outlive the group, so it
+    // is the one thing that cannot go inside the block a spill needs (THE SPILL FUNNEL).
+    std::vector<bool> escaping;
+    bool elem_temp = false;
     for (std::size_t i = 0; i < ntargets; i++) {
         parse::Node* slot = s.children[i + 1].get();
         if (!slot) {
@@ -3728,7 +3784,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
                 es->file_id = f;
                 es->tok = tk;
                 es->children.push_back(makeSrcElem(i));
-                pending.push_back(std::move(es));
+                pending.push_back(std::move(es));    escaping.push_back(false);
             }
             continue;
         }
@@ -3741,7 +3797,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             sub->children[0] = makeSrcElem(i);
             sub->default_move_init = is_move;
             sub->default_swap_init = is_swap;
-            pending.push_back(std::move(sub));
+            pending.push_back(std::move(sub));   escaping.push_back(false);
             continue;
         }
         widen::TypeRef slot_ty = slots[i];
@@ -3771,11 +3827,11 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
                 // construction, no tuple, no temp, no copy. This is the whole reason the
                 // literal is taken apart rather than spilled.
                 decl->children.push_back(std::move(elem));
-                pending.push_back(std::move(decl));
+                pending.push_back(std::move(decl));  escaping.push_back(true);
                 continue;
             }
             // Otherwise a NO-INIT decl (default-construct) ahead of the per-slot statement.
-            pending.push_back(std::move(decl));
+            pending.push_back(std::move(decl));  escaping.push_back(true);
         } else {
             slot_ty = parse::entryType(tree, tid);
         }
@@ -3784,31 +3840,10 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             // to build into (see dispatchAssignInit). Materialize such an element into its
             // own temp first, then copy that in. Only a literal source can produce one.
             if (elem->kind == parse::Kind::kCallExpr && elem->is_construction) {
-                parse::Entry te;
-                te.kind = parse::EntryKind::kLocalVar;
-                te.name = "_$delem";
-                te.slids_type = slot_ty;
-                te.file_id = f;
-                te.tok = tk;
-                int teid = static_cast<int>(tree.entries.size());
-                tree.entries.push_back(std::move(te));
-                auto tdecl = std::make_unique<parse::Node>();
-                tdecl->kind = parse::Kind::kVarDeclStmt;
-                tdecl->name = "_$delem";
-                tdecl->resolved_entry_id = teid;
-                tdecl->return_type = slot_ty;
-                tdecl->file_id = f;
-                tdecl->tok = tk;
-                tdecl->name_tok = tk;
-                tdecl->children.push_back(std::move(elem));
-                pending.push_back(std::move(tdecl));
-                elem = std::make_unique<parse::Node>();
-                elem->kind = parse::Kind::kIdentExpr;
-                elem->name = "_$delem";
-                elem->resolved_entry_id = teid;
-                elem->inferred_type = slot_ty;
-                elem->file_id = f;
-                elem->tok = tk;
+                Spill sp = spillToTemp(tree, std::move(elem), slot_ty, "_$delem");
+                pending.push_back(std::move(sp.decl)); escaping.push_back(false);
+                elem_temp = true;
+                elem = std::move(sp.read);
             }
             // COPY: a bare-name assignment `tname = src[i]`. kAssignStmt dispatches the
             // slot type's op= (or stores a primitive) — kStoreStmt is deref/index-only, so
@@ -3821,7 +3856,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             as->file_id = f;
             as->tok = tk;
             as->children.push_back(std::move(elem));
-            pending.push_back(std::move(as));
+            pending.push_back(std::move(as));    escaping.push_back(false);
         } else {
             // MOVE / SWAP: children [target-ident, src[i]] — the kMoveStmt / kSwapStmt shape.
             auto tgt = std::make_unique<parse::Node>();
@@ -3838,7 +3873,7 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
             st->tok = tk;
             st->children.push_back(std::move(tgt));
             st->children.push_back(std::move(elem));
-            pending.push_back(std::move(st));
+            pending.push_back(std::move(st));    escaping.push_back(false);
         }
     }
     if (pending.empty()) {   // all slots discarded — nothing to bind
@@ -3846,8 +3881,57 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
         s.children.clear();
         return;
     }
-    // The last pending stmt becomes `s`; the rest splice ahead. Re-classifying `s`
-    // finishes it (a per-slot store/move/swap, a decl, or a nested destructure).
+    if (spill_decl || elem_temp) {
+        // GROUP placement (THE SPILL FUNNEL): the temps are read by these per-slot statements
+        // and by nothing else, so they and the statements go in a BLOCK and the temps die at
+        // the SEMICOLON. Only the DECLARING slots are hoisted OUT of it — a declared name has
+        // to outlive the statement.
+        //
+        // Classifying a body statement can EMIT statements of its own, and they must be
+        // sorted the same way: a NESTED destructure flattens itself into its prelude (the
+        // "last stmt becomes s, the rest splice ahead" idiom), so it hands back BOTH its
+        // declaring decls AND its per-slot STORES. The decls belong outside the block; the
+        // stores absolutely do not — they READ the spill, so hoisting them out would run them
+        // BEFORE it is assigned. (That is precisely what went wrong first: the nested `a`
+        // read the spill before `mkNested()` had been evaluated into it, and came out 0.)
+        // The test is who OWNS the name: a compiler temp (`_$...`) stays with the statements
+        // that read it; a user-declared slot escapes.
+        std::vector<std::unique_ptr<parse::Node>> body;
+        auto sortEmitted = [&](std::vector<std::unique_ptr<parse::Node>>& emitted) {
+            for (auto& p : emitted) {
+                if (!p) continue;
+                bool user_decl = p->kind == parse::Kind::kVarDeclStmt
+                    && p->name.rfind("_$", 0) != 0;
+                if (user_decl) prelude.push_back(std::move(p));
+                else body.push_back(std::move(p));
+            }
+        };
+        // The spill runs FIRST inside the block; everything else keeps SOURCE ORDER, so the
+        // slots are declared (and therefore destroyed) in the order they were written.
+        if (spill_decl) {
+            std::vector<std::unique_ptr<parse::Node>> emitted;
+            classifyStmt(tree, *spill_decl, fn_return_type, diag, &emitted);
+            sortEmitted(emitted);
+            body.push_back(std::move(spill_decl));
+        }
+        for (std::size_t k = 0; k < pending.size(); k++) {
+            std::vector<std::unique_ptr<parse::Node>> emitted;
+            classifyStmt(tree, *pending[k], fn_return_type, diag, &emitted);
+            sortEmitted(emitted);
+            if (escaping[k]) prelude.push_back(std::move(pending[k]));
+            else            body.push_back(std::move(pending[k]));
+        }
+        s.kind = parse::Kind::kBlockStmt;
+        s.name.clear();
+        s.resolved_entry_id = -1;
+        s.default_move_init = false;
+        s.default_swap_init = false;
+        s.children = std::move(body);   // already classified — do NOT re-classify `s`
+        return;
+    }
+    // No temp to scope: the last pending stmt becomes `s` and the rest splice ahead, in
+    // source order. Re-classifying `s` finishes it (a per-slot store/move/swap, a decl, or
+    // a nested destructure).
     for (std::size_t k = 0; k + 1 < pending.size(); k++) {
         classifyStmt(tree, *pending[k], fn_return_type, diag, &prelude);
         prelude.push_back(std::move(pending[k]));
@@ -3861,6 +3945,169 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
     s.default_swap_init = last->default_swap_init;
     s.children = std::move(last->children);
     classifyStmt(tree, s, fn_return_type, diag, &prelude);
+}
+
+// The slot / field types of a class-bearing target, in order (a class IS a named tuple).
+std::vector<widen::TypeRef> initSlotTypes(widen::TypeRef T) {
+    widen::TypeRef S = widen::strip(T);
+    widen::Type::Form f = widen::form(S);
+    if (f == widen::Type::Form::kTuple || f == widen::Type::Form::kSlid)
+        return widen::get(S).slots;
+    if (f == widen::Type::Form::kArray) return destructureSlots(S);
+    return {};
+}
+
+// `path[i]` — the lvalue naming slot i of the tuple / array at `path`.
+std::unique_ptr<parse::Node> makeSlotPath(parse::Node const& path, std::size_t i,
+                                          widen::TypeRef slot_ty) {
+    auto lit = std::make_unique<parse::Node>();
+    lit->kind = parse::Kind::kIntLiteral;
+    lit->text = std::to_string(i);
+    lit->file_id = path.file_id;
+    lit->tok = path.tok;
+    auto idx = std::make_unique<parse::Node>();
+    idx->kind = parse::Kind::kIndexExpr;
+    idx->inferred_type = slot_ty;
+    idx->file_id = path.file_id;
+    idx->tok = path.tok;
+    idx->children.push_back(cloneExpr(path));
+    idx->children.push_back(std::move(lit));
+    return idx;
+}
+
+// A CLASS CAN ONLY BE COPIED INTO — it has to EXIST first.
+//
+// So a fresh binding whose initializer contains a same-type class-bearing LVALUE cannot
+// simply FILL the storage from that source: the binding site fills and THEN finalizes
+// (runs the ctor hooks), so the constructor would land on top of the copied value and
+// clobber it. The order a binding must produce is alloc, init, ctor, THEN the transfer.
+//
+// This peels every such TRANSFER out of the initializer and re-emits it as an assignment
+// AFTER the declaration, leaving the DEFAULT value in its place — so the decl constructs a
+// proper object (fields defaulted, ctor run) and the transfer copies into it. It is the
+// same shape swap-init has always used (default-construct, then re-dispatch as an ordinary
+// swap), generalized to `=` and `<--` and, crucially, applied PER SLOT: a CONSTRUCTION slot
+// still builds in place (no temp, no copy), and only a copy is deferred. So a mixed literal
+// `(C(1), c2)` builds slot 0 and copies into slot 1.
+//
+// It recurses through tuple / array literals AND a class's field tuple, because a class
+// FIELD taking an lvalue is the identical bug one level down (`Holder h( c )`).
+// Returns the transfer statements in `post`, in slot order.
+void splitTransferInit(parse::Tree& tree, std::unique_ptr<parse::Node>& init,
+                       widen::TypeRef type, parse::Node const& path, bool is_move,
+                       std::vector<std::unique_ptr<parse::Node>>& post,
+                       diagnostic::Sink& diag) {
+    if (!init) return;
+    widen::TypeRef S = widen::strip(type);
+    if (!widen::hasInPlaceClass(S)) return;   // no class in here — nothing to order
+    // A whole-value TRANSFER of THIS storage. Only a BARE LVALUE is one: an rvalue (a
+    // construction, a call, a chain) has no object to copy FROM — it BUILDS the storage,
+    // which is the elide, and must stay exactly as it is.
+    if (isBareLvalue(*init)) {
+        inferExpr(tree, *init, type, diag);
+        if (widen::deepStrip(init->inferred_type) == widen::deepStrip(type)) {
+            auto st = std::make_unique<parse::Node>();
+            st->file_id = init->file_id;
+            st->tok = init->tok;
+            // The statement shape follows the TARGET: a bare name is a kAssignStmt (target
+            // in `name`, rhs in child 0) — kStoreStmt is deref/index-only — while a slot
+            // path (`t[0]`, `h.c_`) is a kStoreStmt. A move is a kMoveStmt either way (it
+            // already carries its lhs as an expression child).
+            if (is_move) {
+                st->kind = parse::Kind::kMoveStmt;
+                st->children.push_back(cloneExpr(path));
+            } else if (path.kind == parse::Kind::kIdentExpr) {
+                st->kind = parse::Kind::kAssignStmt;
+                st->name = path.name;
+                st->name_tok = path.name_tok;
+                st->resolved_entry_id = path.resolved_entry_id;
+            } else {
+                st->kind = parse::Kind::kStoreStmt;
+                st->children.push_back(cloneExpr(path));
+            }
+            st->children.push_back(std::move(init));
+            post.push_back(std::move(st));
+            init = classZeroValue(tree, type, path.file_id, path.tok, diag);
+            init->inferred_type = type;
+        }
+        return;
+    }
+    // A tuple / array LITERAL — recurse PER SLOT. A tuple and an array have no constructor
+    // of their OWN, so a slot's copy can be deferred past the whole aggregate's construction
+    // and still land right after that slot's own ctor.
+    //
+    // A CLASS's field tuple is NOT recursed, even though a field taking a class lvalue is
+    // the same bug one level down. A construction's arguments are FIELD INITIALIZERS, and a
+    // constructor must see its fields ALREADY INITIALIZED — `Hook(0, ha, hb)` whose ctor
+    // body computes `a_ + b_` has to read the passed values, not the defaults. So a field's
+    // copy cannot be hoisted past the enclosing ctor the way a tuple slot's can: it has to
+    // land BETWEEN the field's own ctor and the enclosing class's ctor body, which is inside
+    // emitConstructed's hook recursion, where the initializer expressions no longer exist.
+    // Left as-is (todo.txt): the field is still FILLED and then constructed over.
+    if (init->kind != parse::Kind::kTupleExpr) return;
+    widen::Type::Form df = widen::form(S);
+    if (df != widen::Type::Form::kTuple && df != widen::Type::Form::kArray) return;
+    std::vector<widen::TypeRef> slots = initSlotTypes(type);
+    if (slots.empty() || slots.size() != init->children.size()) return;
+    for (std::size_t i = 0; i < slots.size(); i++) {
+        if (!init->children[i]) continue;
+        if (!widen::hasInPlaceClass(widen::strip(slots[i]))) continue;
+        auto slot_path = makeSlotPath(path, i, slots[i]);
+        splitTransferInit(tree, init->children[i], slots[i], *slot_path, is_move, post,
+                          diag);
+    }
+}
+
+// Peel the TRANSFERS out of a fresh class-bearing decl (splitTransferInit) and re-emit them
+// AFTER it. The DECL — now initializing to DEFAULTS wherever a copy used to sit — goes into
+// the prelude, and the transfer statements follow it, the last one BECOMING `s` (the same
+// idiom desugarDestructure and swap-init use). So the object is fully CONSTRUCTED and only
+// then copied into: alloc, init, ctor, op=.
+void applyTransferSplit(parse::Tree& tree, parse::Node& s,
+                        widen::TypeRef fn_return_type, diagnostic::Sink& diag,
+                        std::vector<std::unique_ptr<parse::Node>>* prelude) {
+    // A GLOBAL never reaches here with a prelude — its initializer is lowered into a
+    // synthesized lazy ctor (desugar), not into statements around the decl — so a global
+    // class copy-init still FILLS and then CONSTRUCTS. That is the ordering bug, unfixed,
+    // for globals only. todo.txt.
+    if (!prelude || s.is_const || s.is_global) return;
+    if (s.resolved_entry_id < 0 || s.children.empty() || !s.children[0]) return;
+    if (!widen::hasInPlaceClass(widen::strip(s.return_type))) return;
+    auto path = std::make_unique<parse::Node>();
+    path->kind = parse::Kind::kIdentExpr;
+    path->name = s.name;
+    path->name_tok = s.name_tok;
+    path->resolved_entry_id = s.resolved_entry_id;
+    path->inferred_type = s.return_type;
+    path->file_id = s.file_id;
+    path->tok = s.tok;
+    std::vector<std::unique_ptr<parse::Node>> post;
+    splitTransferInit(tree, s.children[0], s.return_type, *path, s.default_move_init,
+                      post, diag);
+    if (post.empty()) return;   // nothing is copied in — the decl BUILDS its object
+    auto decl = std::make_unique<parse::Node>();
+    decl->kind = parse::Kind::kVarDeclStmt;
+    decl->name = s.name;
+    decl->name_tok = s.name_tok;
+    decl->resolved_entry_id = s.resolved_entry_id;
+    decl->return_type = s.return_type;
+    decl->file_id = s.file_id;
+    decl->tok = s.tok;
+    decl->children.push_back(std::move(s.children[0]));
+    prelude->push_back(std::move(decl));
+    for (std::size_t k = 0; k + 1 < post.size(); k++) {
+        classifyStmt(tree, *post[k], fn_return_type, diag, prelude);
+        prelude->push_back(std::move(post[k]));
+    }
+    auto last = std::move(post.back());
+    s.kind = last->kind;
+    s.name = last->name;
+    s.name_tok = last->name_tok;
+    s.resolved_entry_id = last->resolved_entry_id;
+    s.return_type = last->return_type;
+    s.default_move_init = false;
+    s.children = std::move(last->children);
+    classifyStmt(tree, s, fn_return_type, diag, prelude);
 }
 
 // Type-infer a statement LIST, splicing any prelude statements a member emits in
@@ -4107,13 +4354,13 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
     if (widen::form(widen::strip(clsType)) != widen::Type::Form::kSlid) return false;
     int op_id = findClassOperator(tree, clsType, rhs, opname, diag);
     if (op_id < 0) return false;
-    // A SYNTHESIZED default op is NOT dispatched as an explicit `dest.op=(src)` method
-    // call — that would force a default-construct-then-assign and reorder the ctor hooks
-    // relative to the copy. The op exists to give `@Class__$copy`/`__$move`/`__$swap` a
-    // memberwise body; the existing binding/codegen paths already CALL that body (fill +
-    // construct for a decl, a plain copy/move for live storage). So elide here and let
-    // them run. Only a USER op (which may observe / transform) dispatches through classify.
-    if (tree.entries[op_id].synthesized) return false;
+    // A SYNTHESIZED op dispatches exactly like a USER one — the operator is the operator,
+    // whoever wrote it. (It used to bail: "the codegen transfer path already calls
+    // @Class__$copy, so let it". That was true for a plain same-type copy, and it also meant
+    // a class RVALUE source — a hook-returning call, a construction — could never reach the
+    // funnel's `_$cinit` spill unless the author happened to have written an op=. So
+    // `arr[0] = mkClass()` was rejected for a default-copy class and accepted for a class
+    // with a user op=, which is not a distinction the language makes.)
     int idx = expr_lhs ? 1 : 0;
     // A stamped class-operator CHAIN of the target's EXACT class is lowered by desugar,
     // which builds the accumulator IN the target (a fresh one) or in a statement-scoped
@@ -4142,60 +4389,22 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
     }
     // Materialize a class RVALUE source into a `_$cinit` temp so the operator takes its
     // address (a named lvalue / primitive is used in place).
-    // A CONSTRUCTION source can only be materialized into a FRESH decl target; a live-
-    // storage assign RHS that is a construction is unsupported — bail so the caller reports
-    // the clean "construct in this position is not yet supported" error (as with a class
-    // that has no operator), rather than spilling an unbuildable rvalue.
-    if (!needs_construct && idx < static_cast<int>(s.children.size()) && s.children[idx]
-        && s.children[idx]->kind == parse::Kind::kCallExpr
-        && s.children[idx]->is_construction) {
-        return false;
-    }
-    if (prelude && idx < static_cast<int>(s.children.size()) && s.children[idx]) {
-        bool rhs_lvalue = isBareLvalue(*s.children[idx]);
-        auto srcIt = tree.classes.find(widen::strip(s.children[idx]->inferred_type));
-        if (!rhs_lvalue && srcIt != tree.classes.end()) {
-            if (s.children[idx]->kind == parse::Kind::kCallExpr
-                && s.children[idx]->is_construction) {
-                auto ctor = std::move(s.children[idx]);
-                auto tup = std::make_unique<parse::Node>();
-                tup->kind = parse::Kind::kTupleExpr;
-                tup->file_id = ctor->file_id;
-                tup->tok = ctor->tok;
-                for (auto& a : ctor->children)
-                    if (a) tup->children.push_back(std::move(a));
-                s.children[idx] = std::move(tup);
-            }
-            int f = s.children[idx]->file_id, tk = s.children[idx]->tok;
-            parse::Entry e;
-            e.kind = parse::EntryKind::kLocalVar;
-            e.name = "_$cinit";
-            e.slids_type = srcIt->first;
-            e.file_id = f;
-            e.tok = tk;
-            int id = static_cast<int>(tree.entries.size());
-            tree.entries.push_back(std::move(e));
-            auto spill = std::make_unique<parse::Node>();
-            spill->kind = parse::Kind::kVarDeclStmt;
-            spill->name = "_$cinit";
-            spill->resolved_entry_id = id;
-            spill->return_type = srcIt->first;
-            spill->file_id = f;
-            spill->tok = tk;
-            spill->name_tok = tk;
-            spill->children.push_back(std::move(s.children[idx]));
-            classifyClassInit(tree, *spill, srcIt->second, diag);
-            prelude->push_back(std::move(spill));
-            auto ident = std::make_unique<parse::Node>();
-            ident->kind = parse::Kind::kIdentExpr;
-            ident->name = "_$cinit";
-            ident->resolved_entry_id = id;
-            ident->inferred_type = srcIt->first;
-            ident->file_id = f;
-            ident->tok = tk;
-            s.children[idx] = std::move(ident);
-        }
-    }
+    // A CONSTRUCTION into LIVE storage (`x = Class(11)`, `arr[0] = Class(11)`, `x <-- ...`)
+    // used to bail here, because a live target has no fresh slot to BUILD into — the target
+    // is already an object, and field-initializing over it would skip its ctor. That is the
+    // reason for the ELIDE, not a reason to reject: what a live target wants is a TRANSFER,
+    // and the source just has to be materialized somewhere first. The `_$cinit` spill below
+    // does exactly that (it restructures a construction into its field tuple and builds a
+    // temp from it), so the construction becomes a proper object and the target is copied /
+    // moved into through its operator. The temp dies at the semicolon.
+    // A class RVALUE source is NOT spilled here. It used to be — into a `_$cinit` local
+    // spliced into the prelude — and that gave the temp ENCLOSING-BLOCK lifetime: the temp
+    // in `x = C(11);` outlived the semicolon and was destroyed at the end of the block.
+    // Left in place, the rvalue is just an ARGUMENT of the operator call this rewrites to,
+    // and desugar already lifts a construction / hook-returning call in an argument into a
+    // statement-scoped temp (liftSretCallExprs, block-wrapped by liftSretCallList) — the
+    // same path `fn(Class(1))` takes. So the operator gets its address and the temp dies at
+    // the semicolon, which is what a temporary is supposed to do.
     // A FRESH decl target is default-constructed before the operator runs (splice lands in
     // the prelude, before this stmt becomes `name.op(...)`); live storage already exists.
     if (needs_construct && prelude) {
@@ -4757,59 +4966,43 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                             if (a) tup->children.push_back(std::move(a));
                         s.children[0] = std::move(tup);
                     }
-                    // An rvalue AGGREGATE source (a call / op result) can't be indexed
-                    // in place. Spill it into a temp local — evaluated once — so the
-                    // per-field spread in classifyClassInit sees an lvalue and handles
-                    // it EXACTLY like an array/tuple variable (partial fill, recursion
-                    // into class-typed fields, per-slot conversion). A real entry keeps
-                    // its id below desugar's minted-id range.
+                    // An rvalue AGGREGATE source (a call / op result) can't be indexed in
+                    // place. Spill it — evaluated once — so the per-field spread in
+                    // classifyClassInit sees an lvalue and handles it EXACTLY like an
+                    // array/tuple variable (partial fill, recursion into class-typed fields,
+                    // per-slot conversion). A bare variable is free to re-index in place, but
+                    // an index / deref / call / op source can carry a side effect (`g[bump()]`)
+                    // the spread would otherwise re-run once per field.
+                    // SEQ placement (THE SPILL FUNNEL): the temp is read only by THIS decl's
+                    // rhs, so it is parked on the node and desugar hoists it into the
+                    // statement's kSeqExpr — it dies at the SEMICOLON. It used to go into the
+                    // `prelude`, which made it an ordinary local of the enclosing BLOCK and
+                    // kept a whole aggregate (classes and all) alive to the end of the scope.
+                    std::unique_ptr<parse::Node> cinit_decl;
                     if (prelude && !s.children.empty() && s.children[0]
                         && s.children[0]->kind != parse::Kind::kTupleExpr) {
                         inferExpr(tree, *s.children[0], widen::kNoType, diag);
-                        // Spill any aggregate source that ISN'T a bare identifier into
-                        // a temp (evaluated once). A bare variable is free to re-index
-                        // in place, but an index / deref / call / op source can carry a
-                        // side effect (`g[bump()]`) that the per-field spread would
-                        // otherwise re-run once per field. The spilled temp is a bare
-                        // ident, so classifyClassInit then spreads it in place.
                         bool bare_ident =
                             s.children[0]->kind == parse::Kind::kIdentExpr;
                         widen::TypeRef srcT = s.children[0]->inferred_type;
                         if (!bare_ident && isAggregateType(widen::strip(srcT))) {
-                            int f = s.children[0]->file_id, tk = s.children[0]->tok;
-                            // Append a bare entry (NOT parse::addEntry — that wants
-                            // the resolve-time frame stack, gone by classify). We only
-                            // need the id reserved so desugar's `next_id` (seeded at
-                            // entries.size()) skips it; name resolution is done.
-                            parse::Entry e;
-                            e.kind = parse::EntryKind::kLocalVar;
-                            e.name = "_$cinit";
-                            e.slids_type = srcT;
-                            e.file_id = f;
-                            e.tok = tk;
-                            int id = static_cast<int>(tree.entries.size());
-                            tree.entries.push_back(std::move(e));
-                            auto spill = std::make_unique<parse::Node>();
-                            spill->kind = parse::Kind::kVarDeclStmt;
-                            spill->name = "_$cinit";
-                            spill->resolved_entry_id = id;
-                            spill->return_type = srcT;
-                            spill->file_id = f;
-                            spill->tok = tk;
-                            spill->name_tok = tk;
-                            spill->children.push_back(std::move(s.children[0]));
-                            prelude->push_back(std::move(spill));
-                            auto ident = std::make_unique<parse::Node>();
-                            ident->kind = parse::Kind::kIdentExpr;
-                            ident->name = "_$cinit";
-                            ident->resolved_entry_id = id;
-                            ident->inferred_type = srcT;
-                            ident->file_id = f;
-                            ident->tok = tk;
-                            s.children[0] = std::move(ident);
+                            Spill sp = spillToTemp(tree, std::move(s.children[0]), srcT,
+                                                   "_$cinit");
+                            cinit_decl = std::move(sp.decl);
+                            s.children[0] = std::move(sp.read);
                         }
                     }
                     classifyClassInit(tree, s, it->second, diag);
+                    // The init is now this class's FIELD TUPLE. A field taking a class
+                    // LVALUE is a COPY INTO a field that does not exist yet — peel it off
+                    // (`Holder h( c )` becomes `Holder h; h.c_ = c;`), so the field is
+                    // constructed before it is copied into.
+                    applyTransferSplit(tree, s, fn_return_type, diag, prelude);
+                    // Park the spill on the rhs LAST, so the passes above see the field tuple.
+                    if (cinit_decl && !s.children.empty() && s.children[0]) {
+                        s.children[0] = seqSpill(std::move(cinit_decl),
+                                                 std::move(s.children[0]));
+                    }
                     return;
                 }
             }
@@ -4945,6 +5138,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // took the rhs type above, so its dest is kNoType and the helper is
                 // a no-op).
                 checkValueAssign(tree, s.return_type, *s.children[0], diag);
+                // A class-BEARING aggregate (a tuple / array of classes) never reaches the
+                // kSlid funnel above — findClassOperator needs a class — so its copies are
+                // peeled off HERE: a whole-value copy of the aggregate, and, PER SLOT, any
+                // element that is a class lvalue. A CONSTRUCTION element still builds in
+                // its slot; only a copy is deferred until the slot exists.
+                applyTransferSplit(tree, s, fn_return_type, diag, prelude);
             }
             return;
         }

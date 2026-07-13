@@ -148,16 +148,72 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     recurses into emitInitFill, putting every element back on the funnel — an lvalue element
     runs its op= / op<--, a CONSTRUCTION element builds directly in the slot. Gated on
     hasInPlaceClass, so a POD aggregate keeps the cheap whole-value path. Pinned by
-    evaluate.sl block V. NOTE the contrast with CONSTRUCTION,
+    evaluate.sl block V.
+    A FIFTH site asked the same wrong question, in the SEQ temp path: emitSeqEffects
+    constructed a phrase-scoped temp in place only when it WAS a class (`form == kSlid`), so a
+    spilled TUPLE OF CLASSES fell into the scalar store path — where a class-bearing sret call
+    has no destination to build into ("Returning a class by value in an expression position").
+    Same fix, same predicate: hasInPlaceClass. "Is a class physically in this storage?" is the
+    question at EVERY site that constructs, transfers, or destroys; "is this a class?" is not.
+    NOTE the contrast with CONSTRUCTION,
     which stays gated on typeNeedsHook — that one really is asking "is there a ctor body to
     call?", and a hook-less class truthfully has none. The two predicates are NOT
-    interchangeable. findClassOperator finds a same-type op= for EVERY class, but
-    dispatchAssignInit ELIDES a synthesized one (returns false), AND — ELIDE-WHENEVER-POSSIBLE
-    (2026-07-08) — elides a USER op too when a DECL-INIT's source is a same-type class RVALUE
-    (`isBareLvalue==false && exact`): the call/construction builds in place, no op. A USER op
-    fires only for a LVALUE copy, a NON-EXACT convert, or an EXISTING-var assign — the author
-    forces it by declaring, then assigning. (This reverses the earlier "a user op wins over
-    elision even from an rvalue".) There is NO codegen whole-value blit fallback (that
+    interchangeable.
+  * A CLASS CAN ONLY BE COPIED INTO — so it has to EXIST first. Every binding is
+    alloc, init, ctor, THEN the transfer. This is NOT the order the funnel produces on its
+    own: a binding site FILLS storage and then FINALIZES it (emitInitFill, then
+    emitConstructed's hooks), so a fresh decl whose source is an lvalue had its CONSTRUCTOR
+    RUN ON TOP OF THE COPY and silently threw it away — `D dx = dy;` on a class whose ctor
+    writes its own field yielded the ctor's value, not dy's. classify PEELS the transfer off
+    the declaration (`applyTransferSplit` -> `splitTransferInit`) and re-emits it as an
+    assignment AFTER it: the decl initializes to DEFAULTS wherever a copy used to sit (so the
+    ctor sees a properly initialized object), and the transfer copies into the constructed
+    object. Same idiom swap-init has always used (default-construct, then re-dispatch as an
+    ordinary swap), now generalized to `=` and `<--`. It applies PER SLOT of a tuple / array
+    literal, so a CONSTRUCTION slot still BUILDS IN PLACE and only a copy is deferred —
+    `(Ord(1), wa)` builds slot 0 and copies into slot 1. What decides whether a copy happens
+    AT ALL is the SOURCE, not the operator: an RVALUE (a call / construction / chain result)
+    has no object to copy FROM, so it elides and builds in place. Pinned by evaluate.sl
+    block W (class Ord — its ctor WRITES its field, which is the only way the order is
+    OBSERVABLE; every other counting class merely prints, which shows a wrong ORDER but not
+    a wrong ANSWER, and is why this lived so long).
+    NOT DONE, and NOT the same problem: a class FIELD initialized from a class LVALUE
+    (`Holder h( c )`) is still filled and then constructed over. A construction's arguments
+    are FIELD INITIALIZERS, and a ctor must see its fields ALREADY INITIALIZED (evaluate.sl
+    Q4's Hook computes `a_ + b_` in its ctor body), so a field's copy cannot be hoisted past
+    the enclosing ctor the way a tuple slot's can — it has to land BETWEEN the field's own
+    ctor and the enclosing ctor body, inside emitConstructed's hook recursion, where the
+    initializer expressions no longer exist. todo.txt.
+    ALSO NOT DONE, and this one IS the same problem: a GLOBAL (`global Add gb = ga;`). It is
+    not that the rule differs — it is that a global declaration is not lowered here. Its
+    initializer becomes the body of a synthesized LAZY CTOR (desugar's collectGlobals), so
+    there is no statement list at the declaration for the transfer to be split into; that is
+    what classify's `is_global` guard says, and lifting the guard changes nothing. The split
+    has to be made where the lazy ctor's body is built. todo.txt.
+  * WHAT DECIDES WHETHER A COPY HAPPENS AT ALL IS THE SOURCE — never who wrote the operator,
+    and never the shape of the target. dispatchAssignInit dispatches EVERY matching op, user
+    or synthesized (findClassOperator finds a same-type op= for every class). The one thing
+    that skips the operator is the ELIDE, and its rule is: a FRESH decl target initialized
+    from a same-type class RVALUE (`isBareLvalue==false && exact`) BUILDS IN PLACE — the
+    call / construction constructs straight into the slot, so there is no object to copy FROM
+    and no copy to make. Everything else transfers: an LVALUE source is a genuine copy, a
+    NON-EXACT source is a convert, and LIVE storage is copied into (it already exists — that
+    is the whole of "a class can only be copied into", above).
+    A class RVALUE INTO LIVE STORAGE therefore works in every position — `x = Op(11)`,
+    `x <-- mkOp()`, `arr[0] = mkClass()`, `r^ = Class(2)`. The source is materialized as a
+    TEMPORARY and transferred in through the target's operator; the temp dies at the
+    SEMICOLON. It is not spilled by classify (that gave the temp enclosing-BLOCK lifetime):
+    it is left as the operator call's ARGUMENT, and desugar's ordinary argument lift
+    (liftSretCallExprs, block-wrapped by liftSretCallList) makes the temp — the same path
+    `fn(Class(1))` takes. These four positions used to be REJECTED ("Constructing a class in
+    this position is not yet supported" / "Returning a class by value in an expression
+    position"), on the grounds that a live target has no fresh slot to build into. True, and
+    that is the reason for the ELIDE — not a reason to refuse the TRANSFER. Canon
+    nameless.sl block 34 + return_fn.sl.
+    (This supersedes the earlier synthesized-op bail, which elided a DEFAULT copy but not a
+    user one — so `arr[0] = mkClass()` compiled for a class with a user op= and was rejected
+    for a class without one, which is not a distinction the language makes.)
+    There is NO codegen whole-value blit fallback (that
     loop + its g_defined_*_syms gate were deleted; nothing is left to fall back to). A
     CROSS-TYPE operator (`op=(Other^)` / `op<--(Other^)`, case 4) is a distinct method
     dispatched by classify, NOT renamed. canon test/class/operator.sl + return_fn.sl.

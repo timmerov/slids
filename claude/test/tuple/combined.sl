@@ -396,8 +396,10 @@ int32 main() {
         __println("expect dtors 6..1 before");
 
         /* same deep mixed shape, INITIALIZED from a tuple VARIABLE — a whole-value
-           copy of `src`, so every buried class leaf is copy-constructed (src's
-           ctors 1..6, then the copy's ctors 1..6; dtors mirror both). */
+           copy of `src`. A class can only be COPIED INTO, so the destination is
+           CONSTRUCTED first and only then copied into: src's ctors run on its literal
+           (1..6), and the copy's leaves are constructed with their FIELD DEFAULT (42 x6)
+           before the copy overwrites them — so `cpy` reads back 1..6. Dtors mirror both. */
         {
             __println("expect ctors 1..6 (src) then 1..6 (copy) after");
             ( Class[2], Class ) src[2] = ( ((1, 2), 3), ((4, 5), 6) );

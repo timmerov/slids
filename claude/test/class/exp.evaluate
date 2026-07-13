@@ -316,6 +316,7 @@ Acc:dtor: 13
 R3 end gacc=13
 R4: cross-class    Oth ro = ra2 + rb2
 Acc:ctor: 0
+Acc:dtor: 13
 R4 end ro.w_=513
 R5: switch + do-while bodies
 Acc:ctor: 0
@@ -329,7 +330,6 @@ R5 do-while rdw=13
 Acc:dtor: 13
 R5 end
 R end (locals dtor next)
-Acc:dtor: 13
 Acc:dtor: 3
 Acc:dtor: 10
 S: remaining chain positions
@@ -428,10 +428,10 @@ V1 end
 Trk:ctor: 1
 Trk:ctor: 2
 V2: (Trk,Trk) vl = (v1, v2)
+Trk:ctor: 0
+Trk:ctor: 0
 Trk:op=: 1
 Trk:op=: 2
-Trk:ctor: 1
-Trk:ctor: 2
 V2 end vl=1,2
 V3: ((Trk va, Trk vb), Trk vc) = vt
 Trk:ctor: 0
@@ -493,5 +493,80 @@ Trk:dtor: 1
 Trk:dtor: 0
 Trk:dtor: 0
 Trk:dtor: 0
+W: order of construction
+W1: copy-init w1=7 move-init w2=8
+W2: tuple literal w3=7 5
+W3: tuple copy w4=7 5
+W4: array w5=7 5 nested w6=7 5 7
+W5: mixed w7=99 7
+W6: build-in-place w8=99
+W end (locals dtor next)
+X: spills die at the semicolon
+X1: Trkpair xp = mkTrkTup();
+Trk:ctor: 1
+Trk:ctor: 2
+Trk:ctor: 1
+Trk:ctor: 2
+Trk:dtor: 2
+Trk:dtor: 1
+X1 end (the (Trk,Trk) temp is already dead)
+X2: (Trk xa, Trk xb) = mkTrkTup();
+Trk:ctor: 0
+Trk:ctor: 0
+Trk:ctor: 1
+Trk:ctor: 2
+Trk:op=: 1
+Trk:op=: 2
+Trk:dtor: 2
+Trk:dtor: 1
+X2 end xa=1 xb=2
+Trk:dtor: 2
+Trk:dtor: 1
+Trk:ctor: 8
+Trk:ctor: 9
+X3: (xc, xd) = (Trk(80), Trk(90));
+Trk:ctor: 80
+Trk:op=: 80
+Trk:ctor: 90
+Trk:op=: 90
+Trk:dtor: 90
+Trk:dtor: 80
+X3 end xc=80 xd=90
+X end (locals dtor next)
+Trk:dtor: 90
+Trk:dtor: 80
+Trk:dtor: 2
+Trk:dtor: 1
+Y: the source model
+Y1: nested=1 2 3
+Y2: once calls=1 4 5
+Y3: iter 0
+Trk:ctor: 0
+Trk:ctor: 0
+Trk:ctor: 1
+Trk:ctor: 2
+Trk:op=: 1
+Trk:op=: 2
+Trk:dtor: 2
+Trk:dtor: 1
+Y3: iter 0 = 1 2
+Trk:dtor: 2
+Trk:dtor: 1
+Y3: iter 1
+Trk:ctor: 0
+Trk:ctor: 0
+Trk:ctor: 1
+Trk:ctor: 2
+Trk:op=: 1
+Trk:op=: 2
+Trk:dtor: 2
+Trk:dtor: 1
+Y3: iter 1 = 1 2
+Trk:dtor: 2
+Trk:dtor: 1
+Y4: discard effects=11 y4=1
+Y5: array=5 6
+Y6: nested copy=7
+Y end (locals dtor next)
 Class:dtor: 9
 Acc:dtor: 13

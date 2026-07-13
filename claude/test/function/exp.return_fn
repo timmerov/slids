@@ -33,8 +33,8 @@ dtor 7
 ctor 1
 ctor 7
 copy
-ex= 107
 dtor 7
+ex= 107
 dtor 107
 -- elide typed decl move --
 ctor 7
@@ -48,8 +48,8 @@ dtor 7
 ctor 1
 ctor 7
 move
-em= 207
 dtor 0
+em= 207
 dtor 207
 -- inline arg --
 ctor 7
@@ -164,4 +164,37 @@ acc= 12 15
 ctor 7
 ho= 7
 dtor 7
+-- rvalue into live storage --
+ctor 1
+ctor 7
+copy
+dtor 7
+x= 107
+ctor 2
+ctor 7
+move
+dtor 0
+y= 207
+ctor 3
+ctor 33
+copy
+dtor 33
+z= 133
+ctor 4
+ctor 44
+move
+dtor 0
+w= 244
+ctor 5
+ctor 6
+ctor 7
+copy
+dtor 7
+arr0= 107
+dtor 6
+dtor 107
+dtor 244
+dtor 133
+dtor 207
+dtor 107
 -- done --

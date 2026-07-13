@@ -37,8 +37,8 @@ sd.viaQual = 85
 md.info = 11
 A:ctor 5
 B:ctor 7
-A:ctor 5
-B:ctor 7
+A:ctor 0
+B:ctor 0
 copy.gx = 5
 A:ctor 0
 B:ctor 0

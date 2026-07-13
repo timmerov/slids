@@ -2412,8 +2412,14 @@ void emitSeqEffects(ast::Node const& seq, std::size_t begin, std::size_t end,
         if (ch.kind == ast::Kind::kVarDeclStmt) {
             auto it = syms.find(ch.resolved_entry_id);
             assert(it != syms.end() && "kSeqExpr: temp alloca not hoisted");
-            if (widen::form(widen::strip(ch.return_type))
-                    == widen::Type::Form::kSlid) {
+            // The gate is STRUCTURAL — "is a class physically in this storage?" — not "IS
+            // this a class". A spilled TUPLE OF CLASSES is a class temp too: it has to be
+            // CONSTRUCTED in place (so an sret call builds straight into it, and its leaves
+            // run their ctors) and destroyed at the phrase exit. Asking `form == kSlid`
+            // dropped it into the scalar path below, where a class-bearing sret call has no
+            // destination to build into — the same wrong question the transfer gates used to
+            // ask (readme-classes.txt, THE TRANSFER INVARIANT).
+            if (widen::hasInPlaceClass(widen::strip(ch.return_type))) {
                 widen::TypeRef T = ch.return_type;
                 std::string addr = it->second.alloca_name;
                 if (!ch.children.empty()) {

@@ -464,7 +464,44 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
         once. So must a LITERAL THAT READS A TARGET — per-slot stores run in order, so slot 0's
         store would be visible to slot 1's read, and `(sa, sb) = (sb, sa)` must SWAP. The alias
         guard (collectDestructureTargets / readsAny) is what keeps that true.
-    Canon tuple/destructure.sl (semantics) + class/evaluate.sl blocks P/S4/V (object counts).
+    Canon tuple/destructure.sl (semantics) + class/evaluate.sl blocks P/S4/V (object counts)
+    and block Y (WHICH source got read, and HOW MANY TIMES: a nested rvalue source, a counted
+    source evaluated exactly once, a spilling destructure per loop ITERATION, and a discard
+    slot that drops its element's VALUE but not its EFFECTS).
+  * THE SPILL FUNNEL (classify: `spillToTemp`). A SPILL materializes a source that must be
+    evaluated exactly ONCE but is READ MORE THAN ONCE — indexed per slot, spread per field —
+    into a temp local. Four sites hand-rolled the same three things (an Entry, a bare
+    kVarDeclStmt, an ident reading it back); they now share one.
+    THE TEMP'S LIFETIME IS THE CALLER'S ONE DECISION, and the funnel exists to make it one.
+    A spill is a TEMPORARY: it dies at the SEMICOLON. Two placements do that:
+      SEQ   — the temp is read by ONE expression (the statement's rhs). Park the decl ON THE
+              NODE (`agg_conv_spill`, children = [decl, value]); desugar's liftSretCallExprs
+              hoists it into the statement's kSeqExpr, whose teardown destroys it.
+              (`_$cinit`: an aggregate conversion, and a class initialized from an rvalue
+              aggregate — the source tuple spread across the fields.)
+      GROUP — the temp is read by SEVERAL SIBLING STATEMENTS. Put the decl and those
+              statements in a BLOCK, and hoist any DECLARING slot OUT of it — a declared name
+              has to outlive the block. (`_$dsrc`, `_$delem`: a destructure's per-slot stores.
+              A nested destructure's declaring slots escape too, via the prelude.)
+    Pushing the decl into the `prelude` is the third way and it is WRONG: a prelude statement
+    is just another local of the ENCLOSING BLOCK, so the temp lives to the end of the SCOPE.
+    Three sites did that — each having re-derived the lifetime by accident, which is what the
+    duplication bought. Pinned by evaluate.sl block X.
+  * A CLASS CAN ONLY BE COPIED INTO — it must EXIST first, so every binding is alloc, init,
+    ctor, THEN the transfer. classify's `applyTransferSplit` peels a same-type class-bearing
+    LVALUE out of a fresh decl's initializer and re-emits it as an assignment AFTER the decl,
+    leaving the DEFAULT value in its place — the decl constructs a proper object, and the
+    transfer copies into it. Otherwise the binding site FILLS the storage (which IS the copy)
+    and only THEN runs the ctor hooks, so the constructor lands on top of the copied value.
+    Applies PER SLOT of a tuple / array literal (a CONSTRUCTION slot still builds in place;
+    only a copy is deferred), and to the whole value of any class-bearing target. It does NOT
+    recurse into a class's FIELD tuple: a construction's args are field initializers and the
+    ctor must SEE them, so that copy cannot be hoisted past it (readme-classes.txt / todo).
+    TWO SITES STILL HAVE THE OLD WRONG ANSWER, both filed in todo.txt: that class FIELD, and a
+    GLOBAL — a global has no statement list to split into (`prelude` is null, hence the
+    `is_global` guard), and its initializer is lowered into a synthesized LAZY CTOR by desugar's
+    collectGlobals, which still fills and then finalizes. The split has to be made where that
+    ctor's body is BUILT, not at the declaration.
   * A TUPLE OF CLASSES IS BUILT INTO THE STORAGE THAT OWNS IT — never materialized twice.
     Two halves. (1) DESUGAR: liftSretCallExprs, in an INTERCEPTED position (a decl / a return —
     storage the statement owns RAW), DISTRIBUTES a tuple literal instead of lifting its

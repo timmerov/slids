@@ -36,18 +36,44 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * A COPY-INITIALIZATION RUNS THE COPY OPERATOR AND THEN THE CONSTRUCTOR.
-    `Class x = y;` prints `op=` and THEN `ctor` — the object is constructed after it
-    already holds the copied value.
-    WHY: every binding site FILLS storage and then FINALIZES it (the declarator funnel:
-    fill the fields, then run the ctor hooks and register the dtor). For a fresh slot
-    taking a copy, the fill IS the copy, so the ctor arrives last.
-    Uniform, value-correct, and nothing can observe the storage in between — but it is
-    backwards, and a constructor that READ its own fields would see the copy rather than
-    whatever it meant to initialize them to.
-    Fixing it means constructing before filling at every binding site, which reorders the
-    output of every class copy-init — a SEMANTICS decision to make deliberately, not a
-    quiet cleanup. Pinned by evaluate.sl V2.
+  * A CLASS FIELD INITIALIZED FROM A CLASS LVALUE IS CONSTRUCTED OVER THE TOP OF THE COPY.
+    Given a class C whose constructor writes its own field, `Holder h( c );` leaves h's
+    field holding what C's CONSTRUCTOR wrote, not what was in `c`. A wrong answer.
+    WHY: the field is FILLED from `c` and only THEN finalized (the ctor hooks run), so the
+    field's own constructor lands on top of the copied value and overwrites it. This is the
+    same defect a DECLARATION had ("a class can only be copied into" — fixed: the transfer
+    is peeled off the decl and re-emitted against the constructed object).
+    IT CANNOT BE FIXED THE SAME WAY, and the reason is worth keeping: a construction's
+    arguments are FIELD INITIALIZERS, so the enclosing CONSTRUCTOR MUST SEE THEM. A ctor
+    body that computes `a_ + b_` has to read the values that were passed, not the defaults.
+    So the field's copy cannot be hoisted past the enclosing ctor the way a tuple slot's
+    can (a tuple has no ctor of its own, which is exactly why that case was easy). It has
+    to land BETWEEN the field's own ctor and the enclosing class's ctor body.
+    That seam is inside emitConstructed's hook recursion (fields' ctors, then this class's
+    own ctor, then the vptr stamp), where the initializer expressions no longer exist.
+    FIX = give construction a way to interleave: run the field hooks, then the field
+    transfers, then the class's own ctor. Either codegen carries the field transfers into
+    the construction, or the class's own-ctor call is separable so classify can emit
+    decl(field hooks only) / field copies / own-ctor as three steps.
+    Pinned in the OTHER direction by evaluate.sl Q4 (class Hook): hoisting the field copies
+    past the ctor makes Hook's ctor read 0 instead of 3 — so a naive fix here is caught.
+
+  * A GLOBAL CLASS INITIALIZED FROM A CLASS LVALUE IS CONSTRUCTED OVER THE TOP OF THE COPY.
+    The SAME wrong answer as the class-field case above, at a different site. Repro: with a
+    class whose ctor writes its own field (`Add(int v_) { _() { v_ = v_ + 100; } }`),
+
+        global Add ga(5);
+        global Add gb = ga;        // gb.v_ reads back 205, not 105
+
+    A LOCAL `Add lb = ga;` is now correct (105) — the transfer is peeled off the declarator
+    and re-emitted against the constructed object (classify's splitTransferInit). A GLOBAL
+    never reaches that: it has no enclosing statement list to split into (`prelude` is null),
+    and its initializer is lowered into a synthesized LAZY CTOR by desugar's collectGlobals,
+    which still FILLS and then FINALIZES. Lifting classify's `is_global` guard changes
+    nothing — the split has to happen where the lazy ctor's body is BUILT, not at the decl.
+    FIX = have the global's synth ctor emit the same three steps a local does now: default-
+    construct (hooks), then the transfer. NOT TESTED — a golden here would pin 205, which is
+    the wrong answer; evaluate.sl block W is the local half and would extend to cover this.
 
   * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
     access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
@@ -58,11 +84,13 @@ BUGS
     once. Balanced/correct-valued, just a duplicated effect. Only a CALL/op source is
     spilled-once today; a lvalue with a side-effecting subscript/deref/base is not.
     FIX = spill any source whose access path is not provably side-effect-free, not just
-    non-lvalues. The predicate already exists: classify's `isReReadableLvalue` (the
-    destructure asks the identical question — it reads its source once PER SLOT — and
-    answers it correctly: an ident/field/deref/const-index chain is safe to re-read;
-    anything else spills). These sites should share it. No bare-lvalue-with-side-effect
-    test exists yet.
+    non-lvalues. Both halves already exist and just need wiring together: the PREDICATE is
+    classify's `isReReadableLvalue` (the destructure asks the identical question — it reads
+    its source once PER SLOT — and answers it correctly: an ident/field/deref/const-index
+    chain is safe to re-read, anything else spills), and the SPILL is classify's
+    `spillToTemp` funnel (which also makes the temp's lifetime an explicit choice rather than
+    an accident of where the decl is parked). These sites should use both.
+    No bare-lvalue-with-side-effect test exists yet.
 
 
 UNBLOCKED FEATURES
@@ -96,12 +124,6 @@ UNBLOCKED FEATURES
 BLOCKED FEATURES
 
   deferred features involving classes:
-
-  * CONSTRUCTION-IN-EXPRESSION — remaining gaps (record:
-    [[project_self_and_method_calls]]):
-    - CONSTRUCTION in a STORE TARGET / MOVE operand: `arr[i] = Class()`,
-      `r^ = Class()`, `w <-- Class()` are still rejected ("Constructing a class in
-      this position") — those positions aren't lifted (see nameless.sl negatives).
 
   * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
     the class structure: a class IS a named tuple. `Name(field-list){body}` interns

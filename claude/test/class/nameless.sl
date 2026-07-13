@@ -492,6 +492,33 @@ int32 main() {
         __println(tuple[0].x_ + " " + array[0].x_);
     }
 
+    // FORM 2 — a construction as the SOURCE OF A TRANSFER into LIVE storage. These four
+    // were negatives ("Constructing a class in this position is not yet supported"): a live
+    // target has no fresh slot to BUILD into, so the construction was rejected. But that is
+    // the reason for the ELIDE, not a reason to reject — a live target wants a TRANSFER, and
+    // the source only has to be materialized first. It is built as a temporary (its ctor
+    // runs), copied / moved into the target through the target's operator, and destroyed at
+    // the SEMICOLON — the same lifetime any other construction temporary has.
+    __println("== 34: a construction transferred into live storage ==");
+    {
+        Class w = Class(1);
+        w = Class(11);                       // re-assign an existing variable
+        __println("34 assign: w= " + w.get());              // 11
+
+        Class m = Class(2);
+        m <-- Class(22);                     // move onto an existing variable
+        __println("34 move: m= " + m.get());                // 22
+
+        Class^ r = ^w;
+        r^ = Class(33);                      // through a dereference store target
+        __println("34 deref: w= " + w.get());               // 33
+
+        Class arr[2] = (4, 5);
+        arr[0] = Class(44);                  // into an array element
+        __println("34 element: arr= " + arr[0].get() + " " + arr[1].get());   // 44 5
+        __println("-- end 34 --");
+    }
+
     return 0;
 }
 
@@ -525,27 +552,11 @@ int32 main() {
    condition's seq, constructed and destroyed per evaluation (so a loop rebuilds it
    each iteration). */
 
-/* a construction through a dereference store target. */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//void neg_deref_store() {
-//    Class w(1);
-//    Class^ r = ^w;
-//    r^ = Class(2);
-//}
-
-/* a construction stored into an array element. */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//void neg_element_store() {
-//    Class arr[2];
-//    arr[0] = Class(2);
-//}
-
-/* a construction as the source of a move onto an existing variable. */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//void neg_move_source() {
-//    Class w(1);
-//    w <-- Class(2);
-//}
+/* a construction as the source of a TRANSFER into live storage — a deref store target, an
+   array element, a move onto an existing variable, a re-assignment — is SUPPORTED (block 34).
+   The construction is materialized as a temporary and transferred in through the target's
+   operator; it does NOT field-init over a live object, which is what the old rejection was
+   guarding against. */
 
 /* a field that the class does not declare. */
 //-EXPECT-ERROR: has no field 'nope'
@@ -560,12 +571,3 @@ int32 main() {
 //    Bogus(1);
 //}
 
-/* re-assigning a construction to an ALREADY-declared class variable is not
-   supported — it would store the fields without running the constructor (and
-   without destroying the old value). Declare a new variable instead. (A fresh
-   `Class w = Class(7)` declaration is fine — block 6.) */
-//-EXPECT-ERROR: Constructing a class in this position is not yet supported
-//void neg_reassign_construction() {
-//    Class w(5);
-//    w = Class(7);
-//}

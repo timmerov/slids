@@ -171,6 +171,12 @@ Coverage classes, all of which PRINT:
   Triv  NO ctor/dtor, printing op= / op<-- / op+=           — the transfer gates
   Sw    NO ctor/dtor, printing op= / op<-- / op<-->         — the SWAP gate + aggregates
   Trk   ctor/dtor + printing op= + op<-- + op<-->            — the tuple-of-classes counts
+Two classes DON'T print, because two questions are not about a print order:
+  Ord   ctor WRITES its own field (v_ = 99)                  — the ORDER OF CONSTRUCTION (W).
+        A printing ctor shows a wrong ORDER; only a WRITING one shows a wrong ANSWER.
+  Val   silent, KEEPS its ctor argument                      — the SOURCE MODEL (Y). Y asks
+        which source got read and how many times, so it reads VALUES back; Ord can't be used
+        (its ctor deliberately overwrites what was passed).
 Blocks: J (the baseline, 12 -> 7), K (the ladder), L (the trivial bucket), M (destinations +
 shapes), N (the un-fusable buffer + its lifetime), O (the three transfer gates), P (destructure
 from a literal: one accumulator per slot, moved in), Q (where the operator comes from: inherited
@@ -180,7 +186,11 @@ target and a heap-deref operand, destructure into declaring slots), T (the blast
 derived->base bind: exact beats the upcast, a base-only overload is reachable, virtual dispatch
 survives, a pointer-field move), U (the arity-1 unary as a chain node), V (a tuple of classes:
 built in place from a literal of constructions, op= per element from a literal of lvalues, and
-nested destructure in all three forms).
+nested destructure in all three forms), W (the ORDER of construction — every binding copied from
+an lvalue, read back as a VALUE), X (every spill dies at the SEMICOLON — each case prints the
+temp's dtor BEFORE its marker line), Y (the SOURCE MODEL — a nested rvalue source, a counted
+source evaluated exactly once, a spilling destructure per loop iteration, a discard slot whose
+element still runs, an array copy-init from an array lvalue, a copy-init in a NESTED function).
 Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS".
 
 
@@ -188,12 +198,41 @@ Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAIN
 STILL OPEN (all filed in todo.txt)
 ------------------------------------------------------------------------------
   - PING-PONG (Decision 2 rule 6): reuse two alternating buffers instead of one per step.
-  - A COPY-INIT RUNS op= AND THEN THE CTOR. The funnel FILLS storage and then FINALIZES it
-    (emitInitFill, then emitConstructed's hooks), so `Class x = y;` prints op= BEFORE ctor.
-    Uniform, value-correct, and nothing observes the storage in between — but it is backwards,
-    and a ctor that read its own fields would see the copy rather than the initializer. Pinned
-    by evaluate.sl V2. A SEMANTICS decision, not a bug to fix quietly: changing the order moves
-    every class copy-init golden.
+  - A class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
+    constructed over — the ordering bug one level down, and NOT fixable the same way (see
+    below). todo.txt.
+  - A GLOBAL initialized from a class LVALUE (`global Add gb = ga;`) — the SAME ordering bug at
+    a third site, and for a different reason: a global's initializer is lowered into a
+    synthesized LAZY CTOR (desugar's collectGlobals), so the declarator split never reaches it
+    (there is no statement list to split into — hence classify's `is_global` guard, whose
+    removal changes nothing). Fixable the same way, but where the lazy ctor's body is BUILT.
+    Deliberately UNTESTED: a golden here would pin the wrong answer. todo.txt.
+
+THE ORDER OF CONSTRUCTION — FIXED 2026-07-13 (it was filed here as a deferred wart, and was
+                                              in fact a WRONG ANSWER)
+  A COPY-INIT ran op= and THEN the ctor: the funnel FILLS storage and then FINALIZES it, so a
+  fresh decl from an lvalue had its CONSTRUCTOR RUN ON TOP OF THE COPY. It was filed as
+  cosmetic ("uniform, value-correct, nothing observes the gap") because every counting class in
+  evaluate.sl only PRINTS in its ctor — a printing ctor shows a wrong ORDER; only a ctor that
+  WRITES its own field shows a wrong ANSWER, and there wasn't one anywhere in the suite. There
+  is now: class Ord, block W. `D dx = dy;` yielded 99 (the ctor's value), not dy's.
+  THE RULE: a class can only be COPIED INTO, so it must EXIST first — alloc, init, ctor, THEN
+  the transfer. classify peels the transfer off the declaration (applyTransferSplit) and
+  re-emits it against the constructed object, per SLOT. The user's framing, which is the whole
+  design: "an object is copied into; a thing that does not exist yet cannot be copied into."
+  WHAT THIS IS NOT: it does not touch the ELIDE. What decides whether a copy happens at all is
+  the SOURCE — an rvalue has no object to copy FROM, so it builds in place, and `(Ord(1), wa)`
+  still builds slot 0 and copies only into slot 1.
+  THE PART THAT DOES NOT GENERALIZE: a class FIELD from an lvalue. A construction's arguments
+  are FIELD INITIALIZERS, and a ctor must see its fields ALREADY INITIALIZED — Q4's Hook
+  computes `a_ + b_` in its ctor body and must read what was PASSED, not the defaults. Hoisting
+  a field's copy past the enclosing ctor breaks that (Q4 caught it, printing 0 instead of 3).
+  The copy has to land BETWEEN the field's own ctor and the enclosing ctor body — inside
+  emitConstructed's hook recursion, where the initializer expressions no longer exist. Left.
+  THE OTHER PLACE IT DOES NOT REACH: a GLOBAL. Not because the rule differs — it is the same
+  fix — but because a global declaration is not lowered where locals are. Its initializer
+  becomes the body of a synthesized lazy ctor in desugar, and there is no statement list at the
+  declaration to split the transfer into. Found while writing block Y's tests; left, filed.
 
 DESTRUCTURE'S COST — CLOSED 2026-07-13 (was the open item here)
   Block P used to build 4 objects where 2 would do, because a non-bare-name source was spilled
