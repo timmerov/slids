@@ -45,5 +45,10 @@ int32 main() {
     //Class cls = Class + 1 + 2 + 3;
     //__println(cls.a_);
 
+    //tuple = ((Class(1), Class(2)), Class(3));
+    //((Class a, Class b), Class c) <-- tuple;
+    //((Class a, Class b), Class c) <--> tuple;
+    //a; b; c;
+
     return 0;
 }

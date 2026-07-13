@@ -18,6 +18,13 @@ candidate is "No matching overload" — the same wording as a free function.
 - DEFAULT PARAMETERS on a method: a trailing param may carry a default; omitted args
   fill from THE CHOSEN overload's defaults (after ranking). A param type may itself be
   INFERRED from its default value (`x = 7` -> int).
+- and, as for a free function, the SET is checked WHERE IT IS DECLARED: two method
+  overloads whose arity ranges overlap at some arity n with identical first n param
+  types are rejected right there ("Ambiguous overloads of 'am1'", the amb_d negatives),
+  because no n-argument call could ever tell them apart. The receiver is in both
+  prefixes and cancels out, so the rule reads exactly as the free-function one.
+  `withdef(int, int = 100)` beside `withdef(float32)` still stands — they differ at
+  arity 1.
 - the implicit receiver `_$recv` (params[0]) is held OUT of ranking + the arity range;
   it always matches the object.
 - a single (non-overloaded) method keeps its detailed arity / cast errors.
@@ -146,15 +153,22 @@ int32 main() {
 //    return c.kind(d);
 //}
 
-/* a default parameter makes two overloads equally viable for the same call. */
-//-EXPECT-ERROR: Ambiguous call to 'amb_one'
-//Two(int n_) {
-//    int amb_one(int32 x) { return 1; }
-//    int amb_one(int32 x, int32 y = 0) { return 2; }
+/* THE DECLARATION IS THE ERROR (no call needed) — the same rule as a free function
+   (overload_fn.sl amb_one): a default makes the two methods' arity ranges overlap at
+   1 argument, where their prefixes are identical (int32), so a 1-arg call could never
+   pick between them. The implicit receiver sits in both prefixes and cancels out. */
+//-EXPECT-ERROR: Ambiguous overloads of 'am1': a call with 1 argument matches both.
+//AmbD1(int n_) {
+//    int am1(int32 x) { return 1; }
+//    int am1(int32 x, int32 y = 0) { return 2; }
 //}
-//int32 amb_call() {
-//    Two t(0);
-//    return t.amb_one(5);
+
+/* the same rule at arity ZERO (overload_fn.sl amb_zero): an all-default method
+   collides with the nullary one. */
+//-EXPECT-ERROR: Ambiguous overloads of 'am0': a call with 0 arguments matches both.
+//AmbD0(int n_) {
+//    int am0() { return 1; }
+//    int am0(int32 x = 0) { return 2; }
 //}
 
 /* a SINGLE (non-overloaded) method keeps its detailed arity error — a RANGE when it

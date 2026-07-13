@@ -5901,6 +5901,65 @@ void classifyClassSignature(parse::Tree& tree, widen::TypeRef classType,
     }
 }
 
+// THE OVERLOAD-SET DECLARATION CHECK — a default parameter makes a candidate's arity a
+// RANGE (num_required .. param count), so two overloads of one name can both admit the
+// SAME arg count. When they also agree on the parameter types up to that count, no call
+// at that arity can ever distinguish them, and the set is rejected WHERE IT IS DECLARED:
+//
+//     void fn(int a);            // range 1..1
+//     void fn(int a, int b = 0); // range 1..2  -- both admit 1 arg, prefix (int) identical
+//
+// Either fn(i) is ambiguous (so fn(int) can never be called) or it picks fn(int) (so b's
+// default can never be used). Both readings are broken, so neither is chosen — it is an
+// error to WRITE the pair. Runs after classifyScopeSignatures, the point where every
+// param type (including one INFERRED from its default) and num_required are final, so it
+// is order-independent: it compares finished entries, not parse nodes.
+// Two entries with IDENTICAL param types are skipped — that is a forward decl + its
+// definition (methods keep separate entries), owned by the duplicate-definition check.
+// With no default anywhere, an overlapping arity means identical full signatures, so this
+// check can only fire on a default — and it covers METHODS by construction (the shared
+// entry model; a method's `_$recv` sits in both prefixes and cancels out).
+void checkOverloadDefaultCollisions(parse::Tree& tree, diagnostic::Sink& diag) {
+    // A method's owner frame is a CLASS frame; its receiver param is held out of the
+    // spelled signature and the reported arg count, exactly as at a call site.
+    std::map<int, bool> class_frames;
+    for (parse::Entry const& e : tree.entries) {
+        if (e.kind == parse::EntryKind::kClass && e.ns_frame_id >= 0)
+            class_frames[e.ns_frame_id] = true;
+    }
+    for (std::size_t j = 0; j < tree.entries.size(); j++) {
+        parse::Entry const& later = tree.entries[j];
+        if (later.kind != parse::EntryKind::kFunction) continue;
+        for (std::size_t i = 0; i < j; i++) {
+            parse::Entry const& first = tree.entries[i];
+            if (first.kind != parse::EntryKind::kFunction) continue;
+            if (first.name != later.name) continue;
+            if (first.owner_ns_frame != later.owner_ns_frame) continue;
+            if (first.parent_frame_id != later.parent_frame_id) continue;
+            if (first.param_types == later.param_types) continue;   // decl + def
+            std::size_t lo = (std::size_t)(first.num_required > later.num_required
+                                           ? first.num_required : later.num_required);
+            std::size_t hi = first.param_types.size() < later.param_types.size()
+                           ? first.param_types.size() : later.param_types.size();
+            for (std::size_t n = lo; n <= hi; n++) {
+                bool same = true;
+                for (std::size_t k = 0; k < n && same; k++) {
+                    if (first.param_types[k] != later.param_types[k]) same = false;
+                }
+                if (!same) continue;
+                int recv = class_frames.count(later.owner_ns_frame) ? 1 : 0;
+                std::size_t nargs = n >= (std::size_t)recv ? n - (std::size_t)recv : 0;
+                reportAmbiguity(tree, later.file_id, later.tok,
+                    "Ambiguous overloads of '" + later.name + "': a call with "
+                        + std::to_string(nargs) + " argument"
+                        + (nargs == 1 ? "" : "s") + " matches both.",
+                    {(int)i}, recv, diag);
+                break;
+            }
+        }
+    }
+}
+
 void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
                              diagnostic::Sink& diag) {
     for (auto& m : node.children) {
@@ -5960,6 +6019,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // see its completed param types + captured defaults. Recurse ALL scopes so a
     // method / namespace-member signature is complete before ANY body is typed.
     classifyScopeSignatures(tree, *program, diag);
+
+    // Signatures are final — reject any overload set a default parameter has made
+    // indistinguishable at some arity, at the DECLARATION rather than at a call.
+    checkOverloadDefaultCollisions(tree, diag);
 
     // The program is itself a scope (the implicit global namespace): type its
     // member bodies — top-level function bodies, const inits, and every nested

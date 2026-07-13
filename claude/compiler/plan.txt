@@ -904,8 +904,16 @@ Phase 5 — classes
     lift), comparison (arity-1, built-in result), index (`op[]`, read + write, incl.
     array-backed via the `^field[i]` resolve fix), deref (`op^`), unary arity-0 (built-in)
     + arity-1 (produce-self). Out-of-line / external defs in BOTH forms (`bool C:op==(…)`
-    and no-return produce-self `C:op+=(…)`). Ambiguous op= is REPORTED; a class binary with
-    no viable operator is REJECTED cleanly (never lowered to invalid IR).
+    and no-return produce-self `C:op+=(…)`). Ambiguous op= is REPORTED; a class binary
+    (kBinaryExpr) OR COMPOUND (kAugAssignStmt — its guard added 2026-07-12; `a += b` with no
+    op+= used to reach the numeric path, where commonType succeeds for two identical class
+    types, and emit a struct `add`) with no viable operator is REJECTED cleanly, never lowered
+    to invalid IR. An INHERITED operator is REACHABLE from a derived operand (2026-07-12): its
+    params are typed as the BASE, and binding a DERIVED value to a `Base^` param is an UPCAST
+    (slot-0 sub-object, same address, nothing sliced), not a conversion — argConvertCost's
+    auto-ref arm grants it rung 2. Before that fix every user-written base operator was DEAD
+    from a derived operand. Both fixes detailed in readme-classes.txt "CLASS-OPERATOR CHAINS";
+    canon evaluate.sl Q1 + block T, negative neg_aug_no_op.
 
     BINARY SIGNATURE RULE (2026-07-11, canon operator.sl 170-182) — a binary operator's
     FIRST parameter must be a REFERENCE TO THE ENCLOSING CLASS: `op+(Class^ a, ConstType b)`.
@@ -967,7 +975,18 @@ Phase 5 — classes
     implicit pointer cast 2 / smallest same-sign widen 3-5 / smallest cross-sign widen
     6-8, TARGET width) and scores a candidate by the MAX rung over its args (was a flat
     exact-0/widen-1 SUM); so widening is graded (int16 picks int32 over int64) and a tie
-    is an equal-MAX. Canon test/function/overload_fn.sl. resolve
+    is an equal-MAX. UPDATE (2026-07-13): the overload SET is now checked WHERE IT IS
+    DECLARED, not at a call (checkOverloadDefaultCollisions, after the signature pre-pass).
+    A default makes a candidate's arity a RANGE, so two overloads can admit the same arg
+    count; when they also agree on the param types up to that count, no call at that arity
+    could distinguish them -> "Ambiguous overloads of 'fn': a call with N arguments matches
+    both." `fn(int)` + `fn(int, int = 0)` is the canon case: either fn(i) is ambiguous
+    (fn(int) uncallable) or it picks fn(int) (b's default unreachable) — both readings are
+    broken, so the PAIR is rejected. Only a default can overlap two ranges; without one an
+    overlap is an identical signature (the duplicate-definition check). It compares ENTRIES,
+    so METHODS get the same rule with no second implementation. Canon
+    test/function/overload_fn.sl (amb_one / amb_zero) + test/class/overload_cls.sl (am1 /
+    am0). resolve
     allows a method overload SET in a class frame; classifyScopeSignatures runs the
     signature pre-pass over every member (defaults + num_required + infer-from-default).
     SINCE: method-only signature validations (typeless-needs-default, required-after-

@@ -551,6 +551,22 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     a tie is reported with candidate notes and returns the -2 "ambiguous, already
     reported" sentinel, -1 stays "none" (caller errors). So every function / method /
     operator match shares one ranker and one ambiguity diagnostic.
+    THE OVERLOAD SET ITSELF IS CHECKED WHERE IT IS DECLARED (2026-07-13,
+    checkOverloadDefaultCollisions — classify, right after the signature pre-pass, the
+    point where every param type and num_required are final). A DEFAULT parameter makes a
+    candidate's arity a RANGE, so two overloads can admit the same argument count; when
+    they ALSO agree on the parameter types up to that count, no call at that arity could
+    ever tell them apart — so the PAIR is the error, not the call: "Ambiguous overloads of
+    'f': a call with 1 argument matches both." (`f(int)` beside `f(int, int = 0)`: either
+    f(i) is ambiguous, making f(int) uncallable, or it picks f(int), making b's default
+    unreachable — both readings are broken, so neither is taken.) It compares ENTRIES, so
+    a METHOD set gets the identical rule with no second implementation — the `_$recv` sits
+    in both prefixes and cancels, so the reported argument count reads as the user writes
+    the call, and VIRTUAL changes nothing (the set is checked before any dispatch
+    question). An identical-param_types pair is SKIPPED: that is a forward decl + its
+    definition (separate method entries), owned by the duplicate-definition check above.
+    Canon overload_cls.sl (am1 / am0), virtual.sl (Namb), overload_fn.sl (amb_one /
+    amb_zero).
     resolve allows a method OVERLOAD SET in a class frame (a same-name method is an
     overload; a collision with a non-function member is still a dup); a NAMESPACE
     function stays single-definition. classifyScopeSignatures runs classifyFunctionSig-

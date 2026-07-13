@@ -1270,6 +1270,20 @@ STAGE FILES (.h / .cpp pairs)
             ladder (exact 0 / alias 1 / cast 2 / smallest same-sign 3-5 / cross-sign 6-8
             widen) and scores a candidate by the MAX rung over its args, reporting a tie
             via reportAmbiguity, citing each conflicting declaration.
+            THE OVERLOAD SET ITSELF IS CHECKED AT ITS DECLARATION —
+            checkOverloadDefaultCollisions, run right after the signature pre-pass (the
+            point where every param type, incl. one INFERRED from its default, and every
+            num_required are final, so it is order-independent). A default parameter makes
+            a candidate's arity a RANGE, so two overloads can admit the same arg count;
+            when they ALSO agree on the parameter types up to that count, no call could
+            ever tell them apart, and the PAIR is the error ("Ambiguous overloads of 'fn':
+            a call with N arguments matches both."). `fn(int)` + `fn(int, int = 0)` is the
+            canon case — either fn(i) is ambiguous (fn(int) uncallable) or it picks
+            fn(int) (b's default unreachable), so neither reading is taken. It compares
+            ENTRIES, so methods get the rule by construction (a `_$recv` sits in both
+            prefixes and cancels); an identical-param_types pair is skipped (a forward decl
+            + its definition, owned by the duplicate-definition check). Canon
+            test/function/overload_fn.sl + test/class/overload_cls.sl.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,

@@ -554,12 +554,14 @@ int32 main() {
 //NarA(int x_) { _() {} virtual ~() {} virtual void draw() = delete; }
 //int32 use_arr() { NarA a[2] = (1, 2); return 0; }
 
-/* overloaded virtual methods whose signatures both match a call are ambiguous. */
-//-EXPECT-ERROR: Ambiguous call
+/* overloaded virtual methods a call could not tell apart: `f(int)` and `f(int, int = 0)`
+   both admit a 1-argument call with the same prefix, so the OVERLOAD SET is the error and
+   it fires at the DECLARATION — no call needed (canon overload_cls.sl / overload_fn.sl).
+   Being virtual changes nothing: the set is checked before any dispatch question. */
+//-EXPECT-ERROR: Ambiguous overloads of 'f': a call with 1 argument matches both.
 //Namb(int x_) { _() {} virtual ~() {}
 //  virtual int f(int a) { return 1; }
 //  virtual int f(int a, int b = 0) { return 2; } }
-//int32 use_amb() { Namb n(1); n.f(3); return 0; }
 
 /* multiple inheritance is not supported — a virtual class has exactly one base. */
 //-EXPECT-ERROR: Expected function name

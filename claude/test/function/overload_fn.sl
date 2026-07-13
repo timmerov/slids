@@ -89,6 +89,17 @@ the convenience convention plays no part in matching.
 ie syntax is pass-by-value but the semantics are pass-by-reference.
 
     fn(obj);  -->  fn(^obj);
+
+consider this matching problem:
+
+    void fn(int a);
+    void fn(int a, int b = 0);
+
+the reason is fn(i) is either ambiguous: it matches both fn(a) and fn(a,0) exactly.
+in which case, we can never call fn(a).
+or it matches fn(a).
+in which case, we can never call fn(a,b) with the default value for b.
+therefore this is a compile error.
 */
 
 /*
@@ -113,11 +124,19 @@ claude says:
 - DEFAULT PARAMETERS: a trailing param may carry a default (`int32 b = 100`), so a
   candidate's arity is a RANGE — num_required .. param-count. A call within the
   range is viable; the omitted trailing args fill from THE CHOSEN overload's
-  defaults (fillDefaults, AFTER ranking). A default can make two overloads equally
-  viable for the same arg count -> "Ambiguous call" (the amb_one negative). The
-  param type may itself be INFERRED from the default value (`x = 5` -> int), like
-  an inferred local — a typeless param with no default has nothing to infer from
-  and is an error.
+  defaults (fillDefaults, AFTER ranking). The param type may itself be INFERRED
+  from the default value (`x = 5` -> int), like an inferred local — a typeless
+  param with no default has nothing to infer from and is an error.
+- THE OVERLOAD SET IS CHECKED WHERE IT IS DECLARED, not at a call: two overloads
+  whose arity RANGES overlap at some arity n, and whose first n parameter types are
+  identical, can never be told apart by a call with n arguments — so the PAIR is the
+  error ("Ambiguous overloads of 'fn'", the amb_one / amb_zero negatives). `fn(int)`
+  + `fn(int, int = 0)` is the canon case: either fn(i) is ambiguous (fn(int) becomes
+  uncallable) or it picks fn(int) (b's default becomes unreachable) — both readings
+  are broken, so neither is taken. Only a default can make two ranges overlap; with
+  none, an overlap means identical signatures, which is a duplicate definition. The
+  overloads still stand when the prefix DIFFERS at the shared arity — `lm(int,
+  int = 0)` beside `lm(int64)` distinguishes at arity 1, so both are callable.
 - single-overload names keep their existing detailed errors (arity / narrow).
 */
 
@@ -401,14 +420,23 @@ int32 main() {
 //    return kind(d);
 //}
 
-/* a default parameter makes two overloads equally viable for the same call. */
-//-EXPECT-ERROR: Ambiguous call to 'amb_one'
+/* THE DECLARATION IS THE ERROR (no call needed): a default parameter makes the two
+   overloads' arity ranges overlap at 1 argument, where their prefixes are identical
+   (int32) — so a 1-arg call could never pick between them. */
+//-EXPECT-ERROR: Ambiguous overloads of 'amb_one': a call with 1 argument matches both.
 //int32 amb_one(int32 x) {
 //    return 1;
 //}
 //int32 amb_one(int32 x, int32 y = 0) {
 //    return 2;
 //}
-//int32 amb_call() {
-//    return amb_one(5);
+
+/* the same rule at arity ZERO: an all-default overload collides with the nullary one
+   (both admit a 0-argument call, with an empty — hence identical — prefix). */
+//-EXPECT-ERROR: Ambiguous overloads of 'amb_zero': a call with 0 arguments matches both.
+//int32 amb_zero() {
+//    return 1;
+//}
+//int32 amb_zero(int32 x = 0) {
+//    return 2;
 //}
