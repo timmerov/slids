@@ -210,12 +210,6 @@ STILL OPEN (all filed in todo.txt)
   - A class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
     constructed over — the ordering bug one level down, and NOT fixable the same way (see
     below). todo.txt.
-  - A function RETURNING A TUPLE of class LVALUES has the SAME ordering bug at its SRET SLOT
-    (`return (a, b);` fills each slot and then constructs it — a writing ctor reads back 99).
-    The scalar return is right (NRVO builds the local IN the caller's slot). The decl fix
-    cannot reach it: an sret slot is not a named variable, so classify has nothing to address;
-    the order has to be fixed at the per-slot FILL site. PRE-EXISTING — found while testing
-    the slot-wise explode, not caused by it. todo.txt.
   - A CONSTRUCTION as the LEFT operand only dispatches when the class has the COMPOUND
     operator (`Add(7) + a` with a 2-arg op+ and no op+= reports "not defined", while the same
     construction on the RIGHT, and a CALL on the left, both work). The collapsed-head role
@@ -257,6 +251,15 @@ THE ORDER OF CONSTRUCTION — FIXED 2026-07-13 (it was filed here as a deferred 
   whether the shape that reaches it should exist. (plan.txt, A GLOBAL'S INITIALIZER IS DATA.)
   Block R3's `gacc` moved to the declarator form (`global Acc gacc(100);`) — `= Acc(100)` is a
   construction EXPRESSION and is no longer a legal global initializer. Same object, same golden.
+  THE THIRD PLACE IT DID NOT REACH: the RETURN SLOT — FIXED 2026-07-13, and it belongs to
+  return_fn.sl, not here. Every NON-NRVO sret return (a tuple of class locals, overlapping
+  locals, `return p^`) moved into the caller's slot and then ran the ctor on top. I had filed it
+  as an open design question; it was not one — return_fn.sl's canon case 3 already dictates
+  `initialize ret^; ret^.ctor(); ret^ <-- a;`. A returned LITERAL is bound to a `_$ret` local so
+  the declarator funnel has a target (NRVO then builds it in the caller's slot — free); a
+  whole-value LVALUE return is ordered in codegen from the DEFAULTS classify parks on the return
+  node. NRVO is the ELIDE of that pair and is untouched. Z7 pins the DECL half of the same rule;
+  the RETURN half is pinned by return_fn.sl's class Ret. (readme.txt / readme-classes.txt.)
 
 DESTRUCTURE'S COST — CLOSED 2026-07-13 (was the open item here)
   Block P used to build 4 objects where 2 would do, because a non-bare-name source was spilled

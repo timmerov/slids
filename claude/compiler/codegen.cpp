@@ -2788,6 +2788,28 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                         && "sret return not exact-typed — desugar lowers non-exact");
                     (void)rvt;
                 }
+                // THE SLOT IS STORAGE, AND A CLASS CAN ONLY BE COPIED INTO (return_fn.sl
+                // case 3: `initialize ret^; ret^.ctor(); ret^ <-- a;`). A TRANSFER source —
+                // an LVALUE of the return type — must find the slot already CONSTRUCTED:
+                // FILL the defaults classify parked on the return (children[1]), run the
+                // ctor, and only THEN transfer (emitInitFill dispatches each class leaf's
+                // @__$move). Filling first and constructing after — what the single
+                // emitConstructAt below does — ran the ctor ON TOP of the moved-in value and
+                // threw it away. NRVO (above) is the elide of exactly this pair, so it never
+                // gets here; an RVALUE (a call / construction / chain) has no object to
+                // transfer FROM — it BUILDS the slot — and keeps the funnel below.
+                if (stmt.children.size() > 1 && stmt.children[1] && isAstLvalue(rv)) {
+                    emitConstructAt("%sret.in", fn_return_type, llty,
+                                    stmt.children[1].get(), /*is_move=*/false,
+                                    /*sret_in_place=*/false, /*register_dtor=*/false,
+                                    scope, syms, pool, out, diag);
+                    emitInitFill("%sret.in", fn_return_type, llty, rv, /*is_move=*/true,
+                                 syms, pool, out, diag);
+                    closeRhsSeq(rseq, rtemps, syms, pool, out, diag);
+                    emitUnwindDtors(scope, nullptr, out);
+                    out << "  ret void\n";
+                    return;
+                }
                 // Construct the result into the caller's slot %sret.in through the
                 // shared funnel: a RETURN-OF-CALL forwards the slot so the callee
                 // builds its result DIRECTLY into it (no temp, no extra ctor);

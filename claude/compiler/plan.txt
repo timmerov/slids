@@ -1000,6 +1000,28 @@ Phase 5 — classes
     ctor, so there is no statement list at the declaration) — but it no longer needs to be: a
     global's initializer must now be a CONSTANT, so a global class is only ever built from a
     constant field list, in place. See A GLOBAL'S INITIALIZER IS DATA below.
+    THE RETURN SLOT HAD IT TOO (2026-07-13) — and the SPEC ALREADY HAD THE ANSWER. Every
+    non-NRVO sret return (a tuple of class locals, overlapping locals, `return p^`) MOVED into
+    the caller's slot and then ran the ctor on top; return_fn.sl's canon case 3 spells the
+    fallback out step by step (`initialize ret^; ret^.ctor(); ret^ <-- a;`), so there was
+    nothing to design — the user's words: "there is no path in the spec where fields can be
+    move-copied then ctor is called". READ THE OWNING SPEC BEFORE DESIGNING A FIX. The slot has
+    no NAME for classify to address, so the fix is two halves: a returned tuple/array LITERAL
+    with a transfer in a slot is bound to a `_$ret` local (hasClassTransferSlot -> spillToTemp),
+    which hands the ordinary declarator funnel its target and lets the peel run PER SLOT, and
+    NRVO then builds `_$ret` directly in the caller's slot so the name costs nothing; a
+    whole-value LVALUE return is ordered in CODEGEN from the class DEFAULTS classify parks on
+    the return node (classZeroValue, children[1] — codegen has no ClassInfo). NRVO is the ELIDE
+    of that construct/transfer pair (canon case 2), untouched, and it is also the safety net's
+    escape: when NRVO DECLINES `_$ret`, the rewritten return is an ordinary lvalue return and
+    the codegen half still orders it. Golden churn: identical object counts, but a non-NRVO
+    return's ctor now prints the field DEFAULTS instead of the value moved in on top of it.
+    Canon return_fn.sl (class Ret — a WRITING ctor; every other class in that file only prints,
+    which is why this sat under a green golden). Two of the five follow-up gap tests found real
+    bugs: a CHAIN in a returned slot was peeled as a MOVE and reached codegen unlowered (a move
+    needs a source OBJECT to husk; a chain has none — it IS the value, so a chain slot always
+    ASSIGNS), and the NRVO-DECLINED path reproduced the original 99s (the synthesized
+    `return _$ret;` was minted rather than classified, so it never got the parked defaults).
     A GLOBAL'S INITIALIZER IS DATA, AND DATA IS CONSTANT (2026-07-13) — a literal, `nullptr`, or
     a tuple literal of those, asked of EVERY global at every scope (classify's isConstantInit).
     NOT a construction expression: `global Widget w = Widget(5);` is an error though the local is

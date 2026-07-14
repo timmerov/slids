@@ -3976,8 +3976,10 @@ void splitTransferInit(parse::Tree& tree, std::unique_ptr<parse::Node>& init,
             // The statement shape follows the TARGET: a bare name is a kAssignStmt (target
             // in `name`, rhs in child 0) — kStoreStmt is deref/index-only — while a slot
             // path (`t[0]`, `h.c_`) is a kStoreStmt. A move is a kMoveStmt either way (it
-            // already carries its lhs as an expression child).
-            if (is_move) {
+            // already carries its lhs as an expression child) — EXCEPT from a CHAIN, which
+            // is an rvalue: a move needs a source OBJECT to husk, and a chain has none (it
+            // IS the value). It assigns into the slot, whatever the binding was spelled.
+            if (is_move && !chain_slot) {
                 st->kind = parse::Kind::kMoveStmt;
                 st->children.push_back(cloneExpr(path));
             } else if (path.kind == parse::Kind::kIdentExpr) {
@@ -4114,6 +4116,29 @@ void applyTransferSplit(parse::Tree& tree, parse::Node& s,
     s.default_move_init = false;
     s.children = std::move(last->children);
     classifyStmt(tree, s, fn_return_type, diag, prelude);
+}
+
+// Does this initializer TRANSFER a class into a SLOT — copy/move an existing object in,
+// rather than BUILD one there? A class LVALUE is one; so is a class-producing operator
+// CHAIN in a slot (splitTransferInit peels both, and for the same reason). Asked BEFORE
+// inferExpr — a chain is not stamped yet, so a binary/unary at a class-bearing slot IS one.
+// The RETURN arm asks it of a tuple/array LITERAL: a literal with a transfer in it has to be
+// ordered per slot, which needs a NAME to address (`_$ret`).
+bool hasClassTransferSlot(parse::Node const& init, widen::TypeRef type) {
+    if (!widen::hasInPlaceClass(widen::strip(type))) return false;
+    if (isBareLvalue(init)) return true;
+    if (init.kind == parse::Kind::kBinaryExpr
+        || init.kind == parse::Kind::kUnaryExpr) return true;
+    if (init.kind != parse::Kind::kTupleExpr) return false;
+    widen::Type::Form f = widen::form(widen::strip(type));
+    if (f != widen::Type::Form::kTuple && f != widen::Type::Form::kArray) return false;
+    std::vector<widen::TypeRef> slots = initSlotTypes(type);
+    if (slots.size() != init.children.size()) return false;
+    for (std::size_t i = 0; i < slots.size(); i++) {
+        if (init.children[i] && hasClassTransferSlot(*init.children[i], slots[i]))
+            return true;
+    }
+    return false;
 }
 
 // Type-infer a statement LIST, splicing any prelude statements a member emits in
@@ -5560,11 +5585,59 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     "A non-void function must return a value.", {}});
                 return;
             }
+            // THE RETURN SLOT IS STORAGE, AND A CLASS CAN ONLY BE COPIED INTO. A tuple/array
+            // LITERAL with a class TRANSFER in a slot (`return (a, b);`) must order EACH SLOT
+            // — constructed, then copied into, while a CONSTRUCTION slot still builds in place
+            // — and that is exactly what the declarator funnel does. It only needs a NAME to
+            // address, which an sret slot has not got. So give it one: bind the literal to a
+            // `_$ret` local and return that. applyTransferSplit then peels the slots, and
+            // desugar's NRVO builds `_$ret` DIRECTLY in the caller's slot — so the name costs
+            // nothing. (If NRVO ever declines, the return is a bare lvalue and the codegen
+            // path below still constructs the slot before transferring: correct, one temp.)
+            if (!s.children.empty() && s.children[0]
+                && s.children[0]->kind == parse::Kind::kTupleExpr
+                && hasClassTransferSlot(*s.children[0], fn_return_type)) {
+                Spill sp = spillToTemp(tree, std::move(s.children[0]), fn_return_type,
+                                       "_$ret");
+                sp.decl->default_move_init = true;   // canon case 3: `ret^ <-- a`
+                std::vector<std::unique_ptr<parse::Node>> body;
+                classifyStmt(tree, *sp.decl, fn_return_type, diag, &body);
+                body.push_back(std::move(sp.decl));
+                auto ret = std::make_unique<parse::Node>();
+                ret->kind = parse::Kind::kReturnStmt;
+                ret->file_id = s.file_id;
+                ret->tok = s.tok;
+                ret->children.push_back(std::move(sp.read));
+                // Classify it like any other return — `_$ret` is now a bare LVALUE source, so
+                // it takes the defaults the arm parks below. NRVO usually claims it and none
+                // of that is emitted; but NRVO can DECLINE (another returned-local is live
+                // here), and then the slot is constructed and transferred into exactly as any
+                // other lvalue return is. Minting the node and skipping the arm left the
+                // declined path with no defaults — and so with the original bug.
+                classifyStmt(tree, *ret, fn_return_type, diag, &body);
+                body.push_back(std::move(ret));
+                s.kind = parse::Kind::kBlockStmt;
+                s.children.clear();
+                for (auto& b : body) s.children.push_back(std::move(b));
+                return;
+            }
             for (auto& ch : s.children) {
                 if (ch) {
                     inferExpr(tree, *ch, fn_return_type, diag);
                     checkValueAssign(tree, fn_return_type, *ch, diag);
                 }
+            }
+            // A whole-value TRANSFER into the slot (a class-bearing LVALUE source) has the
+            // same rule and no slots to split: codegen constructs the slot and then transfers
+            // into it. It needs the class's DEFAULTS to construct, and those come from
+            // ClassInfo, which is ours — park them on the return (children[1]). An RVALUE
+            // source BUILDS the slot (the elide) and needs nothing.
+            if (!s.children.empty() && s.children[0]
+                && widen::hasInPlaceClass(widen::strip(fn_return_type))
+                && isBareLvalue(*s.children[0])) {
+                auto def = classZeroValue(tree, fn_return_type, s.file_id, s.tok, diag);
+                def->inferred_type = fn_return_type;
+                s.children.push_back(std::move(def));
             }
             return;
         }

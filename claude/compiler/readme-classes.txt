@@ -177,6 +177,17 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     block W (class Ord — its ctor WRITES its field, which is the only way the order is
     OBSERVABLE; every other counting class merely prints, which shows a wrong ORDER but not
     a wrong ANSWER, and is why this lived so long).
+    THE SAME RULE AT THE RETURN SLOT (2026-07-13). An sret slot is storage like any other, and
+    return_fn.sl's canon case 3 already dictated the order — `initialize ret^; ret^.ctor();
+    ret^ <-- a;` — so a non-NRVO return that MOVED into the slot and then ran the ctor on top
+    was a plain spec violation. It reached the slot by a spelling classify could not address (an
+    sret slot has no NAME), so the fix is in two halves: a returned LITERAL with a transfer in a
+    slot is bound to a `_$ret` local and goes through the peel above (NRVO then builds `_$ret`
+    in the caller's slot — the name is free); a whole-value LVALUE return is ordered in codegen
+    from the class DEFAULTS classify parks on the return node. NRVO is the ELIDE of that pair
+    (canon case 2: the local IS the slot, so there is no transfer at all), and it is untouched.
+    Pinned by return_fn.sl class Ret (again a WRITING ctor — every other class in that file
+    only prints, which is why a live miscompile sat under a green golden).
     NOT DONE, and NOT the same problem: a class FIELD initialized from a class LVALUE
     (`Holder h( c )`) is still filled and then constructed over. A construction's arguments
     are FIELD INITIALIZERS, and a ctor must see its fields ALREADY INITIALIZED (evaluate.sl

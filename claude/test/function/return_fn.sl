@@ -305,6 +305,85 @@ Op(int v_) {
 }
 Op mkOp() { Op o(7); return o; }
 
+// THE RETURN SLOT IS CONSTRUCTED, THEN TRANSFERRED INTO (header case 3: `initialize ret^;
+// ret^.ctor(); ret^ <-- a;`). Every class above only PRINTS in its ctor, so a slot FILLED and
+// then CONSTRUCTED shows a wrong ORDER but never a wrong ANSWER. Ret's ctor WRITES its own
+// field — so if the ctor runs on top of the transferred-in value, the caller reads 99.
+Ret(int v_) {
+    _() { v_ = 99; }
+    ~() { }
+}
+// a TUPLE of class lvalues: the fallback, per slot.
+(Ret, Ret) retPair() {
+    Ret a(0); a.v_ = 1;
+    Ret b(0); b.v_ = 2;
+    return (a, b);
+}
+// a MIXED literal: slot 0 is transferred in (1), slot 1 is BUILT in its slot, so its ctor
+// sees its field initializer and overwrites it (99) — a construction keeps its own order.
+(Ret, Ret) retMixed() {
+    Ret a(0); a.v_ = 3;
+    return (a, Ret(0));
+}
+// the SCALAR fallback — overlapping locals, so neither NRVOs.
+Ret retPick(bool b) {
+    Ret a(0); a.v_ = 4;
+    Ret c(0); c.v_ = 5;
+    if (b) { return a; }
+    return c;
+}
+// a PARAM is an lvalue with no local storage to alias — always the fallback.
+Ret retParam(Ret^ p) { return p^; }
+// NRVO is the ELIDE of that pair: one object, built in the caller's slot, ctor NOT on top.
+Ret retNrvo() { Ret a(0); a.v_ = 6; return a; }
+// an ARRAY literal of class lvalues — the same per-slot order down the OTHER bridge
+// (emitArrayFromTuple, not emitTupleFromTuple).
+Ret[2] retArr() {
+    Ret a(0); a.v_ = 7;
+    Ret b(0); b.v_ = 8;
+    return (a, b);
+}
+// NRVO DECLINES on the `_$ret` local: `t` is a returned-local candidate and is still LIVE
+// where the rewritten return sits, so both are ineligible and both take the codegen path
+// (construct the slot, then transfer into it). Correct either way — one extra object.
+(Ret, Ret) retDecline(bool b) {
+    (Ret, Ret) t;
+    t[0].v_ = 9;
+    t[1].v_ = 10;
+    Ret a(0); a.v_ = 11;
+    Ret c(0); c.v_ = 12;
+    if (b) { return t; }
+    return (a, c);
+}
+// a FIELD and an INDEX source — lvalues that are not bare idents.
+Bx(Ret r_) { _() { } ~() { } }
+Ret retField(Bx^ h)      { return h^.r_; }
+Ret retIndex(Ret[2]^ a)  { return a^[1]; }
+
+// A class CHAIN in a returned SLOT. The slot is peeled (a chain cannot be handed a slot of a
+// literal — its accumulator home is answered per STATEMENT), constructed, and the chain is
+// then assigned INTO it. Chn's ctor writes 99, so a chain landing in a filled-then-
+// constructed slot reads back 99 instead of the sum.
+Chn(int v_) {
+    _()                   { v_ = 99; }
+    ~()                   { }
+    op=(Chn^ r)           { v_ = r^.v_; }
+    op+(Chn^ x, Chn^ y)   { v_ = x^.v_ + y^.v_; }
+    int get()             { return v_; }
+}
+(Chn, Chn) retChain() {
+    Chn a(0); a.v_ = 1;
+    Chn b(0); b.v_ = 2;
+    Chn r(0); r.v_ = 5;
+    return (a + b, r);            // slot 0 = a CHAIN, slot 1 = an LVALUE transfer
+}
+
+// THE TRANSFER INVARIANT AT THE RETURN SLOT: the fallback must call the AUTHOR'S op<--, not
+// blit past it. Op prints "move" and adds 200 — mkOp() above is NRVO'd, so nothing else in
+// this file makes a return actually TRANSFER through a user operator.
+(Op, Op) mkOpPair() { Op a(1); Op b(2); return (a, b); }
+Op pickOp(bool b)   { Op a(1); Op c(2); if (b) { return a; } return c; }
+
 int32 main() {
 
     /* POD aggregate — decl (build a new local), existing var, and inline use. */
@@ -533,6 +612,51 @@ int32 main() {
         Op arr[2] = (5, 6);
         arr[0] = mkOp();                                       // into a store target
         __println("arr0= " + arr[0].v_);                        // 107
+    }
+    /* THE RETURN SLOT IS CONSTRUCTED BEFORE IT IS TRANSFERRED INTO. Ret's ctor writes
+       v_ = 99, so a slot that is FILLED and then CONSTRUCTED reads back 99 — the ctor
+       landing on top of the moved-in value. Every case here must read back what the
+       function put there. */
+    {
+        __println("-- return slot order --");
+        (Ret, Ret) rp = retPair();
+        __println("rp= " + rp[0].v_ + " " + rp[1].v_);          // 1 2
+        (Ret, Ret) rm = retMixed();
+        __println("rm= " + rm[0].v_ + " " + rm[1].v_);          // 3 99 (slot 1 is BUILT)
+        Ret r1 = retPick(true);
+        Ret r2 = retPick(false);
+        __println("rk= " + r1.v_ + " " + r2.v_);                // 4 5
+        Ret rn = retNrvo();
+        __println("rn= " + rn.v_);                              // 6
+        Ret rr = retParam(^rn);
+        __println("rr= " + rr.v_);                              // 6
+
+        Ret ra[2] = retArr();
+        __println("ra= " + ra[0].v_ + " " + ra[1].v_);          // 7 8
+        (Ret, Ret) dt = retDecline(true);                       // NRVO declines on both
+        (Ret, Ret) df = retDecline(false);
+        __println("dt= " + dt[0].v_ + " " + dt[1].v_
+                + " df= " + df[0].v_ + " " + df[1].v_);         // 9 10 / 11 12
+        Bx bx;
+        bx.r_.v_ = 12;
+        Ret rf = retField(^bx);
+        Ret rarr[2];
+        rarr[1].v_ = 13;
+        Ret rx = retIndex(^rarr);
+        __println("rf= " + rf.v_ + " rx= " + rx.v_);            // 12 13
+        (Chn, Chn) ch = retChain();
+        __println("ch= " + ch[0].get() + " " + ch[1].get());    // 3 5
+    }
+
+    /* THE TRANSFER INVARIANT AT THE RETURN SLOT — the fallback dispatches the AUTHOR'S
+       op<--, which prints "move" and adds 200. The slot is CONSTRUCTED first (ctor 0), the
+       source is left a husk (v_ = 0, so it dtors as 0), and the caller owns the result. */
+    {
+        __println("-- return slot operator --");
+        (Op, Op) op2 = mkOpPair();
+        __println("op2= " + op2[0].v_ + " " + op2[1].v_);        // 201 202
+        Op op1 = pickOp(false);
+        __println("op1= " + op1.v_);                             // 202
     }
     __println("-- done --");
     return 0;

@@ -511,6 +511,24 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     goes to the prelude, and the spill and the transfers share one BLOCK. Looking THROUGH the
     seq instead would leave the spill riding on the decl's rhs, so the temp would die at the
     DECL's semicolon — before the peeled transfers that read it.
+    A chain slot always ASSIGNS into its constructed slot, even when the binding is a MOVE
+    (a return's is): a move needs a source OBJECT to husk, and a chain has none — it IS the
+    value. (Emitted as a kMoveStmt it reaches codegen unlowered and asserts.)
+    THE RETURN SLOT IS STORAGE TOO, and it has the same rule — return_fn.sl's canon case 3
+    spells the order out: `initialize ret^; ret^.ctor(); ret^ <-- a;`. Two halves, because an
+    sret slot has no NAME for classify to address:
+      - A tuple / array LITERAL with a transfer in a slot (`return (a, b);`) is BOUND TO A
+        `_$ret` LOCAL (classify's return arm: `hasClassTransferSlot` -> `spillToTemp`), which
+        gives the declarator funnel the target it needs — the peel above then orders each slot,
+        and desugar's NRVO builds `_$ret` DIRECTLY in the caller's slot, so the name is free.
+      - A whole-value LVALUE return (`return a;` from overlapping locals, `return p^;`) is
+        ordered in CODEGEN: classify parks the class's DEFAULTS on the return node (children[1],
+        via classZeroValue — codegen has no ClassInfo), and the sret arm FILLS them, runs the
+        ctor, and only THEN emitInitFills the transfer. NRVO is the ELIDE of exactly that pair
+        (canon case 2 — built in place, nothing to transfer), so an NRVO'd return emits neither.
+        This is also the SAFETY NET for the first half: if NRVO declines `_$ret` (another
+        returned-local is live there), the rewritten `return _$ret;` is an ordinary lvalue
+        return and lands here — correct, one extra object.
     ONE SITE STILL HAS THE OLD WRONG ANSWER (todo.txt): that class FIELD. A GLOBAL also cannot
     be split (it has no statement list — `prelude` is null, hence the `is_global` guard — its
     initializer becomes a synth ctor instead), but it no longer needs to be: a global's
