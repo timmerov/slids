@@ -555,6 +555,20 @@ Ool:op+=(int a)       { n_ += a; }   // produce-self op, out of line, NO return 
    primitive/const-pointer params, not just a single type. */
 Mixed(int64 v_) { _(){} ~(){} op=(int64 a){v_=a;} op+(Mixed^ a, int64 b){ v_ = a^.v_ + b; } }
 
+/* a class with the 2-arg op+ and NO op+=. A CONSTRUCTION as the LEFT operand used to be
+   rejected here — "Operator '+' is not defined on class 'Head'" — while the identical rvalue
+   worked as a CALL head (`mkHead() + a`) and as the RIGHT operand (`a + Head(7)`). The chain
+   COLLAPSES a construction head into the accumulator (one temp saved), and an accumulator can
+   only be advanced by an operator that MUTATES it with one argument — op+=, which this class
+   has not got. The collapse is an OPTIMIZATION, so it is DECLINED: the construction becomes an
+   ordinary rvalue operand and the 2-arg operator is called. All three spellings must agree. */
+Head(int v_) {
+    _(){} ~(){}
+    op=(Head^ r)           { v_ = r^.v_; }
+    op+(Head^ x, Head^ y)  { v_ = x^.v_ + y^.v_; }
+}
+Head mkHead() { Head h(7); return h; }
+
 int32 main() {
 
     int a = 42;
@@ -905,6 +919,26 @@ int32 main() {
     Mixed mbase(8);
     Mixed mx = mbase + big;           // mx.op+(Mixed^, int64) -> 8 + 100 = 108
     __println("mx = " + mx.v_);       // mx = 108
+
+    /* ---- a CONSTRUCTION as the LEFT operand of a class binary whose class has only the
+       2-arg op+ (no op+= to collapse into). The three spellings of the same rvalue must all
+       dispatch to the same operator. ---- */
+    Head ha(3);
+    Head hc = Head(7) + ha;           // construction on the LEFT  — the declined collapse
+    __println("hc = " + hc.v_);       // hc = 10
+    Head hk = mkHead() + ha;          // a CALL rvalue on the left — same operator
+    __println("hk = " + hk.v_);       // hk = 10
+    Head hr = ha + Head(7);           // the construction on the RIGHT
+    __println("hr = " + hr.v_);       // hr = 10
+    Head hb(4);
+    Head hn = Head(7) + ha + hb;      // the declined head, continued
+    __println("hn = " + hn.v_);       // hn = 14
+
+    /* the same declined collapse when the SECOND operand is a PRIMITIVE (Mixed has the
+       2-arg op+(Mixed^, int64) and no op+=) — the 2-arg operator is ranked over a primitive
+       rhs, a different road through the overload core than Head's class-to-class one. */
+    Mixed mh = Mixed(8) + big;        // construction head, primitive rhs -> 8 + 100
+    __println("mh = " + mh.v_);       // mh = 108
 
     return 0;
 }

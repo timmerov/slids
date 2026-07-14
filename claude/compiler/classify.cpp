@@ -4685,7 +4685,20 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
         // The construction IS the accumulator; the first operand applies to it. A head
         // built WITH args must use op<OP>= (op= would discard those args).
         viable = lhs.ctor_no_args ? (eq_rhs_id >= 0 || aug_id >= 0) : (aug_id >= 0);
-    } else {
+        // THE COLLAPSE IS AN OPTIMIZATION, NOT A REPRESENTATION — so it can be DECLINED. It
+        // saves one temp by building the head construction straight into the accumulator, but
+        // an accumulator can only be advanced by an operator that MUTATES it with one argument
+        // (op<OP>=). A class with only the 2-arg op<OP> has none — and the chain used to give
+        // up there and report the operator UNDEFINED, though it is defined and the identical
+        // rvalue works both as a CALL head (`mk() + a`) and as the right operand (`a + C(7)`).
+        // Decline the collapse instead: the construction becomes an ORDINARY rvalue operand,
+        // materialized like any other, and the 2-arg operator is called.
+        if (!viable && bin_id >= 0) {
+            collapsed_head = false;
+            viable = true;
+        }
+    }
+    if (!continuation && !collapsed_head) {
         // A real operand pair: one 2-arg call, or seed-then-fuse.
         viable = bin_id >= 0 || (eq_lhs_id >= 0 && aug_id >= 0);
     }
@@ -4705,6 +4718,7 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
     e.children.push_back(std::move(dc->children[0]));
 
     e.class_op_chain = true;
+    e.op_collapse_head = collapsed_head;   // the ROLE, decided here; desugar obeys it
     e.op_bin_eid = bin_id;
     e.op_aug_eid = aug_id;
     e.op_eq_lhs_eid = eq_lhs_id;

@@ -667,5 +667,51 @@ Acc:dtor: 2
 Acc:dtor: 1
 Z7: aggregate chain zv=2 4
 Z7: scalar chain z8=3
+-- Z8 --
+Buf:ctor: 3
+Z8: Buf bc = Buf(7) + ba;
+Buf:ctor: 0
+Buf:ctor: 7
+Buf:dtor: 7
+Z8 end bc=10
+Buf:ctor: 1
+Buf:ctor: 2
+Z8b: (Buf,Buf) bq = (Buf(7) + bp[0], Buf(8) + bp[1]);
+Buf:ctor: 0
+Buf:ctor: 0
+Buf:ctor: 0
+Buf:ctor: 7
+Buf:dtor: 7
+Buf:dtor: 8
+Buf:ctor: 0
+Buf:ctor: 8
+Buf:dtor: 8
+Buf:dtor: 10
+Z8b end bq=8 10
+Buf:dtor: 10
+Buf:dtor: 8
+Buf:dtor: 2
+Buf:dtor: 1
+Buf:dtor: 10
+Buf:dtor: 3
+-- Z9 --
+Acc:ctor: 1
+Acc:ctor: 2
+Z9: (Acc,Acc) nb = na + Acc(10);
+Acc:ctor: 0
+Acc:ctor: 0
+Acc:ctor: 10
+Acc:ctor: 0
+Acc:op<--: 11
+Acc:dtor: 11
+Acc:ctor: 0
+Acc:op<--: 12
+Acc:dtor: 12
+Acc:dtor: 10
+Z9 end nb=11 12
+Acc:dtor: 12
+Acc:dtor: 11
+Acc:dtor: 2
+Acc:dtor: 1
 Class:dtor: 9
 Acc:dtor: 13

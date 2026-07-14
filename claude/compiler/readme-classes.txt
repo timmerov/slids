@@ -342,8 +342,21 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
   * THE LADDER (desugar::lowerOpChain, walking the left spine innermost-first):
       1. a fresh `Class` / `Class()` / `Class(args)` at the HEAD COLLAPSES INTO the
          accumulator — constructed with those args, never materialized as an operand.
+         THE COLLAPSE IS AN OPTIMIZATION, SO IT CAN BE DECLINED. It saves one temp, but an
+         accumulator can only be ADVANCED by an operator that MUTATES it with one argument
+         (rules 2/3), and a class may have only the 2-arg `op<OP>`. Classify then DECLINES the
+         collapse (stampClassBinary: `if (!viable && bin_id >= 0)`) and the construction becomes
+         an ORDINARY rvalue operand of rule 4 — one temp, dead at the semicolon, exactly what
+         the same construction on the RIGHT has always cost. It used to give up instead and
+         report the operator UNDEFINED, though it is defined and the identical rvalue dispatched
+         fine as a CALL head (`mk() + a`) or as the right operand (`a + C(7)`).
+         THE ROLE IS DECIDED IN CLASSIFY AND STAMPED ON THE NODE (`op_collapse_head`); desugar
+         OBEYS it. It used to RE-DERIVE the role here (lhs.is_construction), which is precisely
+         why classify could not decline: the two ends would have disagreed, and desugar would
+         have collapsed anyway and reached for an op_aug_eid of -1.
       2. first operand on a DEFAULT accumulator: prefer `op=` (cheaper on an empty object),
-         fall back to `op<OP>=`.
+         fall back to `op<OP>=`. (A default head always HAS an `op=` — the synthesized copy —
+         so it always collapses; rule 1's decline only ever fires on a head built WITH args.)
       3. on an accumulator built WITH ARGS: `op<OP>=` ONLY — an op= would discard them.
       4. a real operand PAIR at the head: the 2-arg `op<OP>(x,y)` in one call, else DECOMPOSE
          to `acc.op=(x); acc.op<OP>=(y)`.

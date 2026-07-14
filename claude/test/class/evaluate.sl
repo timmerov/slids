@@ -1457,6 +1457,47 @@ int32 main() {
         __println("Z7: scalar chain z8=" + z8.get());                               // 3
     }
 
+    /* Z8: A CONSTRUCTION HEAD WHOSE COLLAPSE IS DECLINED. The collapse builds the head
+       construction straight INTO the accumulator (K3's `Str(10) + ka + kb` costs no temp for
+       the head at all), but the accumulator can then only be ADVANCED by an operator that
+       mutates it with one argument -- and Buf has only the 2-arg op+, no op+=. It used to be
+       REJECTED here ("Operator '+' is not defined on class 'Buf'"), though the same rvalue
+       dispatched fine as a call head or as the right operand. Declining the collapse makes the
+       construction an ORDINARY rvalue operand: it costs ONE temp, which dies at the SEMICOLON
+       -- exactly what `a + Buf(7)` has always cost. The DECL is the accumulator, so that is
+       the whole price. */
+    {
+        __println("-- Z8 --");
+        Buf ba(3);
+        __println("Z8: Buf bc = Buf(7) + ba;");
+        Buf bc = Buf(7) + ba;                                    // ctor 0 (bc), ctor 7, dtor 7
+        __println("Z8 end bc=" + bc.v_);                                            // 10
+
+        // Z8b: the declined collapse INSIDE A SLOT -- the slot-wise explode makes each slot an
+        // ORDINARY operation, so a construction head in a slot declines exactly as it does at
+        // the top level, and the resulting chain is then peeled out of the literal and
+        // assigned into its CONSTRUCTED slot (a chain cannot be handed a slot to build in).
+        // Three of today's rules meeting in one expression.
+        (Buf, Buf) bp = (Buf(1), Buf(2));
+        __println("Z8b: (Buf,Buf) bq = (Buf(7) + bp[0], Buf(8) + bp[1]);");
+        (Buf, Buf) bq = (Buf(7) + bp[0], Buf(8) + bp[1]);
+        __println("Z8b end bq=" + bq[0].v_ + " " + bq[1].v_);                       // 8 10
+    }
+
+    /* Z9: a CONSTRUCTION as the BROADCAST operand of a class aggregate. The operand is read
+       by EVERY slot, and a construction is not re-readable -- so it goes through the SPILL
+       funnel and is built exactly ONCE (Acc prints, so `ctor: 10` appearing once IS the
+       claim). It must never be CLONED per slot: classify's cloneExpr copies neither
+       is_construction nor the chain stamps, so a cloned construction would decay into a plain
+       function call. The spill predicate is what keeps it off that path. */
+    {
+        __println("-- Z9 --");
+        (Acc, Acc) na = (Acc(1), Acc(2));
+        __println("Z9: (Acc,Acc) nb = na + Acc(10);");
+        (Acc, Acc) nb = na + Acc(10);
+        __println("Z9 end nb=" + nb[0].v_ + " " + nb[1].v_);                        // 11 12
+    }
+
     return 0;
 }
 

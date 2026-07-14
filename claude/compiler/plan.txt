@@ -958,6 +958,20 @@ Phase 5 — classes
     2-arg op<OP> or decomposes; later operands FUSE with their own op<OP>=. Result: evaluate.sl
     case J went 12 objects -> 7. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS";
     the plan (with the decisions and their rationale) in plan-evaluate.txt.
+    THE HEAD COLLAPSE IS AN OPTIMIZATION, SO IT CAN BE DECLINED (2026-07-13). `C(7) + a` was
+    REJECTED — "Operator '+' is not defined on class 'C'" — for a class with the 2-arg op+ and
+    no op+=, though the operator IS defined and the identical rvalue dispatched fine as a CALL
+    head (`mk() + a`) or as the RIGHT operand (`a + C(7)`). The collapse builds the head
+    construction straight INTO the accumulator, and an accumulator can only be ADVANCED by an
+    operator that mutates it with one argument; with no op<OP>= the chain gave up, never
+    considering the 2-arg operator sitting right there, resolved. It now declines the collapse
+    and the construction becomes an ordinary rvalue operand (one temp, dead at the semicolon —
+    what the right-hand spelling always cost). THE REASON IT COULD NOT DECLINE BEFORE: desugar
+    RE-DERIVED the role from the AST (lhs.is_construction) instead of reading a stamp, so
+    classify had no way to tell it. The role is now decided once, in classify, and carried on
+    the node (`op_collapse_head`) — the same discipline every other chain decision already
+    followed. Canon operator.sl (class Head — all three spellings agree) + evaluate.sl Z8/Z8b
+    (the declined collapse costs ONE temp; K3 still pins the collapse being TAKEN).
     THE ARITY-1 UNARY JOINED IT (2026-07-13). `-a` produces a whole class value, so it is a
     chain node too: stampClassUnary stamps the kUnaryExpr (op_un_eid = the 1-arg op, op<--,
     the default field tuple) and desugar places the accumulator — fresh storage IS it (zero

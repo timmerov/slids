@@ -8,19 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * A CONSTRUCTION AS THE LEFT OPERAND OF A CLASS BINARY ONLY DISPATCHES IF THE CLASS HAS THE
-    COMPOUND OPERATOR. `Add(7) + a` reports "Operator '+' is not defined on class 'Add'" for
-    a class with a 2-arg `op+` and no `op+=`, while `mk() + a` (a CALL — the same rvalue) and
-    `a + Add(7)` (the same construction, on the right) both work. stampClassBinary's
-    COLLAPSED-HEAD role treats a construction head as the accumulator itself, so a head built
-    WITH args demands `op<OP>=` (op= would discard those args) and gives up when there is
-    none. The collapse is an OPTIMIZATION (it saves a temp); with a 2-arg `op<OP>` available
-    the construction should simply fall back to being a REAL OPERAND, materialized like any
-    other rvalue. FIX = in the collapsed-head arm, `if (!viable && bin_id >= 0)` drop the
-    collapse and take the real-operand path — but desugar re-derives the role from the AST
-    (lhs.kind == construction), so both ends have to agree; the stamp must carry the decision.
-    This is what stops test/misc/bug.sl's line from compiling even with the aggregate explode.
-
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
     (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,

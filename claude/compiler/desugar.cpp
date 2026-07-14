@@ -515,6 +515,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->class_conversion = p.class_conversion;
     node->agg_conv_spill = p.agg_conv_spill;
     node->class_op_chain = p.class_op_chain;
+    node->op_collapse_head = p.op_collapse_head;
     node->op_bin_eid = p.op_bin_eid;
     node->op_un_eid = p.op_un_eid;
     node->op_aug_eid = p.op_aug_eid;
@@ -1485,6 +1486,7 @@ std::unique_ptr<ast::Node> cloneAstExpr(ast::Node const& n) {
     c->class_conversion = n.class_conversion;
     c->agg_conv_spill = n.agg_conv_spill;
     c->class_op_chain = n.class_op_chain;
+    c->op_collapse_head = n.op_collapse_head;
     c->op_bin_eid = n.op_bin_eid;
     c->op_un_eid = n.op_un_eid;
     c->op_aug_eid = n.op_aug_eid;
@@ -2156,8 +2158,12 @@ ChainAcc lowerOpChain(std::unique_ptr<ast::Node> chain, int& next_id,
     } else {
         std::unique_ptr<ast::Node> head = std::move(n0->children[0]);
         std::unique_ptr<ast::Node> rhs0 = std::move(n0->children[1]);
-        bool collapsed = head->is_construction
-            && widen::deepStrip(head->inferred_type) == widen::deepStrip(C);
+        // The ROLE is classify's, stamped on the node — NOT re-derived from the head's shape.
+        // A construction head is USUALLY the accumulator, but classify DECLINES that collapse
+        // when the class has no op<OP>= to advance it with, and the construction is then an
+        // ordinary rvalue operand of the 2-arg op<OP>. Re-deriving the role here would collapse
+        // it anyway and reach for an op_aug_eid of -1.
+        bool collapsed = n0->op_collapse_head;
         if (collapsed) {
             // Rule 1: the construction never exists as an operand — it IS the accumulator.
             // Rules 2/3: seed with op= only on a DEFAULT (empty) accumulator; a head built

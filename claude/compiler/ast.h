@@ -111,6 +111,11 @@ struct Node {
                                  // class's default field-init tuple — children[2] on a binary
                                  // [lhs, rhs, tuple], children[1] on a UNARY [operand, tuple].
                                  // desugar builds the accumulator + the op calls.
+    bool op_collapse_head = false; // kBinaryExpr[class_op_chain]: the head CONSTRUCTION IS the
+                                 // accumulator (built into it, never an operand). Stamped by
+                                 // classify — the chain lowering OBEYS it rather than
+                                 // re-deriving it from lhs.is_construction, because classify
+                                 // DECLINES the collapse when it does not fit (see parse.h).
     int op_bin_eid = -1;         // 2-arg `op<OP>(lhs, rhs)`  — the head pair in one call
     int op_un_eid = -1;          // 1-arg `op<OP>(operand)`   — an arity-1 UNARY produce-self
     int op_aug_eid = -1;         // 1-arg `op<OP>=(rhs)`      — the fuse

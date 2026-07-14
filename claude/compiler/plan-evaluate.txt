@@ -71,6 +71,15 @@ DECISION 2 — THE LADDER  (which operator each operand is applied with)
 
   1. A fresh CONSTRUCTION at the head — a bare `Class`, `Class()`, or `Class(args)` —
      COLLAPSES INTO the accumulator, constructed with those args. Never an operand.
+     AMENDED 2026-07-13: the collapse is an OPTIMIZATION (it saves one temp), and rules 2/3
+     are what it needs to be POSSIBLE — an operator that ADVANCES the accumulator with one
+     argument. A class with only the 2-arg `op<OP>` has none, and the chain used to give up and
+     report the operator UNDEFINED, though rule 4 could have run it. So rule 1 is DECLINED
+     there: the construction becomes an ORDINARY OPERAND of rule 4, one temp, dead at the
+     semicolon — exactly what the same construction on the RIGHT always cost. (A DEFAULT head
+     always has an `op=` — the synthesized copy — so it always collapses; the decline only
+     fires on a head built WITH ARGS.) The ROLE is the STAMP's, not a shape desugar re-derives
+     — see DECISION 3.
   2. First application to a DEFAULT-constructed accumulator: prefer `acc.op=(rhs)`, fall back
      to `acc.op<OP>=(rhs)`. This is canon 4-10 (String defines op= + op+= and NO 2-arg op+).
      RATIONALE (the user's): the accumulator is ALWAYS a fully CONSTRUCTED object before any
@@ -108,6 +117,11 @@ only pass that has the whole statement in one piece at lowering time.
     class's default field-init tuple as children[2]. Diagnostics STAY here: a class with no
     viable ladder returns false and the existing clean error fires. It reads its own ROLE off
     its lhs (continuation / collapsed head / real-operand head) and checks viability per role.
+    THE ROLE IS THE STAMP'S TOO (`op_collapse_head`, 2026-07-13). Desugar used to RE-DERIVE the
+    collapsed-head role from the AST (lhs.is_construction), which meant classify could not
+    DECIDE it — and so could not DECLINE the collapse when the class had no operator to advance
+    the accumulator with (rule 1, amended). Anything classify decides, classify must SAY: a
+    decision re-derived downstream is a decision classify does not actually own.
   DESUGAR   expandOpChainStmt (destinations) + lowerOpChain (the ladder), running inside
     liftSretCallList so the generated op calls get their own nested rvalues lifted like
     hand-written ones. Precedent: tryDesugarAugAssign — classify stamps, desugar synthesizes.
@@ -164,10 +178,15 @@ COUNTING LIVES IN evaluate.sl
 
 operator.sl's OpDefs/Sum have no ctor/dtor, so a fuse and a no-fuse print identically there —
 which is exactly how the old target-keyed chain fuse survived for months with green goldens.
-Coverage classes, all of which PRINT:
+Coverage classes — READ THIS TABLE BEFORE ADDING ONE. Each is a distinct OPERATOR SET, chosen
+so that a question has exactly one class that can ask it; a new class that duplicates a set
+buys nothing (Z8 was first written with a new `Bin` that was Buf character for character).
+All of these PRINT:
   Acc   ctor/dtor + op= + op<-- + op+= + op-= + 2-arg op+   — the fuse and the mixed chain
   Str   ctor/dtor + op= + op<-- + op+=, NO 2-arg op+        — the only-op+= ladder (canon 51-56)
-  Buf   ctor/dtor + op= + 2-arg op+, NO op+=                — the un-fusable buffer + lifetime
+  Buf   ctor/dtor + op= + 2-arg op+, NO op+=                — the un-fusable buffer + lifetime,
+        and (Z8) the DECLINED head collapse: with no op+= there is nothing to advance a
+        collapsed accumulator with, so a construction head must become an ordinary operand
   Triv  NO ctor/dtor, printing op= / op<-- / op+=           — the transfer gates
   Sw    NO ctor/dtor, printing op= / op<-- / op<-->         — the SWAP gate + aggregates
   Trk   ctor/dtor + printing op= + op<-- + op<-->            — the tuple-of-classes counts
@@ -202,7 +221,12 @@ the objects are countable: each slot costs one accumulator, moved in and dead at
 -- and Z2, the ARRAY form, now costs exactly what Z1's TUPLE form does: it is the regression
 test for the explode retyping an array as a tuple, which made its binding a CROSS-FORM copy
 and spilled the whole aggregate to a temp, a ctor and a dtor per slot)
-and Z7 (the ORDER of construction IN A SLOT, class Zord -- a wrong ANSWER, 99 not the sum).
+and Z7 (the ORDER of construction IN A SLOT, class Zord -- a wrong ANSWER, 99 not the sum),
+Z8/Z8b (a construction head whose COLLAPSE IS DECLINED -- class Buf has the 2-arg op+ and no
+op+=, so it cannot collapse; it costs ONE temp, dead at the semicolon, at the top level AND
+inside a slot. K3 pins the collapse being TAKEN: Str has op+= and no 2-arg op+, so it MUST)
+and Z9 (a CONSTRUCTION as the BROADCAST operand: read by every slot, not re-readable, so it
+is SPILLED and built exactly once -- never cloned, which would strip its is_construction).
 Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS".
 
 
@@ -213,11 +237,10 @@ STILL OPEN (all filed in todo.txt)
   - A class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
     constructed over — the ordering bug one level down, and NOT fixable the same way (see
     below). todo.txt.
-  - A CONSTRUCTION as the LEFT operand only dispatches when the class has the COMPOUND
-    operator (`Add(7) + a` with a 2-arg op+ and no op+= reports "not defined", while the same
-    construction on the RIGHT, and a CALL on the left, both work). The collapsed-head role
-    demands op<OP>= for a head built with args; with a 2-arg op<OP> available it should fall
-    back to being an ordinary operand. todo.txt.
+  (A CONSTRUCTION as the LEFT operand — `C(7) + a` with a 2-arg op+ and no op+= — used to be
+  rejected while the same rvalue worked as a call head and as the right operand. FIXED
+  2026-07-13: rule 1's collapse is an OPTIMIZATION and is now DECLINED there, the construction
+  becoming an ordinary operand of rule 4. See DECISION 2 rule 1 and DECISION 3.)
   (A GLOBAL from a class LVALUE — `global Add gb = ga;` — had the same ordering bug and is now
   UNREACHABLE, not fixed: a global's initializer must be a CONSTANT, so it is rejected. See
   below.)

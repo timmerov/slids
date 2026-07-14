@@ -264,6 +264,15 @@ struct Node {
                                  // [operand, tuple]. A unary runs exactly one operator
                                  // (op_un_eid) — it produces the accumulator's whole value — so
                                  // the seed / fuse / 2-arg ids below are unused on it.
+    bool op_collapse_head = false; // kBinaryExpr[class_op_chain]: the head CONSTRUCTION is the
+                                 // accumulator itself (built into it, never an operand — one
+                                 // temp saved). THE ROLE IS DECIDED HERE, ONCE, and desugar
+                                 // OBEYS it: the collapse is an OPTIMIZATION, and when it does
+                                 // not fit (a head built WITH args needs `op<OP>=`, and the
+                                 // class may only have the 2-arg `op<OP>`) classify declines it
+                                 // and the construction becomes an ORDINARY rvalue operand.
+                                 // desugar used to RE-DERIVE the role from the AST
+                                 // (lhs.is_construction), so it could not be told.
     int op_bin_eid = -1;         // 2-arg `op<OP>(lhs, rhs)`  — the head pair in one call
     int op_un_eid = -1;          // 1-arg `op<OP>(operand)`   — an arity-1 UNARY produce-self
     int op_aug_eid = -1;         // 1-arg `op<OP>=(rhs)`      — the fuse
