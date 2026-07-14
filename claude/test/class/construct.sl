@@ -32,6 +32,84 @@ example instantiation:
 the primary object of this test file is to ensure that every possible
 code path handles class construction and destruction properly.
 
+there are two syntactical shapes for object instantiation:
+instantiation by 1) tuple or 2) assignment.
+the two shapres are usually interchangeable.
+
+    Class name ( initializer ) ;
+    Class name = initializer ;
+
+    A(int x) { }
+    A a(7);
+    A a = 42;
+
+the first exception is when the first field accepts a tuple as an initializer
+and you only want to default initialize the rest of the fields.
+there's no way to specify a tuple of size 1 for the assignment syntax.
+the tuple syntax must be used.
+
+    A( (int,int) x, int y ) { }
+    A a = ( (7,42) ); -->
+        A a = (7,42);
+        a.x = 7; a.y = 42;
+        a = ((7,0), 42)
+    A a( (7,42) ); -->
+        a.x = (7.42); a.y = 0;
+        a = ((7,42), 0)
+
+second exception is when we can't just blindly copy (fast mode) the
+initializer slots into the object fields because a ctor or user defined
+assignment operator must be called (slow mode).
+elision of a temporary object into a class field is fast because the
+copy is eliminated.
+
+consider these definitions:
+
+    A(int x) {
+        op=(A^ rhs) {
+            x = rhs^.x;
+        }
+    }
+    B(int y) {
+        _() { __println("ctor"); }
+        ~() { __println("dtor"); }
+    }
+    C(A y, B z) { }
+    A a(1);
+    B b(2);
+
+    C c1(3,4);
+    C c2(A(5),6);
+    C c3(7,B(8));
+    C c4(a, 9);
+    C c5(10, b);
+
+c1 is fast because c1.y(3) and c1.z(4) are fast.
+c2 is fast because c2.y(A(5)) is an elision of a temporary object.
+c3 is fast because c3.z(B(8)) is an elision of a temporary object.
+c4 is slow because c4.y(a) --> c4.y = a --> c4.y.op=(a) must call
+a user defined assignment operator.
+c5 is slow becaues c5.z(b) --> c5.z = b --> c5.z.op=default(b) must
+initialize c5.y, call ct.y.ctor, then default copy b.
+no possibility of a shortcut there.
+
+the instantiated object is initialized with fast data from the rhs
+and initialized with default values for the slow fields.
+then ctor is called.
+then the slow assignments are made.
+
+    c4.y.x = 0;
+    c4.z = 9;
+    c4.ctor first calls c4.y.ctor
+    c4.y = a; --> c4.y.op=(a);
+
+note:
+the reasoning for the second exception also applies for user defined move
+and swap declarations:
+
+    C c6 <-- (a, b);
+    C c7 <--> (a, b);
+
 things to test:
     ctor/dtor balance
     all code paths calls ctor/dtor

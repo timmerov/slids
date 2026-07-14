@@ -235,22 +235,6 @@ requires lhs and rhs to be the same type.
 the rhs must be mutable for move.
 
     Class cls1 = cls2;
-
-object instantiation sequence when the class does not define
-a matching move/assign operator:
-
-    allocate memory
-    copy/move fields iteratively and recursively
-    call ctor
-
-object instantiation sequence when the class defines a matching
-move/assign operator:
-
-    allocate memory
-    initialize fields
-    call ctor
-    call move/assign operator
-
 */
 
 /*
