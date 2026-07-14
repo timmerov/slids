@@ -3872,10 +3872,12 @@ bool explodeAggregateExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     // This is the ONE shape rule now; the nested case needs no rule of its own, because a
     // nested slot pair explodes in its turn and asks the same question there.
     int n = -1;
+    bool all_arrays = true;
     for (auto& c : e.children) {
         if (!c) continue;
         widen::TypeRef t = widen::strip(c->inferred_type);
         if (!isAggregateType(t)) continue;
+        if (widen::form(t) != widen::Type::Form::kArray) all_arrays = false;
         int cnt = aggregateSlotCount(t);
         if (n < 0) { n = cnt; continue; }
         if (cnt != n) {
@@ -3911,6 +3913,35 @@ bool explodeAggregateExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     // flex, widen), and a nested aggregate slot explodes in its turn.
     inferExpr(tree, *tup, widen::kNoType, diag);
     widen::TypeRef ty = tup->inferred_type;
+
+    // AN ARRAY IS A HOMOGENEOUS TUPLE — AND IT MUST STAY ONE. The slots are carried in a
+    // kTupleExpr, which infers to a TUPLE type: so exploding an ARRAY silently RETYPED the
+    // value, and every site downstream then saw a CROSS-FORM copy (array <- tuple) and
+    // lowered it by spilling the source to a temp and copying leaf by leaf (desugar's
+    // lowerAggCopyStmt). For a class-bearing array that temp costs a ctor and a dtor PER SLOT
+    // — copied in, then immediately overwritten by the very operation that built it. Re-form
+    // the result as the ARRAY of the slot type (widening may have changed the element type,
+    // so it is read off the SLOTS, not off the operand). A nested array slot folds its dims
+    // back in, so `int[2][3]` explodes to `int[2][3]`.
+    if (all_arrays) {
+        std::vector<widen::TypeRef> slots = widen::get(widen::strip(ty)).slots;
+        bool homogeneous = !slots.empty();
+        for (widen::TypeRef s : slots)
+            if (widen::deepStrip(s) != widen::deepStrip(slots[0])) homogeneous = false;
+        if (homogeneous) {
+            widen::TypeRef S = widen::strip(slots[0]);
+            std::vector<int> dims;
+            dims.push_back(n);
+            widen::TypeRef elem = S;
+            if (widen::form(S) == widen::Type::Form::kArray) {
+                widen::Type const& st = widen::get(S);
+                elem = st.elem;
+                for (int d : st.dims) dims.push_back(d);   // snapshot before interning
+            }
+            ty = widen::internArray(elem, dims);
+        }
+    }
+    tup->inferred_type = ty;
 
     // SEQ placement for each spill (outermost = evaluated first, so wrap in reverse):
     // the temp is read by THIS expression alone, so desugar hoists it into the statement's

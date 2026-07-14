@@ -138,6 +138,18 @@ int32 main() {
     (int32, int32) mr2 = mt + ma;                  // tuple op array -> tuple
     __println("mr2= " + mr2[0] + " " + mr2[1]);    // 11 22
 
+    /* A MIXED result (a TUPLE) bound to an ARRAY target. A pure array op re-forms as an
+       ARRAY, so this is the only shape that hands a binding site a genuinely cross-form
+       TUPLE LITERAL — and a literal is not a cross-form COPY: it has no source OBJECT to
+       spill and re-index per slot, it IS elements, and the binding site distributes them at
+       the destination's element type. (Spilling it materialized the whole aggregate; for a
+       class-bearing one that is a ctor and a dtor per slot -- evaluate.sl Z2.) */
+    int32 mx[2] = ma + mt;                         // array target <- a mixed (tuple) result
+    __println("mx= " + mx[0] + " " + mx[1]);       // 11 22
+    int32 my[2] = (0, 0);
+    my = mt + ma;                                  // same, into a LIVE array target
+    __println("my= " + my[0] + " " + my[1]);       // 11 22
+
     /* op= with mixed operands: the lvalue's kind is the store target; the
        arithmetic result is a tuple either way, stored back through the relation. */
     mt += ma;                                      // tuple lvalue += array

@@ -1389,7 +1389,10 @@ int32 main() {
         (Acc, Acc) zc = za + zb;
         __println("Z1 end zc=" + zc[0].v_ + " " + zc[1].v_);                    // 11 22
 
-        // Z2: ARRAY + ARRAY -- an array IS a homogeneous tuple, so it is the same road.
+        // Z2: ARRAY + ARRAY -- an array IS a homogeneous tuple, so it is the same road, and
+        // it COSTS THE SAME as Z1 (the explode re-forms its result as the ARRAY, so the decl
+        // is not a cross-form copy: it used to spill the whole aggregate to a temp -- a ctor
+        // and a dtor per slot -- and copy the zero defaults in, only to overwrite them).
         Acc zd[2] = (Acc(1), Acc(2));
         Acc ze[2] = (Acc(10), Acc(20));
         __println("Z2: Acc zf[2] = zd + ze;");

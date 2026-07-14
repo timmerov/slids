@@ -198,7 +198,10 @@ source evaluated exactly once, a spilling destructure per loop iteration, a disc
 element still runs, an array copy-init from an array lvalue, a copy-init in a NESTED function),
 Z (an operation on an AGGREGATE of classes -- tuple+tuple, array+array, the aug-assign's
 per-slot `op+=`, a scalar class BROADCAST, nested, and a spilled call operand; Acc prints, so
-the objects are countable: each slot costs one accumulator, moved in and dead at the semicolon)
+the objects are countable: each slot costs one accumulator, moved in and dead at the semicolon
+-- and Z2, the ARRAY form, now costs exactly what Z1's TUPLE form does: it is the regression
+test for the explode retyping an array as a tuple, which made its binding a CROSS-FORM copy
+and spilled the whole aggregate to a temp, a ctor and a dtor per slot)
 and Z7 (the ORDER of construction IN A SLOT, class Zord -- a wrong ANSWER, 99 not the sum).
 Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAINS".
 

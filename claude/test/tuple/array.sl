@@ -474,6 +474,31 @@ int32 main() {
         __println("si= " + si[0] + " " + si[1] + " " + si[2]);       // 4 5 6
     }
 
+    /* AN ARRAY STAYS AN ARRAY through the explode. The slots ride in a tuple literal, so an
+       exploded array used to come back TYPED AS A TUPLE — which made every binding of it a
+       CROSS-FORM copy (array <- tuple), lowered by spilling the whole aggregate to a temp and
+       copying it leaf by leaf. Invisible here (a POD temp costs nothing observable) and
+       expensive for classes (a ctor + a dtor per slot -- evaluate.sl Z2). These pin the
+       re-formed TYPE: it must survive a MULTI-DIM shape, a WIDENED element (the element type
+       is read off the SLOTS, not off the operand), and a LIVE target as well as a decl. */
+    {
+        int md[2][3] = ((1,2,3), (4,5,6));
+        int me[2][3] = ((10,20,30), (40,50,60));
+        int mf[2][3] = md + me;                // multi-dim: the dims fold back in
+        __println("mf= " + mf[0][0] + " " + mf[1][2]);               // 11 66
+
+        int8 wa[2] = (1, 2);
+        int wb[2] = (10, 20);
+        int wc[2] = wa + wb;                   // int8[2] + int[2] -> int[2] (WIDENED element)
+        __println("wc= " + wc[0] + " " + wc[1]);                     // 11 22
+
+        int la[2] = (1, 2);
+        int lb[2] = (10, 20);
+        int lc[2] = (0, 0);
+        lc = la + lb;                          // a LIVE target, not a decl
+        __println("lc= " + lc[0] + " " + lc[1]);                     // 11 22
+    }
+
     return 0;
 }
 

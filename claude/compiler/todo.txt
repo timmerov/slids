@@ -8,12 +8,6 @@ quest's progress lives in plan.txt).
 
 BUGS
 
-  * A CLASS-BEARING ARRAY DECL THAT IS SPLIT BUILDS AN EXTRA PAIR OF DEFAULTS (cost only,
-    values and balance are correct). evaluate.sl block Z2 (`Acc zf[2] = zd + ze;`) shows two
-    extra `Acc:ctor: 0` / `Acc:dtor: 0` objects that the TUPLE form (Z1) does not: the array
-    default-fill materializes the zero-value tuple as a temp instead of building it into the
-    elements. Every object is destroyed exactly once, so this is efficiency, not correctness.
-
   * A CONSTRUCTION AS THE LEFT OPERAND OF A CLASS BINARY ONLY DISPATCHES IF THE CLASS HAS THE
     COMPOUND OPERATOR. `Add(7) + a` reports "Operator '+' is not defined on class 'Add'" for
     a class with a 2-arg `op+` and no `op+=`, while `mk() + a` (a CALL — the same rvalue) and
@@ -26,12 +20,6 @@ BUGS
     collapse and take the real-operand path — but desugar re-derives the role from the AST
     (lhs.kind == construction), so both ends have to agree; the stamp must carry the decision.
     This is what stops test/misc/bug.sl's line from compiling even with the aggregate explode.
-
-  * SHOULD A WEAK LITERAL BIND TO A CLASS PARAMETER? `Shift s = 1;` field-fills a class in a
-    DECLARATION, but `1` does NOT convert to a `Shift^` parameter, so a class operator
-    `op<<(Shift^, Shift^)` cannot be called as `s << 1`. Open question, deferred: either the
-    operator is written `op<<(Shift^, int)` (works today), or an argument position gains the
-    same literal-to-class fill a declaration has. Needed by test/misc/bug.sl's line.
 
   * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
     returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
@@ -120,6 +108,12 @@ UNBLOCKED FEATURES
     child rather than guess.
     FIX: mark the two forms apart in the parser, then let a declaration from a tuple take
     the same op= dispatch an assignment does.
+
+  * SHOULD A WEAK LITERAL BIND TO A CLASS PARAMETER? `Shift s = 1;` field-fills a class in a
+    DECLARATION, but `1` does NOT convert to a `Shift^` parameter, so a class operator
+    `op<<(Shift^, Shift^)` cannot be called as `s << 1`. Open question, deferred: either the
+    operator is written `op<<(Shift^, int)` (works today), or an argument position gains the
+    same literal-to-class fill a declaration has. Needed by test/misc/bug.sl's line.
 
 
 BLOCKED FEATURES

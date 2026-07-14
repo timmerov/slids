@@ -1089,6 +1089,17 @@ Phase 5 — classes
     splitTransferInit now peels a chain in a SLOT like an lvalue, and a spilled source is
     re-placed as a GROUP so the temp outlives the transfers that read it. Canon
     tuple/anon.sl + array.sl + combined.sl (numeric), class/evaluate.sl block Z (classes).
+    AN ARRAY STAYS AN ARRAY (2026-07-13, the cost bug Z2 filed). The slots ride in a
+    kTupleExpr, which infers to a TUPLE type — so exploding an ARRAY retyped it, and the decl
+    that received it was a CROSS-FORM copy (array <- tuple), which desugar lowers by spilling
+    the source to a temp and copying leaf by leaf. `Acc zf[2] = zd + ze;` therefore built a
+    whole extra aggregate (a ctor and a dtor PER SLOT), copied the zero defaults out of it,
+    and then overwrote them with the chains. The explode now re-forms its result as the ARRAY
+    of the slot type. Belt to that brace, and the more general statement: A TUPLE LITERAL IS
+    NEVER A CROSS-FORM COPY — it is not an OBJECT to be read once and re-indexed per slot, it
+    IS elements, and every binding site already distributes one at the destination's element
+    type — so lowerAggCopyStmt skips a kTupleExpr source outright (a POD `int a[2] = b + c;`
+    was spilling too; nobody noticed, because PODs do not print).
     STILL DEFERRED: ping-pong (a class with a 2-arg op+ but NO op+= cannot fuse, so each
     un-fusable operand starts a fresh buffer — two alternating buffers would need none);
     arity-2 comparison producing a class + reversed-operand comparison. See

@@ -591,10 +591,6 @@ Z2: Acc zf[2] = zd + ze;
 Acc:ctor: 0
 Acc:ctor: 0
 Acc:ctor: 0
-Acc:ctor: 0
-Acc:dtor: 0
-Acc:dtor: 0
-Acc:ctor: 0
 Acc:op<--: 11
 Acc:dtor: 11
 Acc:ctor: 0

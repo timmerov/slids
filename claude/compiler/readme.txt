@@ -298,7 +298,12 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     classifyArray/TupleFrom*Value arms + tupleFlatSlotCount are DELETED. The COPY
     itself is lowered BY SLOT in desugar (lowerAggregateList: a cross-form / leaf-
     widen copy at a decl/assign/store becomes per-leaf kStoreStmts over a form-
-    agnostic kIndexExpr chain `dst[i] = src[i]`, recursing; a non-lvalue source
+    agnostic kIndexExpr chain `dst[i] = src[i]`, recursing; a TUPLE LITERAL source is
+    NOT a cross-form copy at all and is skipped — a literal is not an OBJECT to be read
+    once and re-indexed, it IS elements, and every binding site already distributes one
+    by slot at the destination's element type (emitInitFill's array<->tuple bridge), so
+    spilling it would materialize the whole aggregate for nothing;
+    a non-lvalue source
     spills to `_$agg`, and a side-effecting index/operand of an LVALUE source is
     hoisted to a `_$ix` temp (hoistLvalueSideEffects) so the source — and a move's
     per-leaf null — is evaluated ONCE, not per slot), so codegen sees only scalar
@@ -555,6 +560,13 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     slot re-enters the rewrite when its own element is classified, so recursion is free.
     The result lands through the tuple-literal distribution the declarator funnel already
     has: element i is built into slot i of the storage that owns it.
+    AN ARRAY STAYS AN ARRAY. The slots are carried in a kTupleExpr, which infers to a TUPLE
+    type — so exploding an array RETYPED it, and every site downstream then saw a CROSS-FORM
+    copy (array <- tuple) and lowered it by spilling the source to a temp and copying leaf by
+    leaf (desugar's lowerAggCopyStmt). For a class-bearing array that temp cost a ctor and a
+    dtor PER SLOT, copied in and immediately overwritten by the very operation that built it.
+    The explode now re-forms its result as the ARRAY of the slot type (read off the SLOTS —
+    widening may have changed the element type — with a nested array's dims folded back in).
     Covers `tuple op tuple`, `array op array`, mixed `array op tuple` (a mixed result is a
     TUPLE — the heterogeneous-capable shape), a scalar BROADCAST into any aggregate
     (`array + 1`, `100 - arr`, `tuple += 1`), SHIFT (an aggregate lhs shifts per slot; a

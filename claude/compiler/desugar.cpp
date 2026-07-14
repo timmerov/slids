@@ -1721,6 +1721,22 @@ std::vector<std::unique_ptr<ast::Node>> lowerAggCopyStmt(ast::Node& s,
     std::vector<std::unique_ptr<ast::Node>> repl;
     int file = s.file_id, tok = s.tok;
 
+    // A TUPLE LITERAL IS NEVER A CROSS-FORM COPY. Everything below spills the source to a
+    // temp and copies it leaf by leaf — because a cross-form source is an OBJECT that has to
+    // be read once and re-indexed per slot. A literal is not an object: it IS elements, and
+    // every binding site already distributes one BY SLOT (emitInitFill's array<->tuple
+    // bridge, which emits each element AT THE DESTINATION'S element type, so a leaf widen
+    // falls out). Spilling it materializes the whole aggregate for nothing — and for a
+    // class-bearing one, a ctor and a dtor per slot.
+    ast::Node const* src0 = nullptr;
+    if (s.kind == ast::Kind::kReturnStmt || s.kind == ast::Kind::kVarDeclStmt
+        || s.kind == ast::Kind::kAssignStmt) {
+        if (!s.children.empty()) src0 = s.children[0].get();
+    } else if (s.kind == ast::Kind::kStoreStmt || s.kind == ast::Kind::kMoveStmt) {
+        if (s.children.size() > 1) src0 = s.children[1].get();
+    }
+    if (src0 && src0->kind == ast::Kind::kTupleExpr) return repl;
+
     // RETURN of a cross-form / leaf-widen aggregate: materialize a `_$ret` temp of
     // the function's return type, copy the value into it BY SLOT, return the temp.
     // (The forms below copy into an already-existing destination lvalue.)
