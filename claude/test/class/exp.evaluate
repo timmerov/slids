@@ -284,8 +284,8 @@ Q3 end q3=23
 Q4: ctor/dtor body
 Acc:ctor: 1
 Acc:ctor: 2
-Acc:ctor: 1
-Acc:ctor: 2
+Acc:ctor: 0
+Acc:ctor: 0
 Acc:ctor: 0
 Hook:ctor chain: 3
 Acc:dtor: 3
@@ -500,13 +500,27 @@ W3: tuple copy w4=7 5
 W4: array w5=7 5 nested w6=7 5 7
 W5: mixed w7=99 7
 W6: build-in-place w8=99
+W7: field wf=7 body saw 7
+W8: nested wg=7 body saw 7
+W9: build-in-place field wh=99
+Trk:ctor: 4
+Trk:ctor: 0
+Trk:op=: 4
+Trk:ctor: 0
+Trk:op=: 4
+W10: field op= wp=4 4
 W end (locals dtor next)
+Trk:dtor: 4
+Trk:dtor: 4
+Trk:dtor: 4
 X: spills die at the semicolon
 X1: Trkpair xp = mkTrkTup();
 Trk:ctor: 1
 Trk:ctor: 2
-Trk:ctor: 1
-Trk:ctor: 2
+Trk:ctor: 0
+Trk:op=: 1
+Trk:ctor: 0
+Trk:op=: 2
 Trk:dtor: 2
 Trk:dtor: 1
 X1 end (the (Trk,Trk) temp is already dead)

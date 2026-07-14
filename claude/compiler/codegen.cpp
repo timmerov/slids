@@ -1909,21 +1909,31 @@ void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out
     }
 }
 
-// The BODY of @<Name>__$ctor: construct each hook-carrying field (base at slot 0
-// first), stamp this class's vtable — before the user body runs, so a virtual call
-// inside the ctor already dispatches here, and independent of whether a user ctor
-// exists — then run the user ctor body @<Name>__$ctor__impl (present only when the
-// author defined `_()`).
-void emitClassCtorBody(std::string const& addr, widen::TypeRef cs,
-                       std::ostream& out) {
-    bool has_ctor = widen::get(cs).has_ctor;   // capture before emitSlotCtors interns
-    emitSlotCtors(addr, cs, out);
+// A class's OWN half of construction: stamp this class's vtable — before the user body
+// runs, so a virtual call inside the ctor already dispatches here, and independent of
+// whether a user ctor exists — then run the user ctor body @<Name>__$ctor__impl (present
+// only when the author defined `_()`). The FIELDS are already constructed when this runs.
+//
+// THIS IS THE SEAM. A class field initialized from an OBJECT must be copied into AFTER its
+// own ctor and BEFORE this — the body has to see the copied value. Splitting the two halves
+// is what lets the construction walk splice the copy in between them; @<Name>__$ctor is
+// still defined as their composition, so the two can never drift apart.
+void emitClassOwnCtor(std::string const& addr, widen::TypeRef cs, std::ostream& out) {
     if (g_vtable_syms.count(widen::classSymbol(cs)))
         out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
             << addr << "\n";
-    if (has_ctor)
+    if (widen::get(cs).has_ctor)
         out << "  call void @" << widen::classSymbol(cs)
             << "__$ctor__impl(ptr " << addr << ")\n";
+}
+
+// The BODY of @<Name>__$ctor: the FIELDS half (base at slot 0 first), then this class's
+// OWN half. Nothing else may come between them here — a per-SITE field copy can, and does,
+// but only through the construction walk (emitConstructAt), which calls these same two.
+void emitClassCtorBody(std::string const& addr, widen::TypeRef cs,
+                       std::ostream& out) {
+    emitSlotCtors(addr, cs, out);
+    emitClassOwnCtor(addr, cs, out);
 }
 
 // Destruct: DISPATCH — the mirror of construction. A class object routes to its
@@ -2358,6 +2368,91 @@ void closeRhsSeq(ast::Node const* seq, SeqTemps& temps, SymTab const& syms,
     emitSeqTeardown(temps, out);
 }
 
+// Does this initializer TREE hand an OBJECT to some class field (classify parked it as a
+// kConvertExpr[field_transfer])? Only the field-list STRUCTURE is scanned — a tuple literal
+// and its nested field lists — never into an operand expression.
+bool initHasFieldTransfer(ast::Node const& init) {
+    if (init.field_transfer) return true;
+    if (init.kind != ast::Kind::kTupleExpr) return false;
+    for (auto const& c : init.children)
+        if (c && initHasFieldTransfer(*c)) return true;
+    return false;
+}
+
+// ── THE CONSTRUCTION WALK ──────────────────────────────────────────────────
+// CONSTRUCTION IS ONE WALK, NOT TWO. The ordinary path is two passes over the same tree —
+// emitInitFill writes the VALUES, then emitConstructed runs the HOOKS — and all the values
+// land before any hook does. That is fine until a class field is initialized from an OBJECT:
+// its copy has to land BETWEEN its own ctor and the enclosing class's ctor BODY (a class can
+// only be copied into; and the body must see the copied value), which is a point that falls
+// exactly BETWEEN the two passes, at every level of the tree at once. There is nowhere to put
+// it. So when the initializer carries an object, ONE walk does both, interleaved:
+//
+//   fill this level's leaves        (from the field list)
+//   per class field, in slot order  (the base is slot 0, so it goes first):
+//       build + construct it        (recursing here, or the ordinary 2-pass path when the
+//                                    subtree holds no object — which is the common case)
+//       copy the object in          (@F__$copy — the author's op=, never a blit)
+//   this class's OWN half           (vptr stamp + @T__$ctor__impl — the body, last)
+//
+// A subtree with no object initializer NEVER enters the walk: it takes the ordinary path and
+// emits exactly what it emits today. So the walk only unfolds along the path down to an
+// actual object, and everything else still costs one call to the shared @F__$ctor.
+void emitConstructWalk(std::string const& addr, widen::TypeRef type,
+                       ast::Node const& init, SymTab const& syms, strings::Pool& pool,
+                       std::ostream& out, diagnostic::Sink& diag) {
+    widen::TypeRef st = widen::strip(type);
+    widen::Type::Form f = widen::form(st);
+    std::string llty = llvmForRef(type);
+
+    // An AGGREGATE has no ctor of its own — walk its slots and stop.
+    if ((f == widen::Type::Form::kArray || f == widen::Type::Form::kTuple)
+        && init.kind == ast::Kind::kTupleExpr) {
+        bool arr = (f == widen::Type::Form::kArray);
+        int n = arr ? widen::get(st).dims[0]
+                    : static_cast<int>(widen::get(st).slots.size());
+        for (int i = 0; i < n && i < static_cast<int>(init.children.size()); i++) {
+            if (!init.children[i]) continue;
+            widen::TypeRef et = arr ? arrayElemOf(st) : widen::get(st).slots[i];
+            std::string gep = newTmp(arr ? "welt" : "wslot");
+            out << "  " << gep << " = getelementptr inbounds " << llty << ", ptr "
+                << addr << (arr ? ", i64 0, i64 " : ", i32 0, i32 ") << i << "\n";
+            emitConstructAt(gep, et, llvmForRef(et), init.children[i].get(),
+                            /*is_move=*/false, /*sret_in_place=*/false,
+                            /*register_dtor=*/false, nullptr, syms, pool, out, diag);
+        }
+        return;
+    }
+
+    assert(f == widen::Type::Form::kSlid && init.kind == ast::Kind::kTupleExpr
+        && "the construction walk runs on a class built from its field list");
+    std::vector<widen::TypeRef> slots = widen::get(st).slots;   // copy: recursion may intern
+    for (std::size_t i = 0; i < slots.size() && i < init.children.size(); i++) {
+        if (!init.children[i]) continue;
+        ast::Node const& fi = *init.children[i];
+        std::string gep = newTmp("wfld");
+        out << "  " << gep << " = getelementptr inbounds " << llty << ", ptr "
+            << addr << ", i32 0, i32 " << i << "\n";
+        if (fi.field_transfer) {
+            // The field is BUILT from its own defaults (children[0] — its author defaults,
+            // recursively), fully CONSTRUCTED, and only THEN copied into from the source.
+            assert(fi.children.size() == 2 && "field_transfer = [defaults, source]");
+            emitConstructAt(gep, slots[i], llvmForRef(slots[i]), fi.children[0].get(),
+                            /*is_move=*/false, /*sret_in_place=*/false,
+                            /*register_dtor=*/false, nullptr, syms, pool, out, diag);
+            std::string src = emitLvalueAddr(*fi.children[1], syms, pool, out, diag,
+                                             /*allow_partial=*/true);
+            emitCopy(gep, src, widen::strip(slots[i]), out);
+            continue;
+        }
+        emitConstructAt(gep, slots[i], llvmForRef(slots[i]), &fi,
+                        /*is_move=*/false, /*sret_in_place=*/false,
+                        /*register_dtor=*/false, nullptr, syms, pool, out, diag);
+    }
+    // The class's OWN half runs LAST — the body sees every field in its final state.
+    emitClassOwnCtor(addr, st, out);
+}
+
 // CONSTRUCT a value into raw storage at `addr`: fill from `init` (nullptr =
 // default-construct — no field-init, ctor still runs), then finalize (hooks +
 // dtor registration). `sret_in_place` lets an exact-typed sret CALL initializer
@@ -2378,6 +2473,17 @@ void emitConstructAt(std::string const& addr, widen::TypeRef type,
         emitCall(*init, syms, pool, out, diag, addr);
         if (register_dtor && typeNeedsHook(widen::strip(type), /*ctor=*/true)) {
             assert(scope && "sret call init without a dtor scope");
+            scope->objs.push_back({addr, widen::strip(type), ""});
+        }
+        return;
+    }
+    // An initializer that hands an OBJECT to a class field cannot be filled and then
+    // constructed over — its copy belongs between that field's ctor and the enclosing
+    // body. ONE WALK does both, interleaved. Everything else keeps the two-pass path.
+    if (init && initHasFieldTransfer(*init)) {
+        emitConstructWalk(addr, type, *init, syms, pool, out, diag);
+        if (register_dtor && typeNeedsHook(widen::strip(type), /*ctor=*/true)) {
+            assert(scope && "class instance constructed without a dtor scope");
             scope->objs.push_back({addr, widen::strip(type), ""});
         }
         return;

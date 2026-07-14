@@ -514,6 +514,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->ctor_no_args = p.ctor_no_args;
     node->class_conversion = p.class_conversion;
     node->agg_conv_spill = p.agg_conv_spill;
+    node->field_transfer = p.field_transfer;
     node->class_op_chain = p.class_op_chain;
     node->op_collapse_head = p.op_collapse_head;
     node->op_bin_eid = p.op_bin_eid;
@@ -1485,6 +1486,7 @@ std::unique_ptr<ast::Node> cloneAstExpr(ast::Node const& n) {
     c->ctor_no_args = n.ctor_no_args;
     c->class_conversion = n.class_conversion;
     c->agg_conv_spill = n.agg_conv_spill;
+    c->field_transfer = n.field_transfer;
     c->class_op_chain = n.class_op_chain;
     c->op_collapse_head = n.op_collapse_head;
     c->op_bin_eid = n.op_bin_eid;

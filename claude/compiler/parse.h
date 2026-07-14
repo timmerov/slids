@@ -264,6 +264,14 @@ struct Node {
                                  // [operand, tuple]. A unary runs exactly one operator
                                  // (op_un_eid) — it produces the accumulator's whole value — so
                                  // the seed / fuse / 2-arg ids below are unused on it.
+    bool field_transfer = false; // kConvertExpr: a class FIELD whose initializer is an OBJECT
+                                 // (a value of the field's own class, not a field list for it)
+                                 // — children = [the field's DEFAULT field list, the SOURCE].
+                                 // A class can only be COPIED INTO, so the copy has to land
+                                 // BETWEEN the field's own ctor and the enclosing class's ctor
+                                 // BODY (which must see the final field). Codegen's ONE WALK
+                                 // builds the field from the defaults, runs its ctor, copies
+                                 // the source in through op=, and only then runs the body.
     bool op_collapse_head = false; // kBinaryExpr[class_op_chain]: the head CONSTRUCTION is the
                                  // accumulator itself (built into it, never an operand — one
                                  // temp saved). THE ROLE IS DECIDED HERE, ONCE, and desugar

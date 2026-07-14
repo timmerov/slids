@@ -1626,6 +1626,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // Already lowered (a class conversion rewritten to construct + op= on a
             // prior inferExpr pass) — idempotent: its type is the target.
             if (e.class_conversion) { e.inferred_type = e.return_type; return; }
+            // A parked class-FIELD transfer — [defaults, source], already typed as the field.
+            // Idempotent, and NOT a value conversion: codegen builds and copies it.
+            if (e.field_transfer) { e.inferred_type = e.return_type; return; }
             assert(e.children.size() == 1 && "kConvertExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
@@ -2924,7 +2927,38 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             }
             std::unique_ptr<parse::Node> slot;
             if (pi < provided.size() && provided[pi] && sameClass) {
-                slot = std::move(provided[pi++]);   // same-class value -> copy
+                auto src = std::move(provided[pi++]);
+                // A CONSTRUCTION of the field's own class is NOT an object to copy in — it is
+                // a FIELD LIST in disguise (`Holder h( B(3,4) )`), and it BUILDS IN ITS SLOT:
+                // desugar unwraps it to its per-field tuple, so there is no temp and no copy,
+                // and its ctor sees the values it was written with. Leave it exactly as it is.
+                //
+                // Anything ELSE of the field's class is an OBJECT, and a class can only be
+                // COPIED INTO once it EXISTS. So the source must not be part of the FILL: it
+                // would be blitted in past the class's own op=, and then the field's ctor
+                // would run on top of it and throw it away. Park it — the slot becomes
+                // [the field's DEFAULT field list, the SOURCE] — and codegen's construction
+                // WALK builds the field, runs its ctor, copies the source in through op=, and
+                // only THEN runs the enclosing ctor body, which must SEE the copied value
+                // (evaluate.sl Q4 pins that end).
+                bool builds_in_place = src->kind == parse::Kind::kCallExpr
+                                    && src->is_construction;
+                if (builds_in_place) {
+                    slot = std::move(src);
+                } else {
+                    auto def = classZeroValue(tree, ft, s.file_id, s.tok, diag);
+                    def->inferred_type = ft;
+                    auto w = std::make_unique<parse::Node>();
+                    w->kind = parse::Kind::kConvertExpr;
+                    w->field_transfer = true;
+                    w->inferred_type = ft;
+                    w->return_type = ft;
+                    w->file_id = src->file_id;
+                    w->tok = src->tok;
+                    w->children.push_back(std::move(def));
+                    w->children.push_back(std::move(src));
+                    slot = std::move(w);
+                }
             } else if (is_base) {
                 // FLAT: the base consumes its flat width of initializers (maybe 0). A base
                 // is a subobject — an abstract base is allowed (the concrete derived

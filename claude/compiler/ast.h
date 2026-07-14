@@ -111,6 +111,11 @@ struct Node {
                                  // class's default field-init tuple — children[2] on a binary
                                  // [lhs, rhs, tuple], children[1] on a UNARY [operand, tuple].
                                  // desugar builds the accumulator + the op calls.
+    bool field_transfer = false; // kConvertExpr: a class FIELD initialized from an OBJECT —
+                                 // children = [the field's DEFAULT field list, the SOURCE].
+                                 // codegen's construction WALK builds the field, runs its
+                                 // ctor, THEN copies the source in (op=), so the enclosing
+                                 // ctor body sees the copied value. See parse.h.
     bool op_collapse_head = false; // kBinaryExpr[class_op_chain]: the head CONSTRUCTION IS the
                                  // accumulator (built into it, never an operand). Stamped by
                                  // classify — the chain lowering OBEYS it rather than

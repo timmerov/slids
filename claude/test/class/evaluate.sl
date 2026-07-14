@@ -300,6 +300,15 @@ Ord(int v_) {
     int get() { return v_; }
 }
 
+// W7-W9's holders. A class FIELD initialized from an object is the ordering bug one level
+// down, and the ctor BODY pins the seam from the other side: it reads the field, so the copy
+// must ALREADY have landed when the body runs (Q4's Hook says the same thing about a chain).
+// Ord's ctor writes 99, so a field FILLED and then constructed over reads back 99 -- and so
+// does the body. Nested one more level (OrdOuter), the seam is two levels inside generated
+// code, where the site cannot reach it at all.
+OrdBox(Ord o_, int seen_)      { _() { seen_ = o_.get();      } ~() { } }
+OrdOuter(OrdBox b_, int seen_) { _() { seen_ = b_.o_.get();   } ~() { } }
+
 // The TUPLE-OF-CLASSES counter (block V). Every lifecycle op prints, including all three
 // transfers -- a tuple slot filled by a blit instead of by the operator is then VISIBLE
 // (a missing Trk:op= line), which is what the transfer invariant is about. A move husks
@@ -1272,6 +1281,32 @@ int32 main() {
         // copy FROM, so it elides and the ctor's own write stands.
         Ord w8 = Ord(3);
         __println("W6: build-in-place w8=" + w8.get());                            // 99
+
+        // W7: A CLASS FIELD is the same rule one level down, and it is the case the decl's
+        // peel could NOT reach: the copy has to land between the FIELD's ctor and the
+        // enclosing class's ctor BODY, which is a point INSIDE generated code. It used to be
+        // FILLED from wa and constructed over, so the field read back 99 -- and so did the
+        // body, which is the other half of the claim: the body must SEE the copied value.
+        OrdBox wf(wa, 0);
+        __println("W7: field wf=" + wf.o_.get() + " body saw " + wf.seen_);        // 7 7
+
+        // W8: TWO levels down. The site emits ONE call to OrdOuter's ctor and everything
+        // below it is generated code, so there is no seam at the site to splice into -- the
+        // construction WALK has to reach the field wherever it lives.
+        OrdOuter wg(OrdBox(wa, 0), 0);
+        __println("W8: nested wg=" + wg.b_.o_.get() + " body saw " + wg.seen_);    // 7 7
+
+        // W9: a CONSTRUCTION as a class field still BUILDS IN PLACE -- it is a field list, not
+        // an object, so there is no temp and no copy, and its ctor's own write stands.
+        OrdBox wh(Ord(1), 0);
+        __println("W9: build-in-place field wh=" + wh.o_.get());                   // 99
+
+        // W10: the field copy dispatches the AUTHOR'S op=. It used to be a BLIT -- one
+        // whole-value store, straight past the operator (the transfer invariant, by omission,
+        // for the sixth time). Trk's op= PRINTS, so the golden says whether it ran.
+        Trk wt(4);
+        Trkpair wp(wt, wt);
+        __println("W10: field op= wp=" + wp.a_.v_ + " " + wp.b_.v_);               // 4 4
 
         __println("W end (locals dtor next)");
     }

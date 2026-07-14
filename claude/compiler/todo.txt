@@ -102,6 +102,23 @@ UNBLOCKED FEATURES
     operator is written `op<<(Shift^, int)` (works today), or an argument position gains the
     same literal-to-class fill a declaration has. Needed by test/misc/bug.sl's line.
 
+  * what is the proper way to initialize a class object with a class field?
+    A(int x) { ... } B(A y, int z) { ... } A a(1); B b(a, 2);
+    desugars to:
+    b.y.x = ?; b.z = 2; b.ctor() which calls: the injected b.y.ctor then the B:ctor body.
+    when do we call b.y.op=(a) ?
+    seems like it should happen before B:ctor. but it can't happen until after b.y.ctor.
+    option 1:
+        B b(a,2); becomes B b(0,2); b.y = a; which is almost B b = (a,2);
+        ie b.y is default initialized then copy-assigned from a.
+    option 2:
+        remove the field ctor injection from the class ctor.
+        do the ctor stuff inline like the old days.
+    option 3:
+        compile error.
+    option 4:
+        pass the initializers to enhanced ctors which will copy fields if they need to.
+        claude says: make construction one walk instead of two.
 
 BLOCKED FEATURES
 
