@@ -2742,6 +2742,36 @@ bool checkArrayValueAssign(widen::TypeRef dest, parse::Node const& rhs,
     return true;
 }
 
+// A tuple LITERAL flexes its slots into `dest` during inferExpr (kTupleExpr), but
+// ONLY when the arities already match — a wrong-size literal (`(int,int,int) t(5,5)`)
+// never flexed, so its slot COUNT must be checked HERE, recursively. Codegen walks the
+// DEST width and extractvalues past a short source's end (invalid IR), so an unchecked
+// mismatch is a miscompile, not a soft error. Count only: per-leaf flex/narrowing stays
+// with inferExpr/checkValueWiden, so a literal still fits into a smaller leaf. Recurses
+// only into nested TUPLE slots — a class slot was already constructed and an array slot
+// validated by classifyArrayFromTuple during inferExpr, so re-checking would double-report.
+void checkTupleLiteralArity(widen::TypeRef dest, parse::Node const& lit,
+                            diagnostic::Sink& diag) {
+    if (lit.kind != parse::Kind::kTupleExpr) return;
+    widen::TypeRef ds = widen::strip(dest);
+    if (!isAggregateType(ds)) return;
+    int dn = aggregateSlotCount(ds);
+    int rn = static_cast<int>(lit.children.size());
+    if (dn != rn) {
+        diagnostic::report(diag, {lit.file_id, lit.tok,
+            "Cannot assign '" + widen::spellOrEmpty(lit.inferred_type) + "' to '"
+            + widen::spellOrEmpty(dest) + "'; slot count differs ("
+            + std::to_string(rn) + " vs " + std::to_string(dn) + ").", {}});
+        return;
+    }
+    for (int i = 0; i < dn; i++) {
+        if (!lit.children[i]) continue;
+        widen::TypeRef slot = aggregateSlotType(ds, i);
+        if (widen::form(widen::strip(slot)) == widen::Type::Form::kTuple)
+            checkTupleLiteralArity(slot, *lit.children[i], diag);
+    }
+}
+
 // Deep-clone an expression subtree (a field default reused at a construction
 // site). parse::Node holds unique_ptr children, so it can't be copy-constructed.
 std::unique_ptr<parse::Node> cloneExpr(parse::Node const& n) {
@@ -3167,11 +3197,15 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
         bool rhsAgg = isAgg(rhs.inferred_type);
         if (destAgg && rhsAgg) {
             // Both tuple/array; the arms leave only tuple <- tuple. A tuple LITERAL
-            // already flexed its slots into `dest` via inferExpr (leave it). A
-            // tuple VALUE needs SHAPE match — codegen's per-element widen::convert
-            // handles leaf compat (widen / narrow / cross-family).
-            if (rhs.kind != parse::Kind::kTupleExpr
-                && rhs.inferred_type != widen::kNoType) {
+            // flexed its slots into `dest` via inferExpr, but only when the ARITY
+            // matched — so a wrong-size literal still needs its slot COUNT checked
+            // (checkTupleLiteralArity), else codegen walks the dest width past a
+            // short source's end and emits invalid IR. A tuple VALUE needs the full
+            // SHAPE match — codegen's per-element widen::convert handles leaf compat
+            // (widen / narrow / cross-family).
+            if (rhs.kind == parse::Kind::kTupleExpr) {
+                checkTupleLiteralArity(dest, rhs, diag);
+            } else if (rhs.inferred_type != widen::kNoType) {
                 checkAggregateShapeMatch(dest, rhs.inferred_type, rhs, diag);
             }
         } else if (destAgg != rhsAgg) {

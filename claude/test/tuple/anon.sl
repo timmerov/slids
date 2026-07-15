@@ -452,3 +452,12 @@ int32 main() {
 //    h[0] <--> h[1];
 //    return h[0];
 //}
+
+/* a tuple initializer must match the tuple's SIZE — a short literal never flexed into the
+   wider dest (flex only happens when the arities already match), so an unchecked mismatch
+   reaches codegen, which walks the dest width and extractvalues past the source's end. */
+//-EXPECT-ERROR: slot count differs
+//int neg_tuple_init_arity() {
+//    (int,int,int) t(5,5);
+//    return t[0];
+//}

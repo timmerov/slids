@@ -55,8 +55,5 @@ int32 main() {
     fred;
     */
 
-    /* generates bad ll */
-    //(int,int,int) tup(5,5); tup;
-
     return 0;
 }
