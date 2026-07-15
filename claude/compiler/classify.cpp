@@ -70,6 +70,10 @@ bool isBareLvalue(parse::Node const& n) {
         || k == parse::Kind::kDerefExpr;
 }
 
+// The DEEP re-readable-lvalue test (defined below): may a source be re-read once per slot
+// with no duplicated side effect? Forward-declared here for the class-field spread + spill.
+bool isReReadableLvalue(parse::Node const& n);
+
 // The preferred user-facing spelling for an inferred-from-literal type: the
 // 32-bit defaults read as int / uint / float (their narrow preferred names), so
 // `a = 42` infers `int` (matching an explicitly-typed sibling's ##type), not the
@@ -2921,7 +2925,7 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                 == widen::deepStrip(info.type)) {
             return;
         }
-        bool lvalue = isBareLvalue(*s.children[0]);
+        bool lvalue = isReReadableLvalue(*s.children[0]);
         if (isAggregateType(srcT) && lvalue) {
             int m = aggregateSlotCount(srcT);
             for (int i = 0; i < m; i++) {
@@ -3993,6 +3997,28 @@ bool isReReadableOperand(parse::Node const& e) {
         || isReReadableLvalue(e);
 }
 
+// THE take-the-source-apart spill — the ONE helper every per-slot site funnels through (the
+// aggregate conversion, the class-field spread, and the slot-wise explode). A source read once
+// PER SLOT must be evaluated ONCE unless it is a re-readable OPERAND (isReReadableOperand: a
+// literal / nullptr / an access path with no side effect — the SAME question the destructure
+// asks). When it isn't, `src` is spilled via spillToTemp: `src` becomes the temp read and the
+// decl is appended to `spills` for the CALLER to PLACE — SEQ / GROUP / agg_conv_spill, the
+// caller's one explicit choice (THE SPILL FUNNEL). A take-apart tuple LITERAL is the caller's
+// concern (handled before the call). Returns true iff a spill was minted. This is the single
+// point that answers "may I re-index this in place, or must I evaluate it once?" — the old
+// per-site `isBareLvalue` gate saw only the outermost node and re-ran a side-effecting subscript
+// / base (`arr[pick()]`, `get()^.f`) once per slot; todo.txt.
+bool spillIfNotReReadable(parse::Tree& tree, std::unique_ptr<parse::Node>& src,
+                          char const* name,
+                          std::vector<std::unique_ptr<parse::Node>>& spills) {
+    if (isReReadableOperand(*src)) return false;
+    widen::TypeRef t = src->inferred_type;   // capture BEFORE the move
+    Spill sp = spillToTemp(tree, std::move(src), t, name);
+    spills.push_back(std::move(sp.decl));
+    src = std::move(sp.read);
+    return true;
+}
+
 // One operand of an exploding operation, prepared so slot i can be produced on demand.
 struct AggOperand {
     parse::Node* node = nullptr;   // what to read (the operand, or the spill temp)
@@ -4016,12 +4042,7 @@ AggOperand prepareOperand(parse::Tree& tree, std::unique_ptr<parse::Node>& child
         a.node = child.get();
         return a;
     }
-    if (!isReReadableOperand(*child)) {
-        widen::TypeRef srcT = child->inferred_type;    // BEFORE the move
-        Spill sp = spillToTemp(tree, std::move(child), srcT, "_$agg");
-        spills.push_back(std::move(sp.decl));
-        child = std::move(sp.read);
-    }
+    spillIfNotReReadable(tree, child, "_$agg", spills);
     a.node = child.get();
     return a;
 }
@@ -5051,32 +5072,24 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
     // array element type, dangling a held get()-ref (arena safety).
     std::vector<widen::TypeRef> slotTypes;
     for (int i = 0; i < n; i++) slotTypes.push_back(aggregateSlotType(Ts, i));
-    // Source-once: a tuple LITERAL yields its element i in place; a bare lvalue is
-    // re-indexed (no side effect to duplicate); anything else (a call / op / another
-    // aggregate value) is SPILLED to a `_$cinit` temp evaluated once, and each slot
-    // indexes the temp. The spill decl is stashed for desugar to hoist before the
-    // statement (agg_conv_spill), mirroring the class-conversion lift.
-    bool bareLvalue = isBareLvalue(operand);
+    // Source-once (THE SHARED PREDICATE + THE SPILL FUNNEL): a tuple LITERAL yields its
+    // element i in place; a RE-READABLE lvalue (`isReReadableLvalue` — an access path with
+    // no side effect, the SAME question the destructure and the slot-wise explode ask) is
+    // re-indexed in place; anything else (a call / op, OR an lvalue whose subscript or base
+    // carries a side effect, e.g. `arr[pick()]` / `get()^.f`) is SPILLED via `spillToTemp`
+    // to a `_$cinit` temp evaluated ONCE, and each slot indexes the temp. (The old gate was
+    // the SHALLOW `isBareLvalue`, which sees only the outermost node kind — so a side-effecting
+    // subscript/base was re-cloned per slot and the side effect ran N times; todo.txt.) The
+    // spill decl is stashed for desugar to hoist before the statement (agg_conv_spill).
+    widen::TypeRef opType = operand.inferred_type;
     std::unique_ptr<parse::Node> spill_decl;
     int spill_id = -1;
-    if (!srcIsLit && !bareLvalue) {
-        parse::Entry se;
-        se.kind = parse::EntryKind::kLocalVar;
-        se.name = "_$cinit";
-        se.slids_type = srcT;
-        se.file_id = f;
-        se.tok = tk;
-        spill_id = static_cast<int>(tree.entries.size());
-        tree.entries.push_back(std::move(se));
-        spill_decl = std::make_unique<parse::Node>();
-        spill_decl->kind = parse::Kind::kVarDeclStmt;
-        spill_decl->name = "_$cinit";
-        spill_decl->name_tok = tk;
-        spill_decl->resolved_entry_id = spill_id;
-        spill_decl->return_type = operand.inferred_type;
-        spill_decl->file_id = f;
-        spill_decl->tok = tk;
-        spill_decl->children.push_back(std::move(e.children[0]));   // the source
+    if (!srcIsLit) {
+        std::vector<std::unique_ptr<parse::Node>> spills;
+        if (spillIfNotReReadable(tree, e.children[0], "_$cinit", spills)) {
+            spill_decl = std::move(spills[0]);
+            spill_id = e.children[0]->resolved_entry_id;   // e.children[0] is now the temp read
+        }
     }
     std::vector<std::unique_ptr<parse::Node>> lit;
     if (srcIsLit) for (auto& c : operand.children) lit.push_back(std::move(c));
@@ -5097,7 +5110,7 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
                 base->kind = parse::Kind::kIdentExpr;
                 base->name = "_$cinit";
                 base->resolved_entry_id = spill_id;
-                base->inferred_type = operand.inferred_type;
+                base->inferred_type = opType;
                 base->file_id = f;
                 base->tok = tk;
             } else {
@@ -5317,14 +5330,15 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     if (prelude && !s.children.empty() && s.children[0]
                         && s.children[0]->kind != parse::Kind::kTupleExpr) {
                         inferExpr(tree, *s.children[0], widen::kNoType, diag);
-                        bool bare_ident =
-                            s.children[0]->kind == parse::Kind::kIdentExpr;
+                        // An AGGREGATE source spread across the fields is taken apart by the ONE
+                        // helper: a re-readable lvalue is spread in place; a call / op /
+                        // side-effecting access path is evaluated ONCE into `_$cinit` (SEQ-placed
+                        // below via seqSpill). A scalar source is not a spread — left alone.
                         widen::TypeRef srcT = s.children[0]->inferred_type;
-                        if (!bare_ident && isAggregateType(widen::strip(srcT))) {
-                            Spill sp = spillToTemp(tree, std::move(s.children[0]), srcT,
-                                                   "_$cinit");
-                            cinit_decl = std::move(sp.decl);
-                            s.children[0] = std::move(sp.read);
+                        if (isAggregateType(widen::strip(srcT))) {
+                            std::vector<std::unique_ptr<parse::Node>> spills;
+                            if (spillIfNotReReadable(tree, s.children[0], "_$cinit", spills))
+                                cinit_decl = std::move(spills[0]);
                         }
                     }
                     // A `= (tuple)` value-init routes through the class-from-VALUE funnel: a

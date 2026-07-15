@@ -305,8 +305,8 @@ int32 main() {
         __println("xwret= " + xr[0] + " " + xr[1]);                // 1 2
     }
 
-    /* a side-effecting array index in a cross-form copy / move SOURCE is evaluated
-       ONCE — "pick" prints once per statement. */
+    /* a side-effecting array index in a cross-form copy / move / conversion SOURCE is
+       evaluated ONCE — "pick" prints once per statement, never once per slot. */
     {
         int cg[2][2] = ((1,2), (3,4));
         (int, int) ct = cg[pick()];          // cross-form copy: array row -> tuple
@@ -314,6 +314,31 @@ int32 main() {
         (int, int) cm = (0, 0);
         cm <-- cg[pick()];                   // cross-form move: array row -> tuple
         __println("cm= " + cm[0] + " " + cm[1]);                   // 3 4
+        /* the explicit (Type = value) CONVERSION mints a per-slot conversion DIRECTLY,
+           with no decl-level spill ahead of it, so the conversion's OWN source-once spill
+           is the sole guard. The old SHALLOW isBareLvalue gate re-indexed cg[pick()] per
+           slot here ("pick" twice); the one shared re-readable predicate spills it once. */
+        (int, int) cc = ((int, int) = cg[pick()]);   // cross-form conversion source
+        __println("cc= " + cc[0] + " " + cc[1]);                   // 3 4
+        /* the same conversion source in the MOVE position — the spill must be hoisted
+           before the move too (it used to reach codegen intact and assert). */
+        (int, int) cmv = (0, 0);
+        cmv <-- ((int, int) = cg[pick()]);
+        __println("cmv= " + cmv[0] + " " + cmv[1]);                // 3 4
+        /* the SLOT-WISE EXPLODE site: a side-effecting operand of an aggregate operation
+           spills once too — prepareOperand shares the one helper. */
+        (int, int) ce = cg[pick()] + (10, 20);
+        __println("ce= " + ce[0] + " " + ce[1]);                   // 13 24
+        /* the CLASS-FIELD spread feeder: a side-effecting source spread into a CLASS
+           target's fields spills once — the feeder shares the one helper. */
+        Point cp = cg[pick()];
+        __println("cp= " + cp.x_ + " " + cp.y_);                   // 3 4
+        /* a side-effecting BASE (not the final subscript): the outer subscript is const,
+           but cube[pick()] in the base still forces a single spill (the deep predicate
+           recurses into the access path, unlike the old shallow gate). */
+        int cube[2][2][2] = ( ((1,2),(3,4)), ((5,6),(7,8)) );
+        (int, int) cb = ((int, int) = cube[pick()][0]);
+        __println("cb= " + cb[0] + " " + cb[1]);                   // 5 6
     }
 
     /* CLASS LEAVES — a POD class as the aggregate leaf. array-of-class and

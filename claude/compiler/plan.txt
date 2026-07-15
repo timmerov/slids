@@ -1077,6 +1077,16 @@ Phase 5 — classes
     rvalue aggregate), `_$dsrc` and `_$delem` (destructure) all die at the semicolon now.
     It also exposed a FIFTH hasInPlaceClass-vs-kSlid gate, in emitSeqEffects. Canon
     evaluate.sl block X.
+    THE SPILL DECISION FOLDED TOO (2026-07-15). The funnel unified the spill MECHANICS; the
+    DECISION — re-read in place, or evaluate once? — was still three ad-hoc gates, two of them
+    the SHALLOW `isBareLvalue` (outermost node kind only). So a side-effecting subscript or base
+    (`arr[pick()]`, `get()^.f`) was cloned and re-run ONCE PER SLOT. One helper now answers it —
+    `spillIfNotReReadable` (the deep `isReReadableOperand` -> `isReReadableLvalue` + spillToTemp)
+    — shared by lowerAggregateConversion, the class-field spread feeder, and the slot-wise
+    explode's prepareOperand. Fixing it also EXPOSED a crash: making the conversion source spill
+    (agg_conv_spill) made codegen assert in the one consumer position that never hoisted it — a
+    STORE / MOVE source (`x <-- ((T) = arr[pick()])`); liftSretCallList's store/move arm now
+    hoists it like the decl / assign / return rhs. Canon tuple/combined.sl (the pick() block).
     THE SLOT-WISE EXPLODE (2026-07-13) — A TUPLE DESUGARS TO THE OPERATION BY SLOT,
     ITERATIVELY AND RECURSIVELY. The user's rule, and it is not cleanup: it is the invariant
     that keeps every operation in the family that can express a class. There was no tuple

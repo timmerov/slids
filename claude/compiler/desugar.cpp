@@ -2598,6 +2598,21 @@ void liftSretCallList(std::vector<std::unique_ptr<ast::Node>>& stmts, int& next_
             if (!stmt->children.empty())
                 liftSretCallExprs(stmt->children[0], pre, next_id, false);
             stmt_scoped = true;
+        } else if (k == ast::Kind::kStoreStmt || k == ast::Kind::kMoveStmt) {
+            // A store/move SOURCE is otherwise left in place (a hook call there still errors
+            // at codegen — see this function's header). The one exception is an AGGREGATE
+            // CONVERSION source that had to spill: `agg_conv_spill` carries [spill decl,
+            // per-slot tuple], which codegen cannot emit inline (it asserts on the 2-child
+            // kConvertExpr). Hoist that spill here — exactly as the decl / assign / return rhs
+            // does — so the transfer sees the ordinary tuple and the `_$cinit` temp is
+            // evaluated ONCE. Only a SOURCE is ever a conversion (a target is an lvalue), so
+            // scanning the children reaches it without depending on the source index.
+            for (auto& ch : stmt->children) {
+                if (ch && ch->kind == ast::Kind::kConvertExpr && ch->agg_conv_spill) {
+                    liftSretCallExprs(ch, pre, next_id, false);
+                    stmt_scoped = true;   // scope `_$cinit` to this statement
+                }
+            }
         }
         // A CONDITION's construction temp is NOT hoisted here — it must be scoped to
         // the condition's EVALUATION (rebuilt per loop iteration), so it is lifted

@@ -26,26 +26,6 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
-    access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
-    class-field aggregate spread treat any BARE LVALUE source (`isBareLvalue`:
-    ident/field/index/deref) as "re-index in place, no side effect to duplicate" — but
-    an index/field whose ACCESS PATH has a side effect (`(Agg = arr[pick()])`,
-    `(Agg = get()^.f)`) is CLONED per slot, so the side effect runs N times instead of
-    once. Balanced/correct-valued, just a duplicated effect. Only a CALL/op source is
-    spilled-once today; a lvalue with a side-effecting subscript/deref/base is not.
-    FIX = spill any source whose access path is not provably side-effect-free, not just
-    non-lvalues. Both halves already exist and just need wiring together: the PREDICATE is
-    classify's `isReReadableLvalue` (the destructure asks the identical question — it reads
-    its source once PER SLOT — and answers it correctly: an ident/field/deref/const-index
-    chain is safe to re-read, anything else spills), and the SPILL is classify's
-    `spillToTemp` funnel (which also makes the temp's lifetime an explicit choice rather than
-    an accident of where the decl is parked). These sites should use both.
-    The slot-wise explode is the THIRD site to ask the question and the second to answer it
-    right (`isReReadableOperand` + `prepareOperand` + `spillToTemp`); the two sites named here
-    are the ones still left over. Fold all of it into ONE take-the-source-apart helper.
-    No bare-lvalue-with-side-effect test exists yet.
-
 
 UNBLOCKED FEATURES
 
@@ -78,6 +58,9 @@ UNBLOCKED FEATURES
 
   * pass a tuple literal to a function. fn( (1,2) ); must pass by reference. but can't take
     the address of a tuple literal.
+
+  * allow empty slots in class initialization. Class a(,2,3); empty slots are default
+    initialized. precedent is destructure allows empty slots.
 
 BLOCKED FEATURES
 
@@ -420,7 +403,13 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     (store each slot as it is computed, so `(a,b) = (b,a)` leaves both equal to the old b)
     is what the per-slot lowering would do on its own, and it is cheaper by one temp.
 
-  * A CLASS FIELD TRANSFER IS NOT SUPPORTED. A field that would need a transfer — a same-class
+  * revisit the decision to reject initialization of a class object field that requires a user
+    defined move operator. Super s = (a, 1); s.a.op=(a) has to happen after s.a.ctor() and before
+    s.ctor(). but there's no such seam. i'm not willing to inline ctors at the instantiation site.
+    and i'm not willing to silently extract the assignment and perform it after default
+    instantiation. Super s = (0,1); s.a.op=(a); let the user do that.
+    claude speak:
+    A CLASS FIELD TRANSFER IS NOT SUPPORTED. A field that would need a transfer — a same-class
     COPY (`Holder h( c );`), a same-class MOVE (`Holder h( mk() );`), or a value-init op= dispatch
     (`Super s = ((1,2,3),4);` where the field class has a matching user op=) — is currently
     REJECTED as a compile error rather than done (the landed mitigation; see readme-classes.txt

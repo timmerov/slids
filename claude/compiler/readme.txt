@@ -480,13 +480,31 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     evaluated exactly ONCE but is READ MORE THAN ONCE — indexed per slot, spread per field —
     into a temp local. Four sites hand-rolled the same three things (an Entry, a bare
     kVarDeclStmt, an ident reading it back); they now share one.
+    THE DECISION to spill — is this source safe to re-read once per slot, or must it be
+    evaluated once? — is likewise ONE helper: `spillIfNotReReadable` (the deep predicate
+    `isReReadableOperand` -> `isReReadableLvalue`: a literal, or an access path with no side
+    effect; anything else spills via spillToTemp and the caller places the decl). Every
+    take-the-source-apart site funnels through it — `lowerAggregateConversion`, the class-field
+    spread feeder (classifyStmt), and the slot-wise explode's `prepareOperand`. It replaced a
+    SHALLOW per-site `isBareLvalue` gate that saw only the OUTERMOST node kind, so a side-
+    effecting subscript or base (`arr[pick()]`, `get()^.f`) was cloned and re-run ONCE PER SLOT
+    — a duplicated side effect, correct-valued but observable. The deep predicate recurses the
+    access path (an index needs a const/ident subscript AND a re-readable base), so it spills
+    exactly those. Canon tuple/combined.sl (the pick() block: subscript / base / move / explode /
+    class-field-feeder positions, "pick" once per statement).
     THE TEMP'S LIFETIME IS THE CALLER'S ONE DECISION, and the funnel exists to make it one.
     A spill is a TEMPORARY: it dies at the SEMICOLON. Two placements do that:
       SEQ   — the temp is read by ONE expression (the statement's rhs). Park the decl ON THE
               NODE (`agg_conv_spill`, children = [decl, value]); desugar's liftSretCallExprs
               hoists it into the statement's kSeqExpr, whose teardown destroys it.
               (`_$cinit`: an aggregate conversion, and a class initialized from an rvalue
-              aggregate — the source tuple spread across the fields.)
+              aggregate — the source tuple spread across the fields.) The hoist must fire at
+              EVERY consumer position, not just the decl / assign / return rhs: a STORE / MOVE
+              source (`x <-- ((T) = arr[pick()])`) carries the same 2-child agg_conv_spill node,
+              and codegen asserts on it (`kConvertExpr needs 1 operand`) if it is left inline.
+              liftSretCallList's store/move arm scans for an agg_conv_spill child and hoists it
+              (store/move sources are otherwise left in place); the move-into-live path was the
+              last position to get this. Canon tuple/combined.sl (the `cmv` case).
       GROUP — the temp is read by SEVERAL SIBLING STATEMENTS. Put the decl and those
               statements in a BLOCK, and hoist any DECLARING slot OUT of it — a declared name
               has to outlive the block. (`_$dsrc`, `_$delem`: a destructure's per-slot stores.
