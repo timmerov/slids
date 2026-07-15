@@ -317,6 +317,12 @@ struct Node {
     bool default_swap_init = false;      // kVarDeclStmt: initialized with `<-->` (a swap);
                                  // classify default-constructs then re-dispatches as a
                                  // kSwapStmt (never reaches desugar as a var-decl)
+    bool construction_init = false;      // kVarDeclStmt: the `Type name(args)` paren-init
+                                 // form (vs `= init`) — a FIELD-LIST construction that
+                                 // is ALWAYS built in place, never value-init. Both forms
+                                 // lower the args to a kTupleExpr, so this flag is the only
+                                 // thing that tells `Class c(1,2,3)` (field-list) from
+                                 // `Class c = (1,2,3)` (tries a tuple op= first).
     bool quiet_diag = false;     // kStringifyType inside a `#x` desugar: the same
                                  // operand is also resolved by the sibling `^x`, so
                                  // suppress THIS arm's undefined-operand diagnostic

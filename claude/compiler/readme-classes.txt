@@ -177,6 +177,12 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     block W (class Ord — its ctor WRITES its field, which is the only way the order is
     OBSERVABLE; every other counting class merely prints, which shows a wrong ORDER but not
     a wrong ANSWER, and is why this lived so long).
+    THE PEEL ALSO BUILDS AN op= CONVERSION IN PLACE (2026-07-15). A `(Class = value)` conversion
+    slot (from buildClassFromValue — the class-from-value funnel below) is peeled like any
+    transfer: splitTransferInit retargets the conversion's op= FILL onto the slot lvalue and
+    drops the `_$cret` construct, so a tuple / scalar value op='s directly into the default-
+    constructed slot — no temp, no copy — at the root decl, a tuple slot, and an array element
+    alike. Outside a decl / return (no peel) the conversion falls back to its `_$cret` temp.
     THE SAME RULE AT THE RETURN SLOT (2026-07-13). An sret slot is storage like any other, and
     return_fn.sl's canon case 3 already dictated the order — `initialize ret^; ret^.ctor();
     ret^ <-- a;` — so a non-NRVO return that MOVED into the slot and then ran the ctor on top
@@ -188,6 +194,13 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     (canon case 2: the local IS the slot, so there is no transfer at all), and it is untouched.
     Pinned by return_fn.sl class Ret (again a WRITING ctor — every other class in that file
     only prints, which is why a live miscompile sat under a green golden).
+    A SINGLE class returned from a VALUE joins the same binding (2026-07-15): `return (7,8)` /
+    `return 5` where the return type is a class the value op='s / field-lists is bound to `_$ret`
+    too (the gate widened past hasClassTransferSlot, which sees only aggregate return types), so
+    the value->class assignment the generic return path would REJECT instead runs the declarator
+    funnel (buildClassFromValue) and NRVO's into the caller's slot. A CONSTRUCTION return
+    (`return P(1,2)`) and a whole-value lvalue return are excluded — the arm below already builds
+    / transfers them. canon construct.sl (retTuple / retScalar).
     NOT DONE, and NOT the same problem: a class FIELD initialized from a class LVALUE
     (`Holder h( c )`) is still filled and then constructed over. A construction's arguments
     are FIELD INITIALIZERS, and a ctor must see its fields ALREADY INITIALIZED (evaluate.sl
@@ -244,6 +257,24 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     AGGREGATE target with a class leaf converts PER SLOT (classify::lowerAggregateConversion
     desugars to a tuple of per-slot sub-conversions), so a class leaf at any depth / form /
     cross-form / same-class reshape / spilled source reuses this path. test/assign/typeconv.sl.
+  * CLASS-FROM-A-VALUE — op= VS FIELD-LIST, ONE FUNNEL (2026-07-15). A class slot built from a
+    VALUE (a tuple / scalar, not a same-class copy) chooses between an op= ASSIGNMENT and a
+    field-list CONSTRUCTION, and the choice lives in ONE place — classify::buildClassFromValue:
+    when a USER op= accepts the value's type it mints a `(Class = value)` conversion (op=,
+    above); otherwise it field-list-constructs (constructClass). This is the value-position twin
+    of dispatchAssignInit, so `Class c = (1,2,3)` (root decl), a tuple SLOT `(C,C) t = ((1,2),
+    (3,4))`, and an array ELEMENT `C a[2] = (...)` all reach a user op= identically — iteratively
+    and recursively (a nested aggregate op='s every leaf). The conversion the funnel yields is
+    peeled IN PLACE by splitTransferInit (the peel bullet above): it retargets the conversion's
+    op= fill onto the slot and drops the `_$cret` temp, so the slot is default-constructed then
+    op='d with NO temp and NO copy. EXCLUDED from op= (they stay their old paths): a same-class
+    VALUE (a copy — the whole-value store), and a class FIELD (constructClass field-list — a
+    field's transfer cannot hoist past the enclosing ctor; todo.txt). THE TWO SPELLINGS ARE TOLD
+    APART IN THE PARSER: `Class c(args)` and `Class c = (tuple)` both lower to one tuple child, so
+    grammar sets `construction_init` on the `(args)` form — ALWAYS field-list, never a value op=
+    (the `= Class(args)` construction->tuple rewrite sets it too, so a `(5)` collapsing to a
+    scalar cannot match op=(int)). Supersedes the old "a declaration from a tuple ignores the
+    class's op=" gap. canon construct.sl (TupleInit / ScalarOp / Boxed; pair / row / mix / nest).
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field

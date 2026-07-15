@@ -54,6 +54,114 @@ CtorDtor:dtor: 34
 CtorDtor:dtor: 24
 CtorDtor:dtor: 14
 dtors 34,24,14 before.
+TupleInit tp(7,8): expect ctor (7,8) only.
+TupleInit:ctor: (7,8)
+TupleInit ta = (5,6): expect ctor (0,0) then op=tuple (5,6).
+TupleInit:ctor: (0,0)
+TupleInit:op=tuple: (5,6)
+expect dtors (5,6) then (7,8) after.
+TupleInit:dtor: (5,6)
+TupleInit:dtor: (7,8)
+dtors (5,6),(7,8) before.
+(TupleInit,TupleInit) pair = ((1,2),(3,4)):
+  expect ctors (0,0),(0,0) then op=tuple (1,2),(3,4).
+TupleInit:ctor: (0,0)
+TupleInit:ctor: (0,0)
+TupleInit:op=tuple: (1,2)
+TupleInit:op=tuple: (3,4)
+  expect dtors (3,4),(1,2) after.
+TupleInit:dtor: (3,4)
+TupleInit:dtor: (1,2)
+pair dtors before.
+TupleInit row[2] = ((5,6),(7,8)):
+  expect ctors (0,0),(0,0) then op=tuple (5,6),(7,8).
+TupleInit:ctor: (0,0)
+TupleInit:ctor: (0,0)
+TupleInit:op=tuple: (5,6)
+TupleInit:op=tuple: (7,8)
+  expect dtors (7,8),(5,6) after.
+TupleInit:dtor: (7,8)
+TupleInit:dtor: (5,6)
+row dtors before.
+(CtorDtor,TupleInit) mix = (9,(1,2)):
+  expect CtorDtor ctor 9, TupleInit ctor (0,0) then op=tuple (1,2).
+CtorDtor:ctor: 9
+TupleInit:ctor: (0,0)
+TupleInit:op=tuple: (1,2)
+  expect dtors TupleInit (1,2), CtorDtor 9 after.
+TupleInit:dtor: (1,2)
+CtorDtor:dtor: 9
+mix dtors before.
+((TupleInit,TupleInit),TupleInit) nest = (((1,2),(3,4)),(5,6)):
+  expect 3 ctors (0,0) then op=tuple (1,2),(3,4),(5,6).
+TupleInit:ctor: (0,0)
+TupleInit:ctor: (0,0)
+TupleInit:ctor: (0,0)
+TupleInit:op=tuple: (1,2)
+TupleInit:op=tuple: (3,4)
+TupleInit:op=tuple: (5,6)
+  expect dtors (5,6),(3,4),(1,2) after.
+TupleInit:dtor: (5,6)
+TupleInit:dtor: (3,4)
+TupleInit:dtor: (1,2)
+nest dtors before.
+(ScalarOp,ScalarOp) sc = (11,22):
+  expect ctors 0,0 then op=int 11,22.
+ScalarOp:ctor: 0
+ScalarOp:ctor: 0
+ScalarOp:op=int: 11
+ScalarOp:op=int: 22
+  expect dtors 22,11 after.
+ScalarOp:dtor: 22
+ScalarOp:dtor: 11
+sc dtors before.
+(TupleInit,TupleInit) cp = (a,b) [lvalues]:
+  expect ctors a(1,2),b(3,4), then two default ctors (0,0) (copies silent).
+TupleInit:ctor: (1,2)
+TupleInit:ctor: (3,4)
+TupleInit:ctor: (0,0)
+TupleInit:ctor: (0,0)
+  cp[0]=(1,2) cp[1]=(3,4)
+TupleInit:dtor: (3,4)
+TupleInit:dtor: (1,2)
+TupleInit:dtor: (3,4)
+TupleInit:dtor: (1,2)
+cp/a/b dtors before.
+Boxed bx = (7,(1,2)):
+  expect TupleInit ctor (1,2) [field-list, no op=], then Boxed ctor 7.
+TupleInit:ctor: (1,2)
+Boxed:ctor: 7
+  bx.inner=(1,2)
+Boxed:dtor: 7
+TupleInit:dtor: (1,2)
+bx dtors before.
+TupleInit t = retTuple(): expect ctor (0,0) then op=tuple (1,2).
+TupleInit:ctor: (0,0)
+TupleInit:op=tuple: (1,2)
+  t=(1,2)
+TupleInit:dtor: (1,2)
+ScalarOp s = retScalar(): expect ctor 0 then op=int 7.
+ScalarOp:ctor: 0
+ScalarOp:op=int: 7
+  s=7
+ScalarOp:dtor: 7
+(TupleInit,TupleInit) mv <-- ((1,2),(3,4)):
+  expect ctors 0,0 then op=tuple (1,2),(3,4).
+TupleInit:ctor: (0,0)
+TupleInit:ctor: (0,0)
+TupleInit:op=tuple: (1,2)
+TupleInit:op=tuple: (3,4)
+  expect dtors (3,4),(1,2) after.
+TupleInit:dtor: (3,4)
+TupleInit:dtor: (1,2)
+mv dtors before.
+ScalarOp cx = ScalarOp(5): expect ctor 5 ONLY (build, no op=int).
+ScalarOp:ctor: 5
+ScalarOp cy = 5: expect ctor 0 then op=int 5.
+ScalarOp:ctor: 0
+ScalarOp:op=int: 5
+ScalarOp:dtor: 5
+ScalarOp:dtor: 5
 Later:ctor: 97
 Now:ctor: 97
 Now:dtor: 97

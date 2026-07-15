@@ -150,8 +150,11 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     user `op=` (classify rewrites the assign / store / field / deref / index target
     to a method call) or, absent one, the default same-type copy / move; a source with
     no match is an error. LANDED (operator overloading + the declarator dispatch funnel).
-    A `class <- tuple` as a ctor is CONSTRUCTION (below), not this cell; `op=(tuple)` is
-    deferred.
+    A `class <- tuple` as a ctor is CONSTRUCTION (below), not this cell. A `= (tuple)` value
+    that a user op= accepts DOES dispatch it now (2026-07-15): classify::buildClassFromValue
+    routes a class-from-a-VALUE at every declarator site — root decl, tuple slot, array
+    element, return — through op= (else field-list), and the transfer peel builds it in place;
+    `Class c(args)` (parser `construction_init`) stays field-list. See readme-classes.txt.
   * error  — everything else.
 
   intptr-as-source falls in the integer column, so `pointer <- intptr` is an error

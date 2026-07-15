@@ -833,6 +833,16 @@ void inferPrintArg(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         return;
     }
     inferExpr(tree, e, widen::kNoType, diag);
+    // A sized char array (`char[N]`) decays to its element pointer `char[]` so the
+    // print backend's char[] (%s) branch prints it — the same array->pointer decay
+    // that fires at assignment sites, applied at the print SITE. Only a char array
+    // decays: a non-char array has no string meaning and stays unsupported.
+    if (isArrayType(e.inferred_type)
+        && widen::deepStrip(arrayFirstElem(e.inferred_type))
+           == widen::deepStrip(widen::intern("char"))) {
+        wrapArrayAsElemAddr(e);
+        inferExpr(tree, e, widen::kNoType, diag);
+    }
 }
 
 // Alias-label propagation for an arith/bitwise binary. An alias is sticky against
@@ -1083,6 +1093,21 @@ std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             int file_id, int tok,
                                             diagnostic::Sink& diag,
                                             bool subobject = false);
+// Rank a class's op<sym> overloads against a source value; -1 none, -2 ambiguous
+// (defined later, near the operator machinery).
+int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& rhs,
+                      std::string const& opname, diagnostic::Sink& diag);
+// THE class-from-VALUE funnel (defined after lowerClassConversion): build a class slot
+// from a value, choosing op= CONVERSION (when a user op= accepts the value) over
+// field-list construction — the expression-position twin of dispatchAssignInit. Every
+// value-position class construction (tuple slot, array element, class field, `= value`
+// decl) routes here so the choice is made in ONE place.
+std::unique_ptr<parse::Node> buildClassFromValue(parse::Tree& tree,
+                                                 parse::ClassInfo const& info,
+                                                 std::unique_ptr<parse::Node> init,
+                                                 int file_id, int tok,
+                                                 diagnostic::Sink& diag,
+                                                 bool subobject = false);
 
 // THE argument/parameter check — the one place an ARG is validated against its PARAM
 // (classifyCall's single-candidate + overload arms, and inferMethodCall). A non-primitive
@@ -1300,8 +1325,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     parse::ClassInfo const& sub = tree.classes.at(slot_s);
                     int c_file = e.children[i]->file_id, c_tok = e.children[i]->tok;
                     auto init = std::make_unique<parse::Node>(std::move(*e.children[i]));
-                    auto built = constructClass(tree, sub, std::move(init),
-                                                c_file, c_tok, diag);
+                    auto built = buildClassFromValue(tree, sub, std::move(init),
+                                                     c_file, c_tok, diag);
                     *e.children[i] = std::move(*built);
                     e.children[i]->inferred_type = slot_ctx;
                 }
@@ -2622,8 +2647,8 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
             parse::ClassInfo const& sub = tree.classes.at(elem_s);
             int el_file = el->file_id, el_tok = el->tok;
             auto init = std::make_unique<parse::Node>(std::move(*el));
-            auto built = constructClass(tree, sub, std::move(init),
-                                        el_file, el_tok, diag);
+            auto built = buildClassFromValue(tree, sub, std::move(init),
+                                             el_file, el_tok, diag);
             *el = std::move(*built);
             el->inferred_type = elem;
             continue;
@@ -2977,6 +3002,11 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             // A regular class field is a subobject too: its abstractness (if any) is
             // reported once at the class definition (classifyScope), so skip the check.
             } else if (pi < provided.size() && provided[pi]) {
+                // A class FIELD from a value: field-list construct (constructClass), NOT the
+                // op= class-from-VALUE funnel. A field's transfer cannot be hoisted past the
+                // enclosing ctor (splitTransferInit's field note / todo.txt), so a field op=
+                // would build a temp and copy in — the very fill-then-construct this ordering
+                // avoids. Fields stay field-list until that hoist lands.
                 slot = constructClass(tree, sub, std::move(provided[pi++]),
                                       s.file_id, s.tok, diag, true);
             } else if (fdefault) {
@@ -4015,6 +4045,24 @@ void splitTransferInit(parse::Tree& tree, std::unique_ptr<parse::Node>& init,
     if (!init) return;
     widen::TypeRef S = widen::strip(type);
     if (!widen::hasInPlaceClass(S)) return;   // no class in here — nothing to order
+    // An op= CONVERSION slot — `(Class = value)`, minted by buildClassFromValue when a user
+    // op= accepts a tuple/scalar value — is peeled like any other transfer: the decl
+    // default-constructs the slot, then the conversion's own fill runs IN PLACE against it,
+    // so a class slot reached through a tuple/array literal op='s with NO `_$cret` temp and
+    // NO extra copy. Retarget the fill's receiver from `_$cret` to the slot lvalue and drop
+    // the temp's default-construct (the decl supplies the default); applyTransferSplit
+    // re-classifies the fill, which re-resolves the op= against the new receiver. Outside a
+    // decl the conversion is never peeled — desugar lifts it to a temp (the fallback).
+    if (init->kind == parse::Kind::kConvertExpr && init->class_conversion) {
+        assert(init->children.size() == 2
+            && "class_conversion must carry [construct, fill]");
+        auto fill = std::move(init->children[1]);
+        fill->children[0] = cloneExpr(path);       // receiver _$cret -> the slot lvalue
+        post.push_back(std::move(fill));
+        init = classZeroValue(tree, type, path.file_id, path.tok, diag);
+        init->inferred_type = type;
+        return;
+    }
     // A whole-value TRANSFER of THIS storage. A BARE LVALUE is one: an rvalue (a
     // construction, a call) has no object to copy FROM — it BUILDS the storage, which is
     // the elide, and must stay exactly as it is.
@@ -4614,6 +4662,44 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     e.children.push_back(std::move(fill));
 }
 
+// THE class-from-VALUE funnel. A class slot is built from a value in one of two ways,
+// and the choice belongs in ONE place: if a USER op= accepts the value's type, the value
+// is ASSIGNED (default-construct + op=, the `(Class = value)` conversion lowered by
+// lowerClassConversion) — else its elements are SPREAD as a field list (constructClass).
+// This is the expression-position twin of the statement-position dispatchAssignInit, so a
+// tuple SLOT / array ELEMENT / class FIELD reaches a user op= exactly as a top-level
+// `Class c = value` decl does. A value already of THIS class is a copy, NOT a conversion:
+// left to constructClass (a whole-value store honouring the transfer invariant), never an
+// op= that would double-construct. A FIELD-LIST construction (`Class c(args)`, a base's
+// flat splice) never routes here — it calls constructClass directly.
+std::unique_ptr<parse::Node> buildClassFromValue(parse::Tree& tree,
+                                                 parse::ClassInfo const& info,
+                                                 std::unique_ptr<parse::Node> init,
+                                                 int file_id, int tok,
+                                                 diagnostic::Sink& diag,
+                                                 bool subobject) {
+    if (init) {
+        // Infer once to probe for a matching op=. constructClass / classifyClassInit
+        // re-infer each field slot with its field-type context, so this context-free
+        // pre-inference is harmless for the field-list fall-through.
+        inferExpr(tree, *init, widen::kNoType, diag);
+        widen::TypeRef vt = init->inferred_type;
+        if (vt != widen::kNoType
+            && widen::deepStrip(vt) != widen::deepStrip(info.type)
+            && findClassOperator(tree, info.type, *init, "op=", diag) >= 0) {
+            auto conv = std::make_unique<parse::Node>();
+            conv->kind = parse::Kind::kConvertExpr;
+            conv->return_type = info.type;
+            conv->file_id = file_id;
+            conv->tok = tok;
+            conv->children.push_back(std::move(init));
+            inferExpr(tree, *conv, widen::kNoType, diag);   // -> lowerClassConversion
+            return conv;
+        }
+    }
+    return constructClass(tree, info, std::move(init), file_id, tok, diag, subobject);
+}
+
 // STAMP a class-PRODUCING binary `a op b` — RESOLVE it, but do NOT lower it.
 //
 // The RESULT class is the LHS OPERAND's class — full stop. A binary operator's first
@@ -5038,15 +5124,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 auto it = tree.classes.find(widen::strip(s.return_type));
                 if (it != tree.classes.end()) {
-                    // DECL-INIT operator dispatch. A class var DECLARED with a bare `= expr`
-                    // (copy) or `<-- expr` (move) initializer routes through the ONE binding
-                    // funnel (dispatchAssignInit): when a user op= / op<-- matches the source
-                    // it default-constructs the fresh var (needs_construct) and rewrites THIS
-                    // statement into `name.op=(rhs)` (canon "construct THEN op"; the author's
-                    // operator wins over copy-elision, even for a class RVALUE source, which
-                    // the funnel spills to a temp). EXCLUDED (fall through to the construction
-                    // BUILD / elision below): a kTupleExpr init (a `(args)` construction OR
-                    // `= (tuple)` — tuple-op= deferred); no matching operator; or no prelude.
+                    // DECL-INIT operator dispatch for a NON-tuple source. A class var
+                    // DECLARED with a bare `= expr` (copy) or `<-- expr` (move) whose source
+                    // is a scalar / class value routes through the ONE binding funnel
+                    // (dispatchAssignInit): when a user op= / op<-- matches it default-
+                    // constructs the fresh var (needs_construct) and rewrites THIS statement
+                    // into `name.op=(rhs)` (canon "construct THEN op"). A TUPLE source is NOT
+                    // dispatched here — `Class c = (1,2,3)` is the class-from-VALUE funnel
+                    // (buildClassFromValue below): a tuple op= yields a conversion the transfer
+                    // peel builds in place, exactly as a tuple SLOT / array ELEMENT does, so the
+                    // op= decision lives in ONE place for every position. EXCLUDED here: a tuple
+                    // source, no matching operator, or no prelude.
                     if (prelude && !s.children.empty() && s.children[0]
                         && s.children[0]->kind != parse::Kind::kTupleExpr) {
                         // Type the source for the operator probe. A CONSTRUCTION's type is
@@ -5095,6 +5183,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         for (auto& a : ctor->children)
                             if (a) tup->children.push_back(std::move(a));
                         s.children[0] = std::move(tup);
+                        // `= Class(args)` is a BUILD, identical to `Class c(args)` — its
+                        // arg tuple is a FIELD LIST, never a value op= (a `(1)` collapsing
+                        // to the scalar `1` must not match op=(int)). Mark it so the routing
+                        // below field-lists it rather than probing the class-from-VALUE funnel.
+                        s.construction_init = true;
                     }
                     // An rvalue AGGREGATE source (a call / op result) can't be indexed in
                     // place. Spill it — evaluated once — so the per-field spread in
@@ -5122,11 +5215,24 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                             s.children[0] = std::move(sp.read);
                         }
                     }
-                    classifyClassInit(tree, s, it->second, diag);
-                    // The init is now this class's FIELD TUPLE. A field taking a class
-                    // LVALUE is a COPY INTO a field that does not exist yet — peel it off
-                    // (`Holder h( c )` becomes `Holder h; h.c_ = c;`), so the field is
-                    // constructed before it is copied into.
+                    // A `= (tuple)` value-init routes through the class-from-VALUE funnel: a
+                    // matching op= yields a `(Class = tuple)` conversion the transfer peel
+                    // below builds in place (`Class c = (1,2,3)` -> default-construct + op=,
+                    // no temp), and no match falls back to field-list construction. The `(args)`
+                    // CONSTRUCTION form (construction_init) and every non-tuple source
+                    // field-list / spread via classifyClassInit directly.
+                    if (!s.construction_init && !s.children.empty() && s.children[0]
+                        && s.children[0]->kind == parse::Kind::kTupleExpr) {
+                        s.children[0] = buildClassFromValue(tree, it->second,
+                            std::move(s.children[0]), s.file_id, s.tok, diag);
+                    } else {
+                        classifyClassInit(tree, s, it->second, diag);
+                    }
+                    // The init is now this class's FIELD TUPLE (or an op= conversion). A field
+                    // taking a class LVALUE is a COPY INTO a field that does not exist yet —
+                    // peel it off (`Holder h( c )` becomes `Holder h; h.c_ = c;`), and an op=
+                    // conversion slot is peeled the same way, so the object is constructed
+                    // before it is copied / op'd into.
                     applyTransferSplit(tree, s, fn_return_type, diag, prelude);
                     // Park the spill on the rhs LAST, so the passes above see the field tuple.
                     if (cinit_decl && !s.children.empty() && s.children[0]) {
@@ -5673,12 +5779,36 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // desugar's NRVO builds `_$ret` DIRECTLY in the caller's slot — so the name costs
             // nothing. (If NRVO ever declines, the return is a bare lvalue and the codegen
             // path below still constructs the slot before transferring: correct, one temp.)
-            if (!s.children.empty() && s.children[0]
+            // A SINGLE class return from a VALUE — `return (7,8)` / `return 5` where the return
+            // type is a class the value op='s / field-lists / converts — is the return-slot twin
+            // of a decl: it must bind to `_$ret` too, so the declarator funnel (buildClassFromValue
+            // / dispatchAssignInit: op= / field-list / convert, in place) runs and NRVO builds
+            // `_$ret` in the caller's slot. Without this the generic return path below rejects the
+            // value->class assignment. EXCLUDED (the arm below already builds / transfers them
+            // directly): a CONSTRUCTION (`return P(1,2)` — builds in the slot) and a value already
+            // of the class type (an lvalue copy, a class-producing chain).
+            bool agg_transfer_ret = !s.children.empty() && s.children[0]
                 && s.children[0]->kind == parse::Kind::kTupleExpr
-                && hasClassTransferSlot(*s.children[0], fn_return_type)) {
+                && hasClassTransferSlot(*s.children[0], fn_return_type);
+            bool single_class_ret = false;
+            if (!agg_transfer_ret && !s.children.empty() && s.children[0]
+                && widen::form(widen::strip(fn_return_type)) == widen::Type::Form::kSlid
+                && tree.classes.count(widen::strip(fn_return_type)) > 0) {
+                parse::Node& v = *s.children[0];
+                bool is_ctor = v.kind == parse::Kind::kCallExpr && v.is_construction;
+                if (!is_ctor) {
+                    inferExpr(tree, v, fn_return_type, diag);
+                    single_class_ret = widen::deepStrip(v.inferred_type)
+                                    != widen::deepStrip(fn_return_type);
+                }
+            }
+            if (agg_transfer_ret || single_class_ret) {
                 Spill sp = spillToTemp(tree, std::move(s.children[0]), fn_return_type,
                                        "_$ret");
-                sp.decl->default_move_init = true;   // canon case 3: `ret^ <-- a`
+                // The aggregate-transfer case moves lvalue slots in (canon case 3: `ret^ <-- a`);
+                // a single-class VALUE return is a plain value-init (op= / field-list), not a
+                // move of an existing object, so it takes an ordinary copy-init.
+                if (agg_transfer_ret) sp.decl->default_move_init = true;
                 std::vector<std::unique_ptr<parse::Node>> body;
                 classifyStmt(tree, *sp.decl, fn_return_type, diag, &body);
                 body.push_back(std::move(sp.decl));

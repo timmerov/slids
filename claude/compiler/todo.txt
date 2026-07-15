@@ -47,6 +47,11 @@ BUGS
     decl(field hooks only) / field copies / own-ctor as three steps.
     Pinned in the OTHER direction by evaluate.sl Q4 (class Hook): hoisting the field copies
     past the ctor makes Hook's ctor read 0 instead of 3 — so a naive fix here is caught.
+    SAME REASON the class-from-value op= funnel (buildClassFromValue) excludes a class FIELD:
+    a tuple/scalar field value FIELD-LISTS (constructClass), never an op= conversion, because
+    the peel that would build the op= in place cannot hoist a field's transfer past the
+    enclosing ctor either. Root decls / tuple slots / array elements DO op=; fields wait on
+    this interleave.
 
   * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
     access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
@@ -85,23 +90,21 @@ UNBLOCKED FEATURES
     requires a class type". Swap-init default-constructs the target and then re-dispatches
     as an ordinary swap statement, and only the construct half is class-only.
 
-  * A DECLARATION FROM A TUPLE IGNORES THE CLASS'S op=. Given a class with a matching
-    `op=((int,int)^)`, `Pair p = (1, 2);` SILENTLY FIELD-INITS (p is 1,2 — the operator
-    never runs), while the assignment form `q = (3, 4);` on an existing object dispatches
-    the operator correctly. A silent wrong answer, not a missing feature.
-    WHY: grammar gives a `(args)` construction and a `= (tuple)` initializer the SAME shape
-    (one tuple child), so the declaration cannot tell "construct from these field values"
-    apart from "assign me this tuple", and the operator dispatch is turned off for a tuple
-    child rather than guess.
-    FIX: mark the two forms apart in the parser, then let a declaration from a tuple take
-    the same op= dispatch an assignment does.
+  * A VALUE (tuple/scalar) AS A BY-REF CLASS ARGUMENT IS REJECTED. A declaration, an
+    assignment, and a return all take a class-from-a-VALUE through op= / field-list now
+    (buildClassFromValue — the class-from-value funnel), but the ARGUMENT position does not:
+    `takesP((9,9))` / `takesP(5)` where the param is `P^` errors ("Cannot assign '(int,int)'
+    to 'const P'" / "Cannot implicitly convert 'int' to 'P'"). The workaround is an explicit
+    construction — `takesP(P(9,9))` works. WHY: an arg is bound by the overload / arg-match
+    path (checkArgAssign / argConvertCost), a DIFFERENT subsystem from the declarator funnel;
+    it never wraps a mismatched class arg in a `(P = value)` conversion. This subsumes the old
+    "should a weak literal bind to a class parameter?" (`Shift s = 1` works but `s << 1` /
+    `op<<(Shift^, Shift^)` cannot take `1`). FIX: at an arg site whose param is a class,
+    materialize a value the class op='s / field-lists into a temp (the `(Class = value)`
+    conversion the decl site already uses) and pass its address. Needed by test/misc/bug.sl.
 
-  * SHOULD A WEAK LITERAL BIND TO A CLASS PARAMETER? `Shift s = 1;` field-fills a class in a
-    DECLARATION, but `1` does NOT convert to a `Shift^` parameter, so a class operator
-    `op<<(Shift^, Shift^)` cannot be called as `s << 1`. Open question, deferred: either the
-    operator is written `op<<(Shift^, int)` (works today), or an argument position gains the
-    same literal-to-class fill a declaration has. Needed by test/misc/bug.sl's line.
-
+  * pass a tuple literal to a function. fn( (1,2) ); must pass by reference. but can't take
+    the address of a tuple literal.
 
 BLOCKED FEATURES
 

@@ -396,33 +396,29 @@ KNOWN HOLES  (close as a consequence of the funnels; do not one-off patch)
 
 
 ======================================================================
-REMAINING  (declarator gap still open)
+LANDED SINCE  (declarator follow-ons)
 ======================================================================
 
-  NESTED move/swap destructure — `((a,b),c) <-- src` / `((a,b),c) <--> src`.
-  desugarDestructure (classify.cpp) already RECURSES for a nested COPY slot; the
-  MOVE/SWAP nested slot is rejected today with a clean "A nested move/swap
-  destructure is not yet supported." (classify.cpp ~3432). Landing it reuses the
-  copy-recursion template — three contained changes in desugarDestructure, NO
-  desugar / codegen work:
-    1. Drop the `!is_copy` guard on the nested-slot branch (~3432); take the same
-       recurse path the copy case does.
-    2. Propagate the op kind onto the sub-destructure: set the sub node's
-       default_move_init / default_swap_init from `s` before re-classifying, so the
-       recursion emits per-leaf kMoveStmt / kSwapStmt (not a copy).
-    3. Relax the move/swap SOURCE check (~3352, "requires a named (lvalue) source")
-       to accept a bare-lvalue ACCESS PATH (isBareLvalue: ident / index / field over
-       a named local), because the recursive sub-source is `src[i]` (a kIndexExpr),
-       not a bare ident — index it IN PLACE (do NOT spill to a temp, unlike the copy
-       path), so the per-leaf move nulls the right source leaf.
-  Everything else composes for free: per-leaf source-nulling (moved-from) and swap
-  exchange already ride the flat kMoveStmt / kSwapStmt lowering; the recursion just
-  distributes them one level deeper. Canon: add a nested POSITIVE to
-  test/tuple/destructure.sl (`((a,b),c) <-- src` nulls the source leaves; `<-->`
-  exchanges) and retire the nested-move/swap NEGATIVE. (The clean error is maskable
-  by a set-but-never-used resolve error when the targets are otherwise unused — a
-  general error-order quirk, not specific to this feature; a nested positive
-  sidesteps it.)
+  NESTED move/swap destructure — `((a,b),c) <-- src` / `((a,b),c) <--> src` — LANDED.
+  The old "not yet supported" error is gone; the nested move/swap slot recurses like the
+  copy case and the only rule left is the ordinary move/swap SOURCE requirement (an
+  addressable lvalue, `src[i]` indexed in place — not a literal). The mechanism was the
+  destructure's SOURCE becoming a re-readable EXPRESSION cloned + indexed per slot, so the
+  nested case fell out with no new code. See [[project_tuple_class_evaluation]]; canon
+  test/tuple/destructure.sl.
+
+  CLASS INIT IS THE DECLARATOR FALLTHROUGH — LANDED (2026-07-15). A class instantiated from
+  a VALUE is the value-position twin of dispatchAssignInit: classify::buildClassFromValue
+  chooses op= (a `(Class = value)` conversion) vs field-list (constructClass) in ONE place,
+  and the transfer peel (splitTransferInit) builds the conversion IN PLACE. It composes to
+  every declarator site — root decl `Class c = (1,2,3)`, tuple slot, array element, and the
+  single-class RETURN `return (7,8)` / `return 5` (the return gate widened past
+  hasClassTransferSlot) — iteratively and recursively. The parser tells `Class c(args)`
+  (field-list, `construction_init`) from `Class c = (tuple)` (value-init). NOT routed: a
+  class FIELD (a field's transfer cannot hoist past the enclosing ctor — todo.txt), and a
+  bare tuple/scalar as a by-ref class ARGUMENT (a non-decl site; `takesP((9,9))` is rejected,
+  workaround `takesP(P(9,9))`). See readme-classes.txt "CLASS-FROM-A-VALUE"; canon
+  construct.sl.
 
 
 ======================================================================
@@ -439,10 +435,15 @@ STATUS LEDGER  (update as cleanup lands — keep this honest)
                 same-frame only, like every other site).
   [x] classify  dispatchAssignInit — LANDED (Slice A); 5 assign-form sites routed
                 (hole 1). desugarDestructure — copy/move/swap per-slot (hole 2);
-                COPY recurses for nested slots, MOVE/SWAP nested is the one gap left
-                (see REMAINING). Both holes CLOSED. (4 destructure negative MESSAGES shifted by
-                per-slot desugaring; the EXPECT-ERROR substrings were re-pointed — tuple
+                COPY and MOVE/SWAP both recurse for nested slots (nested move/swap LANDED —
+                see LANDED SINCE). Both holes CLOSED. (4 destructure negative MESSAGES shifted
+                by per-slot desugaring; the EXPECT-ERROR substrings were re-pointed — tuple
                 negatives 50/50.)
+  [x] classify  buildClassFromValue — LANDED (2026-07-15). The value-position twin of
+                dispatchAssignInit: a class-from-a-VALUE (root decl / tuple slot / array
+                element / single-class return) dispatches op= (else field-list), and
+                splitTransferInit peels the op= conversion in place. `construction_init`
+                (parser) keeps `Class c(args)` field-list. See LANDED SINCE.
   [x] desugar   lowerAggCopyStmt — LANDED (as-is); THE cross-form copy/move lowerer for
                 the 5 stmt-kinds. The "extend to same-type/move bails" target is DROPPED:
                 those bail to the codegen funnel, which handles them uniformly (no

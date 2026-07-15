@@ -87,6 +87,40 @@ CtorDtor(int c_) {
     }
 }
 
+/* the two instantiation shapes are NOT interchangeable when the class defines a tuple
+   op=: `X x(a,b)` field-list-constructs in place (ctor only), while `X x = (a,b)` is
+   value-init — default-construct then dispatch op=((int,int)^). */
+TupleInit(int p_, int q_) {
+    _() { __println("TupleInit:ctor: (" + p_ + "," + q_ + ")"); }
+    ~() { __println("TupleInit:dtor: (" + p_ + "," + q_ + ")"); }
+    op=( (int, int)^ t ) {
+        p_ = t^[0];
+        q_ = t^[1];
+        __println("TupleInit:op=tuple: (" + p_ + "," + q_ + ")");
+    }
+}
+
+/* a class with a SCALAR op= — for the scalar-value explode and the construction-vs-value
+   collapse guard: `ScalarOp(5)` (construction) must field-list, while `= 5` must op=. */
+ScalarOp(int v_) {
+    _() { __println("ScalarOp:ctor: " + v_); }
+    ~() { __println("ScalarOp:dtor: " + v_); }
+    op=(int x) { v_ = x; __println("ScalarOp:op=int: " + v_); }
+}
+
+/* a class with a class-typed FIELD: a field built from a value FIELD-LISTS (one ctor, no
+   op=) even though its class defines a matching op= — a field's transfer cannot hoist past
+   the enclosing ctor (splitTransferInit's field note / todo), so fields stay field-list. */
+Boxed(int tag_, TupleInit inner_) {
+    _() { __println("Boxed:ctor: " + tag_); }
+    ~() { __println("Boxed:dtor: " + tag_); }
+}
+
+/* the RETURN slot is the declarator funnel's twin: a single class returned from a VALUE
+   binds `_$ret` and op='s / field-lists in place (NRVO builds it in the caller's slot). */
+TupleInit retTuple()  { return (1, 2); }   /* value op=((int,int)^) */
+ScalarOp   retScalar() { return 7; }        /* value op=(int) */
+
 /* RAII: a class that frees a heap resource it owns in its destructor — `delete` of a
    FIELD (delete takes any pointer lvalue, not just a variable). */
 Resource(int^ data_) {
@@ -315,6 +349,123 @@ int32 main() {
     }
     __println("dtors 34,24,14 before.");
 
+    /* construction shape vs assignment shape diverge once a tuple op= exists:
+       `(a,b)` builds in place (one ctor); `= (a,b)` default-constructs then op='s. */
+    {
+        __println("TupleInit tp(7,8): expect ctor (7,8) only.");
+        TupleInit tp(7, 8);
+        __println("TupleInit ta = (5,6): expect ctor (0,0) then op=tuple (5,6).");
+        TupleInit ta = (5, 6);
+        __println("expect dtors (5,6) then (7,8) after.");
+    }
+    __println("dtors (5,6),(7,8) before.");
+
+    /* THE SLOT-WISE EXPLODE for op=: a TUPLE of classes initialized from a tuple-of-tuples
+       does NOT field-list each slot — every slot whose value matches a tuple op= is
+       default-constructed in place, then op='d in place (no temp, no copy). The decl
+       default-constructs both slots FIRST, then the peeled op= statements run in slot
+       order. */
+    {
+        __println("(TupleInit,TupleInit) pair = ((1,2),(3,4)):");
+        __println("  expect ctors (0,0),(0,0) then op=tuple (1,2),(3,4).");
+        (TupleInit, TupleInit) pair = ((1, 2), (3, 4));
+        __println("  expect dtors (3,4),(1,2) after.");
+    }
+    __println("pair dtors before.");
+
+    /* the same explode reaches ARRAY elements: each element op='s in place. */
+    {
+        __println("TupleInit row[2] = ((5,6),(7,8)):");
+        __println("  expect ctors (0,0),(0,0) then op=tuple (5,6),(7,8).");
+        TupleInit row[2] = ((5, 6), (7, 8));
+        __println("  expect dtors (7,8),(5,6) after.");
+    }
+    __println("row dtors before.");
+
+    /* a MIXED aggregate: a field-list slot (no matching op=) still builds in place while
+       its sibling op='s — the explode is per slot. TupleInit has a 2-int op= but CtorDtor
+       does not, so the CtorDtor slot field-lists (one ctor) and the TupleInit slot op='s. */
+    {
+        __println("(CtorDtor,TupleInit) mix = (9,(1,2)):");
+        __println("  expect CtorDtor ctor 9, TupleInit ctor (0,0) then op=tuple (1,2).");
+        (CtorDtor, TupleInit) mix = (9, (1, 2));
+        __println("  expect dtors TupleInit (1,2), CtorDtor 9 after.");
+    }
+    __println("mix dtors before.");
+
+    /* the explode is recursive: a NESTED aggregate op='s every leaf slot in place. */
+    {
+        __println("((TupleInit,TupleInit),TupleInit) nest = (((1,2),(3,4)),(5,6)):");
+        __println("  expect 3 ctors (0,0) then op=tuple (1,2),(3,4),(5,6).");
+        ((TupleInit, TupleInit), TupleInit) nest = (((1, 2), (3, 4)), (5, 6));
+        __println("  expect dtors (5,6),(3,4),(1,2) after.");
+    }
+    __println("nest dtors before.");
+
+    /* a SCALAR-valued op= per slot (not just tuple values): ScalarOp defines op=(int). */
+    {
+        __println("(ScalarOp,ScalarOp) sc = (11,22):");
+        __println("  expect ctors 0,0 then op=int 11,22.");
+        (ScalarOp, ScalarOp) sc = (11, 22);
+        __println("  expect dtors 22,11 after.");
+    }
+    __println("sc dtors before.");
+
+    /* a same-class LVALUE slot is a COPY, not an op=: buildClassFromValue excludes a value
+       already of the class type, so the slot is default-constructed then whole-value copied
+       (the synthesized copy is silent — only the two default ctors and the source ctors print). */
+    {
+        __println("(TupleInit,TupleInit) cp = (a,b) [lvalues]:");
+        __println("  expect ctors a(1,2),b(3,4), then two default ctors (0,0) (copies silent).");
+        TupleInit a(1, 2);
+        TupleInit b(3, 4);
+        (TupleInit, TupleInit) cp = (a, b);
+        __println("  cp[0]=(" + cp[0].p_ + "," + cp[0].q_ + ") cp[1]=(" + cp[1].p_ + "," + cp[1].q_ + ")");
+    }
+    __println("cp/a/b dtors before.");
+
+    /* a class-typed FIELD from a value FIELD-LISTS (one ctor, no op=) — fields stay
+       field-list even when the field class has a matching op=. */
+    {
+        __println("Boxed bx = (7,(1,2)):");
+        __println("  expect TupleInit ctor (1,2) [field-list, no op=], then Boxed ctor 7.");
+        Boxed bx = (7, (1, 2));
+        __println("  bx.inner=(" + bx.inner_.p_ + "," + bx.inner_.q_ + ")");
+    }
+    __println("bx dtors before.");
+
+    /* the RETURN slot funnels a value the same way — op= (tuple) and op= (scalar), NRVO'd
+       into the caller's slot (one object each). */
+    {
+        __println("TupleInit t = retTuple(): expect ctor (0,0) then op=tuple (1,2).");
+        TupleInit t = retTuple();
+        __println("  t=(" + t.p_ + "," + t.q_ + ")");
+    }
+    {
+        __println("ScalarOp s = retScalar(): expect ctor 0 then op=int 7.");
+        ScalarOp s = retScalar();
+        __println("  s=" + s.v_);
+    }
+
+    /* MOVE-init of an op= aggregate explodes per slot exactly like copy-init. */
+    {
+        __println("(TupleInit,TupleInit) mv <-- ((1,2),(3,4)):");
+        __println("  expect ctors 0,0 then op=tuple (1,2),(3,4).");
+        (TupleInit, TupleInit) mv <-- ((1, 2), (3, 4));
+        __println("  expect dtors (3,4),(1,2) after.");
+    }
+    __println("mv dtors before.");
+
+    /* construction-vs-value collapse guard: `ScalarOp(5)` is a BUILD (field-list ctor),
+       NOT a value op=(int) — the `(5)` arg tuple must not collapse into the op=(int) source.
+       Its `= 5` sibling IS a value op=. */
+    {
+        __println("ScalarOp cx = ScalarOp(5): expect ctor 5 ONLY (build, no op=int).");
+        ScalarOp cx = ScalarOp(5);
+        __println("ScalarOp cy = 5: expect ctor 0 then op=int 5.");
+        ScalarOp cy = 5;
+    }
+
     {
         Now now(97);
     }
@@ -493,4 +644,13 @@ one at a time and asserts the marked error substring.
 //    CtorDtor x(1);
 //    x.~();
 //    return 0;
+//}
+
+/* a class-from-VALUE whose tuple matches NO op= falls back to field-list, which enforces
+   arity: TupleInit has 2 fields and its only op= takes a 2-tuple, so a 3-tuple is neither a
+   value op= nor a valid field list. (The op= funnel does not paper over a size mismatch.) */
+//-EXPECT-ERROR: has 2 field(s) but 3 initializer(s)
+//int neg_class_from_tuple_arity() {
+//    TupleInit t = (1, 2, 3);
+//    return t.p_;
 //}

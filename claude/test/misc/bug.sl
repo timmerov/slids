@@ -10,20 +10,41 @@ claude is forbidden to mention this file unless the user specifically
 puts it in scope.
 */
 
-Class(int a_) {
-    _() { __println("Class:ctor: " + a_); }
-    ~() { __println("Class:dtor: " + a_); }
+Class(int a_, int b_, int c_) {
+    _() { print("ctor"); }
+    ~() { print("dtor"); }
+    void print(char[] text) {
+        __println("Class:" + text + ": (" + a_ + "," + b_ + "," + c_ + ")");
+    }
     void inc() {
         ++a_;
-        __println("Class:inc: " + a_);
+        print("inc");
     }
     op=(int a) {
         a_ = a;
-        __println("Class:op=int: " + a_);
+        print("op=int");
     }
     op+=(int b) {
         a_ += b;
-        __println("Class:op+=int: " + a_);
+        print("op+=int");
+    }
+    op=( (int, int, int)^ tup ) {
+        a_ = tup^[0];
+        b_ = tup^[1];
+        c_ = tup^[2];
+        print("=int,int,int");
+    }
+    op=(Class^ rhs) {
+        a_ = rhs^.a_;
+        b_ = rhs^.b_;
+        c_ = rhs^.c_;
+        print("=Class");
+    }
+    op+=(Class^ rhs) {
+        a_ += rhs^.a_;
+        b_ += rhs^.b_;
+        c_ += rhs^.c_;
+        print("+=Class");
     }
 }
 
@@ -43,17 +64,24 @@ int fn(Class^ cls) {
 
 int32 main() {
 
-    //Class cls = Class + 1 + 2 + 3;
+    __println(##line + ": "); { Class c; }
+    __println(##line + ": "); { Class c(); }
+    __println(##line + ": "); { Class c(1); }
+    __println(##line + ": "); { Class c(1,2); }
+    __println(##line + ": "); { Class c(1,2,3); }
+    __println(##line + ": "); { Class c = 1; }
+    __println(##line + ": "); { Class c = (1,2); }
+    __println(##line + ": "); { Class c = (1,2,3); }
+    __println(##line + ": "); { Class c1(1,2,3); Class c2 = c1; }
+    __println(##line + ": "); { Class c = Class; }
+    __println(##line + ": "); { Class c = Class(); }
+    __println(##line + ": "); { Class c = Class(1); }
+    __println(##line + ": "); { Class c = Class(1,2); }
+    __println(##line + ": "); { Class c = Class(1,2,3); }
+    __println(##line + ": "); { Class c1(1,2,3); Class c2(4,5,6); Class c3 = c1 + 7 + c2; }
 
-    //__println(cls.a_);
-
-    /*
-    (int, int) tup = (1,2);
-    Fred(int a, int b, int c) { }
-    Fred fred = tup;
-    Fred fred(tup);
-    fred;
-    */
+    __println(##line + ": "); { (Class, Class) tup = ((1,2,3), (4,5,6)); tup; }
+    __println(##line + ": "); { Class arr[2] = ((1,2,3), (4,5,6)); arr; }
 
     return 0;
 }

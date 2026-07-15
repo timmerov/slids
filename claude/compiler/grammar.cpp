@@ -1652,6 +1652,7 @@ struct Parser {
             auto tup = newNodeAt(parse::Kind::kTupleExpr, t_file, t_tok);
             if (!parseCallArgs(*tup)) return nullptr;
             node->children.push_back(std::move(tup));
+            node->construction_init = true;   // field-list construction, not `= (tuple)`
         } else if (is_const) {
             error("Constant declaration requires an initializer.");
             return nullptr;

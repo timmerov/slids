@@ -106,7 +106,10 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
             continue;
         }
 
-        if (sty == widen::intern("char[]")) {
+        // A char string — a char iterator, element const or not: a bare `char[]`
+        // and the `(const char)[]` a `char[]` parameter carries deep-strip to the
+        // same handle. printf reads the pointer as a NUL-terminated %s.
+        if (widen::deepStrip(sty) == widen::intern("char[]")) {
             std::string v = codegen::emitExpr(*seg, syms, pool, out, diag, sty);
             fmt += "%s";
             args.push_back({"ptr", v});
