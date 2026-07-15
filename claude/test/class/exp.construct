@@ -127,7 +127,7 @@ TupleInit:dtor: (1,2)
 TupleInit:dtor: (3,4)
 TupleInit:dtor: (1,2)
 cp/a/b dtors before.
-Boxed bx = (7,(1,2)):
+Boxed bx(7,(1,2)):
   expect TupleInit ctor (1,2) [field-list, no op=], then Boxed ctor 7.
 TupleInit:ctor: (1,2)
 Boxed:ctor: 7
@@ -135,6 +135,12 @@ Boxed:ctor: 7
 Boxed:dtor: 7
 TupleInit:dtor: (1,2)
 bx dtors before.
+SuperPod (trivial Pod field):
+  sa(1,2):                p_=(1,0,0) d_=2
+  sb((12,3),4):           p_=(12,3,0) d_=4
+  sc(p,4) [POD copy]:     p_=(1,2,3) d_=4
+  sd(makePod(),4) [move]: p_=(1,2,3) d_=4
+  se=(makePod(),4)[vinit]: p_=(1,2,3) d_=4
 TupleInit t = retTuple(): expect ctor (0,0) then op=tuple (1,2).
 TupleInit:ctor: (0,0)
 TupleInit:op=tuple: (1,2)

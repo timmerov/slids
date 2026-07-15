@@ -234,9 +234,10 @@ Negative: neg_aug_no_op. Full detail in readme-classes.txt "CLASS-OPERATOR CHAIN
 STILL OPEN (all filed in todo.txt)
 ------------------------------------------------------------------------------
   - PING-PONG (Decision 2 rule 6): reuse two alternating buffers instead of one per step.
-  - A class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
-    constructed over — the ordering bug one level down, and NOT fixable the same way (see
-    below). todo.txt.
+  - A class FIELD initialized from a class LVALUE (`Holder h( c )`) is NOT fixable the same way
+    (see below): a ctor must see its field initializers, so the copy cannot be hoisted past it.
+    Rather than the old fill-then-construct-over blit, that case is now REJECTED at classify
+    (2026-07-15, "cannot be initialized by copying/moving"); SUPPORT awaits the interleave. todo.txt.
   (A CONSTRUCTION as the LEFT operand — `C(7) + a` with a 2-arg op+ and no op+= — used to be
   rejected while the same rvalue worked as a call head and as the right operand. FIXED
   2026-07-13: rule 1's collapse is an OPTIMIZATION and is now DECLINED there, the construction
@@ -265,7 +266,11 @@ THE ORDER OF CONSTRUCTION — FIXED 2026-07-13 (it was filed here as a deferred 
   computes `a_ + b_` in its ctor body and must read what was PASSED, not the defaults. Hoisting
   a field's copy past the enclosing ctor breaks that (Q4 caught it, printing 0 instead of 3).
   The copy has to land BETWEEN the field's own ctor and the enclosing ctor body — inside
-  emitConstructed's hook recursion, where the initializer expressions no longer exist. Left.
+  emitConstructed's hook recursion, where the initializer expressions no longer exist. Until
+  that interleave lands, the case is REJECTED, not mis-ordered (2026-07-15, "cannot be
+  initialized by copying/moving", + the value-init "cannot dispatch Class.op="); the copy/move
+  gate uses userSelfTransferOpId so a trivial-bucket field class (op-only, no ctor/dtor) is
+  caught too. See readme-classes.txt "A CLASS FIELD THAT WOULD NEED A TRANSFER".
   THE OTHER PLACE IT DID NOT REACH: a GLOBAL (`global Add gb = ga;` read back 205, not 105).
   Not because the rule differs, but because a global declaration is not lowered where locals
   are: its initializer becomes the body of a synthesized lazy ctor in desugar, and there is no

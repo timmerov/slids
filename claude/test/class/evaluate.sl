@@ -197,12 +197,11 @@ deliberately NOT correct yet (still-broken / deferred):
   - ping-pong: a class with a 2-arg op+ but NO op+= can't fuse (acc.op+(acc,c) would
     read acc while writing it), so each such step starts a fresh buffer -- one temp per
     un-fusable operand. Two alternating buffers would need none.
-  - a class FIELD initialized from a class LVALUE (`Holder h( c )`) is still FILLED and then
-    constructed over -- the same bug one level down, and NOT fixable the same way. A
-    construction's arguments are FIELD INITIALIZERS, and a ctor must see its fields ALREADY
-    INITIALIZED (Q4's Hook computes `a_ + b_` in its ctor body and must read what was passed,
-    not the defaults). So a field's copy cannot be hoisted past the enclosing ctor the way a
-    tuple slot's can: it has to land BETWEEN the field's own ctor and the enclosing ctor body.
+  - a class FIELD initialized from anything but an in-place CONSTRUCTION is now REJECTED: a copy
+    from a class LVALUE (`Holder h( c )`), a move from a call/chain rvalue, or a value the field's
+    op= accepts would each need a transfer that cannot hoist between the field's own ctor and the
+    enclosing ctor body -- a ctor must see its fields ALREADY INITIALIZED (Q4's Hook computes
+    `a_ + b_` and reads what was passed). So the field is built in place: `Hook qh(0, Acc(1), Acc(2))`.
   - a GLOBAL class initialized from a class LVALUE (`global Add gb = ga;`) is still FILLED and
     then constructed over -- the same wrong answer at a third site. A global's initializer is
     lowered into a synthesized LAZY CTOR (desugar), so the declarator split that fixed the
@@ -965,12 +964,12 @@ int32 main() {
         int q3 = qm.combine(^qx, ^qy);
         __println("Q3 end q3=" + q3);                    // 10 + 3 + 10 = 23
 
-        // Q4: a chain inside a CONSTRUCTOR body and a DESTRUCTOR body.
+        // Q4: a chain inside a CONSTRUCTOR body and a DESTRUCTOR body. The Acc fields are
+        // built IN PLACE (`Acc(1)`, `Acc(2)`) -- a class field from a class LVALUE/rvalue is
+        // now rejected, so an in-place construction is the only legal field value.
         __println("Q4: ctor/dtor body");
         {
-            Acc ha = Acc(1);
-            Acc hb = Acc(2);
-            Hook qh(0, ha, hb);
+            Hook qh(0, Acc(1), Acc(2));
             __println("Q4 end qh.v_=" + qh.v_);          // 3   (dtor chain prints after)
         }
 

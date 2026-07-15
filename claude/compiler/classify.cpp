@@ -1087,12 +1087,17 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
 // Build a constructed value for a class from an optional init (defined later).
+// `value_init` records that we arrived through the VALUE-INIT routing (`Class c = value`,
+// buildClassFromValue's field-list fallthrough) rather than a CONSTRUCTION (`Class c(args)`).
+// The two spellings hand a class field the identical slot value, so this bit is the only
+// thing that tells them apart when deciding whether a class field's op= must dispatch.
 std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             parse::ClassInfo const& info,
                                             std::unique_ptr<parse::Node> init,
                                             int file_id, int tok,
                                             diagnostic::Sink& diag,
-                                            bool subobject = false);
+                                            bool subobject = false,
+                                            bool value_init = false);
 // Rank a class's op<sym> overloads against a source value; -1 none, -2 ambiguous
 // (defined later, near the operator machinery).
 int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& rhs,
@@ -2835,7 +2840,7 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
 // zero. The result is a kTupleExpr typed as the class; codegen fills the struct.
 void classifyClassInit(parse::Tree& tree, parse::Node& s,
                        parse::ClassInfo const& info, diagnostic::Sink& diag,
-                       bool subobject = false);
+                       bool subobject = false, bool value_init = false);
 
 // Build a fully-constructed value for class `info` from an optional init value
 // (a scalar / tuple / same-class value), filling the field defaults / zeros.
@@ -2846,19 +2851,44 @@ std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             std::unique_ptr<parse::Node> init,
                                             int file_id, int tok,
                                             diagnostic::Sink& diag,
-                                            bool subobject) {
+                                            bool subobject, bool value_init) {
     auto holder = std::make_unique<parse::Node>();
     holder->kind = parse::Kind::kVarDeclStmt;
     holder->file_id = file_id;
     holder->tok = tok;
     if (init) holder->children.push_back(std::move(init));
-    classifyClassInit(tree, *holder, info, diag, subobject);
+    classifyClassInit(tree, *holder, info, diag, subobject, value_init);
     return std::move(holder->children[0]);
+}
+
+// The entry id of a USER (non-synthesized) self-transfer operator `opname(Self^)` on `cls`
+// (searching the class + base frames), else -1. Unlike findClassOperator this scans directly:
+// it does NOT rank or require `defined`, and it EXCLUDES the compiler's memberwise default —
+// so it reliably answers "would a blit past this operator lose behavior?" even for a class in
+// the trivial bucket (no ctor/dtor), where findClassOperator does not surface the user self-op.
+int userSelfTransferOpId(parse::Tree& tree, widen::TypeRef cls,
+                         std::string const& opname) {
+    widen::TypeRef cs = widen::strip(cls);
+    for (int fr : parse::classAndBaseFrames(tree, cs)) {
+        if (fr < 0) continue;
+        for (std::size_t id = 0; id < tree.entries.size(); id++) {
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind != parse::EntryKind::kFunction || e.synthesized
+                || e.owner_ns_frame != fr || e.name != opname
+                || e.param_types.size() != 2)
+                continue;
+            widen::TypeRef p = widen::strip(e.param_types[1]);
+            if (widen::form(p) != widen::Type::Form::kPointer) continue;
+            if (widen::deepStrip(widen::get(p).pointee) == widen::deepStrip(cs))
+                return static_cast<int>(id);
+        }
+    }
+    return -1;
 }
 
 void classifyClassInit(parse::Tree& tree, parse::Node& s,
                        parse::ClassInfo const& info, diagnostic::Sink& diag,
-                       bool subobject) {
+                       bool subobject, bool value_init) {
     // THE construction funnel: every instantiation of a class — a local, a `new`, a
     // temporary, an array/tuple element (init or default) — reaches here, so the
     // abstract-instantiation check lives here and nowhere else. `subobject` is set only
@@ -2979,14 +3009,66 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             }
             std::unique_ptr<parse::Node> slot;
             if (pi < provided.size() && provided[pi] && sameClass) {
-                slot = std::move(provided[pi++]);   // same-class value -> copy
+                // A same-class value flowing into a class field. The ONLY form that is fine is
+                // an in-place CONSTRUCTION (`Class(1,2,3)`), which field-lists into the field —
+                // one ctor, no temp. Every OTHER same-class value is a TRANSFER: a bare lvalue
+                // is a COPY (op=(Class^)), any other rvalue (a call, a chain) is a MOVE
+                // (op<--) — and by the copy-into order a transfer must run only AFTER the field
+                // is default-constructed, a seam buried inside the enclosing class's shared
+                // complete constructor where a per-site transfer cannot yet be woven. Codegen
+                // instead BLITS the value in (an rvalue via a throwaway temp) and runs the
+                // field's ctor over the copied bytes, skipping op= / op<--. Reject that
+                // silently-wrong lowering. (A trivial field class — no ctor/dtor — has nothing
+                // observable to skip, so it stays legal.)
+                //
+                // The rejection is for an EXPLICIT per-field class value (`Holder h(c)`,
+                // `= (…, val)`). It does NOT fire for the aggregate-SPREAD path
+                // (`provided_built`: `Trkpair xp = mkTrkTup()`), where a whole matching
+                // aggregate is distributed across the fields — a whole-object transfer, a
+                // different operation, left as it was.
+                bool is_ctor = provided[pi]->is_construction;
+                if (!is_ctor && !provided_built) {
+                    parse::Node const& v = *provided[pi];
+                    bool is_move = !isBareLvalue(v);   // an rvalue source moves; an lvalue copies
+                    std::string opname = is_move ? "op<--" : "op=";
+                    // A USER transfer operator makes the blit observably wrong; the compiler's
+                    // SYNTHESIZED default is memberwise, so a blit past it is byte-identical and
+                    // stays legal. This is the signal `needs_ctor/needs_dtor` misses — an
+                    // op=-only / op<--only class with no ctor/dtor (findClassOperator does not
+                    // surface a trivial-bucket class's self-op, so scan directly).
+                    int cop_id = userSelfTransferOpId(tree, ft, opname);
+                    // A field class is TRIVIAL for transfer only when it has no ctor/dtor AND no
+                    // user copy/move operator — then the blit is byte-for-byte correct with
+                    // nothing to skip, so it stays legal. Reject when the blit would skip a hook
+                    // OR a user op= / op<-- (an op=-only class with no hooks still has an operator
+                    // the blit would bypass). A BASE subobject is included: a WHOLE same-base
+                    // value is a copy — the flat scalar splice is a different branch, never here.
+                    if (sub.needs_ctor || sub.needs_dtor || cop_id >= 0) {
+                        std::vector<diagnostic::Note> notes;
+                        if (cop_id >= 0) {
+                            parse::Entry const& op = tree.entries[cop_id];
+                            notes.push_back({op.file_id, op.tok,
+                                "'" + sub.name + "." + opname + "(" + sub.name
+                                + "^)' declared here."});
+                        }
+                        std::string subj = is_base
+                            ? "Base '" + sub.name + "' of '" + info.name + "'"
+                            : "Class field '" + info.field_names[i] + "' of '" + info.name + "'";
+                        diagnostic::report(diag, {v.file_id, v.tok,
+                            subj + " cannot be initialized by "
+                            + (is_move ? "moving" : "copying")
+                            + " another '" + sub.name + "' value here.", notes});
+                    }
+                }
+                slot = std::move(provided[pi++]);   // same-class value -> transfer
             } else if (is_base) {
                 // FLAT: the base consumes its flat width of initializers (maybe 0). A base
                 // is a subobject — an abstract base is allowed (the concrete derived
                 // completes its pure slots), so its construction skips the abstract check.
                 int bw = flatFieldWidth(tree, ft);
                 if (bw <= 0) {
-                    slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true);
+                    slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true,
+                                          value_init);
                 } else {
                     auto subtup = std::make_unique<parse::Node>();
                     subtup->kind = parse::Kind::kTupleExpr;
@@ -2996,19 +3078,44 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                     // partial-fills from its own defaults (intended; see loop header).
                     for (int k = 0; k < bw && pi < provided.size(); k++)
                         subtup->children.push_back(std::move(provided[pi++]));
+                    // The base subobject inherits the enclosing value-init context, so a field
+                    // inside a BASE whose op= would need to dispatch is diagnosed too.
                     slot = constructClass(tree, sub, std::move(subtup),
-                                          s.file_id, s.tok, diag, true);
+                                          s.file_id, s.tok, diag, true, value_init);
                 }
             // A regular class field is a subobject too: its abstractness (if any) is
             // reported once at the class definition (classifyScope), so skip the check.
             } else if (pi < provided.size() && provided[pi]) {
-                // A class FIELD from a value: field-list construct (constructClass), NOT the
-                // op= class-from-VALUE funnel. A field's transfer cannot be hoisted past the
-                // enclosing ctor (splitTransferInit's field note / todo.txt), so a field op=
-                // would build a temp and copy in — the very fill-then-construct this ordering
-                // avoids. Fields stay field-list until that hoist lands.
+                // A class FIELD from a (non-same-class) value: field-list construct
+                // (constructClass), NOT the op= class-from-VALUE funnel. A field's transfer
+                // cannot be hoisted past the enclosing ctor (splitTransferInit's field note /
+                // todo.txt), so a field op= is not yet available.
+                //
+                // In the VALUE-INIT spelling (`Super s = ((1,2,3),4)`), each field is meant to
+                // be assigned its slot value — and if the field class defines a user op= that
+                // accepts the value, that operator SHOULD run (default-construct the field,
+                // then op=), exactly as `Class c = (1,2,3)` does at the top level. Field-list
+                // construction would silently skip it. For a tuple / scalar value a match is
+                // necessarily a USER op=, so reject rather than quietly field-list. (The
+                // CONSTRUCTION spelling `Super s((1,2,3),4)` wants field-list — value_init is
+                // false there — and a value no op= accepts field-lists as the only option;
+                // both are unaffected.)
+                int op_id = (value_init && !provided_built)
+                    ? findClassOperator(tree, ft, *provided[pi], "op=", diag) : -1;
+                if (op_id >= 0) {
+                    parse::Node const& v = *provided[pi];
+                    parse::Entry const& op = tree.entries[op_id];
+                    diagnostic::report(diag, {v.file_id, v.tok,
+                        "Class field '" + info.field_names[i] + "' of '" + info.name
+                        + "' cannot dispatch '" + sub.name
+                        + ".op=' for its value-initializer here.",
+                        {
+                        {op.file_id, op.tok,
+                         "'" + sub.name + ".op=' (which accepts this value) declared here."},
+                        }});
+                }
                 slot = constructClass(tree, sub, std::move(provided[pi++]),
-                                      s.file_id, s.tok, diag, true);
+                                      s.file_id, s.tok, diag, true, value_init);
             } else if (fdefault) {
                 slot = constructClass(tree, sub, cloneExpr(*fdefault),
                                       s.file_id, s.tok, diag, true);
@@ -4697,7 +4804,12 @@ std::unique_ptr<parse::Node> buildClassFromValue(parse::Tree& tree,
             return conv;
         }
     }
-    return constructClass(tree, info, std::move(init), file_id, tok, diag, subobject);
+    // Field-list fall-through: the class itself has no op= for this value. This is the ONE
+    // origin of value-init context — every caller of buildClassFromValue is a value-position
+    // `= value` site — so mark the field-list `value_init` so a nested class field that DOES
+    // have a matching op= is diagnosed rather than silently field-listed.
+    return constructClass(tree, info, std::move(init), file_id, tok, diag, subobject,
+                          /*value_init=*/true);
 }
 
 // STAMP a class-PRODUCING binary `a op b` — RESOLVE it, but do NOT lower it.
@@ -5226,7 +5338,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         s.children[0] = buildClassFromValue(tree, it->second,
                             std::move(s.children[0]), s.file_id, s.tok, diag);
                     } else {
-                        classifyClassInit(tree, s, it->second, diag);
+                        // A non-tuple source (a scalar, a same-class value) does not route through
+                        // buildClassFromValue, but a VALUE-INIT one (`Bw bw = 5`) still carries
+                        // value-init context to its fields — so a nested class field whose op=
+                        // would need to dispatch is diagnosed, exactly as a tuple source's is. A
+                        // `(args)` CONSTRUCTION (construction_init) does not.
+                        classifyClassInit(tree, s, it->second, diag, /*subobject=*/false,
+                                          /*value_init=*/!s.construction_init);
                     }
                     // The init is now this class's FIELD TUPLE (or an op= conversion). A field
                     // taking a class LVALUE is a COPY INTO a field that does not exist yet —

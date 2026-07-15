@@ -108,13 +108,42 @@ ScalarOp(int v_) {
     op=(int x) { v_ = x; __println("ScalarOp:op=int: " + v_); }
 }
 
-/* a class with a class-typed FIELD: a field built from a value FIELD-LISTS (one ctor, no
-   op=) even though its class defines a matching op= — a field's transfer cannot hoist past
-   the enclosing ctor (splitTransferInit's field note / todo), so fields stay field-list. */
+/* a class with a class-typed FIELD. In the CONSTRUCTION spelling (`Boxed bx(7,(1,2))`) the
+   field FIELD-LISTS (one ctor, no op=). The VALUE-INIT spelling (`Boxed bx = (7,(1,2))`) and a
+   field COPY (`Boxed bx(7, t)`) would each need the field to dispatch its op= / copy, which a
+   field's transfer cannot hoist past the enclosing ctor to do (splitTransferInit's field note /
+   todo) — so both are rejected rather than silently field-listed or blitted (negatives below). */
 Boxed(int tag_, TupleInit inner_) {
     _() { __println("Boxed:ctor: " + tag_); }
     ~() { __println("Boxed:dtor: " + tag_); }
 }
+
+/* TRIVIAL (POD) classes: no ctor/dtor. A trivial class-typed FIELD is exempt from the
+   field-transfer rejections a hook-bearing one triggers — a copy from an lvalue, a move from a
+   call rvalue, and a value-init all stay legal, because the blit is byte-for-byte correct with
+   no op= / ctor to skip or observe. */
+Pod(int a_, int b_, int c_) { }
+SuperPod(Pod p_, int d_) { }
+Pod makePod() { return Pod(1, 2, 3); }
+
+Aop(int v_) { _(){} ~(){} op=(int x) { v_ = x; } }
+Bw(Aop a_) { }
+Cw(Bw b_) { }
+Dw(Cw c_) { }
+Multi(int x_, Aop a_, int y_) { }
+Bw : HasBaseWithOp(int own_) { }   // base Bw (contains Aop) is slot 0
+
+/* the trivial-BUCKET transfer classes: a user op= / op<-- but NO ctor and NO dtor. Every
+   field negative above uses a field class WITH a ctor/dtor (TupleInit, Aop, Bw-contains-Aop),
+   so it rejects through the `needs_ctor || needs_dtor` gate. These two reject ONLY through the
+   direct operator scan (userSelfTransferOpId) — the gate and findClassOperator both miss a
+   trivial-bucket class's self-op. Delete that scan and the two negatives below go GREEN (a
+   silent blit past the operator), which is the regression they guard. */
+CopyOnly(int v_) { op=(CopyOnly^ r) { v_ = r^.v_; } }           // op=-only, no _()/~()
+MoveOnly(int v_) { op<--(mutable MoveOnly^ r) { v_ = r^.v_; } }  // op<--only, no _()/~()
+HoldCopy(CopyOnly a_) { }
+HoldMove(MoveOnly a_) { }
+MoveOnly mkMoveOnly() { return MoveOnly(1); }
 
 /* the RETURN slot is the declarator funnel's twin: a single class returned from a VALUE
    binds `_$ret` and op='s / field-lists in place (NRVO builds it in the caller's slot). */
@@ -424,15 +453,34 @@ int32 main() {
     }
     __println("cp/a/b dtors before.");
 
-    /* a class-typed FIELD from a value FIELD-LISTS (one ctor, no op=) — fields stay
-       field-list even when the field class has a matching op=. */
+    /* a class-typed FIELD in the CONSTRUCTION spelling FIELD-LISTS (one ctor, no op=) — fields
+       stay field-list even when the field class has a matching op=. The VALUE-INIT spelling and
+       a field COPY are rejected instead (negatives at end). */
     {
-        __println("Boxed bx = (7,(1,2)):");
+        __println("Boxed bx(7,(1,2)):");
         __println("  expect TupleInit ctor (1,2) [field-list, no op=], then Boxed ctor 7.");
-        Boxed bx = (7, (1, 2));
+        Boxed bx(7, (1, 2));
         __println("  bx.inner=(" + bx.inner_.p_ + "," + bx.inner_.q_ + ")");
     }
     __println("bx dtors before.");
+
+    /* a TRIVIAL (no ctor/dtor) class FIELD is exempt from the rejections: a copy from an lvalue,
+       a move from a call rvalue, and a value-init are all legal — the blit is byte-correct with
+       nothing to skip. No lifecycle output (Pod/SuperPod are silent); the field values prove it. */
+    {
+        __println("SuperPod (trivial Pod field):");
+        SuperPod sa(1, 2);
+        __println("  sa(1,2):                p_=(" + sa.p_.a_ + "," + sa.p_.b_ + "," + sa.p_.c_ + ") d_=" + sa.d_);
+        SuperPod sb((12, 3), 4);
+        __println("  sb((12,3),4):           p_=(" + sb.p_.a_ + "," + sb.p_.b_ + "," + sb.p_.c_ + ") d_=" + sb.d_);
+        Pod p(1, 2, 3);
+        SuperPod sc(p, 4);
+        __println("  sc(p,4) [POD copy]:     p_=(" + sc.p_.a_ + "," + sc.p_.b_ + "," + sc.p_.c_ + ") d_=" + sc.d_);
+        SuperPod sd(makePod(), 4);
+        __println("  sd(makePod(),4) [move]: p_=(" + sd.p_.a_ + "," + sd.p_.b_ + "," + sd.p_.c_ + ") d_=" + sd.d_);
+        SuperPod se = (makePod(), 4);
+        __println("  se=(makePod(),4)[vinit]: p_=(" + se.p_.a_ + "," + se.p_.b_ + "," + se.p_.c_ + ") d_=" + se.d_);
+    }
 
     /* the RETURN slot funnels a value the same way — op= (tuple) and op= (scalar), NRVO'd
        into the caller's slot (one object each). */
@@ -653,4 +701,88 @@ one at a time and asserts the marked error substring.
 //int neg_class_from_tuple_arity() {
 //    TupleInit t = (1, 2, 3);
 //    return t.p_;
+//}
+
+/* a class-typed FIELD in the VALUE-INIT spelling would need the field to dispatch its op=
+   (default-construct, then assign) — a transfer that cannot hoist past the enclosing ctor. It
+   is rejected rather than silently field-listed. (The CONSTRUCTION spelling `Boxed b(7,(1,2))`
+   is legal and field-lists — a positive above.) */
+//-EXPECT-ERROR: cannot dispatch 'TupleInit.op='
+//int neg_field_value_init_op() {
+//    Boxed b = (7, (1, 2));
+//    return b.inner_.p_;
+//}
+
+/* copying a class VALUE into a class FIELD would need the field's op=(Class^) copy under the
+   copy-into order (the field default-constructed first, its ctor observing the default). The
+   copy cannot hoist between the field's ctor and the enclosing ctor body, so it is rejected
+   rather than blitted-then-constructed-over. (A trivial field class, with nothing observable to
+   skip, is unaffected.) */
+//-EXPECT-ERROR: cannot be initialized by copying
+//int neg_field_copy() {
+//    TupleInit t(1, 2);
+//    Boxed b(9, t);
+//    return b.inner_.p_;
+//}
+
+/* the same restriction reaches a same-class RVALUE: a call result (or any non-construction
+   rvalue) MOVES into the field (op<--), which likewise cannot hoist into the field's own
+   construction, so codegen would blit a throwaway temp in and construct over it — rejected too.
+   Only an in-place construction ('TupleInit(...)') is a legal class-field value. */
+//-EXPECT-ERROR: cannot be initialized by moving
+//int neg_field_move() {
+//    Boxed b(9, retTuple());
+//    return b.inner_.p_;
+//}
+
+/* the value-init rejection recurses: Dw -> Cw -> Bw -> Aop, so the value threaded to the
+   DEEPLY nested Aop field (which has op=(int)) is caught at depth. */
+//-EXPECT-ERROR: cannot dispatch 'Aop.op='
+//int neg_field_deep() {
+//    Dw dw = 5;
+//    return dw.c_.b_.a_.v_;
+//}
+
+/* the rejected field need not be the FIRST: Multi's op= field a_ is the second, reached by the
+   flat init index. */
+//-EXPECT-ERROR: cannot dispatch 'Aop.op='
+//int neg_field_not_first() {
+//    Multi m = (1, 5, 9);
+//    return m.a_.v_;
+//}
+
+/* the rejection reaches a field inside a BASE subobject: HasBaseWithOp's base Bw carries the
+   Aop field, and value-init flows through the base flat-splice. */
+//-EXPECT-ERROR: cannot dispatch 'Aop.op='
+//int neg_field_through_base() {
+//    HasBaseWithOp h = (5, 9);
+//    return h.own_;
+//}
+
+/* the copy rejection covers a BASE subobject given a WHOLE same-base value (not the flat scalar
+   splice): the base is a subobject like any field, and a blit past its transfer is the same bug. */
+//-EXPECT-ERROR: Base 'Bw' of 'HasBaseWithOp' cannot be initialized by copying
+//int neg_base_copy() {
+//    Bw b(Aop(1));
+//    HasBaseWithOp h(b, 9);
+//    return h.own_;
+//}
+
+/* THE CLOSED GAP — COPY: copying an op=-only class (no ctor/dtor) into a field. The
+   `needs_ctor/needs_dtor` gate does not fire (nothing in the trivial bucket), so only the
+   direct op= scan rejects the blit that would skip CopyOnly.op=. */
+//-EXPECT-ERROR: cannot be initialized by copying
+//int neg_field_copy_oponly() {
+//    CopyOnly c(1);
+//    HoldCopy h(c);
+//    return h.a_.v_;
+//}
+
+/* THE CLOSED GAP — MOVE: moving an op<--only class (no ctor/dtor) rvalue into a field. Same
+   trivial-bucket blind spot; the direct op<-- scan rejects the blit that would skip
+   MoveOnly.op<--. */
+//-EXPECT-ERROR: cannot be initialized by moving
+//int neg_field_move_oponly() {
+//    HoldMove h(mkMoveOnly());
+//    return h.a_.v_;
 //}

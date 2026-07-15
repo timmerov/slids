@@ -275,6 +275,25 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     (the `= Class(args)` construction->tuple rewrite sets it too, so a `(5)` collapsing to a
     scalar cannot match op=(int)). Supersedes the old "a declaration from a tuple ignores the
     class's op=" gap. canon construct.sl (TupleInit / ScalarOp / Boxed; pair / row / mix / nest).
+  * A CLASS FIELD THAT WOULD NEED A TRANSFER IT CANNOT HAVE IS REJECTED (2026-07-15), not silently
+    field-listed past the operator. A field's transfer cannot hoist past the enclosing ctor (the
+    class-FIELD exclusion above), so rather than blit and skip a user operator, classifyClassInit's
+    field loop diagnoses the three shapes that would otherwise do so: (a) a VALUE-INIT field
+    (`Super s = ((1,2,3),4)`) whose field class has a matching user op= — "cannot dispatch
+    'Class.op='"; (b) a COPY of a same-class LVALUE into a field (`Holder h(c)`) — "cannot be
+    initialized by copying"; (c) a MOVE of a same-class RVALUE into a field (`Holder h(mk())`) —
+    "cannot be initialized by moving". The copy/move gate is `sub.needs_ctor || sub.needs_dtor ||
+    userSelfTransferOpId(field, op) >= 0`: the last term (a DIRECT scan of the class + base frames
+    for a NON-synthesized self-transfer op `op=(Self^)` / `op<--(Self^)`) catches a TRIVIAL-BUCKET
+    field class — a user op= / op<-- but NO ctor/dtor — that needs_ctor/needs_dtor and
+    findClassOperator both MISS (findClassOperator does not surface a trivial-bucket class's
+    self-op), and whose blit would silently skip the operator. EXEMPT (legal): an in-place
+    CONSTRUCTION slot (`Holder h(C(1))` — field-lists, one ctor, no transfer), a truly trivial POD
+    field (a memberwise blit is byte-identical — nothing to skip), and the whole-aggregate SPREAD
+    idiom (`Pair p = mkPair()` — a whole-object transfer, a different operation). This is the
+    MITIGATION until the construction interleave lands (field hooks -> field transfers -> own ctor;
+    todo.txt): a clean compile error instead of the old silent wrong-order blit. Canon construct.sl
+    neg_field_copy / neg_field_move / neg_field_value_init_op / neg_field_*_oponly / neg_base_copy.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field

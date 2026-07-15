@@ -61,9 +61,38 @@ int fn(Class^ cls) {
     return cls^.a_;
 }
 
+Super(Class cls_, int d_) {
+    _() { print("ctor"); }
+    ~() { print("dtor"); }
+    void print(char[] text) {
+        __println("Super:" + text + ": ((" + cls_.a_ + "," + cls_.b_ + "," + cls_.c_ + "), " + d_ + ")");
+    }
+}
+
+Class makeClass() {
+    return Class(1,2,3);
+}
+
+Pod(int a_, int b_, int c_) { }
+SuperPod(Pod p_, int d_) { }
+Pod makePod() {
+    return Pod(1,2,3);
+}
+
+Ctor(int a_, int b_, int c_) {
+    _() { print("ctor"); }
+    ~() { print("dtor"); }
+    void print(char[] text) {
+        __println("Ctor:" + text + ": (" + a_ + "," + b_ + "," + c_ + ")");
+    }
+}
+SuperCtor(Ctor ctor_, int d_) { }
+Ctor makeCtor() {
+    return Ctor(1,2,3);
+}
 
 int32 main() {
-
+/*
     __println(##line + ": "); { Class c; }
     __println(##line + ": "); { Class c(); }
     __println(##line + ": "); { Class c(1); }
@@ -83,5 +112,26 @@ int32 main() {
     __println(##line + ": "); { (Class, Class) tup = ((1,2,3), (4,5,6)); tup; }
     __println(##line + ": "); { Class arr[2] = ((1,2,3), (4,5,6)); arr; }
 
+    __println(##line + ": "); { Super s; }
+    __println(##line + ": "); { Super s(1,2); }
+    //__println(##line + ": "); { Super s = (1,2); }
+    __println(##line + ": "); { Super s((1,2,3),4); }
+    //__println(##line + ": "); { Super s = ((1,2,3),4); }
+    //__println(##line + ": "); { Class c(1,2,3); Super s(c,4); }
+    //__println(##line + ": "); { Super s(makeClass(),4); }
+    //__println(##line + ": "); { Super s = (makeClass(),4); }
+
+    __println(##line + ": "); { SuperPod s(1,2); s; }
+    __println(##line + ": "); { SuperPod s((12,3),4); s; }
+    __println(##line + ": "); { Pod p(1,2,3); SuperPod s(p,4); s; }
+    __println(##line + ": "); { SuperPod s(makePod(),4); s; }
+    __println(##line + ": "); { SuperPod s = (makePod(),4); s; }
+
+    __println(##line + ": "); { SuperCtor s(1,2); s; }
+    __println(##line + ": "); { SuperCtor s((12,3),4); s; }
+    //__println(##line + ": "); { Ctor p(1,2,3); SuperCtor s(p,4); s; }
+    //__println(##line + ": "); { SuperCtor s(makeCtor(),4); s; }
+    //__println(##line + ": "); { SuperCtor s = (makeCtor(),4); s; }
+*/
     return 0;
 }

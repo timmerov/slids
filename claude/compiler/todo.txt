@@ -26,33 +26,6 @@ BUGS
     value. Either removes the discipline requirement and the entire bug class. Until
     then, every `Type const& x = get(...)` near an intern is a latent dangling read.
 
-  * A CLASS FIELD INITIALIZED FROM A CLASS LVALUE IS CONSTRUCTED OVER THE TOP OF THE COPY.
-    Given a class C whose constructor writes its own field, `Holder h( c );` leaves h's
-    field holding what C's CONSTRUCTOR wrote, not what was in `c`. A wrong answer.
-    WHY: the field is FILLED from `c` and only THEN finalized (the ctor hooks run), so the
-    field's own constructor lands on top of the copied value and overwrites it. This is the
-    same defect a DECLARATION had ("a class can only be copied into" — fixed: the transfer
-    is peeled off the decl and re-emitted against the constructed object).
-    IT CANNOT BE FIXED THE SAME WAY, and the reason is worth keeping: a construction's
-    arguments are FIELD INITIALIZERS, so the enclosing CONSTRUCTOR MUST SEE THEM. A ctor
-    body that computes `a_ + b_` has to read the values that were passed, not the defaults.
-    So the field's copy cannot be hoisted past the enclosing ctor the way a tuple slot's
-    can (a tuple has no ctor of its own, which is exactly why that case was easy). It has
-    to land BETWEEN the field's own ctor and the enclosing class's ctor body.
-    That seam is inside emitConstructed's hook recursion (fields' ctors, then this class's
-    own ctor, then the vptr stamp), where the initializer expressions no longer exist.
-    FIX = give construction a way to interleave: run the field hooks, then the field
-    transfers, then the class's own ctor. Either codegen carries the field transfers into
-    the construction, or the class's own-ctor call is separable so classify can emit
-    decl(field hooks only) / field copies / own-ctor as three steps.
-    Pinned in the OTHER direction by evaluate.sl Q4 (class Hook): hoisting the field copies
-    past the ctor makes Hook's ctor read 0 instead of 3 — so a naive fix here is caught.
-    SAME REASON the class-from-value op= funnel (buildClassFromValue) excludes a class FIELD:
-    a tuple/scalar field value FIELD-LISTS (constructClass), never an op= conversion, because
-    the peel that would build the op= in place cannot hoist a field's transfer past the
-    enclosing ctor either. Root decls / tuple slots / array elements DO op=; fields wait on
-    this interleave.
-
   * AGGREGATE-CONVERSION SOURCE RE-EVALUATED PER SLOT (side-effecting bare-lvalue
     access path). The aggregate-conversion spill (`lowerAggregateConversion`) and the
     class-field aggregate spread treat any BARE LVALUE source (`isBareLvalue`:
@@ -446,3 +419,22 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     OPEN only as a SPEC question: confirm that is the wanted semantics. The alternative
     (store each slot as it is computed, so `(a,b) = (b,a)` leaves both equal to the old b)
     is what the per-slot lowering would do on its own, and it is cheaper by one temp.
+
+  * A CLASS FIELD TRANSFER IS NOT SUPPORTED. A field that would need a transfer — a same-class
+    COPY (`Holder h( c );`), a same-class MOVE (`Holder h( mk() );`), or a value-init op= dispatch
+    (`Super s = ((1,2,3),4);` where the field class has a matching user op=) — is currently
+    REJECTED as a compile error rather than done (the landed mitigation; see readme-classes.txt
+    "A CLASS FIELD THAT WOULD NEED A TRANSFER"). This item is the missing SUPPORT.
+    WHY IT'S HARD: a construction's arguments are FIELD INITIALIZERS, so the enclosing CONSTRUCTOR
+    MUST SEE THEM — a ctor body that computes `a_ + b_` reads the values passed, not the defaults.
+    So the field's transfer cannot be hoisted past the enclosing ctor the way a tuple slot's can
+    (a tuple has no ctor of its own — why that case was easy). It has to land BETWEEN the field's
+    own ctor and the enclosing class's ctor body — the seam inside emitConstructed's hook recursion
+    (fields' ctors, then this class's own ctor, then the vptr stamp), where the initializer
+    expressions no longer exist. Pinned in the OTHER direction by evaluate.sl Q4 (class Hook):
+    hoisting the field copies past the ctor makes Hook's ctor read 0 instead of 3.
+    FIX = give construction a way to interleave: run the field hooks, then the field transfers,
+    then the class's own ctor. Either codegen carries the field transfers into the construction,
+    or the class's own-ctor call is separable so classify can emit decl(field hooks only) / field
+    transfers / own-ctor as three steps. This is also why buildClassFromValue excludes a class
+    FIELD (it field-lists, never op='s): the peel cannot hoist a field's transfer past the ctor.

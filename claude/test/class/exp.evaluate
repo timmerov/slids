@@ -284,8 +284,6 @@ Q3 end q3=23
 Q4: ctor/dtor body
 Acc:ctor: 1
 Acc:ctor: 2
-Acc:ctor: 1
-Acc:ctor: 2
 Acc:ctor: 0
 Hook:ctor chain: 3
 Acc:dtor: 3
@@ -293,8 +291,6 @@ Q4 end qh.v_=3
 Acc:ctor: 0
 Hook:dtor chain: 3
 Acc:dtor: 3
-Acc:dtor: 2
-Acc:dtor: 1
 Acc:dtor: 2
 Acc:dtor: 1
 Q end (locals dtor next)
