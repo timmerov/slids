@@ -57,58 +57,84 @@ the tuple syntax must be used.
         a.x = (7.42); a.y = 0;
         a = ((7,42), 0)
 
-second exception is when we can't just blindly copy (fast mode) the
-initializer slots into the object fields because a ctor or user defined
-assignment operator must be called (slow mode).
-elision of a temporary object into a class field is fast because the
-copy is eliminated.
+there is a couple of special cases when instantiating a class object.
+one is when the entire class object is elided from a function return.
+another is when the entire rhs can be evaluated into the newly declared variable.
 
-consider these definitions:
+    A a = makeA();
+    A a = a1 + a2 + a3;
 
-    A(int x) {
-        op=(A^ rhs) {
-            x = rhs^.x;
-        }
-    }
-    B(int y) {
-        _() { __println("ctor"); }
-        ~() { __println("dtor"); }
-    }
-    C(A y, B z) { }
-    A a(1);
-    B b(2);
+to otherwise fully instantiate a class object, there are three phases: initialization,
+construct, and assignment.
+the initialization algorithm starts with the entire lhs and the entire rhs.
+key points: elision before assignment operation before by-field.
 
-    C c1(3,4);
-    C c2(A(5),6);
-    C c3(7,B(8));
-    C c4(a, 9);
-    C c5(10, b);
+if the lhs is empty the rhs must also be empty.
+initialization is done.
 
-c1 is fast because c1.y(3) and c1.z(4) are fast.
-c2 is fast because c2.y(A(5)) is an elision of a temporary object.
-c3 is fast because c3.z(B(8)) is an elision of a temporary object.
-c4 is slow because c4.y(a) --> c4.y = a --> c4.y.op=(a) must call
-a user defined assignment operator.
-c5 is slow becaues c5.z(b) --> c5.z = b --> c5.z.op=default(b) must
-initialize c5.y, call ct.y.ctor, then default copy b.
-no possibility of a shortcut there.
+if the rhs is empty then default initialize the lhs iteratively and recursively.
+initialization is done.
 
-the instantiated object is initialized with fast data from the rhs
-and initialized with default values for the slow fields.
-then ctor is called.
-then the slow assignments are made.
+if the lhs is a class and the rhs can be elided from a construction expression then
+perform the initialization part of the elision.
+do not call the ctor now.
+continue initialization.
 
-    c4.y.x = 0;
-    c4.z = 9;
-    c4.ctor first calls c4.y.ctor
-    c4.y = a; --> c4.y.op=(a);
+if the lhs is a class and the rhs is a function returning the class and the class does
+not have a ctor/dtor then call the class's copy operator now.
+note: this is the default copy operation which we can use now because the class does
+not have a ctor/dtor.
+continue initialization.
 
-note:
-the reasoning for the second exception also applies for user defined move
-and swap declarations:
+if the lhs is a class and the rhs is a function returning the class and the class does
+have a ctor/dtor then the function must spill to a temporary variable.
+note: this case matches the default copy operator but we can't use it because the ctor
+needs to be called with default initialization.
+continue initialization.
 
-    C c6 <-- (a, b);
-    C c7 <--> (a, b);
+if the lhs is a class and the rhs matches a user defined assignment operation then:
+1. the lhs class is default initialized.
+2. add this assignment operator to the assignment phase.
+continue initialization.
+
+if the lhs is a class and the rhs is the same class and the class has a ctor/dtor then
+1. the lhs class is default initialized.
+2. add this assignment operator to the assignment phase.
+note: this case matches the default copy operator but we can't use it because the ctor
+needs to be called with default initialization.
+continue initialization.
+
+if the lhs is a class and the rhs is the same class and the class does not have a
+ctor/dtor then:
+1. call the class's copy operator now.
+note: this is the default copy operation which we can use now because the class does
+not have a ctor/dtor.
+continue initialization.
+
+if the lhs is an array or tuple, the rhs must be an array or tuple of the same size,
+or a primitive if the size is 1.
+iterate and recurse over the lhs elements and the corresponding rhs elements or slots.
+continue initialization.
+
+if the lhs is a primitive type then the rhs must also be a primitive type.
+widening and pointer rules apply.
+continue initialization.
+
+if the lhs is a class, the rhs must be an array or tuple.
+the rhs may be a primitive. treat as a tuple of size 1.
+iterate and recurse over the lhs fields and the corresponding rhs elements or slots.
+continue initialization.
+
+else compile error.
+
+construction phase:
+call the class object's ctor.
+this will call all of the field ctors.
+
+assignment phase:
+call all of the assignment operators on the list generated during initialization.
+
+note: the instantitation algorithm holds when the transfer operation is move or swap.
 
 things to test:
     ctor/dtor balance

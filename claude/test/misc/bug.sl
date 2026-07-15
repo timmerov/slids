@@ -40,10 +40,23 @@ int fn(Class^ cls) {
     return cls^.a_;
 }
 
+
 int32 main() {
 
     //Class cls = Class + 1 + 2 + 3;
+
     //__println(cls.a_);
+
+    /*
+    (int, int) tup = (1,2);
+    Fred(int a, int b, int c) { }
+    Fred fred = tup;
+    Fred fred(tup);
+    fred;
+    */
+
+    /* generates bad ll */
+    //(int,int,int) tup(5,5); tup;
 
     return 0;
 }
