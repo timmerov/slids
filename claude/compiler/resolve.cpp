@@ -4678,19 +4678,31 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // in different openings — the author reads them as one class definition — so both
     // the presence answer and the obligation a declaration creates are per CLASS, and
     // this is the only place that sees the whole class.
-    bool ctor_declared = false, ctor_defined = false;
-    bool dtor_declared = false, dtor_defined = false;
+    // A DUPLICATE hook is diagnosed here too, and for the same reason: the two definitions
+    // may sit in different openings. Keeping the first def node gives the "first defined
+    // here" note a method's duplicate already gets.
+    bool ctor_declared = false, dtor_declared = false;
+    parse::Node const* ctor_def = nullptr;
+    parse::Node const* dtor_def = nullptr;
     auto scanHook = [&](parse::Node const* m) {
         if (!m) return;
-        bool is_def = (m->kind == parse::Kind::kFunctionDef);
-        if (m->name == "_$ctor") {
-            if (is_def) ctor_defined = true; else ctor_declared = true;
-        } else if (m->name == "_$dtor") {
-            if (is_def) dtor_defined = true; else dtor_declared = true;
+        bool is_ctor = (m->name == "_$ctor");
+        if (!is_ctor && m->name != "_$dtor") return;
+        bool& declared = is_ctor ? ctor_declared : dtor_declared;
+        parse::Node const*& def = is_ctor ? ctor_def : dtor_def;
+        if (m->kind != parse::Kind::kFunctionDef) { declared = true; return; }
+        if (def) {
+            diagnostic::report(diag, {m->file_id, m->name_tok,
+                is_ctor ? "Duplicate constructor." : "Duplicate destructor.",
+                {{def->file_id, def->name_tok, "first defined here"}}});
+            return;
         }
+        def = m;
     };
     for (auto& m : node.children) scanHook(m.get());
     for (parse::Node* m : info.pending_hooks) scanHook(m);
+    bool ctor_defined = (ctor_def != nullptr);
+    bool dtor_defined = (dtor_def != nullptr);
     bool has_ctor = ctor_declared || ctor_defined;
     bool has_dtor = dtor_declared || dtor_defined;
     // The ctor/dtor contract, over the whole class. Both halves are reported here and
@@ -5266,6 +5278,17 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             }
         }
         parse::Node* target = level.front();
+        // A ctor/dtor is CLASS-only. The bare form is rejected in the parser ("A
+        // constructor or destructor may only appear in a class body"); the QUALIFIED
+        // spelling must not be a way around that restriction — a namespace has no
+        // lifecycle. Without this the hook relocates in as a receiver-less free
+        // function and codegen emits a stray top-level `@_$ctor`.
+        if (is_fn && target->kind != parse::Kind::kClassDef
+            && (ch->name == "_$ctor" || ch->name == "_$dtor")) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "A constructor or destructor may only appear in a class body.", {}});
+            continue;
+        }
         // A method (function whose immediate scope is a class) needs the implicit
         // receiver `_$recv` of type `Class^`. A namespace/class node, or a free
         // function in a namespace, has no receiver.

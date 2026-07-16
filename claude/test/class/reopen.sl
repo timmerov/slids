@@ -92,6 +92,23 @@ defined out of line. Its members are reached qualified (`Class:E:member`, or `E:
 from inside the class — a named enum's members are never bare). Enum joins const / alias /
 method / namespace / re-open as a full external member, in every scope. (`global` stays
 out — not implemented.)
+
+STAGE G (landed): the ctor/dtor CONTRACT holds over the whole CLASS, not one body — the
+lifecycle is the union of every opening, like every other member. A `_();` / `~();` forward
+declaration emits a bodyless kFunctionDecl member; the DEFINITION it obligates may land in
+ANY opening (`Forward` — one re-open; `Split` — the two halves in two SEPARATE re-opens),
+and a re-open may add hooks the primary never declared (`Late`). Both the PAIRING rule and
+the must-be-defined obligation moved OUT of the parser (it reads one body at a time and
+cannot see a later opening) into registerClassBody — the only place the whole class is
+visible. It scans the primary's own members plus info.pending_hooks: the re-opens' hooks,
+carried to the primary exactly as pending_fields carries appended fields. Pairing gates the
+obligation, so a lone `_();` reports the missing dtor once, and declaring the pair while
+defining one half now names the missing DEFINITION instead of a phantom pairing violation.
+Before this a re-open's hook was INVISIBLE to the primary's lifecycle scan — has_ctor stayed
+false, the hook was never called, and its `__impl` was emitted DEAD: it compiled, linked, ran,
+and printed nothing. A GLOBAL group keeps its own per-body pairing check in parseGlobal (with
+its own `_$gctor`/`_$gdtor` and its own messages): a group is ONE body and cannot be re-opened,
+so the rule genuinely is per-body there.
 */
 
 /* STAGE A — a primary + block re-opens: later openings add members that see the
@@ -322,6 +339,45 @@ Late() {
     ~() { __println("Late:dtor: " + a_); }
 }
 
+/* a ctor/dtor is a METHOD with restrictions, so the EXTERNAL form applies to it too:
+   `Class:_()` / `Class:~()` define the hooks out of line. */
+Ext(int a_) {
+    _(); ~();
+}
+Ext:_() { __println("Ext:ctor: " + a_); }
+Ext:~() { __println("Ext:dtor: " + a_); }
+
+/* the external hook form CHAINS like an external method, and mixes freely with the
+   block form: the ctor arrives in a re-open, the dtor through a qualified path. */
+Hh(int h_) {
+    Nst(int n_) {
+        _(); ~();
+    }
+    Nst() {
+        _() { __println("Nst:ctor: " + n_); }
+    }
+}
+Hh:Nst:~() { __println("Nst:dtor: " + n_); }
+
+/* the external hook form inside a NAMESPACE body, targeting a class declared there
+   (STAGE E — the form is not file-scope-bound). */
+Hs {
+    Veg(int v_) {
+        _(); ~();
+    }
+    Veg:_() { __println("Veg:ctor: " + v_); }
+    Veg:~() { __println("Veg:dtor: " + v_); }
+}
+
+/* the external hook form inside a CLASS body, targeting a sibling hoisted class. */
+Hc2(int c_) {
+    Sib(int s_) {
+        _(); ~();
+    }
+    Sib:_() { __println("Sib:ctor: " + s_); }
+    Sib:~() { __println("Sib:dtor: " + s_); }
+}
+
 int32 main() {
     Rc r = (10);
     __println("base = " + r.base_m());        // 10 + 1 = 11
@@ -424,6 +480,10 @@ int32 main() {
     Forward fwd;
     Split sp = (3);                             // hooks defined in two SEPARATE re-opens
     Late lt = (4);                              // hooks added by a re-open, never declared
+    Ext ex = (5);                               // hooks defined by the EXTERNAL form
+    Hh:Nst hn = (6);                            // ctor in a re-open, dtor via a CHAINED path
+    Hs:Veg hv = (7);                            // external hooks in a namespace body
+    Hc2:Sib hs = (8);                           // external hooks in a class body
 
     return 0;
 }
@@ -514,3 +574,48 @@ int32 main() {
 //Fnq() {
 //    ~() { }
 //}
+
+/* a DUPLICATE hook spans openings too — two definitions of the same hook in two
+   different openings. (Caught per class; the parser sees one body at a time and used
+   to let this through to emit invalid IR: two `@Dd__$ctor__impl` definitions.) */
+//-EXPECT-ERROR: Duplicate constructor
+//Dd(int a_) {
+//    _() { } ~() { }
+//}
+//Dd() {
+//    _() { }
+//}
+
+/* the same, via the EXTERNAL form: a hook defined both in a block and out of line. */
+//-EXPECT-ERROR: Duplicate destructor
+//De(int a_) {
+//    _() { } ~() { }
+//}
+//De:~() { }
+
+/* the same-body duplicate stays an error (it was the only one the parser caught). */
+//-EXPECT-ERROR: Duplicate constructor
+//Df(int a_) {
+//    _() { } _() { } ~() { }
+//}
+
+/* a ctor/dtor's RESTRICTIONS hold for the external spelling too: no return type... */
+//-EXPECT-ERROR: A constructor has no return type
+//Dg(int a_) {
+//    _(); ~();
+//}
+//void Dg:_() { }
+//Dg:~() { }
+
+/* ...and no parameters. */
+//-EXPECT-ERROR: A constructor or destructor takes no parameters
+//Dh(int a_) {
+//    _(); ~();
+//}
+//Dh:_(int x) { }
+//Dh:~() { }
+
+/* a ctor/dtor is CLASS-only — the qualified spelling is not a way around it. */
+//-EXPECT-ERROR: A constructor or destructor may only appear in a class body
+//Dn { }
+//Dn:_() { }

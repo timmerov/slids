@@ -1347,8 +1347,11 @@ Phase 7 — class advanced
     INCOMPLETE (trailing `...`; see the INCOMPLETE CLASSES bullet). BLOCK: registerClassName
     points the re-open node's resolved_entry_id at the primary + marks is_reopen;
     registerScopeNames recurses members into the shared ns_frame_id; the field-body pass +
-    class-collection loops skip the is_reopen node (primary's layout/lifecycle intact);
-    flattenScope lifts each opening's methods. EXTERNAL: `int C:m()` (method), `C:Ns {}`
+    class-collection loops skip the is_reopen node (primary's LAYOUT intact — its LIFECYCLE is
+    the union of every opening instead, and that skip is what hid it; see the next bullet);
+    flattenScope lifts each opening's methods. EXTERNAL: `int C:m()` (method), `C:op+=(…)`
+    (operator), `C:_()` / `C:~()` (ctor/dtor — a method with restrictions takes every method
+    form; class-only, so a namespace target is rejected in relocation), `C:Ns {}`
     (namespace), `C:R() {}` (hoisted-class re-open, EMPTY parens), `const int C:k=7;`,
     `alias C:A=int;`, and `enum int C:E ( … )` (NAMED enum, members reached qualified). A
     field-bearing `C:X(fields){}` STAYS inheritance (token-identical to `Base:Derived`).
@@ -1378,6 +1381,58 @@ Phase 7 — class advanced
     split into REFINEMENTS below. Canon test/class/reopen.sl (Stages A-F: block/method/
     namespace/hoisted-reopen/chained + const/alias/enum in file/namespace/class/function scope;
     field-add / redefine / leak / bad-path / refine-reject negatives). [[project_reopen_classes]]
+  * A CTOR/DTOR IS A METHOD WITH RESTRICTIONS — LANDED 2026-07-16. The governing rule (canon):
+    a ctor/dtor is a method with restrictions, LIKE AN OPERATOR, so every syntax a method admits
+    it admits too. The restrictions are only: no params, no return type, class-only, ctor never
+    virtual. What this closed: the EXTERNAL out-of-line form `C:_()` / `C:~()`, chained
+    (`A:B:~()`) and in every scope the class is declared (Stage E falls out — relocation is
+    already per-scope). Five scans walk a `:`-chain and each had to stop before the hook, so they
+    share ONE test (isHookHead): parseQualifiedName (as it already did for `:op`),
+    looksLikeQualifiedScopeDef and looksLikeClassDef — BOTH of which silently MATCHED `C:_() {}`,
+    as a hoisted-class re-open of a class named `_` and as an empty-field derived class named `_`
+    (token-identical shapes; the hook wins, as the class-body loop already had it), plus
+    looksLikeFunctionDef and parseFunctionDef's qualifier loop. Restrictions enforced for the
+    out-of-line spelling exactly as inline: no return type, no params, and NAMESPACE-TARGET
+    REJECTED in relocation (it otherwise relocated in receiver-less and emitted a stray top-level
+    `@_$ctor` — the bare form was rejected in the parser, so the qualified one was a way around a
+    restriction). ALSO FIXED, PRE-EXISTING AND UNRELATED TO HOOKS: a chained out-of-line member
+    with NO return type (`A:B:op+=(…)`) failed with "Expected function name" — parseFunctionDef
+    reinterpreted only a ONE-segment leading identifier as the qualifier, but parseQualifiedName
+    swallows the whole `A:B` chain as the "return type"; it now splits the spelling back into
+    segments (token-count checked, 2n-1, so segment->token stays exact). Hooks and operators were
+    one fix. Canon reopen.sl: `Ext` / `Hh:Nst` / `Hs:Veg` / `Hc2:Sib` positives (external,
+    chained, namespace-body, class-body) + no-return-type / no-params / namespace-target
+    negatives. [[project_reopen_class_lifecycle]]
+  * CLASS LIFECYCLE ACROSS OPENINGS — LANDED 2026-07-16. The ctor/dtor contract is per CLASS,
+    not per BODY — the lifecycle is the union of every opening, like every other member. A
+    `_();` / `~();` forward declaration may sit in the primary with its DEFINITION in a re-open,
+    the two halves may land in two SEPARATE re-opens, or a re-open may add both hooks with no
+    declaration anywhere. A declaration now emits a bodyless kFunctionDecl member
+    (`_$ctor`/`_$dtor`) instead of nothing — every downstream hook scan already accepted one
+    (resolve's type pass even says hooks "have no entry but still need their `_$recv` typed"),
+    and flattenScope lifts only kFunctionDef, so no stray symbol appears. Both the PAIRING rule
+    and the must-be-defined obligation moved OUT of parseClassDef (it reads one body at a time
+    and structurally cannot see a later opening) into registerClassBody, which scans the
+    primary's own members PLUS ClassInfo.pending_hooks — the re-opens' hooks, carried to the
+    primary exactly as pending_fields carries appended fields, and left OWNED by the re-open node
+    so the body pass still resolves them there. Pairing GATES the obligation (a lone `_();`
+    reports the missing dtor once, not that plus "must be defined"); declaring the pair while
+    defining one half now names the missing DEFINITION instead of a phantom pairing violation.
+    DUPLICATES joined them (2026-07-16): two definitions of one hook in two OPENINGS were caught
+    by nothing — the parser's per-body "Duplicate constructor." saw one body — so slidsc emitted
+    two `@C__$ctor__impl` definitions and llc rejected the IR. Now diagnosed per class with the
+    "first defined here" note a duplicate METHOD already got; that asymmetry is what exposed it.
+    grammar now keeps NO hook state at all: all three rules span openings.
+    THE BUG THIS CLOSED WAS SILENT: a re-open's hook was invisible to the primary's lifecycle
+    scan, so has_ctor stayed false, the hook was NEVER CALLED, and its `__impl` was emitted DEAD
+    — it compiled, linked, ran, and printed nothing. parseGlobal keeps its own per-body pairing
+    check (its own `_$gctor`/`_$gdtor` + its own messages): a global group is ONE body and cannot
+    be re-opened, so per-body is correct there. Canon test/class/reopen.sl Stage G — positives
+    `Forward` (decl in primary, def in a re-open), `Split` (halves in two re-opens), `Late` (a
+    re-open adds both, undeclared); each FAILS without the fix, `Late` by printing nothing. Five
+    negatives pin the obligation + pairing across openings (regression locks: each produced the
+    same message before, from the parser, for the wrong reason).
+    [[project_reopen_class_lifecycle]]
   * INCOMPLETE CLASSES — LANDED (single-file). A class whose field tuple ends with a trailing
     `...` is INCOMPLETE (Node.is_incomplete; grammar parseParamList, class field lists only,
     `...` must be LAST — no leading/interior form). The re-open field rule becomes STATEFUL on
@@ -1425,6 +1480,33 @@ Phase 8 — namespaces + cross-TU
       non-overloaded free function links by its plain symbol; an OVERLOADED function
       mangles by per-TU entry id, which won't match across objects — stable cross-TU
       mangling is the remaining propagation work. See [[project_cross_tu_declare_only]].
+    - DECLARE-ONLY METHODS PARSE (partial slice, LANDED 2026-07-16). A class body
+      now accepts a bodyless method (`void print();`) — the shape a header needs to
+      declare a class's methods. parseDefinitionMember's class arm gated on
+      looksLikeFunctionDef, whose `;`-tail reads empty parens as a CONSTRUCTION
+      (`Type name();`) and so rejected it; the gate takes an in_class flag that
+      short-circuits that tail, because a class body holds no variable declarations
+      (a field is a slot in the field tuple) and nothing there can be a construction.
+      The statement-context call site keeps the ambiguity. PARSE ONLY — it moves the
+      error, it does not make test/import work: flattenScope lifts only kFunctionDef,
+      so a declare-only method (and a declare-only NAMESPACE function) is silently
+      dropped rather than reaching codegen as a `declare`. The cross-TU class model
+      below is the rest.
+    - CROSS-TU CLASSES (NOT started). A class declared in a `.slh` and used in
+      another TU needs its ctor/dtor to LINK, and the seam is the COMPLETE
+      `@<Name>__$ctor` — one symbol, defined once in the TU holding the `_(){}`,
+      declared elsewhere, exactly as `hello_world` works. NOT the `__impl` split:
+      that is a compiler-internal artifact of the per-TU synthesis model, and
+      exporting it would make the link-time ABI surface scaffolding AND leave every
+      importing TU re-synthesizing its own copy of the field walk. The rule is the
+      one that already exists (`!is_def && fileIsImported`): declared in a header,
+      not defined here -> `declare`; defined here -> drop the `internal` from
+      codegen's `define internal void @<Name>__$ctor`; not from a header -> today's
+      per-TU internal synthesis, unchanged (a class needing a ctor only transitively
+      has no defining TU to name, so it must stay internal). Note the prerequisite
+      landed above: a header's `_();` and the sibling `.sl`'s `_(){}` are different
+      OPENINGS of one class, so "is it defined in this TU" is only answerable now
+      that registerClassBody sees every opening's hooks.
     - DEPENDENCY OUTPUT (LANDED 2026-07-15). slidsc `-MF <file>` / `-M` emit a
       make rule `<out.ll>: <in.sl> <imported.slh>...` (gcc-style, v1 had it as
       -M/-MF). The source list is `tokens.files` read right after lex — the file

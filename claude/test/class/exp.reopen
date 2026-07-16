@@ -44,6 +44,14 @@ le.e = 1
 Forward:ctor: 0
 Split:ctor: 3
 Late:ctor: 4
+Ext:ctor: 5
+Nst:ctor: 6
+Veg:ctor: 7
+Sib:ctor: 8
+Sib:dtor: 8
+Veg:dtor: 7
+Nst:dtor: 6
+Ext:dtor: 5
 Late:dtor: 4
 Split:dtor: 3
 Forward:dtor: 0

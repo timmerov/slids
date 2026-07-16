@@ -305,10 +305,22 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field
     name in the body rewrites to the spec `self.field` = `_$recv^.field` (resolve
     method_fields fallback — locals shadow).
-    desugar lifts them to top-level `<Name>__$ctor` / `__$dtor`. Optional but must
-    PAIR; FORWARD declarations (`_();`) allowed but must be defined; no author
-    params. The kSlid type carries has_ctor/has_dtor (the explicit symbol exists)
-    vs needs_ctor/needs_dtor (TRANSITIVE).
+    desugar lifts them to top-level `<Name>__$ctor` / `__$dtor`.
+    A CTOR/DTOR IS A METHOD WITH RESTRICTIONS — like an operator. EVERY syntax a method
+    admits, a hook admits: a body-inline definition, a bodyless forward DECLARATION, a
+    definition in any RE-OPEN, and the EXTERNAL out-of-line form (`C:_()`, `A:B:~()`) in
+    any scope the class is declared (see THE EXTERNAL FORM). The restrictions are only:
+    no author params, no return type, class-only (a namespace has no lifecycle — the
+    qualified spelling is rejected in relocation, not just the bare one in the parser),
+    and a ctor is never `virtual`.
+    THE CONTRACT IS PER CLASS, NOT PER BODY (see THE LIFECYCLE IS THE UNION OF EVERY
+    OPENING, below): hooks are optional but must PAIR, a FORWARD declaration (`_();` — a
+    bodyless kFunctionDecl member) must be DEFINED in SOME opening (not necessarily the
+    one that declared it), and a DUPLICATE definition is one across ALL openings. All
+    three are enforced in registerClassBody, the only place the whole class is visible;
+    the parser reads one body at a time and enforces NONE of them (it keeps no hook state
+    at all). The kSlid type carries has_ctor/has_dtor (the explicit symbol exists) vs
+    needs_ctor/needs_dtor (TRANSITIVE).
   * CALL-IF-NEEDED + ITANIUM RECURSIVE DESCENT (complete-method model): a trivial
     class emits no method and no call. needs_ctor/needs_dtor is transitive over the
     field graph (resolve fixpoint after all classes register — a by-value field whose
@@ -976,20 +988,69 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   (the persistent ns_frame_id that namespaces already reuse), so const / alias / enum / method
   / nested class / nested namespace all land in one member set. The field-body pass and the
   class-collection loops SKIP an is_reopen node (guarded by the flag), so the primary's fields
-  / lifecycle / layout are never clobbered; flattenScope lifts each opening's methods under
-  `<Class>__method` for free. A re-open of a BASE is visible on a DERIVED instance (it rides
-  the _$base chain); a nested class introduced by a re-open, and re-opened again, both work.
+  / layout are never clobbered (its LIFECYCLE is a different story — see below: a re-open's
+  hooks must reach the primary, and the skip is exactly what hid them); flattenScope lifts each
+  opening's methods under `<Class>__method` for free. A re-open of a BASE is visible on a
+  DERIVED instance (it rides the _$base chain); a nested class introduced by a re-open, and
+  re-opened again, both work.
+
+  THE LIFECYCLE IS THE UNION OF EVERY OPENING. A ctor/dtor is a member like any other, so the
+  DECLARATION `_();` may sit in the primary with its DEFINITION in a re-open (canon reopen.sl
+  `Forward`), the two halves may land in two SEPARATE re-opens (`Split`), or a re-open may add
+  both with no declaration anywhere (`Late`). But an is_reopen node skips the class BODY passes,
+  so its hooks are invisible to the primary's lifecycle scan — the same problem pending_fields
+  solves for fields, solved the same way: the re-open branch of registerClassName points
+  ClassInfo.pending_hooks at its `_$ctor`/`_$dtor` members (still OWNED by the re-open node, so
+  the body pass resolves them there), and registerClassBody scans the primary's own members PLUS
+  pending_hooks. That scan is also where the WHOLE contract is enforced, classifying each hook as
+  declaration-or-definition by node kind: PAIRING first, which GATES the must-be-defined
+  obligation (so a lone `_();` reports the missing dtor once, not that plus "must be defined";
+  and declaring the pair while defining one half names the missing DEFINITION rather than a
+  phantom pairing violation), plus DUPLICATES — two definitions of one hook in two openings,
+  which the parser's per-body check could not see and which reached codegen as two
+  `@C__$ctor__impl` definitions, i.e. INVALID IR caught only by llc. Keeping the first def node
+  gives that diagnostic the same "first defined here" note a duplicate METHOD already got — the
+  asymmetry that gave the bug away. BEFORE this the scan saw only the primary, so a
+  re-open's hook left has_ctor false: the hook was NEVER CALLED and its `__impl` was emitted
+  DEAD — it compiled, linked, ran, and printed nothing. A GLOBAL group keeps its own per-body
+  pairing check in parseGlobal (its own `_$gctor`/`_$gdtor`, its own messages): a group is ONE
+  body and cannot be re-opened, so per-body is correct there and is NOT an inconsistency to
+  "fix".
 
   THE EXTERNAL (out-of-line) FORM. `Class:member` defines a member of Class out of line —
   it desugars to `Class() { member }`, seeing Class's fields / consts / methods bare. Member
   kinds: const `const int C:k=7;`, alias `alias C:A=int;`, ENUM `enum int C:E ( … );` (a
   NAMED enum — its members are reached qualified, `C:E:m` / `E:m`), a METHOD `int C:m() { }`,
   an OPERATOR (a method — value-producing `bool C:op==(int a) { }` OR a no-return produce-self
-  `C:op+=(int a) { }`; the qualifier loop accepts an `op<sym>` name, and parseQualifiedName
-  stops its chain before a `:op` so the core-type parser doesn't eat `C:op` as a qualified type),
-  a NAMESPACE `Class:Namespace { }` (brace tail), and a hoisted-class RE-OPEN
+  `C:op+=(int a) { }`), a CTOR/DTOR (`C:_() { }` / `C:~() { }` — a method with restrictions, so
+  it takes this form like any other; class-only, so a NAMESPACE target is rejected here rather
+  than relocating in as a receiver-less free `@_$ctor`), a NAMESPACE `Class:Namespace { }`
+  (brace tail), and a hoisted-class RE-OPEN
   `Class:Reopen() { }` (EMPTY parens). A field-bearing head `Class:Name(fields) { }` is NOT
   this form — token-identical to inheritance (`Base:Derived(fields)`) and STAYS inheritance.
+
+  A NAME-SLOT THAT IS NOT A NAME. Three member spellings are not identifiers — `op<sym>`, `_`,
+  and `~` — and every scan that walks a `:`-chain must stop before them or misread the shape.
+  isHookHead(ahead) is the ONE test for `_(` / `~(`, used by all five: parseQualifiedName (stops,
+  as it already did for `:op`, leaving the head to parseFunctionDef), looksLikeQualifiedScopeDef
+  and looksLikeClassDef (both of which otherwise MATCH `C:_() {}` — as a hoisted-class re-open of
+  a class named `_`, and as an empty-field derived class named `_` — token-identical shapes where
+  the hook must win, exactly as the class-body loop peels `_`/`~` off before looksLikeClassDef),
+  looksLikeFunctionDef (an early-out: an out-of-line hook head has no return type, so the
+  return-type scan would eat the qualifier and then find `:` in the name slot), and
+  parseFunctionDef's qualifier loop (which mints the same `_$ctor`/`_$dtor` name the in-class form
+  does). `~` is not an identifier and `_` is reserved wherever a member may be named, so neither is
+  spellable as a member name and there is nothing to disambiguate against.
+
+  THE LEADING CHAIN IS THE QUALIFIER. An out-of-line member with NO return type — `C:op+=(…)`,
+  `C:_()`, and the CHAINED `A:B:op+=(…)` / `A:B:~()` — leads with the qualifier where a return type
+  would sit, so parseFunctionDef reinterprets what parseDeclarator ate. That reinterpretation must
+  cover the WHOLE chain: parseQualifiedName swallows all of `A:B` as the "type", so a one-token
+  test (the old `pos == type_start + 1`) caught only the single-segment forms and reported
+  "Expected function name" at the `:` for every chained one — which is why `A:B:op+=` was broken
+  long before hooks existed. The spelling is split back into segments (splitQualifiedSpelling) and
+  a token-count check (a bare chain of n segments is 2n-1 tokens) confirms the declarator consumed
+  exactly the colon chain and no type suffix, so segment -> token stays exact for the carets.
   The TAIL disambiguates at grammar (looksLikeQualifiedScopeDef, checked BEFORE
   looksLikeClassDef): `{` -> namespace, `()` -> class re-open, `(fields)` -> inheritance. The
   empty-parens `A:B() {}` is genuinely AMBIGUOUS with an empty-field DERIVED class

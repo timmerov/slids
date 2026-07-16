@@ -45,12 +45,21 @@ void Space:Vegetable:print() {
 }
 
 /*
-in a source file, we cannot add a ctor or dtor to a class
-first declared in a header file.
+in a source file, we cannot add a ctor/dtor or copy, move, swap
+operators to a class first declared in a header file.
 */
 NoCtor() {
     _() { __println("compile error."); }
 }
 NoCtor() {
     ~() { __println("compile error."); }
+}
+NoCtor() {
+    op=(NoCtor^ rhs) { __println("compile error."); }
+}
+NoCtor() {
+    op<--(mutable NoCtor^ rhs) { __println("compile error."); }
+}
+NoCtor() {
+    op<-->(mutable NoCtor^ rhs) { __println("compile error."); }
 }

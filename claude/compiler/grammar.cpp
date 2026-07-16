@@ -68,6 +68,42 @@ struct Parser {
         return tokens.tokens[p].kind;
     }
 
+    std::string const& peekText(int ahead) const {
+        static std::string const kNone;
+        int p = pos + ahead;
+        if (p >= static_cast<int>(tokens.tokens.size())) return kNone;
+        return tokens.tokens[p].text;
+    }
+
+    // Split a bare qualified-name spelling (`A`, `A:B`, `A:B:C`) into its segments.
+    // The inverse of the `:`-joined spelling parseQualifiedName builds, used to hand a
+    // leading chain that turned out to be a QUALIFIER back to the qualifier slot.
+    static std::vector<std::string> splitQualifiedSpelling(std::string const& s) {
+        std::vector<std::string> out;
+        std::size_t start = 0;
+        for (std::size_t i = 0; i <= s.size(); i++) {
+            if (i == s.size() || s[i] == ':') {
+                out.push_back(s.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        return out;
+    }
+
+    // `_(` / `~(` at `ahead` — a ctor/dtor head. A ctor/dtor is a METHOD with
+    // restrictions, so every place a method may be named admits one; this is the ONE
+    // spelling test they all share (the class-body loop's own peel, the qualified-head
+    // loop, parseQualifiedName's stop, and both lookaheads). `~` is not an identifier at
+    // all and `_` is RESERVED by this test wherever a member may be named, so neither is
+    // spellable as a class/member name and there is nothing to disambiguate against.
+    bool isHookHead(int ahead) const {
+        if (peekKind(ahead) == token::Kind::kBitNot)
+            return peekKind(ahead + 1) == token::Kind::kLParen;
+        return peekKind(ahead) == token::Kind::kIdentifier
+            && peekText(ahead) == "_"
+            && peekKind(ahead + 1) == token::Kind::kLParen;
+    }
+
     void advance() {
         if (pos + 1 < static_cast<int>(tokens.tokens.size())) pos++;
     }
@@ -745,12 +781,14 @@ struct Parser {
         segments.push_back(peek().text);
         toks.push_back(pos);
         advance();
-        // A qualified NAME segment is always an identifier (or `self`), never `op` — so a
-        // `:op` here is NOT part of the name: it starts a qualified OPERATOR-definition head
-        // (`Class:op+=(...)`), which the caller (parseFunctionDef) owns. Stop before it,
-        // leaving the `:op` unconsumed, rather than erroring on `op`.
+        // A qualified NAME segment is always an identifier (or `self`), never `op` and never
+        // a ctor/dtor — so a `:op` / `:_(` / `:~(` here is NOT part of the name: it starts a
+        // qualified OPERATOR- or HOOK-definition head (`Class:op+=(...)`, `Class:_()`,
+        // `Class:~()`), which the caller (parseFunctionDef) owns. Stop before it, leaving the
+        // segment unconsumed, rather than erroring on it.
         while (peek().kind == token::Kind::kColon
-               && peekKind(1) != token::Kind::kOp) {
+               && peekKind(1) != token::Kind::kOp
+               && !isHookHead(1)) {
             advance();
             // `Base:self` — the receiver viewed as the base sub-object. `self` (a
             // reserved word) is allowed as a qualified-name segment; resolve reframes
@@ -3129,9 +3167,13 @@ struct Parser {
         if (peekKind(0) != token::Kind::kIdentifier) return false;
         // A derived class: `Base : Derived(field-list) { body }` — the field list
         // starts after `Base : Derived` (offset 3). A non-derived class starts at 1.
+        // The derived-name slot is NOT a hook: `C:_() { }` is a qualified CTOR, not an
+        // empty-field class named `_` derived from C — token-identical shapes, and the
+        // hook wins, as it does everywhere a member may be named.
         int start = 1;
         if (peekKind(1) == token::Kind::kColon
-            && peekKind(2) == token::Kind::kIdentifier) {
+            && peekKind(2) == token::Kind::kIdentifier
+            && !isHookHead(2)) {
             start = 3;
         }
         if (peekKind(start) != token::Kind::kLParen) return false;
@@ -3158,10 +3200,16 @@ struct Parser {
     bool looksLikeQualifiedScopeDef() const {
         if (peekKind(0) != token::Kind::kIdentifier) return false;
         int o = 1;
+        // A trailing `:_()` is a qualified CTOR, not a hoisted-class re-open of a class
+        // named `_` — token-identical shapes, and the hook wins, exactly as the class-body
+        // loop peels `_`/`~` off before looksLikeClassDef. Without this stop, `C:_() {...}`
+        // silently becomes a re-open and the ctor body reports naked code in a class body.
         if (peekKind(o) != token::Kind::kColon
-            || peekKind(o + 1) != token::Kind::kIdentifier) return false;
+            || peekKind(o + 1) != token::Kind::kIdentifier
+            || isHookHead(o + 1)) return false;
         while (peekKind(o) == token::Kind::kColon
-               && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+               && peekKind(o + 1) == token::Kind::kIdentifier
+               && !isHookHead(o + 1)) o += 2;
         // `o` now indexes the token after the final segment.
         if (peekKind(o) == token::Kind::kLBrace) return true;           // namespace
         return peekKind(o) == token::Kind::kLParen                       // re-open
@@ -3297,6 +3345,18 @@ struct Parser {
     // passes false — there the `;` shape is ambiguous with a construction.
     bool looksLikeFunctionDef(bool in_class = false) const {
         int o = 0;
+        // An out-of-line HOOK head — `C:_(`, `A:B:~(` — carries NO return type, so its
+        // leading identifier is the QUALIFIER, not a type. The return-type scan below would
+        // eat it and then find `:` where the name must be, so recognize the shape up front.
+        // (`_`/`~` are reserved wherever a member may be named, so `ident : … : _(` has no
+        // other reading.) parseFunctionDef performs the same reinterpretation.
+        if (peekKind(0) == token::Kind::kIdentifier) {
+            int q = 1;
+            while (peekKind(q) == token::Kind::kColon
+                   && peekKind(q + 1) == token::Kind::kIdentifier
+                   && !isHookHead(q + 1)) q += 2;
+            if (peekKind(q) == token::Kind::kColon && isHookHead(q + 1)) return true;
+        }
         // An operator method may omit the return type (`op+(...)`); when a return
         // type is present it is scanned exactly as for a named function, and the
         // name slot then holds `op<sym>` instead of an identifier.
@@ -3539,9 +3599,9 @@ struct Parser {
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
 
         std::string recv_type = name + "^";   // the implicit receiver param's type
-        bool ctor_def = false, dtor_def = false;   // this body's own DEFINITIONS (the
-                                                   // duplicate-hook check; the class-wide
-                                                   // contract is registerClassBody's)
+        // (This body tracks NO hook state: every rule about a class's ctor/dtor — pairing,
+        // the definition a declaration obligates, and duplicates — spans OPENINGS, so all
+        // three live in registerClassBody, which sees the whole class.)
         bool saw_any_virtual = false;        // any `virtual` member -> a virtual class
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
@@ -3625,10 +3685,10 @@ struct Parser {
                 return nullptr;
             }
             advance();   // {
-            // Caret the duplicate `_`/`~` (m_tok), not the body just consumed.
-            if (is_ctor && ctor_def) { errorAt(m_tok, "Duplicate constructor."); return nullptr; }
-            if (is_dtor && dtor_def) { errorAt(m_tok, "Duplicate destructor."); return nullptr; }
-
+            // (A DUPLICATE hook is diagnosed per CLASS in registerClassBody, not here:
+            // the two definitions may sit in different OPENINGS, which this loop cannot
+            // see. Catching it here caught only the same-body spelling and let the
+            // cross-opening one through to emit invalid IR.)
             auto member = newNodeAt(parse::Kind::kFunctionDef, m_file, m_tok);
             member->name = is_ctor ? "_$ctor" : "_$dtor";
             member->name_tok = m_tok;
@@ -3643,15 +3703,14 @@ struct Parser {
             if (!parseStmtsThroughRBrace(member->children)) return nullptr;
             current_func = std::move(saved_func);
 
-            if (is_ctor) ctor_def = true; else dtor_def = true;
             node->children.push_back(std::move(member));
         }
         if (!expect(token::Kind::kRBrace, "}")) return nullptr;
-        // (A ctor/dtor contract — the pairing rule, and the definition a forward
-        // declaration obligates — holds over the whole CLASS, not this one body: any
-        // opening may supply either half. registerClassBody enforces both, where every
-        // opening's hooks are visible. A GLOBAL group's pairing rule is unrelated and
-        // stays in parseGlobal: a group is one body that cannot be re-opened.)
+        // (Every ctor/dtor rule — PAIRING, the definition a forward declaration obligates,
+        // and DUPLICATES — holds over the whole CLASS, not this one body: any opening may
+        // supply any half. registerClassBody enforces all three, where every opening's
+        // hooks are visible. A GLOBAL group's pairing rule is unrelated and stays in
+        // parseGlobal: a group is one body that cannot be re-opened.)
         // A virtual class carries a vtable pointer at OFFSET 0 (C++ ABI). A ROOT
         // virtual class (>=1 `virtual` member, no base) gets a hidden `_$vptr` field as
         // its UNNAMED FIRST FIELD — like `_$base`, it flows into the class layout so the
@@ -3693,15 +3752,29 @@ struct Parser {
         std::string ret_type = std::move(d.type);
         std::string name;
         int name_tok;
-        if (lead_ident && pos == type_start + 1
-            && peek().kind == token::Kind::kColon) {
-            // The bare-identifier "return type" is really the qualifier's FIRST segment and
-            // there is NO return type (`Class:op+=` / `Class:method`): parseDeclarator ate
-            // the class where a return type would be, and a `:` (with no name) follows.
-            // Hand it to the name slot; the qualifier loop consumes the rest (incl. `:op`).
-            name = std::move(ret_type);
+        std::vector<std::string> qualifier;
+        std::vector<int> qualifier_toks;
+        bool is_hook = false, hook_is_ctor = false;
+        // The "return type" may really be the QUALIFIER of an out-of-line member that has
+        // NO return type — `Class:op+=(…)`, `Class:_()`, and their CHAINED forms
+        // `A:B:op+=(…)` / `A:B:~()`. parseDeclarator ate the qualified NAME where a return
+        // type would sit (parseQualifiedName stops before a `:op` / `:_(` / `:~(`), leaving
+        // a `:` + the member name. EVERY leading segment is qualifier, not just the first:
+        // the declarator swallows the whole `A:B` chain, so a one-token test would miss the
+        // chained forms and report "Expected function name" at the `:`. The token-count
+        // check (a bare chain `A:B` is 3 tokens, n segments = 2n-1) confirms the declarator
+        // consumed exactly the colon chain and no type suffix, so segment -> token is exact.
+        std::vector<std::string> lead_segs;
+        if (lead_ident) lead_segs = splitQualifiedSpelling(ret_type);
+        if (lead_ident && peek().kind == token::Kind::kColon
+            && pos - type_start == 2 * static_cast<int>(lead_segs.size()) - 1) {
+            for (std::size_t i = 0; i + 1 < lead_segs.size(); i++) {
+                qualifier.push_back(lead_segs[i]);
+                qualifier_toks.push_back(type_start + 2 * static_cast<int>(i));
+            }
+            name = lead_segs.back();
+            name_tok = type_start + 2 * (static_cast<int>(lead_segs.size()) - 1);
             ret_type.clear();
-            name_tok = type_start;
         } else if (peek().kind == token::Kind::kOp) {
             is_op = true;                       // `Ret op<sym>` — return type parsed above
             name_tok = pos;
@@ -3721,8 +3794,6 @@ struct Parser {
         // the last is the member name. resolve routes it into that frame — for a class
         // target it becomes a method (receiver-injected). The return-type prefix
         // distinguishes this from an inheritance head (`Base : Derived(...)`).
-        std::vector<std::string> qualifier;
-        std::vector<int> qualifier_toks;
         while (peek().kind == token::Kind::kColon) {
             advance();   // :
             qualifier.push_back(std::move(name));
@@ -3730,8 +3801,18 @@ struct Parser {
             // The qualified member may itself be an OPERATOR (`Ret Class:op+(...)`, or a
             // produce-self `Class:op+=(...)` whose qualifier was reinterpreted above) — an
             // operator is just a method, so the out-of-line member form accepts an
-            // `op<sym>` name after ':' exactly as the inline head does above.
-            if (peek().kind == token::Kind::kOp) {
+            // `op<sym>` name after ':' exactly as the inline head does above. A ctor/dtor
+            // is likewise just a method with restrictions, so `Class:_()` / `Class:~()`
+            // are accepted here for the same reason, minting the same `_$ctor`/`_$dtor`
+            // member name the in-class form does — relocation then splices the receiver
+            // and the target class's lifecycle picks it up like any other opening's hook.
+            if (isHookHead(0)) {
+                is_hook = true;
+                hook_is_ctor = (peek().kind == token::Kind::kIdentifier);
+                name = hook_is_ctor ? "_$ctor" : "_$dtor";
+                name_tok = pos;
+                advance();   // `_` or `~`
+            } else if (peek().kind == token::Kind::kOp) {
                 is_op = true;
                 name_tok = pos;
                 name = parseOperatorName();
@@ -3751,7 +3832,22 @@ struct Parser {
         // it is already set.) Applied AFTER the qualifier loop so it also covers an out-of-
         // line op whose `is_op` is only discovered there (`Class:op+=`).
         if (is_op && ret_type.empty()) ret_type = "void";
+        // A ctor/dtor's RESTRICTIONS, enforced for the out-of-line spelling exactly as the
+        // class-body loop enforces them for the inline one: no return type, no parameters.
+        if (is_hook) {
+            if (!ret_type.empty()) {
+                errorAt(name_tok, hook_is_ctor
+                    ? "A constructor has no return type."
+                    : "A destructor has no return type.");
+                return nullptr;
+            }
+            ret_type = "void";
+        }
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
+        if (is_hook && peek().kind != token::Kind::kRParen) {
+            error("A constructor or destructor takes no parameters.");
+            return nullptr;
+        }
 
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
