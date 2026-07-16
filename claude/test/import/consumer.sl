@@ -13,7 +13,7 @@ import library;
 
 int32 main() {
 
-    //hello_world();
+    hello_world();
 
     return 0;
 }

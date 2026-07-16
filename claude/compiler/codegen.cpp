@@ -3263,6 +3263,25 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
     for (auto const& ch : s.children) if (ch) collectVarDecls(*ch, out);
 }
 
+// An EXTERNAL function (declared in an imported `.slh`, defined in another TU):
+// emit an LLVM `declare` so a call site in this module is a valid reference that
+// the linker binds to the other object's `define`. Mirrors emitFunction's
+// signature (same sret lowering, same symbol via fn.name = functionSymbol) but has
+// no body and names no parameters — a prototype is types-only.
+void emitDeclare(ast::Node const& fn, std::ostream& out) {
+    bool sret = isSretReturn(fn.return_type);
+    std::string ret_llty = sret ? "void" : llvmForRef(fn.return_type);
+    out << "declare " << ret_llty << " @" << fn.name << "(";
+    bool need_comma = false;
+    if (sret) { out << "ptr"; need_comma = true; }
+    for (size_t i = 0; i < fn.params.size(); i++) {
+        if (need_comma) out << ", ";
+        out << llvmForRef(fn.params[i]->return_type);
+        need_comma = true;
+    }
+    out << ")\n";
+}
+
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
     // A non-primitive (hook-bearing) return is lowered to sret: the function
@@ -3563,7 +3582,10 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                 emitFunction(*fn, pool, body, diag);
                 collectNestedFunctions(*fn, nested);
             } else if (fn->kind == ast::Kind::kFunctionDecl) {
-                // intentional n/a: declarations carry no body to emit
+                // A local forward declaration carries no body to emit (its def
+                // emits the define). An EXTERNAL decl (imported header, defined in
+                // another TU) needs a `declare` so the call site links.
+                if (fn->external_decl) emitDeclare(*fn, body);
             } else if (fn->kind == ast::Kind::kVarDeclStmt && fn->is_const) {
                 // intentional n/a: file-scope const has no runtime form;
                 // constfold substituted every use to a literal.

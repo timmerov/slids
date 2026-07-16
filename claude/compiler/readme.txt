@@ -1227,8 +1227,11 @@ STAGE FILES (.h / .cpp pairs)
             print intrinsic used as an expression, needs-qualifier /
             not-visible-from-scope / has-no-member / is-not-a-namespace for
             namespace access, and (final pass) any function declared but
-            never defined — anywhere, used or not. Multi-source notes point
-            at prior decls. Owns
+            never defined — anywhere, used or not, EXCEPT one declared in an
+            imported `.slh` header (Entry.is_external, stamped at registration
+            from Tree.file_imported): its definition lives in another translation
+            unit, linked in, so being bodyless here is not an orphan. Multi-source
+            notes point at prior decls. Owns
             the "what does this name refer to" decision; types are not
             resolve's job.
   constfold parse tree -> parse tree. Iterative post-order walker.
@@ -1604,7 +1607,12 @@ STAGE FILES (.h / .cpp pairs)
             args>)` via one shared emitCall using the classify-stamped
             return_type and param_types — the statement form discards the
             result register, the expression form (kCallExpr) widens it into
-            the destination type. ALL local allocas are HOISTED to the function
+            the destination type. An EXTERNAL function (a bodyless kFunctionDecl
+            from an imported `.slh`, flagged ast Node.external_decl by desugar)
+            emits a types-only `declare <ret> @name(...)` (emitDeclare) so its
+            call site is a valid reference the linker binds to the defining
+            object — the cross-TU declare-only path. A local forward-decl merges
+            into its definition (entry defined) and emits no stray declare. ALL local allocas are HOISTED to the function
             entry block (emitFunction pre-walks the body via collectVarDecls): an
             alloca emitted at its declaration site would re-allocate stack on
             every pass through an enclosing loop — unbounded growth → stack
@@ -1780,10 +1788,16 @@ PRODUCT FILES (.h / .cpp pairs)
 
 PLUMBING
 
-  main.cpp        Pipeline orchestrator. Parses argv (-o, -I), opens the
-                  root via lex::run, walks the seven stages, prints
-                  diagnostics + exits 1 if any errors, otherwise runs
-                  codegen.
+  main.cpp        Pipeline orchestrator. Parses argv (-o, -I, and the
+                  dependency flags -MF <file> / -M), opens the root via
+                  lex::run, walks the seven stages, prints diagnostics +
+                  exits 1 if any errors, otherwise runs codegen. -M / -MF
+                  emit a make rule for the .ll target and its sources — the
+                  root .sl plus every transitively-imported .slh — read
+                  straight off tokens.files right after lex (so deps land
+                  even when a later stage errors); a Makefile `-include`s the
+                  .d so editing a header retriggers the dependent compiles
+                  with no hand-maintained header list.
   diagnostic.h/.cpp  Record { file_id, tok, message, notes }, Note (same
                      shape), Sink (vector of records). APIs: report(),
                      hasErrors(), render(). render() walks the unified

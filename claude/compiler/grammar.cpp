@@ -3810,6 +3810,11 @@ struct Parser {
 }  // namespace
 
 void run(token::List const& in, parse::Tree& out, diagnostic::Sink& diag) {
+    // Record which files were imported (`.slh` headers, imported_by != -1) so
+    // resolve can tell a header-origin declaration from a primary-source one.
+    out.file_imported.resize(in.files.size());
+    for (size_t i = 0; i < in.files.size(); i++)
+        out.file_imported[i] = in.files[i].imported_by != -1;
     Parser p{in, out, diag};
     p.parseProgram();
 }

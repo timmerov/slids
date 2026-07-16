@@ -12,16 +12,12 @@ SAMPLES = \
 	consumer
 
 # Every translation unit linked into the consumer binary: the program plus
-# each imported library's .sl. `import "library";` is a textual include of
+# each imported library's .sl. `import library;` is a textual include of
 # library.slh (declarations only) — the DEFINITIONS live in library.sl, which
 # is compiled to its own object and linked in here.
 OBJS = \
 	consumer \
 	library
-
-# Headers textually included via `import` — a change forces a recompile.
-HEADERS = \
-	library.slh
 
 .PHONY: all clean negatives positives $(SAMPLES)
 
@@ -41,9 +37,16 @@ $(BIN_DIR)/consumer: $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(OBJS)))
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-$(BUILD_DIR)/%.ll: %.sl $(HEADERS) $(SLIDSC)
+# slidsc writes a `.d` alongside the `.ll` (-MF): the make rule naming every
+# `.slh` the source textually imported. Editing a header then re-triggers the
+# compile automatically — no hand-maintained header list. On the first build the
+# `.d` doesn't exist yet (wildcard is empty, -include no-ops); it lands after the
+# first compile and governs every build after.
+$(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d
+
+-include $(wildcard $(BUILD_DIR)/*.d)
 
 clean:
 	rm -rf $(BUILD_DIR)

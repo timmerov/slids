@@ -150,6 +150,11 @@ struct Node {
                                                  // offset 0 of children[0] (the receiver),
                                                  // GEPs this slot, and calls indirect
                                                  // instead of `@name`. -1 = static call.
+    bool external_decl = false;                  // kFunctionDecl: an external function
+                                                 // (declared in an imported `.slh`, defined
+                                                 // in another TU) that is undefined here —
+                                                 // codegen emits a `declare` for it so the
+                                                 // call links against the other object.
 };
 
 // A per-class vtable: the class's symbol and, per slot, the implementing method's

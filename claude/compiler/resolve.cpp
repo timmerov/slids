@@ -315,6 +315,14 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
     return t;
 }
 
+// True if `file_id` names an imported `.slh` header (grammar filled file_imported
+// from the token list). A function DECLARED in such a file is external: its
+// definition lives in another translation unit, so it is not an orphan here.
+bool fileIsImported(parse::Tree const& tree, int file_id) {
+    return file_id >= 0 && file_id < (int)tree.file_imported.size()
+        && tree.file_imported[file_id];
+}
+
 // Resolve a declared type IN PLACE to its structured form (alias leaves become
 // transparent kAlias), then require the result to be a known type. A cycle was
 // already reported, so skip the redundant "Unknown type" the broken chain emits.
@@ -4088,6 +4096,7 @@ void registerNestedFunctions(parse::Tree& tree,
         e.file_id = ch->file_id;
         e.tok = ch->name_tok;
         e.defined = is_def;
+        e.is_external = !is_def && fileIsImported(tree, ch->file_id);
         if (is_def) {
             e.def_file_id = ch->file_id;
             e.def_tok = ch->name_tok;
@@ -4486,6 +4495,7 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             e.file_id = m->file_id;
             e.tok = m->name_tok;
             e.defined = (m->kind == parse::Kind::kFunctionDef);
+            e.is_external = !e.defined && fileIsImported(tree, m->file_id);
             e.is_virtual = m->is_virtual;
             e.is_pure = m->is_pure;
             if (e.defined) { e.def_file_id = m->file_id; e.def_tok = m->name_tok; }
@@ -5694,6 +5704,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             e.file_id = ch->file_id;
             e.tok = ch->name_tok;
             e.defined = is_def;
+            e.is_external = !is_def && fileIsImported(tree, ch->file_id);
             if (is_def) {
                 e.def_file_id = ch->file_id;
                 e.def_tok = ch->name_tok;
@@ -5838,11 +5849,14 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // Pass 3 — orphan declarations. A function declared but never defined
     // (anywhere, used or not) is a compile error: a call to it would emit a
     // `declare` with no `define` and llc would reject the IR. Caret at the
-    // declaration's name. (Cross-TU `.slh` headers legitimately declare-only;
-    // that distinction defers with the rest of the .slh work.)
+    // declaration's name. (Cross-TU `.slh` headers legitimately declare-only —
+    // their entries are flagged is_external at registration and skipped below.)
     for (parse::Entry const& e : tree.entries) {
         // A PURE virtual (`= delete`) is intentionally bodyless — not an orphan.
-        if (e.kind == parse::EntryKind::kFunction && !e.defined && !e.is_pure) {
+        // An EXTERNAL declaration (from an imported `.slh`) is defined in another
+        // translation unit and linked in — also not an orphan here.
+        if (e.kind == parse::EntryKind::kFunction && !e.defined && !e.is_pure
+            && !e.is_external) {
             // A forward declaration is SATISFIED by a same-signature DEFINITION in
             // the same scope. A free function merges its decl + def into ONE entry
             // (Pass 1a, matched by signature); a class METHOD's decl + def stay

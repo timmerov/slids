@@ -106,17 +106,15 @@ BLOCKED FEATURES
 
   * TEMPLATED ALIAS — `alias X<...> = T;`.
 
-  * ORPHAN-CHECK vs IMPORT FORWARD-DECLS — resolve's Pass 3 errors on any
-    function declared-but-never-defined ("Function 'X' is declared but never
-    defined.") — but a `.slh` header legitimately declares-only (defined in the
-    adjacent .sl, or a link error). Today every declared-nowhere-defined
-    function is an error regardless of file. Needs the `.slh` declare-only
-    carve-out; lands with the cross-TU / .slh-propagation work (plan Phase 8).
-    prerequisite: group with general work on import. NOTE: the orphan check now
-    satisfies a forward decl by a SAME-(exact-scope)-signature DEFINITION
-    (owner_ns_frame + parent_frame_id + param_types) — that is the in-TU decl+def
-    parity (a class method decl+def, a free-function decl+def); the remaining gap is
-    only the CROSS-TU `.slh` declare-only case.
+  * CROSS-TU MANGLING FOR OVERLOADS — the declare-only import path
+    links a function by its emitted symbol. A single
+    free function keeps its plain name, so a `declare` in the consumer and the
+    `define` in the library agree. An OVERLOADED function mangles by per-TU ENTRY
+    ID (functionSymbol: `name.<id>`), and entry ids differ between objects, so the
+    consumer's `declare` and the library's `define` would NOT match — an undefined
+    symbol at link. Needs a deterministic, TU-independent mangling (by signature,
+    not entry id) before overloaded functions can cross a `.slh`. Rides the rest of
+    the .slh-propagation work.
 
   * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local
     sweep (resolve) covers only body-declared locals; parameters are exempt

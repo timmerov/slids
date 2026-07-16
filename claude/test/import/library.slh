@@ -3,7 +3,8 @@ test import and linked files.
 this is the library header file.
 
 declarations only.
-no definitions.
+no definitions here.
+the definitions are in the library source file.
 */
 
 /*
@@ -12,4 +13,4 @@ claude says:
 tbd
 */
 
-//void hello_world();
+void hello_world();

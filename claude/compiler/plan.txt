@@ -1414,6 +1414,24 @@ Phase 8 — namespaces + cross-TU
   * namespaces (`Name {}`)  — single-TU core LANDED early (see Phase 4);
     Phase 8 adds only the cross-TU pieces below.
   * .slh → .sl propagation (header → consumer, transitive impl-load)
+    - DECLARE-ONLY IMPORT (first slice, LANDED 2026-07-15). A function DECLARED
+      in an imported `.slh` may go undefined in this TU — its definition is linked
+      in from the sibling `.sl`. grammar stamps Tree.file_imported (a file pulled in
+      via `import`, token imported_by != -1); resolve marks such a declaration
+      Entry.is_external at registration and the Pass-3 orphan check skips it; codegen
+      emits a types-only `declare` for the called external (ast Node.external_decl →
+      emitDeclare) so the linker binds it to the other object. Proven by
+      test/import (consumer.sl calls hello_world defined in library.sl). LIMIT: a
+      non-overloaded free function links by its plain symbol; an OVERLOADED function
+      mangles by per-TU entry id, which won't match across objects — stable cross-TU
+      mangling is the remaining propagation work. See [[project_cross_tu_declare_only]].
+    - DEPENDENCY OUTPUT (LANDED 2026-07-15). slidsc `-MF <file>` / `-M` emit a
+      make rule `<out.ll>: <in.sl> <imported.slh>...` (gcc-style, v1 had it as
+      -M/-MF). The source list is `tokens.files` read right after lex — the file
+      table already records every opened file, so no stage API was needed. A
+      Makefile emits a `.d` per `.ll` and `-include`s them, so editing a `.slh`
+      auto-retriggers the dependent compiles (test/import; retired its manual
+      HEADERS list). Transitive by construction (a nested import is in the table).
   * C interop (`= import`, `import {}`)
   * globals — SINGLE-TU CORE LANDED (pulled forward from Phase 8; see readme.txt
     "GLOBALS" + [[project_globals]]). Complete across every SCOPE (file / namespace /

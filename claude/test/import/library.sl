@@ -1,6 +1,7 @@
 /*
 test import and linked files.
 this is the library source file.
+it must define all of the things declared in the header file.
 */
 
 /*

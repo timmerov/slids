@@ -502,6 +502,14 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->name_tok = p.name_tok;
     node->resolved_entry_id = p.resolved_entry_id;
     node->loop_levels = p.loop_levels;
+    // An external function DECLARATION (from an imported `.slh`, defined in another
+    // TU) reaches codegen as a bodyless kFunctionDecl; flag it so codegen emits a
+    // `declare`. (A local forward-decl merges into its defining entry, so `defined`
+    // is true and this stays false — no stray declare beside the define.)
+    node->external_decl = p.kind == parse::Kind::kFunctionDecl
+        && p.resolved_entry_id >= 0
+        && tree.entries[p.resolved_entry_id].is_external
+        && !tree.entries[p.resolved_entry_id].defined;
     // ast.is_const means a SUBSTITUTED constant — codegen emits no storage for it.
     // A const VARIABLE (a non-foldable type routed to kLocalVar in resolve) is NOT
     // substituted: it has real storage, so it lowers with is_const=false even though

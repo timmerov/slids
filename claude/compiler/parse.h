@@ -412,6 +412,12 @@ struct Entry {
     bool is_pure = false;         // kFunction: a pure virtual (`= delete`) — no body,
                                   // never an orphan; a class with an un-overridden pure
                                   // method is abstract (not instantiable).
+    bool is_external = false;     // kFunction: DECLARED in an imported `.slh` header —
+                                  // its definition legitimately lives in another
+                                  // translation unit (linked in), so being undefined
+                                  // in THIS unit is not an orphan. Codegen emits a
+                                  // `declare` for it when it is called (see the ast
+                                  // Node.external_decl flag it feeds).
     int def_file_id = -1;         // Function: source of the first definition
     int def_tok = -1;             // Function: token of the first definition (for
                                   // "first defined here"; distinct from tok, which
@@ -475,6 +481,12 @@ struct Tree {
     // Symbol table — populated by classify, consumed by later stages.
     std::vector<Entry> entries;
     int next_frame_id = 0;
+
+    // Indexed by file_id (token::List file order): true if that file was pulled
+    // in via `import` (a `.slh` header — token::File::imported_by != -1). Filled
+    // by grammar from the token list. Consumed by resolve to mark a declaration
+    // whose file is imported as external (its definition is in another TU).
+    std::vector<bool> file_imported;
 
     // Class layouts keyed by the class's interned kSlid handle (which is unique
     // per definition via def_id — see ClassInfo). Populated by resolve's class
