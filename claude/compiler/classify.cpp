@@ -2998,6 +2998,29 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             continue;
         }
 
+        // An EXPLICIT EMPTY SLOT — a null IN RANGE, from `Class c(,2,3)` / `(1,,3)` — takes
+        // the field's author DEFAULT (else zero / default-construct) and CONSUMES its flat
+        // position, so the values AFTER it still align. This differs from an under-filled TAIL
+        // (`pi` past the end), which also defaults but consumes nothing. A base (`_$base`)
+        // splices its own flat run and threads any null within it down to its own fields, so
+        // leave a base to the splice branch below.
+        if (!is_base && pi < provided.size() && !provided[pi]) {
+            pi++;   // the empty slot consumes its position
+            std::unique_ptr<parse::Node> slot;
+            if (widen::form(fts) == widen::Type::Form::kSlid && tree.classes.count(fts)) {
+                parse::ClassInfo const& sub = tree.classes.at(fts);
+                slot = constructClass(tree, sub, fdefault ? cloneExpr(*fdefault) : nullptr,
+                                      s.file_id, s.tok, diag, true);
+            } else {
+                slot = fdefault ? cloneExpr(*fdefault)
+                                : classZeroValue(tree, ft, s.file_id, s.tok, diag);
+                inferExpr(tree, *slot, ft, diag);
+                checkValueAssign(tree, ft, *slot, diag);
+            }
+            tup->children.push_back(std::move(slot));
+            continue;
+        }
+
         // A CLASS field is constructed (not raw-filled): a value already of the
         // field's class type is a copy; a scalar / tuple is the field's constructor
         // input, recursively filled with the sub-class's defaults; no value

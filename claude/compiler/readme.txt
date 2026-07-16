@@ -154,7 +154,9 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     that a user op= accepts DOES dispatch it now (2026-07-15): classify::buildClassFromValue
     routes a class-from-a-VALUE at every declarator site — root decl, tuple slot, array
     element, return — through op= (else field-list), and the transfer peel builds it in place;
-    `Class c(args)` (parser `construction_init`) stays field-list. See readme-classes.txt.
+    `Class c(args)` (parser `construction_init`) stays field-list — and a field-list may carry
+    EMPTY slots (`Class c(,2,3)`), each defaulting that field (2026-07-15); the `= (tuple)` form
+    may not. See readme-classes.txt.
   * error  — everything else.
 
   intptr-as-source falls in the integer column, so `pointer <- intptr` is an error

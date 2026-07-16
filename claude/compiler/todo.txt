@@ -56,12 +56,6 @@ UNBLOCKED FEATURES
     materialize a value the class op='s / field-lists into a temp (the `(Class = value)`
     conversion the decl site already uses) and pass its address. Needed by test/misc/bug.sl.
 
-  * pass a tuple literal to a function. fn( (1,2) ); must pass by reference. but can't take
-    the address of a tuple literal.
-
-  * allow empty slots in class initialization. Class a(,2,3); empty slots are default
-    initialized. precedent is destructure allows empty slots.
-
 BLOCKED FEATURES
 
   deferred features involving classes:
@@ -427,3 +421,11 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     or the class's own-ctor call is separable so classify can emit decl(field hooks only) / field
     transfers / own-ctor as three steps. This is also why buildClassFromValue excludes a class
     FIELD (it field-lists, never op='s): the peel cannot hoist a field's transfer past the ctor.
+
+  * allow empty slots in the `= (tuple)` VALUE-INIT form (`Class c = (,2,3)`). Two obstacles:
+    it parses through the SHARED tuple-literal grammar, where an empty slot has no meaning outside
+    a class value-init and the parser cannot know the target is a class (no syntactic gate like the
+    construction `(` gives); and it classifies through buildClassFromValue's op= dispatch, a SECOND
+    defaulting path separate from classifyClassInit's field loop. FIX: allow nullptr slots in the
+    general tuple literal (every OTHER tuple consumer must then reject them), and default-fill the
+    empties before the op= probe. Precedent is destructure's empty slots.

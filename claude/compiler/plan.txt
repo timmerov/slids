@@ -1087,6 +1087,20 @@ Phase 5 — classes
     (agg_conv_spill) made codegen assert in the one consumer position that never hoisted it — a
     STORE / MOVE source (`x <-- ((T) = arr[pick()])`); liftSretCallList's store/move arm now
     hoists it like the decl / assign / return rhs. Canon tuple/combined.sl (the pick() block).
+    EMPTY INIT SLOTS in a construction field-list (2026-07-15). `Class c(,2,3)` / `(1,,3)` — a
+    LEADING or INTERIOR empty slot takes the field's AUTHOR DEFAULT (classZeroValue for a field
+    with none), CONSUMING its flat position so the values after it still align. Precedent: the
+    destructure's empty slots are already a nullptr child (parseDestructureSlots). Parse —
+    parseCallArgs gained an allow_empty flag: an empty slot is a nullptr child, a TRAILING comma
+    is rejected ("a trailing comma is not an empty slot"); enabled ONLY at the two construction-
+    declarator sites (`Class c(args)` and the for-var form), so it cannot leak into a general tuple
+    literal. Classify — classifyClassInit's field loop early-branches on an in-range nullptr
+    provided slot, fills it from fdefault / a recursive sub-class construction / classZeroValue, and
+    advances the provided index. CONSTRUCTION FORM ONLY: the `= (tuple)` value-init (`Class c = (,2,3)`)
+    is NOT covered — it parses through the SHARED tuple-literal grammar (no syntactic gate: the parser
+    cannot know the target is a class) and classifies through buildClassFromValue's op= dispatch, a
+    SECOND defaulting path. Deferred as its own todo. Canon construct.sl (Defs/Pod empty-slot block +
+    trailing-comma negative).
     THE SLOT-WISE EXPLODE (2026-07-13) — A TUPLE DESUGARS TO THE OPERATION BY SLOT,
     ITERATIVELY AND RECURSIVELY. The user's rule, and it is not cleanup: it is the invariant
     that keeps every operation in the family that can express a class. There was no tuple

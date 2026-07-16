@@ -1650,7 +1650,7 @@ struct Parser {
             int t_tok = pos;
             advance();   // (
             auto tup = newNodeAt(parse::Kind::kTupleExpr, t_file, t_tok);
-            if (!parseCallArgs(*tup)) return nullptr;
+            if (!parseCallArgs(*tup, /*allow_empty=*/true)) return nullptr;
             node->children.push_back(std::move(tup));
             node->construction_init = true;   // field-list construction, not `= (tuple)`
         } else if (is_const) {
@@ -2128,13 +2128,27 @@ struct Parser {
     // Parses arguments into node->children, starting just past the '(' and
     // consuming the closing ')'. Shared by statement-form (parseNameLedStmt) and
     // expression-form (parsePostfix) calls. Returns false on error.
-    bool parseCallArgs(parse::Node& node) {
+    bool parseCallArgs(parse::Node& node, bool allow_empty = false) {
         while (peek().kind != token::Kind::kRParen) {
-            auto arg = parseExpr();
-            if (!arg) return false;
-            node.children.push_back(std::move(arg));
+            // A CONSTRUCTION field-list allows an EMPTY SLOT — a leading / interior `,` with
+            // no expression — recorded as a NULL child, exactly as a destructure discard is;
+            // the field takes its author default. A function call / tuple (allow_empty false)
+            // has no default to fall back on, so a `,` there is still a syntax error via
+            // parseExpr. No TRAILING comma: a `,` immediately before `)` has no slot after it.
+            if (allow_empty && peek().kind == token::Kind::kComma) {
+                node.children.push_back(nullptr);
+            } else {
+                auto arg = parseExpr();
+                if (!arg) return false;
+                node.children.push_back(std::move(arg));
+            }
             if (peek().kind == token::Kind::kComma) {
                 advance();
+                if (allow_empty && peek().kind == token::Kind::kRParen) {
+                    error("Expected a value after ',' "
+                          "(a trailing comma is not an empty slot).");
+                    return false;
+                }
                 continue;
             }
             if (peek().kind != token::Kind::kRParen) {
@@ -2840,7 +2854,7 @@ struct Parser {
                 int t_tok = pos;
                 advance();   // (
                 auto tup = newNodeAt(parse::Kind::kTupleExpr, t_file, t_tok);
-                if (!parseCallArgs(*tup)) return nullptr;
+                if (!parseCallArgs(*tup, /*allow_empty=*/true)) return nullptr;
                 decl->children.push_back(std::move(tup));
             }
             varlist.push_back(std::move(decl));

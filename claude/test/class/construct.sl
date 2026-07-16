@@ -126,6 +126,10 @@ Pod(int a_, int b_, int c_) { }
 SuperPod(Pod p_, int d_) { }
 Pod makePod() { return Pod(1, 2, 3); }
 
+// All fields have AUTHOR DEFAULTS, so an EMPTY init slot (`Defs d(,2,3)`) is observable —
+// the defaulted position reads its default (7/8/9), distinct from a provided value.
+Defs(int a_ = 7, int b_ = 8, int c_ = 9) { }
+
 Aop(int v_) { _(){} ~(){} op=(int x) { v_ = x; } }
 Bw(Aop a_) { }
 Cw(Bw b_) { }
@@ -482,6 +486,22 @@ int32 main() {
         __println("  se=(makePod(),4)[vinit]: p_=(" + se.p_.a_ + "," + se.p_.b_ + "," + se.p_.c_ + ") d_=" + se.d_);
     }
 
+    /* EMPTY INIT SLOTS in a construction field-list (`Class c(,2,3)` / `(1,,3)`): a LEADING or
+       INTERIOR empty slot takes the field's AUTHOR DEFAULT (Defs: 7/8/9), or ZERO for a field
+       with no default (Pod). It CONSUMES its flat position, so the values after it still align.
+       Construction form only; a trailing comma is a negative below. */
+    {
+        __println("empty init slots:");
+        Defs da(, 2, 3);      // a_ defaults to 7
+        __println("  Defs da(,2,3): (" + da.a_ + "," + da.b_ + "," + da.c_ + ")");   // (7,2,3)
+        Defs db(1, , 3);      // b_ defaults to 8
+        __println("  Defs db(1,,3): (" + db.a_ + "," + db.b_ + "," + db.c_ + ")");   // (1,8,3)
+        Defs dc(, , 3);       // a_ and b_ default
+        __println("  Defs dc(,,3):  (" + dc.a_ + "," + dc.b_ + "," + dc.c_ + ")");   // (7,8,3)
+        Pod pe(, 5, 6);       // no default -> a_ zero-inits
+        __println("  Pod pe(,5,6):  (" + pe.a_ + "," + pe.b_ + "," + pe.c_ + ")");   // (0,5,6)
+    }
+
     /* the RETURN slot funnels a value the same way — op= (tuple) and op= (scalar), NRVO'd
        into the caller's slot (one object each). */
     {
@@ -785,4 +805,12 @@ one at a time and asserts the marked error substring.
 //int neg_field_move_oponly() {
 //    HoldMove h(mkMoveOnly());
 //    return h.a_.v_;
+//}
+
+/* EMPTY INIT SLOTS reject a TRAILING comma — a leading/interior empty slot means "default this
+   field", but a comma with nothing after it names no field to default; it is a typo, not a slot. */
+//-EXPECT-ERROR: a trailing comma is not an empty slot
+//int neg_trailing_comma() {
+//    Defs d(1, 2, );
+//    return d.a_;
 //}

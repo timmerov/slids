@@ -55,8 +55,15 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     else codegen's array field-init asserts on an untyped element). A class-typed
     field constructs RECURSIVELY (constructClass): a scalar/tuple is the sub-class's
     ctor input filled with ITS defaults; a same-class value copies. The `=` form
-    SPREADS its tuple slot-to-field; the call form keeps each arg whole. A size-1
-    init tuple is inexpressible (`( x )` collapses) — punted (todo). A class — OR an
+    SPREADS its tuple slot-to-field; the call form keeps each arg whole. An EMPTY
+    slot in the CALL form (`Class c(,2,3)` / `(1,,3)`) is a nullptr in the provided
+    list: the field loop early-branches on it, consumes its position, and fills it
+    from the field default (fdefault / recursive sub-class / classZeroValue) exactly
+    as a tail under-fill would — so a leading/interior omission means "default this
+    one" (grammar parseCallArgs allow_empty; the two construction-declarator sites
+    only, a TRAILING comma rejected). The `= (tuple)` value-init form has no empty
+    slots — it goes through buildClassFromValue's op= path, not this loop (todo). A
+    size-1 init tuple is inexpressible (`( x )` collapses) — punted (todo). A class — OR an
     array/tuple whose leaves are classes (widen::hasInPlaceClass, recursing array
     elem + tuple slots, stopping at a pointer/iterator) — is definitely-initialized
     (DA) and default-constructed IN PLACE even with no initializer: resolve marks it
