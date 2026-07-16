@@ -2396,9 +2396,11 @@ struct Parser {
         if (in_class) {
             // A class body: a method is a function-shaped member (receiver-injected).
             // looksLikeFunctionDef gates here — anything not function-shaped is a
-            // naked statement and rejected. (A class has no forward-decl members; the
-            // ctor/dtor `_();`/`~();` decls are handled separately by the class loop.)
-            if (!looksLikeFunctionDef()) {
+            // naked statement and rejected. A method DECLARATION (`void print();`,
+            // the imported-header form) is function-shaped too, which is what
+            // in_class buys. (The ctor/dtor `_();`/`~();` decls are handled
+            // separately by the class loop.)
+            if (!looksLikeFunctionDef(/*in_class=*/true)) {
                 error("A class body holds the constructor '_()', the destructor "
                       "'~()', member definitions (aliases, constants, enums, "
                       "classes, namespaces), and methods.");
@@ -3290,7 +3292,10 @@ struct Parser {
         return true;
     }
 
-    bool looksLikeFunctionDef() const {
+    // `in_class`: the shape is being read as a CLASS BODY member, where a `;` tail
+    // is always a method declaration (see the tail below). A statement context
+    // passes false — there the `;` shape is ambiguous with a construction.
+    bool looksLikeFunctionDef(bool in_class = false) const {
         int o = 0;
         // An operator method may omit the return type (`op+(...)`); when a return
         // type is present it is scanned exactly as for a named function, and the
@@ -3339,7 +3344,8 @@ struct Parser {
         // Scan to the matching `)` and look past it: a `{` body is always a
         // function def; a `;` is a function (forward decl) only when the parens
         // hold a PARAMETER list (type-led), not construction arguments
-        // (expressions) or an empty `()`.
+        // (expressions) or an empty `()` — except in a class body, where no
+        // construction can occur (see the `in_class` arm at the tail).
         int open = o;
         int depth = 0;
         int close = -1;
@@ -3354,6 +3360,11 @@ struct Parser {
         if (after == token::Kind::kLBrace) return true;        // definition
         if (after == token::Kind::kEquals) return true;        // `= delete` pure virtual
         if (after != token::Kind::kSemicolon) return false;
+        // A class body holds no variable declarations — a field is a slot in the
+        // field tuple, never a body member — so nothing there can be a construction
+        // and `Type name(…);` is unambiguously a method DECLARATION. The params-vs-
+        // construction-args disambiguation below exists only for a statement context.
+        if (in_class) return true;
         token::Kind first = peekKind(open + 1);
         if (first == token::Kind::kRParen) return false;       // `()` -> construction
         if (isTypeStart(first)) return true;                   // `(int ...)` -> params

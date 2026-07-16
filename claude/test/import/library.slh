@@ -13,4 +13,24 @@ claude says:
 tbd
 */
 
+alias Integer = int;
+enum Color ( kRed, kGreeen, kBlue );
+
 void hello_world();
+
+Animal(int a, int b) {
+    _(); ~();
+    void print();
+}
+
+Space {
+    alias Float = float;
+    enum Result ( kSuccess, kFailure );
+
+    void goodbye_world();
+
+    Vegetable(int a, int b) {
+        _(); ~();
+        void print();
+    }
+}

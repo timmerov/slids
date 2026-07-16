@@ -15,3 +15,31 @@ import library;
 void hello_world() {
     __println("Hello, World!");
 }
+
+Animal() {
+    _() {
+        __println("Animal:ctor: " + a + " " + b);
+    }
+    ~() {
+        __println("Animal:dtor: " + a + " " + b);
+    }
+}
+
+void Animal:print() {
+    __println("Animal:print: " + a + " " + b);
+}
+
+Space {
+    Vegetable() {
+        _() {
+            __println("Vegetable:ctor: " + a + " " + b);
+        }
+    }
+    Vegetable:~() {
+        __println("Vegetable:dtor: " + a + " " + b);
+    }
+}
+
+void Space:Vegetable:print() {
+    __println("Vegetable:print: " + a + " " + b);
+}
