@@ -175,7 +175,7 @@ Phase 2 — declarations + flow (LANDED)
     reuse requires a compatible type, else the normal assignment conversion rejects
     it). All four for shapes obey NORMAL lexical scoping — a for-var may shadow an
     enclosing const/fn/class. FOR-ARRAY + FOR-TUPLE landed in Phase 4 (`for (var :
-    arr)` / `for (v : tuple)` — see Phase 4); for-class pending classes. Session 5 (switch) LANDED, then REDESIGNED —
+    arr)` / `for (v : tuple)` — see Phase 4); for-class LANDED (Phase 5). Session 5 (switch) LANDED, then REDESIGNED —
     kSwitchStmt + kCaseClause (a label-list + a mandatory `{ }` body; trailing
     `continue;` = fall-through): NO `case` keyword, NO implicit fall-through (a
     clause exits at its body unless a trailing continue carries it into the next
@@ -189,7 +189,7 @@ Phase 2 — declarations + flow (LANDED)
     numbered (`break N;` Nth loop) + named (`break name;`) break/continue, resolved
     to a hop count and walked over a LoopCtx linked list in codegen; no
     break/continue of any flavor in a for-update; labels on loops only.
-    Phase 2 FLOW COMPLETE; for-array + for-tuple landed in Phase 4, for-class pending (Phase 5).
+    Phase 2 FLOW COMPLETE; for-array + for-tuple landed in Phase 4, for-class landed (Phase 5).
     RELOCATION (later): all for-shapes (ranged/array/tuple/enum) were moved to lower
     in the DESUGAR stage (was grammar for ranged, resolve for array/tuple/enum) —
     grammar emits kForRangedStmt, resolve retags the kForEnumStmt carrier to
@@ -440,6 +440,25 @@ Phase 4 — types beyond primitives
     Homogeneous only; by value / by ref [a non-primitive element forces by-ref; a
     by-ref var's pointee must match the element]; typeless local + inferred-ref
     deref dispatch via classify guard. test/flow/fortuple.sl.)
+  * for-class (`for (var : container)`)                            LANDED
+    (a class iterates by its PROTOCOL: size/op[] [op[] returns an element ref] or
+    begin/end/next [arity 0/0/1, all one type]. UNLIKE array/tuple, for-class
+    LOWERS AT RESOLVE — understandForClass rebuilds the node as a kForLongStmt over
+    METHOD CALLS and re-resolves it, so classify's ordinary pass infers the
+    synthesized calls [a call minted in desugar would never be classified]; same
+    model as enum-for. Five desugar shapes: begin/end/next returning a VALUE [loop
+    var IS the iterator], returning a REFERENCE by-value [hidden `_$fc_ref` + deref]
+    or by-ref [loop var IS the ref]; size/op[] by-value [`var = c.op[](i)^`] or
+    by-ref [`ref = c.op[](i)`]. SELECTION [option D]: both protocols defined → the
+    loop var must be explicit, a value picks size/op[], a reference picks
+    begin/end/next; a malformed-but-unused protocol is ignored. A re-readable lvalue
+    container [var, `ptr^`, index] is cloned per call; an RVALUE [`C(..)`, `fn()`] is
+    SPILLED to a class temp WRAPPING the loop in a block scope [a for-long varlist
+    local is not destructed at loop scope, a block local IS], built once and
+    destructed at loop exit. Synth locals are token-suffixed [nested loops never
+    collide]; inherited protocol methods work [classAndBaseFrames]. Loop-var
+    widening / truncation, the unused-loop-var sweep, break/continue all ride the
+    kForLongStmt. test/flow/forclass.sl.)
   * pointer casting (`<Type^> ptr`)                                LANDED
     (kCastExpr — a prefix-unary reinterpret cast [a leading `<` is unambiguous;
     operand is another unary so casts chain right-to-left; target on return_type,
@@ -1189,7 +1208,8 @@ Phase 5 — classes
   * move / swap — the OVERLOADABLE class operators (`op<--`/`op<-->`) + resource
     semantics + class fields inside a moved/swapped tuple (the primitive / pointer
     / tuple forms landed in Phase 4 — [[project_v2_move_swap]])
-  * for-each protocol (op[]+size OR begin/end/next)
+  * for-each protocol (op[]+size OR begin/end/next)                 LANDED
+    (see for-class above — understandForClass, lowered at resolve; test/flow/forclass.sl)
   * stringification operators (`##name`, `##type`, `#`) — the 7 `##` macros
     (##file / ##line / ##func / ##name(x) / ##date / ##time / ##type(x)) LANDED,
     pulled forward as the inferred-types test instrument (##type(x) -> a new

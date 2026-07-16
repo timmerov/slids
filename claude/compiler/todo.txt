@@ -47,12 +47,6 @@ BLOCKED FEATURES
 
   deferred features involving classes:
 
-  * FOR-CLASS — what
-    remains is the for-each PROTOCOL (op[]/size or begin/end/next, Phase 5).
-    Remaining work is DESIGNING the protocol (which
-    operators/methods an iterable must provide) and lowering it to a kForLongStmt in
-    desugar like the others.
-
   * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
     the first DEFINITION (Entry.def_tok) and "first declared here" the first
     DECLARATION (Entry.tok); verified by manual probe only. The //-EXPECT-ERROR

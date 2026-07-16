@@ -2404,6 +2404,360 @@ Completion understandForTuple(parse::Tree& tree, parse::Node& s,
     return Completion::Normal;
 }
 
+// ---- for-class: iterate a user class by protocol -------------------------------
+// A class is iterable if it defines begin/end/next (arity 0/0/1, all returning the
+// SAME type, which next also takes) OR size/op[] (arity 0/1, op[] returning a
+// reference). Unlike array/tuple (understood here, lowered in desugar), for-class
+// LOWERS AT RESOLVE — it rebuilds the node as a kForLongStmt over METHOD CALLS and
+// re-resolves it, so classify's ordinary pass infers the calls (a call synthesized
+// in desugar would never be classified). Same model as enum-for.
+
+// Find a class METHOD by name across the class's own frame and its bases (most-
+// derived first); -1 if none. Name-based (not overload-aware): the protocol methods
+// are identified by name, and a malformed one is caught by the arity/return checks.
+int findClassMethodByName(parse::Tree const& tree, widen::TypeRef cls,
+                          std::string const& name) {
+    for (int fr : parse::classAndBaseFrames(tree, cls)) {
+        int id = parse::findMemberDeclared(tree, fr, name);
+        if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kFunction)
+            return id;
+    }
+    return -1;
+}
+
+// The classification of one for-class protocol family. A method's param_types
+// carries the `_$recv` receiver at [0], so user-arity == param_types.size() - 1.
+struct ForClassProto {
+    enum Status { Absent, Bad, Good } status = Absent;
+    std::string reason;
+    widen::TypeRef ret = widen::kNoType;   // begin's iterator / op[]'s element ref
+};
+
+ForClassProto classifyBeginEndNext(parse::Tree const& tree, widen::TypeRef cls,
+                                   std::string const& cname) {
+    int b = findClassMethodByName(tree, cls, "begin");
+    int e = findClassMethodByName(tree, cls, "end");
+    int n = findClassMethodByName(tree, cls, "next");
+    ForClassProto d;
+    int present = (b >= 0) + (e >= 0) + (n >= 0);
+    if (present == 0) return d;                       // Absent
+    if (present < 3) {
+        std::string missing;
+        auto add = [&](char const* nm) {
+            if (!missing.empty()) missing += ", ";
+            missing += nm;
+        };
+        if (b < 0) add("begin");
+        if (e < 0) add("end");
+        if (n < 0) add("next");
+        d.status = ForClassProto::Bad;
+        d.reason = "Type '" + cname + "' defines some of begin/end/next but not all; "
+                   "missing " + missing + ".";
+        return d;
+    }
+    if (tree.entries[b].param_types.size() != 1
+        || tree.entries[e].param_types.size() != 1
+        || tree.entries[n].param_types.size() != 2) {
+        d.status = ForClassProto::Bad;
+        d.reason = "Methods begin/end/next on type '" + cname
+                 + "' must have arity 0/0/1.";
+        return d;
+    }
+    widen::TypeRef rb = tree.entries[b].slids_type;
+    if (widen::strip(rb) != widen::strip(tree.entries[e].slids_type)
+        || widen::strip(rb) != widen::strip(tree.entries[n].slids_type)
+        || widen::strip(rb) != widen::strip(tree.entries[n].param_types[1])) {
+        d.status = ForClassProto::Bad;
+        d.reason = "Methods begin/end/next on type '" + cname
+                 + "' must all return, and next must take, the same type.";
+        return d;
+    }
+    d.status = ForClassProto::Good;
+    d.ret = rb;
+    return d;
+}
+
+ForClassProto classifySizeOpIndex(parse::Tree const& tree, widen::TypeRef cls,
+                                  std::string const& cname) {
+    int sz = findClassMethodByName(tree, cls, "size");
+    int op = findClassMethodByName(tree, cls, "op[]");
+    ForClassProto d;
+    if (sz < 0 && op < 0) return d;                   // Absent
+    if (sz < 0 || op < 0) {
+        d.status = ForClassProto::Bad;
+        d.reason = "Type '" + cname + "' defines "
+                 + std::string(op >= 0 ? "op[] but not size." : "size but not op[].");
+        return d;
+    }
+    if (tree.entries[sz].param_types.size() != 1
+        || tree.entries[op].param_types.size() != 2) {
+        d.status = ForClassProto::Bad;
+        d.reason = "Methods size/op[] on type '" + cname + "' must have arity 0/1.";
+        return d;
+    }
+    if (!isReferenceType(tree.entries[op].slids_type)) {
+        d.status = ForClassProto::Bad;
+        d.reason = "Method op[] on type '" + cname + "' must return a reference.";
+        return d;
+    }
+    d.status = ForClassProto::Good;
+    d.ret = tree.entries[op].slids_type;             // element reference T^
+    return d;
+}
+
+Completion understandForClass(parse::Tree& tree, parse::Node& s,
+                              widen::TypeRef cls, diagnostic::Sink& diag) {
+    parse::Node& var_decl = *s.children[0];
+    parse::Node& cont = *s.children[1];
+    int cfile = cont.file_id, ctok = cont.tok;
+    int vfile = var_decl.file_id, vtok = var_decl.name_tok;
+    std::string cname = widen::spellOrEmpty(cls);
+
+    if (var_decl.return_type != widen::kNoType) {     // resolve alias leaf
+        std::set<std::string> visiting; bool reported = false;
+        var_decl.return_type = resolveTypeRef(tree, var_decl.return_type, visiting,
+                                              reported, vfile, vtok, diag);
+    }
+    bool has_type = (var_decl.return_type != widen::kNoType);
+    bool lv_is_ref = has_type && isReferenceType(var_decl.return_type);
+
+    ForClassProto bnn = classifyBeginEndNext(tree, cls, cname);
+    ForClassProto soi = classifySizeOpIndex(tree, cls, cname);
+    bool bnnGood = bnn.status == ForClassProto::Good;
+    bool soiGood = soi.status == ForClassProto::Good;
+
+    if (!bnnGood && !soiGood) {
+        if (bnn.status == ForClassProto::Bad || soi.status == ForClassProto::Bad) {
+            std::string msg;
+            if (bnn.status == ForClassProto::Bad) msg += bnn.reason;
+            if (soi.status == ForClassProto::Bad) {
+                if (!msg.empty()) msg += " ";
+                msg += soi.reason;
+            }
+            diagnostic::report(diag, {cfile, ctok, msg, {}});
+        } else {
+            diagnostic::report(diag, {cfile, ctok, "Type '" + cname
+                + "' is not iterable: it defines neither begin/end/next nor "
+                  "size/op[].", {}});
+        }
+        return Completion::Normal;
+    }
+
+    // Select the protocol (option D): when both are defined the loop var must be
+    // explicit, and its shape picks — a value picks size/op[], a reference picks
+    // begin/end/next.
+    bool use_bnn;
+    if (bnnGood && soiGood) {
+        if (!has_type) {
+            diagnostic::report(diag, {vfile, vtok, "Type '" + cname
+                + "' defines both size/op[] and begin/end/next; the for-loop "
+                  "variable type must be written explicitly to select a protocol.",
+                {}});
+            return Completion::Normal;
+        }
+        use_bnn = lv_is_ref;
+    } else {
+        use_bnn = bnnGood;
+    }
+
+    // Decide the desugar shape and finalize the loop var's type.
+    //   1: begin/end/next return a VALUE  — loop var IS the iterator value
+    //   2: begin/end/next return a REF, loop var by-VALUE (hidden ref + deref)
+    //   3: begin/end/next return a REF, loop var by-REF (loop var IS the iterator)
+    //   4: size/op[], loop var by-VALUE (var = c[i])
+    //   5: size/op[], loop var by-REF  (ref = ^c[i])
+    int shape;
+    widen::TypeRef size_ret = widen::kNoType, count_ty = widen::kNoType;
+    auto isPrim = [](widen::TypeRef t) {
+        return widen::form(widen::strip(t)) == widen::Type::Form::kPrimitive; };
+    if (use_bnn) {
+        widen::TypeRef iter = bnn.ret;
+        if (isReferenceType(iter)) {
+            widen::TypeRef elem = widen::get(widen::strip(iter)).pointee;
+            if (!has_type) {
+                shape = isPrim(elem) ? 2 : 3;
+                var_decl.return_type = isPrim(elem) ? elem : iter;
+            } else {
+                shape = lv_is_ref ? 3 : 2;
+            }
+        } else {
+            if (lv_is_ref) {
+                diagnostic::report(diag, {vfile, vtok, "begin/end/next on type '"
+                    + cname + "' return a value; the for-loop variable cannot be a "
+                      "reference.", {}});
+                return Completion::Normal;
+            }
+            shape = 1;
+            if (!has_type) var_decl.return_type = iter;
+        }
+    } else {
+        int op_id = findClassMethodByName(tree, cls, "op[]");
+        int sz_id = findClassMethodByName(tree, cls, "size");
+        size_ret = tree.entries[sz_id].slids_type;
+        count_ty = tree.entries[op_id].param_types[1];
+        widen::TypeRef elem = widen::get(widen::strip(soi.ret)).pointee;
+        if (!has_type) {
+            shape = isPrim(elem) ? 4 : 5;
+            var_decl.return_type = isPrim(elem) ? elem : widen::internPointer(elem);
+        } else {
+            shape = lv_is_ref ? 5 : 4;
+        }
+    }
+
+    // ---- lower to a kForLongStmt over the protocol's method calls --------------
+    int fid = s.file_id, tk = s.tok;
+    std::unique_ptr<parse::Node> loopVar = std::move(s.children[0]);
+    std::unique_ptr<parse::Node> contNode = std::move(s.children[1]);
+    std::unique_ptr<parse::Node> body = std::move(s.children[2]);
+    std::string lv = loopVar->name;
+    // Synthesized locals are suffixed with the loop's token so NESTED for-class
+    // loops never share a name (each is unique across the whole function).
+    std::string sfx = "_" + std::to_string(tk);
+    std::string sEnd = "_$fc_end" + sfx, sRef = "_$fc_ref" + sfx,
+                sSize = "_$fc_size" + sfx, sCount = "_$fc_count" + sfx,
+                sRecv = "_$fc_recv" + sfx;
+    // A re-readable lvalue container (a var, `ptr^`, an index) is cloned per method
+    // call; an rvalue (a construction / call) is SPILLED to a for-scope local built
+    // ONCE, so every begin/size/next/op[] hits the same object (and it is destructed
+    // when the loop scope exits). Lvalue kinds re-read with no side effect.
+    bool spill_recv = !(contNode->kind == parse::Kind::kIdentExpr
+                     || contNode->kind == parse::Kind::kDerefExpr
+                     || contNode->kind == parse::Kind::kIndexExpr);
+
+    auto ident = [&](std::string nm) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kIdentExpr; n->name = std::move(nm);
+        n->file_id = fid; n->tok = tk; n->name_tok = tk;
+        return n;
+    };
+    auto recv = [&]() -> std::unique_ptr<parse::Node> {
+        return spill_recv ? ident(sRecv) : cloneExpr(*contNode);
+    };
+    auto mcall = [&](std::string method, std::unique_ptr<parse::Node> arg) {
+        auto c = std::make_unique<parse::Node>();
+        c->kind = parse::Kind::kMethodCallStmt;
+        c->name = std::move(method); c->file_id = fid; c->tok = tk; c->name_tok = tk;
+        c->children.push_back(recv());
+        if (arg) c->children.push_back(std::move(arg));
+        return c;
+    };
+    auto bin = [&](std::string op, std::unique_ptr<parse::Node> a,
+                   std::unique_ptr<parse::Node> b) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kBinaryExpr; n->text = std::move(op);
+        n->file_id = fid; n->tok = tk;
+        n->children.push_back(std::move(a)); n->children.push_back(std::move(b));
+        return n;
+    };
+    auto intlit = [&](char const* v) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kIntLiteral; n->text = v;
+        n->file_id = fid; n->tok = tk;
+        return n;
+    };
+    auto un = [&](parse::Kind k, std::unique_ptr<parse::Node> a) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = k; n->file_id = fid; n->tok = tk;
+        n->children.push_back(std::move(a));
+        return n;
+    };
+    auto vdecl = [&](std::string nm, widen::TypeRef ty,
+                     std::unique_ptr<parse::Node> init) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kVarDeclStmt; n->name = std::move(nm); n->name_tok = tk;
+        n->return_type = ty; n->file_id = fid; n->tok = tk;
+        if (init) n->children.push_back(std::move(init));
+        return n;
+    };
+    auto assign = [&](std::string nm, std::unique_ptr<parse::Node> rhs) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kAssignStmt; n->name = std::move(nm); n->name_tok = tk;
+        n->file_id = fid; n->tok = tk;
+        n->children.push_back(std::move(rhs));
+        return n;
+    };
+    auto blk = [&](std::vector<std::unique_ptr<parse::Node>> stmts) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kBlockStmt; n->file_id = fid; n->tok = tk;
+        for (auto& st : stmts) n->children.push_back(std::move(st));
+        return n;
+    };
+    auto prepend = [&](std::unique_ptr<parse::Node> st) {
+        body->children.insert(body->children.begin(), std::move(st)); };
+
+    std::vector<std::unique_ptr<parse::Node>> varlist;
+    // The rvalue container is spilled to a class local that WRAPS the loop in a
+    // block scope — a for-long varlist local is not destructed at loop scope, a
+    // block local is — so the temp is built once before the loop and destructed
+    // when the block exits.
+    std::unique_ptr<parse::Node> spillDecl;
+    if (spill_recv) spillDecl = vdecl(sRecv, cls, std::move(contNode));
+    std::unique_ptr<parse::Node> cond, update;
+
+    if (shape == 1 || shape == 3) {
+        // loop var IS the iterator: init = begin(), advance = next(loopvar).
+        loopVar->children.clear();
+        loopVar->children.push_back(mcall("begin", nullptr));
+        varlist.push_back(std::move(loopVar));
+        varlist.push_back(vdecl(sEnd, bnn.ret, mcall("end", nullptr)));
+        cond = bin("!=", ident(lv), ident(sEnd));
+        std::vector<std::unique_ptr<parse::Node>> up;
+        up.push_back(assign(lv, mcall("next", ident(lv))));
+        update = blk(std::move(up));
+    } else if (shape == 2) {
+        // hidden reference iterator; loop var = element by value.
+        varlist.push_back(vdecl(sRef, bnn.ret, mcall("begin", nullptr)));
+        varlist.push_back(vdecl(sEnd, bnn.ret, mcall("end", nullptr)));
+        varlist.push_back(std::move(loopVar));
+        cond = bin("!=", ident(sRef), ident(sEnd));
+        std::vector<std::unique_ptr<parse::Node>> up;
+        up.push_back(assign(sRef, mcall("next", ident(sRef))));
+        update = blk(std::move(up));
+        prepend(assign(lv, un(parse::Kind::kDerefExpr, ident(sRef))));
+    } else {
+        // size/op[]: index 0.._$fc_size-1; by-value var = c[i], by-ref ref = ^c[i].
+        varlist.push_back(vdecl(sSize, size_ret, mcall("size", nullptr)));
+        varlist.push_back(vdecl(sCount, count_ty, intlit("0")));
+        varlist.push_back(std::move(loopVar));
+        cond = bin("<", ident(sCount), ident(sSize));
+        std::vector<std::unique_ptr<parse::Node>> up;
+        up.push_back(assign(sCount, bin("+", ident(sCount), intlit("1"))));
+        update = blk(std::move(up));
+        // op[] returns the element REFERENCE. By-value derefs it (`c.op[](i)^`);
+        // by-ref binds it directly (`c.op[](i)`). Built as the method call, not the
+        // `c[i]` subscript sugar (which always derefs, and whose `^c[i]` address is
+        // not a plain variable codegen's addr-of accepts).
+        std::unique_ptr<parse::Node> elem = mcall("op[]", ident(sCount));
+        if (shape == 4) elem = un(parse::Kind::kDerefExpr, std::move(elem));
+        prepend(assign(lv, std::move(elem)));
+    }
+
+    auto buildForLong = [&](parse::Node& n) {
+        n.kind = parse::Kind::kForLongStmt;
+        n.children.clear();
+        n.children.push_back(std::move(cond));     // [0]
+        n.children.push_back(std::move(update));   // [1]
+        n.children.push_back(std::move(body));     // [2]
+        for (auto& v : varlist) n.children.push_back(std::move(v));   // [3..]
+    };
+    if (spill_recv) {
+        // { _$fc_recv = <container>; for (...) {...} } — the block owns the temp's
+        // lifetime; the loop keeps the label so break/continue still target it.
+        auto forNode = std::make_unique<parse::Node>();
+        forNode->file_id = fid; forNode->tok = tk; forNode->label = s.label;
+        buildForLong(*forNode);
+        s.kind = parse::Kind::kBlockStmt;
+        s.label.clear(); s.text.clear(); s.name.clear();
+        s.children.clear();
+        s.children.push_back(std::move(spillDecl));
+        s.children.push_back(std::move(forNode));
+        return resolveStmt(tree, s, diag);
+    }
+    s.text.clear(); s.name.clear();
+    buildForLong(s);
+    return resolveStmt(tree, s, diag);
+}
+
 // Resolve a store lvalue (the target of a kStoreStmt). An index store WRITES
 // its base array — mark it initialized (whole-array definite-assignment; a
 // subscript write assigns the array) but don't require it and don't read-mark
@@ -3315,6 +3669,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     return understandForTuple(tree, s, ity, /*is_literal=*/false,
                                            lval, diag);
                 }
+                // A CLASS EXPRESSION iterable — `ptr^`, a construction `C(..)`, a
+                // call `fn()`. understandForClass spills a non-lvalue (rvalue) to a
+                // for-scope temp so its protocol methods hit one object.
+                if (widen::form(widen::strip(ity)) == widen::Type::Form::kSlid) {
+                    return understandForClass(tree, s, widen::strip(ity), diag);
+                }
                 if (ity == widen::kNoType) {
                     return understandForTuple(tree, s, widen::kNoType,
                                            /*is_literal=*/false, lval, diag);
@@ -3343,6 +3703,14 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                          || tree.entries[enum_id].kind == parse::EntryKind::kGlobalVar;
             if (iter_var && isArrayType(tree.entries[enum_id].slids_type)) {
                 return understandForArray(tree, s, enum_id, diag);
+            }
+            // A CLASS local/global — iterate by its begin/end/next or size/op[]
+            // protocol (understood + lowered to a kForLongStmt at resolve).
+            if (iter_var
+                && widen::form(widen::strip(tree.entries[enum_id].slids_type))
+                       == widen::Type::Form::kSlid) {
+                return understandForClass(tree, s,
+                    widen::strip(tree.entries[enum_id].slids_type), diag);
             }
             if (iter_var
                 && widen::form(widen::strip(tree.entries[enum_id].slids_type))

@@ -485,6 +485,40 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
     NEGATIVE: neg_aug_no_op — `+=` on a class with no op+= (the aug-assign guard).
 
 
+FOR-CLASS — ITERATING A CLASS BY ITS PROTOCOL (landed; resolve understandForClass)
+
+  * A class is iterable in `for (var : container)` if it defines ONE of two protocols
+    (found by NAME across the class + its bases, classAndBaseFrames): size/op[] —
+    `size()` arity 0, `op[](i)` arity 1 RETURNING A REFERENCE to the element — or
+    begin/end/next — arity 0/0/1, all returning (and next taking) the SAME type. A
+    malformed set is not an error on its own; it just can't form the protocol, and a
+    malformed set is IGNORED when the other protocol is usable.
+  * SELECTION (option D): both protocols defined → the loop-var type must be EXPLICIT
+    (an inferred one is an error), and its shape picks — a VALUE loop var selects
+    size/op[], a REFERENCE selects begin/end/next. Exactly one defined → it is used
+    (it serves both loop-var shapes). Neither → "not iterable". A typeless loop var is
+    inferred: a primitive element binds by value, a class element by reference.
+  * LOWERED AT RESOLVE, not retagged for desugar (the array/tuple model). The lowering
+    emits METHOD CALLS (begin/size/next/op[]), and a call minted in desugar is never
+    classified — so understandForClass rebuilds the node as a kForLongStmt and
+    re-resolves it, letting classify's ordinary pass infer the calls. Same reason
+    enum-for lowers at resolve. Nothing downstream needs for-class code.
+  * FIVE DESUGAR SHAPES: begin/end/next returning a VALUE [loop var IS the iterator,
+    `var = c.begin()`, advance `var = c.next(var)`]; returning a REFERENCE by-value
+    [hidden `_$fc_ref` iterator + `var = _$fc_ref^`] or by-ref [loop var IS the ref];
+    size/op[] by-value [`var = c.op[](i)^`] or by-ref [`ref = c.op[](i)`, the op[]
+    reference bound directly — NOT `^c[i]`, which codegen's addr-of rejects]. op[] is
+    called as a method node, since `.op[](i)` is not surface syntax and `c[i]` sugar
+    always derefs.
+  * CONTAINER LIFETIME: a re-readable lvalue (a var, `ptr^`, an index) is cloned per
+    method call; an RVALUE (`C(..)`, `fn()`) is SPILLED to a class temp that WRAPS the
+    loop in a block scope — a for-long varlist local is NOT destructed at loop scope,
+    a block local IS — so the temp is built once and destructed at loop exit. Synth
+    locals are token-suffixed so NESTED for-class loops never collide. Loop-var
+    widening/truncation, the unused-loop-var sweep, and break/continue all fall out of
+    the kForLongStmt. Canon test/flow/forclass.sl.
+
+
 CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
 
   * SIZEOF(Class) — LLVM owns the struct layout, so a class's size is NOT a

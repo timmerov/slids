@@ -1184,7 +1184,12 @@ STAGE FILES (.h / .cpp pairs)
             an array/tuple local (or a tuple literal / `ref^` / call) is UNDERSTOOD
             here (understandForArray / understandForTuple register the loop var,
             resolve the body + DA, validate) and RETAGGED kForArrayStmt /
-            kForTupleStmt for desugar to lower; a real enum (a kNamespace with an
+            kForTupleStmt for desugar to lower; a CLASS iterable (a var, `ptr^`, a
+            construction, a call — any type that is a kSlid) is LOWERED HERE by
+            understandForClass into a kForLongStmt over the class's protocol methods
+            (size/op[] or begin/end/next) and re-resolved, so classify infers the
+            synthesized method calls [a call minted in desugar is never classified —
+            hence lower-at-resolve, not retag-for-desugar]; a real enum (a kNamespace with an
             underlying type) is rebuilt as a kForRangedStmt over the enum's
             first..last DEFINED members — find the first/last kConst members by id
             (definition) order in its ns_frame, build `for (var : Enum:first .. <=
