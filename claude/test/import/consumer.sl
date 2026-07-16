@@ -9,7 +9,7 @@ claude says:
 tbd
 */
 
-//import "library";
+import library;
 
 int32 main() {
 

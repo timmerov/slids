@@ -9,7 +9,7 @@ claude says:
 tbd
 */
 
-//import "library";
+import library;
 
 void hello_world() {
     __println("Hello, World!");
