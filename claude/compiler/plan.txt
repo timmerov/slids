@@ -1466,7 +1466,10 @@ CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
   them. Behavior-identical (suite 374, IR byte-identical, `--type-selftest` 36).
   Full detail: readme.txt "TYPE REPRESENTATION" + the type-representation memory.
   This unblocked anonymous tuples (now LANDED — see Phase 4) whose slots can be
-  kAlias.
+  kAlias. The arena container is a `std::deque<Type>` (not a vector): `get()` hands
+  out a `Type const&` into it, and a deque never relocates existing elements on
+  push_back, so held refs survive interning — retiring an old per-site
+  capture-before-intern discipline and the dangling-get() bug class.
 
 CROSS-CUTTING — ASSIGNMENT RELATION (spec'd in readme.txt; LANDED end-to-end)
   The single implicit-conversion relation — whether a source value may flow into

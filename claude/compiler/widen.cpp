@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <limits>
 #include <ostream>
 #include <unordered_map>
@@ -757,7 +758,11 @@ long long typeByteSize(std::string const& t) {
 namespace {
 
 struct Arena {
-    std::vector<Type> types;
+    // deque, NOT vector: get(TypeRef) returns a Type const& into this container,
+    // and interning (push_back) must not invalidate outstanding references. A
+    // deque never relocates existing elements on push_back; a vector reallocs.
+    // TypeRef is an integer index, so operator[] indexing is unchanged.
+    std::deque<Type> types;
     std::unordered_map<std::string, TypeRef> by_struct;     // STRUCTURAL dedup (primary)
     std::unordered_map<std::string, TypeRef> by_spelling;   // intern(spelling) parse memo
 };

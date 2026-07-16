@@ -60,10 +60,12 @@ TYPE REPRESENTATION (the carrier; not a stage)
     internAlias(name, underlying) — the last minted ONLY by resolve (which has the
     symbol table). strip() peels one alias layer; deepStrip() removes all (so
     `Integer^` and `IntPtr=int^` compare equal modulo aliases).
-    HAZARD: get(ref) returns a `Type const&` INTO the arena's `std::vector<Type>`;
-    any intern* may push_back and REALLOCATE, dangling outstanding refs. Capture the
-    fields you need into locals BEFORE interning; never read the ref after. Latent
-    bug class, fixed per-site so far — durable fix (node-stable arena) is a todo BUG.
+    get(ref) returns a `Type const&` INTO the arena, which is a `std::deque<Type>`
+    (NOT a vector) precisely so a `push_back` on intern never relocates existing
+    elements — outstanding refs stay valid across an intern*. TypeRef is an integer
+    index, so `operator[]` indexing is unchanged. (Before the deque, a vector realloc
+    dangled every held ref, and a capture-before-intern discipline held it together
+    per-site; the deque removes that requirement and the whole bug class.)
   * kAlias is a TRANSPARENT type: spells as its name (for ##type/diagnostics) but
     sees through to `underlying` for every structural query (classify / llvm /
     size / known / the form-predicate cluster via strip). Aliases + enum type

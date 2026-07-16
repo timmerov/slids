@@ -6,27 +6,6 @@ main plan. Everything here is OPEN; closed/landed items are removed (the main
 quest's progress lives in plan.txt).
 
 
-BUGS
-
-  * ARENA REALLOC DANGLES `get()` REFERENCES (structural) — `widen::get(ref)`
-    returns a `Type const&` into `arena().types`, a `std::vector<Type>`. Any intern
-    (`intern` / `internArray` / `internTuple` / `internPointer` / `internIterator`,
-    and `deepStrip`, which calls them) funnels through one `push_back` (widen.cpp:734)
-    that can REALLOCATE the vector and dangle every outstanding `get()` reference.
-    The whole codebase relies on an unwritten "capture-before-intern" discipline:
-    read the fields you need into locals BEFORE calling an intern, never touch the
-    `Type const&` after. Three sites violated it (read a dim count after interning a
-    sub-array type) and were fixed per-site (classify::destructureSlots, plus the
-    sweep fixes in emitConstructHooks / emitDestructHooks / the for-over-iterable
-    slot expansion) — but the hazard recurs every time someone holds a `get()` ref
-    across an intern, and only bites multi-dim arrays (the one case where the element
-    type is freshly interned), so it slips tests. DURABLE FIX = make handles stable:
-    back the arena with a node-stable container (`std::deque<Type>`, or a deque of
-    chunks) so a `push_back` never moves existing elements, OR have `get()` return by
-    value. Either removes the discipline requirement and the entire bug class. Until
-    then, every `Type const& x = get(...)` near an intern is a latent dangling read.
-
-
 UNBLOCKED FEATURES
 
   * should we be able to take the address of a temporary variable?
@@ -292,9 +271,6 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     818), so a second `++` is a parse error. Low priority / low utility. Prereq:
     `x++ AS AN LVALUE` (above) — same lift-the-bump-off-the-lvalue machinery. Needs
     parsePostfix to LOOP ++/--.
-
-  * allow partial initialization of an array/tuple of class elements.
-    Class arr[3] = (1,2); (Class,Class,Class) tup = (1,2);
 
   * REDUNDANT / NESTED TYPE GROUPING accepted silently — `((((int)))) x` parses as
     `int`, at any nesting depth. Each `(T)` layer is a size-1 tuple that collapses to
