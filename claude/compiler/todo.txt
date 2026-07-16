@@ -43,19 +43,6 @@ UNBLOCKED FEATURES
     requires a class type". Swap-init default-constructs the target and then re-dispatches
     as an ordinary swap statement, and only the construct half is class-only.
 
-  * A VALUE (tuple/scalar) AS A BY-REF CLASS ARGUMENT IS REJECTED. A declaration, an
-    assignment, and a return all take a class-from-a-VALUE through op= / field-list now
-    (buildClassFromValue — the class-from-value funnel), but the ARGUMENT position does not:
-    `takesP((9,9))` / `takesP(5)` where the param is `P^` errors ("Cannot assign '(int,int)'
-    to 'const P'" / "Cannot implicitly convert 'int' to 'P'"). The workaround is an explicit
-    construction — `takesP(P(9,9))` works. WHY: an arg is bound by the overload / arg-match
-    path (checkArgAssign / argConvertCost), a DIFFERENT subsystem from the declarator funnel;
-    it never wraps a mismatched class arg in a `(P = value)` conversion. This subsumes the old
-    "should a weak literal bind to a class parameter?" (`Shift s = 1` works but `s << 1` /
-    `op<<(Shift^, Shift^)` cannot take `1`). FIX: at an arg site whose param is a class,
-    materialize a value the class op='s / field-lists into a temp (the `(Class = value)`
-    conversion the decl site already uses) and pass its address. Needed by test/misc/bug.sl.
-
 BLOCKED FEATURES
 
   deferred features involving classes:

@@ -415,9 +415,8 @@ LANDED SINCE  (declarator follow-ons)
   single-class RETURN `return (7,8)` / `return 5` (the return gate widened past
   hasClassTransferSlot) — iteratively and recursively. The parser tells `Class c(args)`
   (field-list, `construction_init`) from `Class c = (tuple)` (value-init). NOT routed: a
-  class FIELD (a field's transfer cannot hoist past the enclosing ctor — todo.txt), and a
-  bare tuple/scalar as a by-ref class ARGUMENT (a non-decl site; `takesP((9,9))` is rejected,
-  workaround `takesP(P(9,9))`). The un-routed class FIELD is REJECTED where it would need a
+  class FIELD (a field's transfer cannot hoist past the enclosing ctor — todo.txt). The
+  un-routed class FIELD is REJECTED where it would need a
   transfer it cannot get — a value-init op= dispatch, a same-class copy, or a same-class move
   (2026-07-15) — rather than silently field-listed past a user operator; the copy/move gate adds
   userSelfTransferOpId to catch a trivial-bucket field class (op-only, no ctor/dtor) that the
