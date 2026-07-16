@@ -34,3 +34,5 @@ Space {
         void print();
     }
 }
+
+NoCtor(int a_) { }

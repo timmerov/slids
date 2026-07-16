@@ -203,6 +203,13 @@ FwdDecl(int x_) {
     void run() { __println("FwdDecl:run: " + twice(x_) + " " + twice(x_, 3)); }  // 10 15
 }
 
+Forward(int x_) {
+    void print();
+    void print() {
+        __println("Forward:print: " + x_);
+    }
+}
+
 int32 main() {
 
     Method method1(76);
@@ -306,6 +313,9 @@ int32 main() {
 
     FwdDecl fd(5);
     fd.run();                                         // FwdDecl:run: 10 15
+
+    Forward forward;
+    forward.print();
 
     return 0;
 }

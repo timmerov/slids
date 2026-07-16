@@ -43,3 +43,14 @@ Space {
 void Space:Vegetable:print() {
     __println("Vegetable:print: " + a + " " + b);
 }
+
+/*
+in a source file, we cannot add a ctor or dtor to a class
+first declared in a header file.
+*/
+NoCtor() {
+    _() { __println("compile error."); }
+}
+NoCtor() {
+    ~() { __println("compile error."); }
+}

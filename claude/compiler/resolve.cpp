@@ -4575,6 +4575,13 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
                     {{prev.file_id, prev.tok, "first defined here"}}});
                 return;
             }
+            // A re-open's ctor/dtor are the PRIMARY's lifecycle: point at them so
+            // registerClassBody's scan sees every opening's hooks (they stay owned by
+            // this node, so the body phase resolves them here). Without this the
+            // primary reads has_ctor=false and the hook is never called.
+            for (auto& m : node.children)
+                if (m && (m->name == "_$ctor" || m->name == "_$dtor"))
+                    info.pending_hooks.push_back(m.get());
             // The layout is the primary's regardless (a re-open node skips the class
             // BODY passes); any appended fields flow to the primary via pending_fields.
             node.is_reopen = true;
@@ -4665,12 +4672,45 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     };
     for (auto& p : node.params) addField(p.get());
     for (parse::Node* p : info.pending_fields) addField(p);
-    // Constructor / destructor presence (parsed as `_$ctor`/`_$dtor` members).
-    bool has_ctor = false, has_dtor = false;
-    for (auto& m : node.children) {
-        if (!m) continue;
-        if (m->name == "_$ctor") has_ctor = true;
-        else if (m->name == "_$dtor") has_dtor = true;
+    // Constructor / destructor presence (parsed as `_$ctor`/`_$dtor` members), over
+    // EVERY opening: the primary's own members plus the hooks re-opens contributed
+    // (info.pending_hooks). The DECLARATION `_();` and the DEFINITION `_(){}` may sit
+    // in different openings — the author reads them as one class definition — so both
+    // the presence answer and the obligation a declaration creates are per CLASS, and
+    // this is the only place that sees the whole class.
+    bool ctor_declared = false, ctor_defined = false;
+    bool dtor_declared = false, dtor_defined = false;
+    auto scanHook = [&](parse::Node const* m) {
+        if (!m) return;
+        bool is_def = (m->kind == parse::Kind::kFunctionDef);
+        if (m->name == "_$ctor") {
+            if (is_def) ctor_defined = true; else ctor_declared = true;
+        } else if (m->name == "_$dtor") {
+            if (is_def) dtor_defined = true; else dtor_declared = true;
+        }
+    };
+    for (auto& m : node.children) scanHook(m.get());
+    for (parse::Node* m : info.pending_hooks) scanHook(m);
+    bool has_ctor = ctor_declared || ctor_defined;
+    bool has_dtor = dtor_declared || dtor_defined;
+    // The ctor/dtor contract, over the whole class. Both halves are reported here and
+    // not returned on: the layout below still interns, so the rest of resolve sees a
+    // well-formed class and piles no cascade on top of the one real error.
+    // A ctor and dtor are hooks for the same scope boundary; one without the other is a
+    // contract error — and it gates the obligation check below, so a lone `_();` reports
+    // the missing dtor once rather than that plus "must be defined".
+    if (has_ctor != has_dtor) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            has_ctor ? "A constructor requires a matching destructor."
+                     : "A destructor requires a matching constructor.", {}});
+    } else {
+        // A forward-declared hook must be defined in SOME opening of the class.
+        if (ctor_declared && !ctor_defined)
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "A forward-declared constructor must be defined.", {}});
+        if (dtor_declared && !dtor_defined)
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "A forward-declared destructor must be defined.", {}});
     }
     info.needs_ctor = has_ctor;
     info.needs_dtor = has_dtor;

@@ -293,6 +293,35 @@ Outer(int o_) {
     int Sib:go() { Num n = sm() + kC + E:kB; return n; }    // sm + 4 + 1
 }
 
+Forward(int a_) {
+    _(); ~();
+}
+Forward() {
+    _() { __println("Forward:ctor: " + a_); }
+    ~() { __println("Forward:dtor: " + a_); }
+}
+
+/* the two DEFINITIONS a forward declaration obligates may land in DIFFERENT openings:
+   the ctor/dtor contract holds over the whole class, not over one body. */
+Split(int a_) {
+    _(); ~();
+}
+Split() {
+    _() { __println("Split:ctor: " + a_); }
+}
+Split() {
+    ~() { __println("Split:dtor: " + a_); }
+}
+
+/* a re-open supplies BOTH hooks with no forward declaration at all — the primary's
+   lifecycle is the union of every opening, so the hooks still run. */
+Late(int a_) {
+}
+Late() {
+    _() { __println("Late:ctor: " + a_); }
+    ~() { __println("Late:dtor: " + a_); }
+}
+
 int32 main() {
     Rc r = (10);
     __println("base = " + r.base_m());        // 10 + 1 = 11
@@ -391,6 +420,11 @@ int32 main() {
     Lce le = (5);
     __println("le.sum = " + le.sum());          // 7
     __println("le.e = " + Lce:E:kY);            // 1
+
+    Forward fwd;
+    Split sp = (3);                             // hooks defined in two SEPARATE re-opens
+    Late lt = (4);                              // hooks added by a re-open, never declared
+
     return 0;
 }
 
@@ -440,3 +474,43 @@ int32 main() {
 //-EXPECT-ERROR: 'Rfe' is not a class or namespace in scope
 //Rfe(int a_) { }
 //int32 refuse_e() { enum int Rfe:E ( kZ ); return 0; }
+
+/* a forward-declared ctor that NO opening ever defines. The pair is declared, so this
+   is a missing definition — not a pairing violation. */
+//-EXPECT-ERROR: A forward-declared constructor must be defined
+//Fnc(int a_) {
+//    _(); ~();
+//}
+//Fnc() {
+//    ~() { }
+//}
+
+/* the mirror: a forward-declared dtor that no opening defines. */
+//-EXPECT-ERROR: A forward-declared destructor must be defined
+//Fnd(int a_) {
+//    _(); ~();
+//}
+//Fnd() {
+//    _() { }
+//}
+
+/* neither half is ever defined. */
+//-EXPECT-ERROR: A forward-declared constructor must be defined
+//Fnn(int a_) {
+//    _(); ~();
+//}
+
+/* the PAIRING rule also spans openings: a re-open supplies a ctor and no opening
+   supplies a dtor. The error carets the primary, which owns the lifecycle. */
+//-EXPECT-ERROR: A constructor requires a matching destructor
+//Fnp(int a_) { }
+//Fnp() {
+//    _() { }
+//}
+
+/* the mirror: a re-open supplies a dtor and no opening supplies a ctor. */
+//-EXPECT-ERROR: A destructor requires a matching constructor
+//Fnq(int a_) { }
+//Fnq() {
+//    ~() { }
+//}

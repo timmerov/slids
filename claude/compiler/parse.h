@@ -468,6 +468,13 @@ struct ClassInfo {
     // (single-file: all appends are seen in Phase 1 before Phase 2 interns).
     bool is_open = false;
     std::vector<Node*> pending_fields;
+    // The `_$ctor` / `_$dtor` members contributed by RE-OPENS (still OWNED by their
+    // re-open node, like pending_fields). A class's lifecycle is the union of every
+    // opening — "as if everything was declared within a single class definition" — but
+    // a re-open node skips the class BODY passes, so its hooks would otherwise be
+    // invisible to registerClassBody's lifecycle scan (has_ctor false -> the hook is
+    // never called and its `__impl` is emitted dead).
+    std::vector<Node*> pending_hooks;
     int fieldIndex(std::string const& f) const {
         for (std::size_t i = 0; i < field_names.size(); ++i)
             if (field_names[i] == f) return static_cast<int>(i);

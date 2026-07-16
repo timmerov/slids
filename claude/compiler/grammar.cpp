@@ -3539,8 +3539,9 @@ struct Parser {
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
 
         std::string recv_type = name + "^";   // the implicit receiver param's type
-        bool ctor_decl = false, ctor_def = false;
-        bool dtor_decl = false, dtor_def = false;
+        bool ctor_def = false, dtor_def = false;   // this body's own DEFINITIONS (the
+                                                   // duplicate-hook check; the class-wide
+                                                   // contract is registerClassBody's)
         bool saw_any_virtual = false;        // any `virtual` member -> a virtual class
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
@@ -3598,11 +3599,24 @@ struct Parser {
                 return nullptr;
             }
             advance();   // )
-            // `_();` is a forward declaration; `_(){...}` is the definition. A
-            // declaration emits no member node — it only obligates a definition.
+            // `_();` is a forward declaration; `_(){...}` is the definition. The
+            // declaration emits a bodyless kFunctionDecl member: the DEFINITION it
+            // obligates may live in another OPENING of this class, which the parser
+            // cannot see (it reads one body at a time), so the obligation is answered
+            // per CLASS in resolve's registerClassBody — and it needs the declaration
+            // recorded to answer it. (Every downstream hook scan already accepts a
+            // kFunctionDecl; flattenScope lifts only kFunctionDef, so no stray symbol.)
             if (peek().kind == token::Kind::kSemicolon) {
                 advance();   // ;
-                if (is_ctor) ctor_decl = true; else dtor_decl = true;
+                auto decl = newNodeAt(parse::Kind::kFunctionDecl, m_file, m_tok);
+                decl->name = is_ctor ? "_$ctor" : "_$dtor";
+                decl->name_tok = m_tok;
+                decl->is_virtual = saw_virtual;
+                decl->return_type = widen::internOrNone("void");
+                decl->params.push_back(
+                    parse::makeReceiverParam(widen::internOrNone(recv_type),
+                                             m_file, m_tok));
+                node->children.push_back(std::move(decl));
                 continue;
             }
             if (peek().kind != token::Kind::kLBrace) {
@@ -3633,26 +3647,11 @@ struct Parser {
             node->children.push_back(std::move(member));
         }
         if (!expect(token::Kind::kRBrace, "}")) return nullptr;
-        // A constructor and destructor are hooks for the same scope boundary;
-        // one without the other is a contract error. Caret the class name (the
-        // `}` is already consumed, so the current position is the next token).
-        bool has_ctor = ctor_decl || ctor_def;
-        bool has_dtor = dtor_decl || dtor_def;
-        if (has_ctor != has_dtor) {
-            errorAt(name_tok,
-                    has_ctor ? "A constructor requires a matching destructor."
-                             : "A destructor requires a matching constructor.");
-            return nullptr;
-        }
-        // A forward declaration obligates a definition later in the body.
-        if (ctor_decl && !ctor_def) {
-            errorAt(name_tok, "A forward-declared constructor must be defined.");
-            return nullptr;
-        }
-        if (dtor_decl && !dtor_def) {
-            errorAt(name_tok, "A forward-declared destructor must be defined.");
-            return nullptr;
-        }
+        // (A ctor/dtor contract — the pairing rule, and the definition a forward
+        // declaration obligates — holds over the whole CLASS, not this one body: any
+        // opening may supply either half. registerClassBody enforces both, where every
+        // opening's hooks are visible. A GLOBAL group's pairing rule is unrelated and
+        // stays in parseGlobal: a group is one body that cannot be re-opened.)
         // A virtual class carries a vtable pointer at OFFSET 0 (C++ ABI). A ROOT
         // virtual class (>=1 `virtual` member, no base) gets a hidden `_$vptr` field as
         // its UNNAMED FIRST FIELD — like `_$base`, it flows into the class layout so the

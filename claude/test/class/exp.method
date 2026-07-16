@@ -35,5 +35,6 @@ Rec:run: sum4=10 even4=1
 Fwd:run: 42
 Args:run: 14 9
 FwdDecl:run: 10 15
+Forward:print: 0
 Sibs:dtor: 106
 Method:dtor: 80
