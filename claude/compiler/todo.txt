@@ -47,31 +47,6 @@ BLOCKED FEATURES
 
   deferred features involving classes:
 
-  * CLASS-FIELD INIT FROM A SIZE-1 TUPLE — the "vexing parse" (Phase 5). CONTEXT,
-    the class structure: a class IS a named tuple. `Name(field-list){body}` interns
-    a kSlid that CARRIES its field slot types (the layout rides on the type, so
-    codegen needs no symbol table), a ClassInfo holds the field names/defaults
-    (parse-side only), `.field` lowers to a slot index, and construction reuses the
-    tuple aggregate path. Two init forms feed it: the CALL form
-    `Name(arg0, arg1, ...)` — each arg is ONE field's value, so a tuple arg stays
-    WHOLE and a class-typed field constructs from it recursively (its own defaults
-    fill the rest) — and the `=` form `Name x = tuple` — the init tuple is the
-    FIELD tuple, SPREAD slot-to-field. They coincide for a multi-field class
-    (`= (6,7)` == `(6, 7)`) and DIVERGE when one argument is itself a tuple bound
-    for a single (class) field: the call form keeps it whole, `=` spreads.
-    THE GAP: a SIZE-1 init tuple is INEXPRESSIBLE in the `=` form — `( X )` is a
-    grouping paren that COLLAPSES to `X` (size-1 tuples collapse to their slot
-    everywhere). So `Outer x = ( (13,17) )` (Outer has one class field) collapses
-    to `= (13,17)`, a 2-slot tuple spread into 1 field -> "1 field(s) but 2
-    initializer(s)". No `=`-spelling passes a whole tuple to a lone field; the
-    CALL form `Outer x( (13,17) )` is the only way (parseCallArgs preserves the
-    argument boundary the collapsing parens destroy). PUNTED: use the call /
-    initializer-list form for a single-field-from-tuple init; canon initialize.sl
-    keeps the working call form `Outer ot2( (13,17) )` and the `= ( (13,17) )` case
-    commented with a "vexing parse" note. A real fix
-    needs a non-collapsing 1-tuple syntax, which touches grouping parens globally —
-    not worth it. prerequisite: a 1-tuple spelling (none planned).
-
   * FOR-CLASS — what
     remains is the for-each PROTOCOL (op[]/size or begin/end/next, Phase 5).
     Remaining work is DESIGNING the protocol (which
@@ -197,11 +172,6 @@ BLOCKED FEATURES
     flips a non-primitive typeless const to a kLocalVar + deepConst). Extend that to
     a PRIMITIVE rhs that didn't fold: route to a const SCALAR variable instead of
     erroring. Keep a FOLDABLE scalar (`const x = 5`) on the substitution path.
-
-  * decide if class field allows default init by tuple.
-    Class( Other field = (1,2,3) ) { }
-    Class( Other field(1,2,3) ) { }
-    lean yes to both.
 
   * OPENED-SCOPE NAME AMBIGUITY (not unique to inheritance — applies to ANY opened
     scope). resolveNameDetail flags a name found in two OPENED frames ("Reference to
@@ -329,14 +299,6 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     `x++ AS AN LVALUE` (above) — same lift-the-bump-off-the-lvalue machinery. Needs
     parsePostfix to LOOP ++/--.
 
-  * UNIT ARRAY WITH A NON-SCALAR ELEMENT — `(int,int) arr[1] = (3,4)` (a size-1
-    array whose element is itself a tuple / array / class) can't be initialized: the
-    1-tuple==scalar collapse erases the wrapper, so `(3,4)` reads as TWO elements,
-    not one tuple element -> "shape does not match". (The SCALAR-element case
-    `int arr[1] = 2` / `int m[1][1] = 7` now works — checkValueAssign wraps the bare
-    scalar in dims-deep 1-tuples.) Needs a non-collapsing 1-tuple spelling — same
-    root as CLASS-FIELD INIT FROM A SIZE-1 TUPLE below; defer with it.
-
   * allow partial initialization of an array/tuple of class elements.
     Class arr[3] = (1,2); (Class,Class,Class) tup = (1,2);
 
@@ -416,3 +378,11 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     defaulting path separate from classifyClassInit's field loop. FIX: allow nullptr slots in the
     general tuple literal (every OTHER tuple consumer must then reject them), and default-fill the
     empties before the op= probe. Precedent is destructure's empty slots.
+
+  * UNIT ARRAY WITH A NON-SCALAR ELEMENT — `(int,int) arr[1] = (3,4)` (a size-1
+    array whose element is itself a tuple / array / class) can't be initialized: the
+    1-tuple==scalar collapse erases the wrapper, so `(3,4)` reads as TWO elements,
+    not one tuple element -> "shape does not match". (The SCALAR-element case
+    `int arr[1] = 2` / `int m[1][1] = 7` now works — checkValueAssign wraps the bare
+    scalar in dims-deep 1-tuples.) Needs a non-collapsing 1-tuple spelling, which
+    touches grouping parens globally (none planned).

@@ -62,9 +62,8 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     as a tail under-fill would — so a leading/interior omission means "default this
     one" (grammar parseCallArgs allow_empty; the two construction-declarator sites
     only, a TRAILING comma rejected). The `= (tuple)` value-init form has no empty
-    slots — it goes through buildClassFromValue's op= path, not this loop (todo). A
-    size-1 init tuple is inexpressible (`( x )` collapses) — punted (todo). A class — OR an
-    array/tuple whose leaves are classes (widen::hasInPlaceClass, recursing array
+    slots — it goes through buildClassFromValue's op= path, not this loop (todo).
+    A class — OR an array/tuple whose leaves are classes (widen::hasInPlaceClass, recursing array
     elem + tuple slots, stopping at a pointer/iterator) — is definitely-initialized
     (DA) and default-constructed IN PLACE even with no initializer: resolve marks it
     initialized, and classifyStmt (and the per-field loop) synthesizes the
