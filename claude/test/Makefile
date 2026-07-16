@@ -6,6 +6,7 @@ SUBDIRS = \
 	expression \
 	flow \
 	function \
+	import \
 	lex \
 	misc \
 	pointer \
