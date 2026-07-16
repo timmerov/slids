@@ -9,8 +9,8 @@ everything else is true.
 arrays, tuples, functions returning void are not valid condition expressions.
 
 note:
-deferred until class operator overloads land.
-classes are valid if they override op!.
+classes are valid if they override op! (dispatched by `!`); a class without op!
+is rejected like any non-coercible type.
 */
 
 /*
@@ -20,14 +20,21 @@ the operand of `!`, and both operands of `&&` / `||` / `^^`, must coerce to bool
 (isCoercibleToBool: numeric or pointer-like — int/uint/float/bool/char, and `^`/`[]`
 incl. char[]). a TUPLE or ARRAY operand is rejected: "Operator 'X' is not defined on
 type 'Y'." (the negatives below). a void operand is caught EARLIER as "cannot be used
-as an expression" (so that arm is unreachable). a CLASS operand errors the same way
-today; it becomes valid only once operator overloading lands and the class defines
-op! — deferred (the //-EXPECT-ERROR-DEFERRED below).
+as an expression" (so that arm is unreachable). a CLASS operand dispatches its op!
+when defined (Flag in main); a class WITHOUT op! errors the same "not defined" way
+as a tuple/array (the neg_not_class negative below).
 
 the SAME coercion governs the if / while / for CONDITIONS (flow/ifelse.sl, while.sl,
 forlong.sl) and the logical AUGMENTED-ASSIGN `&&=` / `||=` / `^^=` (same "Operator
 'X' is not defined" message). slids has no ternary `?:`.
 */
+
+// A class is a valid condition operand IFF it defines op! — dispatched by `!`.
+Flag(int v_ = 0) {
+    bool op!() {
+        return v_ == 0;
+    }
+}
 
 int32 main() {
 
@@ -54,6 +61,10 @@ int32 main() {
     bool b1 = false; b1 ||= p;  __println("b1 = " + b1);   // true
     bool b2 = true;  b2 &&= pn; __println("b2 = " + b2);   // false
     bool b3 = false; b3 ^^= it; __println("b3 = " + b3);   // true
+
+    // a CLASS operand with op! — `!` dispatches it (v_ defaults to 0 -> op! true).
+    Flag f;
+    __println("!flag = " + (!f));   // true
 
     return 0;
 }
@@ -154,9 +165,9 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //    return 0;
 //}
 
-/* a CLASS operand errors today (no op!), but becomes valid once operator
-   overloading lands and the class defines op! — deferred, not a permanent reject. */
-//-EXPECT-ERROR-DEFERRED: a class condition operand needs op! (operator overloading not landed)
+/* a CLASS operand WITHOUT op! is rejected like any type that can't coerce — the
+   class must define op! (see Flag in main, which does). */
+//-EXPECT-ERROR: Operator '!' is not defined on type 'Box'
 //int neg_not_class() {
 //    Box(int v_) { }
 //    Box b(1);

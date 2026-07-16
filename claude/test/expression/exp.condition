@@ -10,3 +10,4 @@ it ^^ false = true
 b1 = true
 b2 = false
 b3 = true
+!flag = true
