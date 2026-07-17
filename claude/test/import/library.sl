@@ -91,6 +91,45 @@ void Animal:print() {
     __println("Animal:print: " + a + " " + b);
 }
 
+/* the definitions of the header's overloaded function + method. */
+int add(int a) {
+    return a;
+}
+int add(int a, int b) {
+    return a + b;
+}
+
+int pick(int x) {
+    x;
+    return 1;
+}
+int pick(int64 x) {
+    x;
+    return 2;
+}
+
+int pairsum((int, int)^ p) {
+    int a; int b;
+    (a, b) = p^;
+    return a + b;
+}
+
+int probe(int^ r) {
+    r;
+    return 1;
+}
+int probe(int[] it) {
+    it;
+    return 2;
+}
+
+int Animal:sum(int x) {
+    return a + x;
+}
+int Animal:sum(int x, int y) {
+    return a + x + y;
+}
+
 Space {
     void goodbye_world() {
         __println("Goodbye, World!");

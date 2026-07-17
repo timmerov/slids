@@ -1518,22 +1518,27 @@ STAGE FILES (.h / .cpp pairs)
             params, param_types, file_id, tok).
 
             A SYMBOL MUST BE A FUNCTION OF THE LANGUAGE, NEVER OF THIS TU. Every
-            symbol is minted here (functionSymbol / methodSymbol / classSymbol),
-            and once a `.slh` is in play TWO TUs mint the same symbol independently
-            — the definer and the importer — so any input that differs between them
-            silently un-links. ENTRY IDS ARE PER-TU and were the recurring offender:
-              - a NAMESPACE member mangles from its SCOPE PATH (`Space:goodbye_world`
-                -> `Space__goodbye_world`), never from an entry id;
-              - "is this name OVERLOADED?" counts DISTINCT SIGNATURES, not entries —
-                a declaration and its definition are two entries sharing one
-                signature (for a METHOD they cannot be merged: same-name methods are
-                overloads), so counting entries read a plain declared-then-defined
-                function as overloaded and suffixed it `.entry_id`, which the
-                importer — seeing only the declaration, one entry — did not.
-            An entry id is still the disambiguator for a genuinely OVERLOADED name
-            and for a NESTED function; the nested case is sound (TU-local by
-            construction, nothing outside can name it), the overload case is the
-            open limit — see todo.txt CROSS-TU MANGLING FOR OVERLOADS.
+            user function and method mangles through ONE core, symbolFor(entry)
+            (functionSymbol / methodSymbol are thin adapters over it; classSymbol
+            still mints class-owned symbols), to an ITANIUM `_Z<name><params>` string
+            built from the scope path, unqualified name, and PARAMETER TYPES — never
+            an entry id. Once a `.slh` is in play the definer and the importer mint
+            the symbol independently, so any per-TU input silently un-links; itanium
+            removes the last such input (a per-TU entry-id overload suffix). Mangling
+            EVERYTHING, not just overloads, is deliberate: a symbol no longer depends
+            on whether a sibling overload exists (adding one never renames an existing
+            symbol), and there is no per-TU scope scan to decide the spelling; `c++filt`
+            demangles the result, so a link error reads as a signature. mangleType
+            encodes a parameter type: `P`<T> a pointer `^` (demangles `*`), `R`<T> an
+            iterator `[]` (demangles `&`) — DISTINCT codes, or two legal overloads
+            collide to one `define`; `A`<n>`_`<T> an array; and a vendor source-name
+            `u<len><spelling>` for every LEAF (primitive, class, tuple), injective and
+            demangler-readable — the tuple (`u<len>tupleN$...`) being the one form
+            itanium cannot spell. EXCEPTIONS keep a fixed name: `main` (the C entry
+            point), a NESTED function (an entry-id suffix — TU-local by construction,
+            nothing outside names it), and the synthesized class canonicals
+            `__$copy`/`__$move`/`__$swap`. This closed the last cross-TU leak: overloads
+            across a `.slh` now link (was the open limit, todo CROSS-TU MANGLING).
 
             THE LOWERING PASSES RUN PER FUNCTION — AND "EVERY FUNCTION" INCLUDES
             NESTED ONES. run() collects every kFunctionDef in a program subtree

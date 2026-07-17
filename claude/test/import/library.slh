@@ -44,10 +44,38 @@ enum Color ( kRed, kGreeen, kBlue );
 
 void hello_world();
 
+/* OVERLOADED across the seam: two signatures, declared here, defined in library.sl,
+   called with both arities in consumer.sl. This is the case the old per-TU entry-id
+   overload suffix could not link — the definer and the importer numbered their entries
+   differently, so `@add.N` disagreed. Itanium mangling makes the symbol a function of
+   the signature alone (`_Z3addu3int` vs `_Z3addu3intu3int`), identical in every TU. */
+int add(int a);
+int add(int a, int b);
+
+/* a SAME-ARITY overload discriminated by TYPE (not count): the symbols differ only in
+   the mangled parameter type (`_Z4picku3int` vs `_Z4picku5int64`), so this is what
+   proves two TUs agree on the TYPE encoding, not just the arity. */
+int pick(int x);
+int pick(int64 x);
+
+/* a TUPLE in the signature — the special case Itanium can't spell. It reaches the
+   mangler as `Pu<len>tuple2$int$int` (a pointer, since a tuple can't be passed by
+   value), and both TUs must mint that identical vendor form. */
+int pairsum((int, int)^ p);
+
+/* the two slids pointer-like types must take DISTINCT codes: `^` -> Itanium `P`
+   (`int*`), `[]` -> Itanium `R` (`int&`). Sharing `P` made these two legal overloads
+   mint ONE symbol (`_Z5probePu3int` twice) — invalid IR. They are a valid overload
+   set, so this file DEFINES both and consumer.sl calls each. */
+int probe(int^ r);
+int probe(int[] it);
+
 Animal(int a, int b) {
     _(); ~();
     op=(Animal^ rhs);
     void print();
+    int sum(int x);            /* an OVERLOADED METHOD across the seam — same test */
+    int sum(int x, int y);
 }
 
 Space {

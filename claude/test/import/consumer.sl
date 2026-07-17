@@ -83,11 +83,33 @@ int32 main() {
     Util:tag();
     Widget cw; cw.hum();
 
+    // OVERLOADED header function, both arities — the cross-TU overload the old
+    // per-TU entry-id suffix could not link.
+    int a1 = add(10);      __println("add1: " + a1);
+    int a2 = add(10, 20);  __println("add2: " + a2);
+
+    // Same-arity overload discriminated by TYPE (int vs int64), and a TUPLE in the
+    // signature — both cross the seam and must mangle identically in each TU.
+    int p1 = pick(5);           __println("pick.int: " + p1);
+    int64 big = 100;
+    int p2 = pick(big);         __println("pick.i64: " + p2);
+    (int, int) pr = (7, 8);
+    int ps = pairsum(^pr);      __println("pairsum: " + ps);
+
+    // `^` and `[]` are DISTINCT overloads — they must not share a mangled symbol.
+    int y = 5;
+    int pv = probe(^y);         __println("probe.ref: " + pv);   // int^  -> P -> int*
+    int ya[2]; ya[0] = 1;
+    int[] yi = ya;
+    int pi = probe(yi);         __println("probe.iter: " + pi);  // int[] -> R -> int&
+
     hello_world();
 
     Integer x = Color:kRed; x;
     Animal dog(1,2);
     dog.print();
+    int s1 = dog.sum(10);      __println("sum1: " + s1);      // OVERLOADED method
+    int s2 = dog.sum(10, 20);  __println("sum2: " + s2);
 
     Space:Float f = 3.14; f;
     x = Space:Result:kSuccess;

@@ -1248,5 +1248,6 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   to know what it is — and that is the sibling's. No `@C__$vtable` crosses a TU.
 
   OPEN. `sizeof` (an external synthesized function for an INCOMPLETE class, an internal constant
-  otherwise — deferred with cross-TU incomplete classes); cross-TU globals; and overloads, which
-  still mangle per-TU — see todo.txt.
+  otherwise — deferred with cross-TU incomplete classes); cross-TU globals. (Overloads across a
+  `.slh` now LINK — every function/method mangles to an Itanium `_Z...` symbol off its signature,
+  not a per-TU entry id; see readme.txt's desugar entry.)

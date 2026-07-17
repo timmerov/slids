@@ -1,11 +1,20 @@
 consumer: note
 consumer: Util:tag
 consumer: Widget:hum
+add1: 10
+add2: 30
+pick.int: 1
+pick.i64: 2
+pairsum: 15
+probe.ref: 1
+probe.iter: 2
 Hello, World!
 library: note
 library: Widget:hum
 Animal:ctor: 1 2
 Animal:print: 1 2
+sum1: 11
+sum2: 31
 Vegetable:ctor: 3 4
 Vegetable:print: 3 4
 Goodbye, World!

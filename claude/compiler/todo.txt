@@ -9,10 +9,6 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
-  * CROSS-TU MANGLING FOR OVERLOADS — they get a dumb counter mangling the name.
-    should use itanium mangling so link errors are readable. but need special handling
-    for tuples. and ^ is gonna show up as *. fine. see plan-mangle.txt.
-
 UNBLOCKED FEATURES
 
   * should we be able to take the address of a temporary variable?

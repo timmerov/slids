@@ -224,15 +224,117 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node, int& next_id) {
     return out;
 }
 
-// The LLVM symbol for a function reference. File-scope functions keep their bare
-// name; a namespace member is disambiguated by its entry id (computed identically
-// at the definition and every call site from the same resolved_entry_id — never
-// stored as a canonical-name string). Two namespaces may both define `foo`; this
-// keeps their symbols distinct without a scope-path string.
-// The scope path of a frame, outermost segment first (`Space`, or `A`,`B` for `A:B`);
-// empty at file scope. Walks entry.ns_frame_id -> entry.owner_ns_frame, so it crosses
-// namespaces and classes alike.
-std::vector<std::string> framePath(parse::Tree const& tree, int frame) {
+// ---- Itanium-style name mangling -------------------------------------------
+// Every user function and method mangles to an Itanium `_Z...` symbol: the (possibly
+// scope-qualified) name followed by its parameter-type list. The symbol is a function
+// of the LANGUAGE — scope path, unqualified name, parameter types — and NEVER of this
+// TU, so a call site and the chosen definition mint the identical string in any two
+// objects. This retired the per-TU `.entry_id` overload suffix, whose value differed
+// across TUs and so never linked (was todo: CROSS-TU MANGLING FOR OVERLOADS).
+// Mangling EVERYTHING, not just overloads, is deliberate: a symbol's identity no longer
+// depends on whether a sibling overload exists (adding one never renames an existing
+// symbol), and there is no per-TU scope scan to decide the spelling. `c++filt`
+// demangles the result, so a link error reads as a signature. Exceptions keep a fixed
+// name: `main` (the C entry point), a nested function (TU-local by construction), and
+// the synthesized class canonicals `__$copy`/`__$move`/`__$swap` (peeled off below).
+// Itanium can't spell a slids TUPLE — nor a fixed-width / no-width primitive, nor `^`
+// vs `[]` — so those take a vendor-extended source-name (`u<len><spelling>`) a
+// demangler prints verbatim: lossy but readable, as the user accepted for `^`/`[]`->`*`.
+std::string sanitizeSymbolName(std::string const& name);   // defined below
+std::string mangleType(widen::TypeRef ref);
+
+// A tuple's readable, symbol-legal element token: a scalar spells as its name
+// (`tuple3$int$int$int`), structure gets a suffix. Kept human-readable rather than
+// recursively Itanium-coded — the tuple name is the best-effort escape hatch.
+std::string tupleSlotToken(widen::TypeRef ref) {
+    ref = widen::deepStrip(ref);
+    widen::Type const& t = widen::get(ref);
+    switch (t.form) {
+        case widen::Type::Form::kPointer:  return tupleSlotToken(t.pointee) + "_p";
+        case widen::Type::Form::kIterator: return tupleSlotToken(t.pointee) + "_i";
+        case widen::Type::Form::kArray:    return tupleSlotToken(t.elem) + "_a";
+        case widen::Type::Form::kSlid:     return widen::classSymbol(ref);
+        case widen::Type::Form::kTuple: {
+            std::string s = "tuple" + std::to_string(t.slots.size());
+            for (widen::TypeRef sl : t.slots) s += "$" + tupleSlotToken(sl);
+            return s;
+        }
+        case widen::Type::Form::kNone:
+        case widen::Type::Form::kPrimitive:
+        case widen::Type::Form::kVoid:
+        case widen::Type::Form::kAnyptr:
+        case widen::Type::Form::kAlias:
+        case widen::Type::Form::kConst: return widen::spell(ref);
+    }
+    return widen::spell(ref);   // unreachable; every Form is handled above
+}
+
+// The Itanium <type> encoding of a parameter type. Compound structure uses the
+// standard productions (`P`<T> pointer, `A`<n>`_`<T> array); every LEAF — primitive,
+// class, tuple — is a vendor-extended source-name `u<len><name>`, which is injective
+// (the length self-delimits) and demangles to the readable slids spelling.
+std::string mangleType(widen::TypeRef ref) {
+    ref = widen::deepStrip(ref);
+    widen::Type const& t = widen::get(ref);
+    switch (t.form) {
+        case widen::Type::Form::kVoid:   return "v";
+        case widen::Type::Form::kAnyptr: return "Pv";
+        // The two slids pointer-like types take DISTINCT Itanium codes so they never
+        // collide: `^` (reference) is a pointer `P` (demangles `*`), `[]` (iterator) is
+        // a reference `R` (demangles `&`). Sharing `P` made `fn(int^)` and `fn(int[])`
+        // mint one symbol — two legal overloads, one `define`, invalid IR.
+        case widen::Type::Form::kPointer:  return "P" + mangleType(t.pointee);
+        case widen::Type::Form::kIterator: return "R" + mangleType(t.pointee);
+        case widen::Type::Form::kArray: {
+            std::string s;
+            for (int d : t.dims) s += "A" + std::to_string(d) + "_";
+            return s + mangleType(t.elem);
+        }
+        case widen::Type::Form::kSlid: {
+            std::string cs = widen::classSymbol(ref);
+            return "u" + std::to_string(cs.size()) + cs;
+        }
+        case widen::Type::Form::kTuple: {
+            std::string tn = tupleSlotToken(ref);
+            return "u" + std::to_string(tn.size()) + tn;
+        }
+        // primitive (and the deepStrip-removed kAlias/kConst, kNone): `u<len><spelling>`
+        // — vendor source-name, injective (int vs int32) and demangler-readable.
+        case widen::Type::Form::kNone:
+        case widen::Type::Form::kPrimitive:
+        case widen::Type::Form::kAlias:
+        case widen::Type::Form::kConst: break;
+    }
+    std::string s = widen::spell(ref);
+    return "u" + std::to_string(s.size()) + s;
+}
+
+// The Itanium operator-code for a slids operator name, or "" if not a standard one.
+std::string itaniumOpCode(std::string const& name) {
+    static const std::map<std::string, std::string> m = {
+        {"op+", "pl"}, {"op-", "mi"}, {"op*", "ml"}, {"op/", "dv"}, {"op%", "rm"},
+        {"op==", "eq"}, {"op!=", "ne"}, {"op<", "lt"}, {"op>", "gt"},
+        {"op<=", "le"}, {"op>=", "ge"}, {"op&", "an"}, {"op|", "or"},
+        {"op^", "eo"}, {"op~", "co"}, {"op!", "nt"}, {"op[]", "ix"}, {"op=", "aS"},
+    };
+    auto it = m.find(name);
+    return it == m.end() ? std::string() : it->second;
+}
+
+// The <unqualified-name> production: an operator code, else a `<len><name>` source-name
+// (operator chars with no standard code are $-sanitized so the identifier is legal).
+std::string unqualifiedName(std::string const& name) {
+    std::string op = itaniumOpCode(name);
+    if (!op.empty()) return op;
+    std::string s = sanitizeSymbolName(name);
+    return std::to_string(s.size()) + s;
+}
+
+// Scope segments of a frame as source-name strings, outermost first; empty at file
+// scope. Crosses namespaces and classes alike (Itanium's nested-name makes no
+// distinction) — a CLASS segment carries its `def_id` disambiguator via classSymbol,
+// so two same-named local classes don't collide.
+std::vector<std::string> scopeSegments(parse::Tree const& tree, int frame) {
     std::vector<std::string> out;
     int guard = static_cast<int>(tree.entries.size()) + 2;
     while (frame >= 0 && guard-- > 0) {
@@ -246,10 +348,61 @@ std::vector<std::string> framePath(parse::Tree const& tree, int frame) {
             break;
         }
         if (found < 0) break;
-        out.push_back(tree.entries[found].name);
-        frame = tree.entries[found].owner_ns_frame;
+        parse::Entry const& e = tree.entries[found];
+        out.push_back(e.kind == parse::EntryKind::kClass
+                          ? widen::classSymbol(widen::strip(e.slids_type))
+                          : e.name);
+        frame = e.owner_ns_frame;
     }
     std::reverse(out.begin(), out.end());
+    return out;
+}
+
+// THE ONE MANGLER — every function and method symbol is minted here, from the ENTRY
+// alone (the four method call sites derived their `defCls` identically from
+// classEntryForFrame(owner_ns_frame), so the entry already carries the defining class).
+std::string symbolFor(parse::Entry const& e, parse::Tree const& tree, int entry_id) {
+    // `main` — the C entry point — keeps its plain symbol (the same name-based
+    // decision grammar/resolve make about the one function that opens `global;`).
+    if (e.name == "main" && e.owner_ns_frame < 0 && e.parent_frame_id == 0)
+        return "main";
+    // A NESTED function is TU-LOCAL (lifted; nothing outside names it), so the entry id
+    // both disambiguates and cannot collide with a file-scope name.
+    if (e.owner_ns_frame < 0 && e.parent_frame_id != 0)
+        return e.name + "." + std::to_string(entry_id);
+    // A same-type transfer operator IS the class's canonical @__$copy / __$move /
+    // __$swap — every whole-class transfer site calls that symbol, so it must not be
+    // Itanium-mangled.
+    if ((e.name == "op=" || e.name == "op<--" || e.name == "op<-->")
+        && e.param_types.size() == 2) {
+        int cid = parse::classEntryForFrame(tree, e.owner_ns_frame);
+        if (cid >= 0) {
+            widen::TypeRef defCls = widen::strip(tree.entries[cid].slids_type);
+            widen::TypeRef pointee =
+                widen::get(widen::strip(e.param_types[1])).pointee;
+            if (pointee != widen::kNoType
+                && widen::deepStrip(pointee) == widen::deepStrip(defCls))
+                return widen::classSymbol(defCls)
+                     + (e.name == "op=" ? "__$copy"
+                        : e.name == "op<--" ? "__$move" : "__$swap");
+        }
+    }
+    // Otherwise: Itanium `_Z` <name> <bare-function-type>.
+    std::string out = "_Z";
+    std::vector<std::string> segs = scopeSegments(tree, e.owner_ns_frame);
+    std::string uq = unqualifiedName(e.name);
+    if (segs.empty()) {
+        out += uq;
+    } else {
+        out += "N";
+        for (std::string const& s : segs) out += std::to_string(s.size()) + s;
+        out += uq + "E";
+    }
+    if (e.param_types.empty()) {
+        out += "v";
+    } else {
+        for (widen::TypeRef pt : e.param_types) out += mangleType(pt);
+    }
     return out;
 }
 
@@ -257,34 +410,7 @@ std::string functionSymbol(parse::Node const& p, parse::Tree const& tree) {
     if (p.resolved_entry_id < 0) return p.name;
     parse::Entry const& e = tree.entries[p.resolved_entry_id];
     if (e.kind != parse::EntryKind::kFunction) return p.name;
-    // A NESTED function (registered in a body frame, parent_frame_id != the global
-    // frame 0, and in no namespace) is lifted to a top-level symbol. It is TU-LOCAL by
-    // construction — nothing outside can name it — so the entry id both disambiguates it
-    // and cannot collide with a file-scope name.
-    if (e.owner_ns_frame < 0 && e.parent_frame_id != 0) {
-        return e.name + "." + std::to_string(p.resolved_entry_id);
-    }
-    // A NAMESPACE member is mangled from its SCOPE PATH (`Space:goodbye_world` ->
-    // `Space__goodbye_world`) — NEVER from an entry id. Every TU that imports the
-    // namespace must mint the same symbol, and entry ids are per-TU: the importer
-    // numbered its entries differently from the definer, so the call did not link.
-    std::string base;
-    for (std::string const& seg : framePath(tree, e.owner_ns_frame)) base += seg + "__";
-    base += e.name;
-    // Overloaded? Count DISTINCT SIGNATURES in the same scope — a forward declaration and
-    // its definition share one — so a single function (and main) keeps its plain symbol.
-    // The `.entry_id` suffix an overload still gets is per-TU, so overloads remain
-    // un-linkable across TUs (todo: CROSS-TU MANGLING FOR OVERLOADS).
-    std::vector<std::vector<widen::TypeRef>> sigs;
-    for (parse::Entry const& q : tree.entries) {
-        if (q.kind != parse::EntryKind::kFunction
-            || q.owner_ns_frame != e.owner_ns_frame || q.name != e.name) continue;
-        bool seen = false;
-        for (auto const& s : sigs) if (s == q.param_types) { seen = true; break; }
-        if (!seen) sigs.push_back(q.param_types);
-    }
-    if (sigs.size() > 1) return base + "." + std::to_string(p.resolved_entry_id);
-    return base;
+    return symbolFor(e, tree, p.resolved_entry_id);
 }
 
 // An operator method name ("op+", "op<--", "op[]", …) carries characters that are
@@ -321,51 +447,14 @@ std::string sanitizeSymbolName(std::string const& name) {
     return out;
 }
 
-// The LLVM symbol for a method: classSymbol(defClass) + "__" + name, plus an
-// entry-id suffix when the method name is OVERLOADED in its class (2+ same-name
-// method entries in the owner frame) — so distinct overloads get distinct symbols,
-// exactly like functionSymbol. The call site and the chosen definition share the
-// entry id, so they mangle identically. Operator names are $-encoded so the symbol
-// is a valid LLVM identifier (the raw name still drives the overload count below).
+// The LLVM symbol for a method — a thin adapter over symbolFor, which derives the
+// defining class from the entry's owner frame itself, so `defCls` (which every caller
+// computed the same way) is only the fallback for the degenerate no-entry case.
 std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
                          std::string const& name, int entry_id) {
-    // The same-type transfer operators op<--(Self^) / op=(Self^) / op<-->(Self^) are the
-    // class's canonical move / copy / swap functions @<Class>__$move / __$copy / __$swap —
-    // every whole-class transfer site (a function-return fallback, the caller husk,
-    // `a <-- b` / `a = b` / `a <--> b`) calls that symbol, and a class lacking the user
-    // operator gets a synthesized function (a real memberwise method, resolve's
-    // synthesizeClassTransferOps — EVERY class gets one, so there is always a symbol to
-    // call and no blit fallback anywhere). Both the definition and every call mangle here,
-    // so they agree.
-    if ((name == "op<--" || name == "op=" || name == "op<-->") && entry_id >= 0
-        && tree.entries[entry_id].param_types.size() == 2) {
-        widen::TypeRef pointee =
-            widen::get(widen::strip(tree.entries[entry_id].param_types[1])).pointee;
-        if (pointee != widen::kNoType
-            && widen::deepStrip(pointee) == widen::deepStrip(defCls))
-            return widen::classSymbol(defCls)
-                 + (name == "op=" ? "__$copy" : name == "op<--" ? "__$move" : "__$swap");
-    }
-    std::string base = widen::classSymbol(defCls) + "__" + sanitizeSymbolName(name);
-    if (entry_id < 0) return base;
-    int frame = tree.entries[entry_id].owner_ns_frame;
-    // Overloaded? Count DISTINCT SIGNATURES, not entries. A method's DECLARATION and its
-    // DEFINITION are separate entries sharing one signature (registration cannot merge
-    // them — same-name methods are overloads), so counting entries reads a plain
-    // declared-then-defined method as overloaded and suffixes it `.entry_id`. That
-    // suffix is per-TU, so the defining TU emitted `@C__m.8` while an importing TU —
-    // which sees only the declaration, one entry — called the unsuffixed `@C__m`, and
-    // they did not link.
-    std::vector<std::vector<widen::TypeRef>> sigs;
-    for (parse::Entry const& q : tree.entries) {
-        if (q.kind != parse::EntryKind::kFunction
-            || q.owner_ns_frame != frame || q.name != name) continue;
-        bool seen = false;
-        for (auto const& s : sigs) if (s == q.param_types) { seen = true; break; }
-        if (!seen) sigs.push_back(q.param_types);
-    }
-    if (sigs.size() > 1) return base + "." + std::to_string(entry_id);
-    return base;
+    if (entry_id < 0)   // no entry to mangle from — valid code never hits this
+        return widen::classSymbol(defCls) + "__" + sanitizeSymbolName(name);
+    return symbolFor(tree.entries[entry_id], tree, entry_id);
 }
 
 // ---- Virtual dispatch: vtable slot map ----------------------------------------
