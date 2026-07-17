@@ -10,7 +10,30 @@ the definitions are in the library source file.
 /*
 claude says:
 
-tbd
+this header declares; library.sl defines. the two rules that bind this file:
+
+NO DEFINITIONS HERE. checked in the PARSER (grammar rejectBodyInHeader), not later —
+by resolve the tree also holds SYNTHESIZED definitions (the default ctor/dtor/copy/
+move/swap) stamped with this file's id, and no later stage could tell those from a
+body someone typed here. it only bites where a declaration and a definition are
+SEPARABLE things: a function / method / hook / operator. the alias / enum below stay,
+because for those the declaration IS the definition — nothing to separate.
+
+THIS HEADER REQUIRES A SIBLING library.sl. even for a pod class, even if it were
+empty. someone has to emit the synthesized members exactly once, and "the .sl with
+the same base name" is the only answer that every TU computes identically.
+
+the classes here cover the axes that matter, not just the happy path:
+  Animal      hooks + an op= + a method, all DECLARED here and DEFINED in the
+              sibling. proves the ban is on ADDING an implicit member, not defining
+              one — `Animal:_(){}` over there is legal precisely because `_();` is here.
+  Space       a namespace: its member fn and its nested Vegetable must mangle by
+              SCOPE PATH, since a symbol may never be a function of which TU minted it.
+  Vegetable   hooks declared here, ctor defined in a BLOCK re-open and dtor in the
+              EXTERNAL form over in the sibling — a ctor/dtor is a method with
+              restrictions, so every method syntax has to reach it.
+  NoCtor      declares NO implicit member, so every source-side attempt to add one is
+              a compile error. that is its only job; it is never instantiated.
 */
 
 alias Integer = int;

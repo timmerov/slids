@@ -10,7 +10,29 @@ operator to a class first declared in a header file.
 /*
 claude says:
 
-tbd
+this is library.slh's SIBLING — same base name (the directories would be allowed to
+differ). that is what makes this file, and no other, responsible for emitting the
+SYNTHESIZED members of every class the header declares: the complete ctor/dtor and the
+default copy/move/swap. consumer.sl only DECLARES those and links here.
+
+the split is between synthesized and declared, not between this file and the rest:
+  - SYNTHESIZED (nobody wrote it) -> only the sibling can emit it. no source's location
+    could select an owner, so the rule has to be positional.
+  - DECLARED (a method, an operator, a hook body) -> definable in ANY ONE .sl. a header
+    declaring several classes is meant to be able to give each one its own source file.
+so everything defined below is here because it is convenient, not because it is forced.
+defining it zero times or twice is a LINK error — this compiler sees one TU and cannot
+know what the others define. that is the same deal hello_world() already gets.
+
+the external `Vegetable:~()` and the block re-open `Vegetable() { _() {...} }` are two
+spellings of the same thing, on purpose: a ctor/dtor is a method with restrictions, so
+if a syntax works for a method it has to work here.
+
+KNOWN GAP (todo: HOOK BODY IN A NON-SIBLING TU): a header-declared hook whose body sits
+in a non-sibling .sl mis-compiles today — this file would emit the complete `@C__$ctor`
+calling a `@C__$ctor__impl` it never declares, and llc rejects it with no diagnostic
+from slidsc. so the hook bodies below are in the sibling because that is what WORKS, not
+because the model requires it.
 */
 
 import library;
