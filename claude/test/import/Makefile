@@ -15,9 +15,13 @@ SAMPLES = \
 # each imported library's .sl. `import library;` is a textual include of
 # library.slh (declarations only) — the DEFINITIONS live in library.sl, which
 # is compiled to its own object and linked in here.
+# bird.sl is a NON-SIBLING source for library.slh: a member declared in a header
+# may be defined in any one .sl, so a header declaring several classes can give
+# each its own file. library.sl still emits Bird's SYNTHESIZED members.
 OBJS = \
 	consumer \
-	library
+	library \
+	bird
 
 # Every file holding negative cases. Unlike the other test dirs this is not just
 # $(SAMPLES): a rule about imports has a side per FILE ROLE, and each has to be

@@ -1144,6 +1144,15 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
             && in.file_imported[f.file_id]) {
             fn->external_decl = true;
         }
+        // A member of a class this TU keeps PRIVATE is emitted `internal`. THIS is the
+        // last place that knows a lifted member's owner — flattening drops the class node
+        // and codegen sees only a mangled string — so the class's linkage has to be
+        // stamped on the node here or it is unrecoverable. Only a CLASS member: this
+        // lambda is never called for a free function, which is external on purpose.
+        if (owner != widen::kNoType
+            && widen::slidLinkage(owner) == widen::Type::Linkage::kInternal) {
+            fn->internal_def = true;
+        }
         return fn;
     };
     for (auto const& m : node.children) {
@@ -1163,12 +1172,14 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
                 if (f->kind != parse::Kind::kFunctionDef
                     && f->kind != parse::Kind::kFunctionDecl) continue;
                 bool hook = (f->name == "_$ctor" || f->name == "_$dtor");
-                // A hook DECLARATION mints no symbol. `_();` exists to tell every TU that
-                // the class HAS a ctor — that lands in has_ctor, which drives the complete
-                // method — and the only caller of `@C__$ctor__impl` is the complete
-                // `@C__$ctor`, emitted by whoever owns the class's synthesized symbols.
-                // So a bodyless hook needs no declare; emitting one collides with the
-                // definition in the TU that has the body.
+                // A hook DECLARATION mints no symbol here. A hook is not a frame ENTRY at
+                // all (resolve's member loop skips `_$ctor`/`_$dtor`) — its presence lives
+                // on the class TYPE as has_ctor/has_dtor — so it has no resolved_entry_id
+                // and copyNode's external_decl machinery, which is entry-driven, cannot
+                // speak about it. The `declare @C__$ctor__impl` that a body-elsewhere TU
+                // needs is emitted by run()'s complete-method loop instead, off the type's
+                // ctor_here/dtor_here — the same place, and the same fact, that decides
+                // whether to emit the call at all.
                 if (hook && f->kind != parse::Kind::kFunctionDef) continue;
                 std::string name;
                 if      (f->name == "_$ctor") name = sym + "__$ctor";

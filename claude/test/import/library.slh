@@ -59,6 +59,17 @@ Space {
     }
 }
 
+/* Bird's hooks and method are declared here like Animal's, but DEFINED in bird.sl —
+   not in the sibling. that is the "each class can have its own source file" case, and
+   it is a different code path from Animal: library.sl still emits Bird's SYNTHESIZED
+   members (it is the sibling), so its complete @Bird__$ctor calls a `__impl` that
+   another object file defines. that call needs a `declare`; without one, library.ll is
+   invalid IR that slidsc emits happily and only llc rejects. */
+Bird(int a, int b) {
+    _(); ~();
+    void chirp();
+}
+
 NoCtor(int a_) { }
 
 /* no definitions in a header file. a declaration and its definition are separable for

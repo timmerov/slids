@@ -20,22 +20,6 @@ BUGS
     cross a `.slh`. Note the nested-function `.<id>` suffix is NOT affected: a nested
     function is TU-local by construction.
 
-  * HOOK BODY IN A NON-SIBLING TU MIS-COMPILES — a header-declared `_();` whose
-    `_(){}` body is defined in some OTHER `.sl` (not the sibling) produces INVALID IR
-    with no diagnostic. Per the model a DECLARED member may be defined in any one
-    `.sl`, and a hook is a method with restrictions, so this is supposed to work.
-    What happens: the SIBLING emits the complete `@C__$ctor`, which calls
-    `@C__$ctor__impl` — but the impl body is in the other TU, so the sibling's own IR
-    references a value it never declared. Both TUs compile clean; llc rejects the
-    sibling ("use of undefined value '@C__$ctor__impl'"). Verified 2026-07-16.
-    FIX SHAPE: the sibling must `declare` an `__impl` it doesn't define (and the
-    defining TU must emit it non-internal) — i.e. `__impl` needs the same
-    declare/define linkage split the complete ctor got, keyed on whether the hook's
-    BODY is in this TU. Note this argues `__impl` becomes part of the link surface
-    after all, which the "export the symbol the language names" rule pushed back on;
-    the alternative is to REQUIRE a header class's hook bodies in the sibling (a
-    compile error elsewhere), which is a spec decision, not a bug fix. Decide first.
-
 
 UNBLOCKED FEATURES
 

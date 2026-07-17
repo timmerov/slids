@@ -1179,11 +1179,19 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   resolve's registerClassBody (the only place that sees every opening) and read by codegen as
   the choice between three emissions:
 
-    kInternal  the class is declared in a `.sl`. It is PRIVATE to this TU — nothing outside can
-               name it — so every member, synthesized or written, emits `define internal`. This
-               is also a FIX, not just a policy: two unrelated `.sl` files each declaring a
-               class named `Sh` used to emit the same global `@Sh__$ctor` twice and fail to
-               link. Two such classes are now unrelated by construction.
+    kInternal  the class is declared in a `.sl`. It is PRIVATE to this TU — nothing outside
+               can name it, so nothing outside can call its members — and EVERY symbol it
+               owns is `define internal`: the complete `@C__$ctor`/`__$dtor` and `__$sizeof`
+               (run()'s per-class loop), AND every member emitted through emitFunction (the
+               hook impls, the transfer ops, ordinary methods — flagged ast internal_def by
+               desugar's liftMember, the last place a lifted member knows its owner). This
+               is a FIX, not just a policy: two unrelated `.sl` files each declaring a class
+               named `Sh` emitted the same global `@Sh__$ctor__impl` / `@Sh__$copy` /
+               `@Sh__method` twice and failed to link. TWO EMITTERS, ONE RULE — applying it
+               at only one of them is exactly the bug, and the half that was missed is the
+               half that emits most of the symbols. Note a FREE function is untouched: a
+               `.sl`'s `void do_a()` is external ON PURPOSE, that being how another TU
+               calls it. Only a CLASS MEMBER goes internal.
     kDefine    the class is declared in a `.slh` AND this TU is its SIBLING (same base name;
                the directories may differ). The sibling emits the SYNTHESIZED members —
                complete ctor/dtor, default copy/move/swap — as real external definitions.
@@ -1202,6 +1210,21 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   `library.slh` declaring several classes with a source file each. Zero or two definitions is a
   LINK error, not a compile error: this compiler sees one TU and cannot know what the others
   define, and that is the same deal `foo()` declared in `foo.slh` already gets.
+
+  A HOOK BODY IS A DECLARED MEMBER, so it too may live in a non-sibling `.sl` (a ctor/dtor is a
+  method with restrictions — the same freedom, for the same reason). That crosses the two halves
+  in the one place they touch: the SIBLING emits the complete `@C__$ctor`, whose body CALLS
+  `@C__$ctor__impl`, and the impl may be somebody else's. So a TU that emits the complete method
+  must `declare` an impl it does not define. Type::ctor_here / dtor_here carries the answer —
+  "is the body written HERE", as opposed to has_ctor's "does the class HAVE one", which every TU
+  agrees on because it comes from the header. It cannot be asked of the symbol table the way a
+  method's decl/def split is: a hook is not a frame ENTRY at all (resolve's member loop skips
+  `_$ctor`/`_$dtor`; its presence lives on the TYPE), so it has no entry id and none of the
+  entry-driven external_decl machinery can speak about it. registerClassBody answers it, where
+  every opening is visible — and a hook DEF node in this tree is proof the body is ours, since
+  a header may not hold a body at all. Missing this declare emitted IR that referenced a value
+  the module never defined: both TUs compiled clean and only llc caught it. Canon
+  test/import/bird.sl.
 
   A SOURCE FILE CANNOT ADD AN IMPLICIT MEMBER TO A HEADER CLASS. The five implicitly-invoked
   members — ctor, dtor, copy, move, swap — are called WITHOUT the author naming them, off a
@@ -1222,5 +1245,5 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   to know what it is — and that is the sibling's. No `@C__$vtable` crosses a TU.
 
   OPEN. `sizeof` (an external synthesized function for an INCOMPLETE class, an internal constant
-  otherwise — deferred with cross-TU incomplete classes); cross-TU globals; overloads (they
-  mangle per-TU); and a HOOK BODY IN A NON-SIBLING TU, which mis-compiles today — see todo.txt.
+  otherwise — deferred with cross-TU incomplete classes); cross-TU globals; and overloads, which
+  still mangle per-TU — see todo.txt.

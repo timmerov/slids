@@ -4807,6 +4807,14 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     info.needs_dtor = has_dtor;
     widen::internSlid(node.name, info.field_types, def_id);  // attach slots to `type`
     widen::setSlidLifecycle(type, has_ctor, has_dtor);
+    // WHO DEFINES THE HOOK BODY, as opposed to whether the class has one. A hook DEF node
+    // exists in this tree only if some `.sl` compiled into THIS TU wrote it: a header may
+    // not hold a body at all (grammar rejects one), so a `_$ctor` kFunctionDef is proof
+    // the body is ours. `ctor_defined` is that answer over EVERY opening, which is the
+    // only place it can be taken — the declaration and the definition may sit in
+    // different ones. Codegen turns it into `call an impl I define` vs `declare the
+    // impl somebody else defines`.
+    widen::setSlidHookHere(type, ctor_defined, dtor_defined);
 }
 
 // True if `cls` (or an ancestor) is a WELL-FORMED virtual class — one that carries a

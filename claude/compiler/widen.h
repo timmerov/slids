@@ -64,10 +64,20 @@ struct Type {
                                            // classes are distinct handles. The NAME
                                            // stays bare; the unique LLVM symbol is
                                            // minted from this at codegen, never stored.
-    bool has_ctor = false;                 // kSlid: an explicit `_(){}` -> a
+    bool has_ctor = false;                 // kSlid: an explicit `_()` -> a
     bool has_dtor = false;                 //   <Name>__$ctor/__$dtor symbol exists
     bool needs_ctor = false;               // kSlid: TRANSITIVE — explicit, or a
     bool needs_dtor = false;               //   field whose class needs it (run hooks)
+    // kSlid: is the hook's BODY (`@<Name>__$ctor__impl`) written in THIS TU? has_ctor
+    // says the class HAS a ctor — a per-CLASS fact every TU agrees on, since it comes
+    // from the header. This says who DEFINES it, which differs per TU: a header class's
+    // `_(){}` may live in any ONE `.sl` (a hook is a method with restrictions, and a
+    // declared member is definable anywhere), so the TU emitting the COMPLETE method
+    // must `declare` the impl it calls whenever the body is somebody else's. A hook is
+    // not a frame entry, so this cannot be asked of the symbol table the way a method's
+    // decl/def split is — it is answered where every opening is visible and recorded here.
+    bool ctor_here = false;
+    bool dtor_here = false;
     // kSlid: how THIS TU emits the class's symbols. Set by resolve from the file the
     // class is DECLARED in; read by codegen.
     //   kInternal — declared in a `.sl`: the class is private to this TU, so EVERY
@@ -138,6 +148,14 @@ void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor);
 // from the file the class is DECLARED in; codegen reads it back via slidLinkage.
 void setSlidLinkage(TypeRef ref, Type::Linkage linkage);
 Type::Linkage slidLinkage(TypeRef ref);
+
+// Set whether each hook's BODY is written in this TU (see Type::ctor_here). Resolve
+// decides it in registerClassBody, where every OPENING of the class is visible — the
+// declaration and the definition may sit in different ones. Codegen reads it back to
+// choose between calling an impl it defines and declaring one it does not.
+void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here);
+bool slidCtorHere(TypeRef ref);
+bool slidDtorHere(TypeRef ref);
 
 // The disambiguated LLVM symbol base for a class kSlid handle (file-scope = bare
 // name; local = name + ".<frame>"). The ONE place a class name is mangled, and

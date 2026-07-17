@@ -3268,10 +3268,28 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
 // the linker binds to the other object's `define`. Mirrors emitFunction's
 // signature (same sret lowering, same symbol via fn.name = functionSymbol) but has
 // no body and names no parameters — a prototype is types-only.
+// The EMITTED symbol of a function node. A ctor/dtor node carries the COMPLETE
+// method's name (`C__$ctor`), but what its body IS is the user's `_(){}` — emitted as
+// `C__$ctor__impl` and called by the complete method, which run() materializes
+// separately. Every other function emits its own name.
+//
+// THE DEFINE AND THE DECLARE MUST AGREE, so both go through here. They did not: this
+// suffix lived inline in emitFunction only, so a hook DECLARATION emitted a `declare`
+// naming the COMPLETE method — a symbol that TU also defines — instead of the impl.
+std::string emitSymbol(ast::Node const& fn) {
+    auto endsWith = [](std::string const& s, std::string const& suf) {
+        return s.size() >= suf.size()
+            && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
+    };
+    if (endsWith(fn.name, "__$ctor") || endsWith(fn.name, "__$dtor"))
+        return fn.name + "__impl";
+    return fn.name;
+}
+
 void emitDeclare(ast::Node const& fn, std::ostream& out) {
     bool sret = isSretReturn(fn.return_type);
     std::string ret_llty = sret ? "void" : llvmForRef(fn.return_type);
-    out << "declare " << ret_llty << " @" << fn.name << "(";
+    out << "declare " << ret_llty << " @" << emitSymbol(fn) << "(";
     bool need_comma = false;
     if (sret) { out << "ptr"; need_comma = true; }
     for (size_t i = 0; i < fn.params.size(); i++) {
@@ -3290,18 +3308,8 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // unchanged (returned by value).
     bool sret = isSretReturn(fn.return_type);
     std::string ret_llty = sret ? "void" : llvmForRef(fn.return_type);
-    // A ctor/dtor method's user body is emitted as @<sym>__$ctor__impl /
-    // @<sym>__$dtor__impl; the COMPLETE @<sym>__$ctor / @<sym>__$dtor (field/base
-    // hooks + vtable stamp + this body) is materialized in run(). Every other
-    // function keeps its own symbol.
-    auto endsWith = [](std::string const& s, std::string const& suf) {
-        return s.size() >= suf.size()
-            && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
-    };
-    std::string emit_name = fn.name;
-    if (endsWith(fn.name, "__$ctor") || endsWith(fn.name, "__$dtor"))
-        emit_name += "__impl";
-    out << "define " << ret_llty << " @" << emit_name << "(";
+    out << "define " << (fn.internal_def ? "internal " : "")
+        << ret_llty << " @" << emitSymbol(fn) << "(";
     bool need_comma = false;
     if (sret) {
         out << "ptr %sret.in";
@@ -3629,10 +3637,17 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare;
         char const* def = (widen::slidLinkage(cs) == widen::Type::Linkage::kInternal)
                         ? "define internal void @" : "define void @";
+        // When we emit the complete method we emit a CALL to the user's hook body, so we
+        // must also name that body. If it is not ours — a header's `_();` defined in some
+        // other `.sl`, which the model allows for any declared member — the call needs a
+        // `declare`. Without it this module referenced a value it never defined: IR that
+        // slidsc emitted happily and only llc rejected.
         if (typeNeedsHook(cs, /*ctor=*/true)) {
             if (declare_only) {
                 body << "declare void @" << sym << "__$ctor(ptr)\n\n";
             } else {
+                if (widen::get(cs).has_ctor && !widen::slidCtorHere(cs))
+                    body << "declare void @" << sym << "__$ctor__impl(ptr)\n\n";
                 body << def << sym << "__$ctor(ptr %o) {\n";
                 emitClassCtorBody("%o", cs, body);
                 body << "  ret void\n}\n\n";
@@ -3642,6 +3657,8 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             if (declare_only) {
                 body << "declare void @" << sym << "__$dtor(ptr)\n\n";
             } else {
+                if (widen::get(cs).has_dtor && !widen::slidDtorHere(cs))
+                    body << "declare void @" << sym << "__$dtor__impl(ptr)\n\n";
                 body << def << sym << "__$dtor(ptr %o) {\n";
                 emitClassDtorBody("%o", cs, body);
                 body << "  ret void\n}\n\n";

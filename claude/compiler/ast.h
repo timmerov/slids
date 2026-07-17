@@ -155,6 +155,18 @@ struct Node {
                                                  // in another TU) that is undefined here —
                                                  // codegen emits a `declare` for it so the
                                                  // call links against the other object.
+    bool internal_def = false;                   // kFunctionDef: a member of a class this TU
+                                                 // keeps PRIVATE (declared in a `.sl`, so
+                                                 // nothing outside can name it) — codegen
+                                                 // emits `define internal`, so two unrelated
+                                                 // `.sl` files may each declare a class of the
+                                                 // same name without their members colliding
+                                                 // at link. Set by desugar's liftMember, the
+                                                 // one place a lifted member still knows its
+                                                 // OWNER; by codegen the symbol is a bare
+                                                 // string. A free function is never this: a
+                                                 // `.sl`'s `void do_a()` is external ON
+                                                 // PURPOSE — that is how another TU calls it.
 };
 
 // A per-class vtable: the class's symbol and, per slot, the implementing method's

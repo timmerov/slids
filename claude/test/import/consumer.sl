@@ -55,6 +55,11 @@ int32 main() {
 
     Space:goodbye_world();
 
+    // Bird is declared in library.slh but defined in bird.sl — NOT the sibling. from
+    // here that is invisible: same import, same construction, same call.
+    Bird tweety(5,6);
+    tweety.chirp();
+
     return 0;
 }
 

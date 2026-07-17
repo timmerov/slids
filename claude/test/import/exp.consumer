@@ -4,5 +4,8 @@ Animal:print: 1 2
 Vegetable:ctor: 3 4
 Vegetable:print: 3 4
 Goodbye, World!
+Bird:ctor: 5 6
+Bird:chirp: 5 6
+Bird:dtor: 5 6
 Vegetable:dtor: 3 4
 Animal:dtor: 1 2

@@ -1007,6 +1007,14 @@ Type::Linkage slidLinkage(TypeRef ref) {
     return get(ref).linkage;
 }
 
+void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here) {
+    arena().types[ref].ctor_here = ctor_here;
+    arena().types[ref].dtor_here = dtor_here;
+}
+
+bool slidCtorHere(TypeRef ref) { return get(ref).ctor_here; }
+bool slidDtorHere(TypeRef ref) { return get(ref).dtor_here; }
+
 // The LLVM symbol base for a class (`<Name>__$ctor` etc. append to it). Minted
 // HERE — the only place a class name is disambiguated — from the bare name plus
 // the def_id (a local class's defining frame). File-scope (def_id < 0) stays the

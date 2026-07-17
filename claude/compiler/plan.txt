@@ -1501,9 +1501,11 @@ Phase 8 — namespaces + cross-TU
       hello_world_impl.")
       WHERE A CLASS IS DECLARED DECIDES ITS LINKAGE — the whole model in one rule, now
       carried on the class TYPE (widen::Type::Linkage), decided in registerClassBody and
-      read by codegen. A `.sl` class is kInternal (private to this TU, `define internal`
-      throughout — which also FIXED two unrelated `.sl` files each declaring a class of
-      the same name failing to link). A `.slh` class is kDefine in its SIBLING `.sl`
+      read by codegen. A `.sl` class is kInternal (private to this TU, so every symbol it
+      owns is `define internal` — which also FIXED two unrelated `.sl` files each declaring
+      a class of the same name failing to link; note that took the rule at BOTH emitters,
+      run()'s per-class loop AND emitFunction via ast internal_def, and applying it at only
+      one was itself the bug). A `.slh` class is kDefine in its SIBLING `.sl`
       (same base name, directories may differ), which emits the SYNTHESIZED members, and
       kDeclare everywhere else. Every `.slh` therefore REQUIRES a sibling `.sl` — even
       an empty one for a POD class; a header-only module is impossible, because someone
@@ -1526,9 +1528,15 @@ Phase 8 — namespaces + cross-TU
       The prerequisite landed above: a header's `_();` and the sibling's `_(){}` are
       different OPENINGS of one class, so "is it defined in this TU" only became
       answerable once registerClassBody saw every opening's hooks.
-      OPEN: overloads across a `.slh` (todo CROSS-TU MANGLING FOR OVERLOADS); a hook
-      body defined in a NON-SIBLING TU (todo, mis-compiles today); cross-TU globals;
-      `sizeof` (deferred with cross-TU incomplete classes); multi-header modules.
+      A HOOK BODY IS A DECLARED MEMBER, so it may live in a NON-SIBLING `.sl` too — and
+      that is where the two halves touch: the sibling emits the complete `@C__$ctor`,
+      which CALLS an `@C__$ctor__impl` that may be somebody else's, so it must `declare`
+      the impl it does not define. Type::ctor_here/dtor_here carries "is the body HERE"
+      (as opposed to has_ctor's "does the class HAVE one", which comes from the header
+      and every TU agrees on); a hook is not a frame entry, so the entry-driven
+      external_decl path cannot answer it. Canon test/import/bird.sl.
+      OPEN: overloads across a `.slh` (todo CROSS-TU MANGLING FOR OVERLOADS); cross-TU
+      globals; `sizeof` (deferred with cross-TU incomplete classes); multi-header modules.
     - DEPENDENCY OUTPUT (LANDED 2026-07-15). slidsc `-MF <file>` / `-M` emit a
       make rule `<out.ll>: <in.sl> <imported.slh>...` (gcc-style, v1 had it as
       -M/-MF). The source list is `tokens.files` read right after lex — the file
