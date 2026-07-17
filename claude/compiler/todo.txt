@@ -4,22 +4,19 @@ Outstanding bugs, reach goals, anomalies, and deferred items — things we
 started but didn't finish, found but deferred, or want later but aren't on the
 main plan. Everything here is OPEN; closed/landed items are removed (the main
 quest's progress lives in plan.txt).
+these entries need to be concise plain english - not overburdened with details.
 
 
 BUGS
 
-  * CROSS-TU MANGLING FOR OVERLOADS — the import path links by emitted symbol, and
-    an OVERLOADED name is the one symbol still mangled from a per-TU ENTRY ID
-    (`name.<id>` — functionSymbol for a function, methodSymbol for a method). Entry
-    ids differ between objects, so the consumer's `declare` and the library's
-    `define` don't match: an undefined symbol at link. Everything AROUND this is now
-    TU-independent (a namespace member mangles by scope path; the overload COUNT is
-    by distinct signature, so a plain declared-then-defined function keeps its plain
-    symbol) — the id suffix on a true overload is the last piece. Needs a
-    deterministic mangling BY SIGNATURE before an overloaded function or method can
-    cross a `.slh`. Note the nested-function `.<id>` suffix is NOT affected: a nested
-    function is TU-local by construction.
+  * CROSS-TU MANGLING FOR OVERLOADS — they get a dumb counter mangling the name.
+    should use itanium mangling so link errors are readable. but need special handling
+    for tuples. and ^ is gonna show up as *. fine. see plan-mangle.txt.
 
+  * functions are incorrectly implemented as external symbols.
+    spec is everything is private unless it is declared in a .slh file - either
+    explicitly or implicitly by synthesis.
+    there are a few exceptions: like main and the global dtor registry.
 
 UNBLOCKED FEATURES
 

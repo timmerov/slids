@@ -1,0 +1,131 @@
+CROSS-TU SYMBOL MANGLING — adopt Itanium
+========================================
+
+canon:   none yet. test/import is the exercise; it has no overload across the seam today.
+memory:  [[project_cross_tu_classes]], [[project_cross_tu_declare_only]]
+todo:    "CROSS-TU MANGLING FOR OVERLOADS"
+status:  PLANNED 2026-07-16, not started. Phase 8.
+where:   nothing is shipped, so there is no readme section yet. THIS file keeps the
+         DECISIONS and the MEASUREMENTS — the things that took a session to reach and
+         that a later reader would otherwise re-derive or get wrong.
+
+GOAL
+  Two objects that name the same function agree on its symbol, so an overloaded function
+  or method can cross a .slh and link. And when it does NOT link, the error names the
+  function you wrote.
+
+  Scope: EVERY function and method mangles, because every function is an external symbol
+  (a decision — see the section near the end before proposing otherwise). There is no
+  prerequisite work and no second path.
+
+THE BUG IS BIGGER THAN "OVERLOADS DON'T LINK" (both verified by probe)
+  The known half: an overloaded name mangles as `name.<entry_id>`, and entry ids differ
+  between objects, so the caller and the definer disagree.
+
+  The half that matters more: the DECISION to mangle is per-TU too. It is a count of this
+  TU's matching entries. So a header declares `foo(int)`, nobody overloads it across the
+  seam, and it still breaks the moment the library adds a private `foo(float)` beside it:
+  the definer now counts two and emits foo.0/foo.1, while the importer counts one and
+  calls plain `foo`. A local implementation detail silently renames a public function.
+
+WHY COUNTING CAN NEVER BE MADE TU-INDEPENDENT (do not re-derive this)
+  The obvious repair is to count only the entries a header declares, since a header is
+  shared. It does not work: WHICH headers are imported is itself per-TU. `import a;
+  import b;` where each declares a different `foo` overload gives the importer two and
+  a.sl one. The set of visible declarations is always a property of the translation unit.
+  There is no counting rule that survives this — which is why the decision has to be
+  unconditional, and why C++ mangles everything. Do not spend another session looking for
+  a cleverer count.
+
+WHY ITANIUM RATHER THAN OUR OWN SCHEME
+  We already link through g++, and ld carries the Itanium demangler and applies it with no
+  prompting. So the link error reads `undefined reference to 'Animal::print()'` instead of
+  today's bare `foo`, and c++filt / nm -C / gdb all work for free. An invented scheme means
+  raw symbols in every link error, and a demangler of our own, and routing the link through
+  slidsc so something can filter ld's stderr.
+
+  This buys the DEMANGLER, not C++ ABI compatibility — see substitutions below. That was
+  never a goal; do not let anyone "finish" it into one.
+
+THE ENCODING
+  Leaf types become VENDOR EXTENDED types, `u<length><slids spelling>`, which demangle
+  verbatim. This is the whole trick for readability: it keeps the output in slids's own
+  vocabulary. `u5int64` prints "int64", where standard Itanium `x` prints "long long" —
+  a C++ word we do not use. So every primitive goes vendor: bool, char, int8/16/32/64,
+  intptr, uint8/16/32/64, float32, float64. (`int` and `int32` are the same interned type,
+  as are `intptr` and `int64`, so the canonical spelling falls out; there is nothing to
+  disambiguate.) Tuples are vendor too — see the open fork.
+
+  Structure stays standard Itanium, and composes over the vendor leaves:
+    ^        P            handle(int32*)
+    const    K            handle(float64 const*)
+    [N]      A<N>_<T>     handle(int32 [5])
+    []       P<T>         (an iterator decays to a pointer anyway)
+    class    <len><Name>, nested as N<scope><name>E   ->  Space::Vegetable::print()
+    no args  v
+  The return type is not mangled; it does not participate in overloading.
+
+  `^` maps to P and not R because `p^ = v` dereferences — "Animal*" is the honest read.
+
+WHAT THE PROBES ESTABLISHED (all cheap to re-run against c++filt)
+  - Substitutions (S_) are OPTIONAL. c++filt demangles the un-substituted
+    _Z3fooP3FooP3Foo exactly like the canonical _Z3fooP3FooS0_. Skip the compression. The
+    cost is that our names are not byte-identical to a C++ compiler's for the same
+    signature, which is where C++ link compatibility went.
+  - The demangler tolerates only [A-Za-z0-9_$.] inside a vendor name. Parens, commas,
+    angle brackets, colons, hyphens and spaces all make it give up and print the symbol
+    raw. This is what rules out spelling a tuple the way slids spells it.
+  - Mixing schemes is safe: ld only demangles names starting with _Z and leaves the rest
+    alone. So the fixed class ABI names can stay exactly as they are.
+
+THE OPEN FORK — what goes inside a tuple
+  A tuple has no Itanium analogue, so it is a vendor leaf: `tuple<arity>$<e1>$<e2>...`.
+  The arity digit is load-bearing. Without it, tuple$int32$int32$float32 reads as both
+  (int32,int32,float32) and ((int32,int32),float32); with it, nesting is a prefix code.
+
+  What the elements are is undecided:
+    (a) recursive Itanium      tuple2$u5int32$u5int32   /  tuple2$P6Animal$u5int32
+        One encoder, charset-safe by construction, but the common (int,int) reads badly.
+    (b) slids spelling         tuple2$int32$int32       /  tuple2$Animal.p$int32
+        Reads well for the common case, but it is a SECOND encoder and needs an escape
+        for every structure character (^ -> .p, [N] -> .aN, const -> .k).
+  Leaning (b): a tuple in a cross-TU signature is rare, and (int,int) should read well.
+  Either way `void handle((int,int)^ p)` demangles to handle(tuple2...*) — noisier than
+  the source. If that is judged a bad trade, it is the argument for dropping Itanium and
+  writing a slids-native scheme instead, accepting raw symbols in link errors.
+
+WHAT STAYS UNMANGLED
+  main, because the C runtime names it. And the fixed per-class ABI symbols — C__$ctor,
+  __$dtor, __$copy, __$move, __$swap. There is one of each per class, they are never
+  overloaded, they are already TU-stable, and they already read fine raw in a link error.
+  Itanium's C1/D1 map suspiciously well onto our complete-vs-__impl split (they demangle
+  as "Animal::Animal()"), but our complete constructor is not what C1 means. Do not adopt
+  them because they demangle prettily.
+
+A FUNCTION IS AN EXTERNAL SYMBOL. THAT IS A DECISION — DO NOT "FIX" IT
+  Every function is emitted as a plain external `define`, and that is deliberate: the user
+  decided it long ago. It is not an oversight and not a leak, and this design does not
+  depend on changing it.
+
+  Read this before you talk yourself into the same wrong turn I did. Two unrelated .sl
+  files each holding a private `void helper()` do not link ("multiple definition"). It is
+  tempting to call that a bug and to reach for the class rule — a class declared in a .sl
+  is internal, so surely a function should be too, since the orphan check means no other
+  slids TU can even declare it. The argument is wrong because it only covers SLIDS
+  callers: a C caller, or anything else at link time, needs the plain external symbol and
+  knows nothing about the orphan check. Two same-named functions colliding is what
+  NAMESPACES are for, exactly as in C++. It is not a linkage question.
+
+WHAT THIS MEANS FOR THE PLAN — it gets simpler, not harder
+  Because every function is externally nameable, every function's symbol must be
+  TU-stable. So there is no linkage work to do first, and no split between "the ABI
+  surface mangles, private code stays plain": everything mangles, uniformly, by signature.
+  One rule, one path, no counting anywhere. (An internal class's METHODS could in
+  principle keep the cheap per-TU counter, since kInternal means nothing outside can name
+  them — don't. A second path earns nothing and is one more place to get wrong.)
+
+THE TRAP
+  A malformed _Z name does not fail loudly. A wrong length prefix silently re-reads the
+  tail as another type: u13tuple2$int$int demangled as "tuple2$int$in, unsigned short".
+  Every length written by hand during this design session was wrong. The encoder must be
+  one funnel that COMPUTES the length from the string; no call site ever spells one.
