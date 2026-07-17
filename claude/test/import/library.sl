@@ -70,7 +70,9 @@ Widget() {
 int priv_ = 6;   /* .sl-LOCAL (not in the header) — PRIVATE, same name as consumer's */
 
 void hello_world() {
-    __println("Hello, World!");
+    String hw(nullptr, 42);
+    gw.set("Hello, World!");
+    __println(gw.get() + " " + gw.tag());
     note();
     Widget lw; lw.hum();
     __println("library priv: " + priv_);   // library's own internal priv_
@@ -172,6 +174,21 @@ void bump_shared() {
 }
 global int nums[3] = (7, 8, 9);
 /* from_bird is DEFINED in bird.sl, not here — this TU only declares it (via the header). */
+
+/* complete the incomplete class */
+String(char[] str_ = nullptr, int tag_ = 7) {
+    _() {}
+    ~() { delete str_; }
+
+    void set(char[] s) {
+        intptr len = 0;
+        while (s[len]) { ++len; }
+        str_ = new char[len+1];
+        while (len >= 0) { str_[len] = s[len]; --len; }
+    }
+    char[] get() { return str_; }
+    int tag() { return tag_; }
+}
 
 /*
 in a source file, we cannot add a ctor/dtor or copy, move, swap operator to a class

@@ -210,6 +210,13 @@ Forward(int x_) {
     }
 }
 
+ArrayFieldAccessBug(int a_[2]) {
+    void set(int a) {
+        a_[0] = a;
+        a_[1] = 0;
+    }
+}
+
 int32 main() {
 
     Method method1(76);
@@ -316,6 +323,10 @@ int32 main() {
 
     Forward forward;
     forward.print();
+
+    ArrayFieldAccessBug afab;
+    afab.set(65);
+    __println("afab = " + afab.a_[0] + " " + afab.a_[1]);   // 65 0
 
     return 0;
 }

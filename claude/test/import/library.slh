@@ -132,6 +132,14 @@ int from_bird = 77;
    read in the normal build — a header value with no definer is a harmless external. */
 int mismatch_ = 2;
 
+/* incomplete class */
+String(...) {
+    _(); ~();
+    void set(char[] s);
+    char[] get();
+    int tag();
+}
+
 NoCtor(int a_) { }
 
 /* no definitions in a header file. a declaration and its definition are separable for

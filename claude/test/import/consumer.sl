@@ -144,6 +144,10 @@ int32 main() {
     // this TU's PRIVATE priv_ (5); library's own priv_ (6) never collides.
     __println("consumer priv: " + priv_);
 
+    String hello;
+    hello.set("goodbye");
+    __println(hello.get() + " " + hello.tag());
+
     return 0;
 }
 

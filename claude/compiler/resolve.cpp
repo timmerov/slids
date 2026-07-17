@@ -359,6 +359,7 @@ char const* entryKindNoun(parse::Entry const& e) {
             return e.slids_type != widen::kNoType ? "enum" : "namespace";
         case parse::EntryKind::kLocalVar:
         case parse::EntryKind::kGlobalVar: return "variable";
+        case parse::EntryKind::kField:     return "field";
     }
     return "variable";
 }
@@ -862,16 +863,13 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
     if (frame < 0) return;   // a duplicate / unregistered scope — no members to resolve
     int base_pushed = pushBaseChain(tree, node);
     tree.open_ns_frames.push_back(frame);
-    std::vector<std::string> const* saved_mf = tree.method_fields;
     std::string saved_base = tree.current_base_name;
     std::string saved_class = tree.current_class_name;
     if (isClass) {
         auto it = tree.classes.find(widen::strip(node.return_type));
-        // Bare field names in a method/ctor/dtor body rewrite to `self.field` via
-        // method_fields; a member function is self-bound only in the class scope
-        // itself — a nested namespace's free functions reset it (the else below).
-        tree.method_fields = (it != tree.classes.end()) ? &it->second.field_names
-                                                        : nullptr;
+        // Bare field names in a method/ctor/dtor body resolve via a kField frame pushed in
+        // resolveFunctionBody (see collectMethodFields); current_base_name/class_name below
+        // still drive the `Base:` reframe and base-class depth.
         tree.current_base_name = node.text;   // base name for the `Base:` reframe (or "")
         tree.current_class_name = (it != tree.classes.end()) ? it->second.name : "";
         // Synthesize the default copy/move/swap ops NOW — the SINGLE choke point every
@@ -888,7 +886,6 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             }
         }
     } else {
-        tree.method_fields = nullptr;   // a free function does not self-bind
         tree.current_base_name.clear();
         tree.current_class_name.clear();
     }
@@ -914,7 +911,6 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             resolveScopeBodies(tree, *m, /*isClass=*/true, diag);
         }
     }
-    tree.method_fields = saved_mf;
     tree.current_base_name = saved_base;
     tree.current_class_name = saved_class;
     tree.open_ns_frames.pop_back();
@@ -1214,14 +1210,6 @@ void noteCapture(parse::Tree& tree, int id) {
     tree.capture_node->captures.push_back(id);
 }
 
-// Inside a member-function body (ctor / dtor / method), is `name` one of the class
-// fields? (method_fields is the field-name list; null outside a member body.)
-bool isMethodField(parse::Tree const& tree, std::string const& name) {
-    if (!tree.method_fields) return false;
-    for (auto const& f : *tree.method_fields) if (f == name) return true;
-    return false;
-}
-
 // Build `_$recv^` — the deref of the implicit receiver param `_$recv` (a
 // `Class^` holding the object's address). This IS the object the author calls
 // `self` (transmogrification: author `self` = compiler `_$recv^`; see the
@@ -1242,20 +1230,6 @@ std::unique_ptr<parse::Node> buildRecvDeref(int file_id, int tok) {
     deref->tok = tok;
     deref->children.push_back(std::move(recv_id));
     return deref;
-}
-
-// Build `_$recv^.field` (author `self.field`) — a kFieldExpr over `_$recv^`
-// (buildRecvDeref). Shared by the field READ rewrite (in resolveExpr) and the
-// field WRITE rewrite (a bare assignment target).
-std::unique_ptr<parse::Node> buildSelfField(std::string const& field,
-                                            int file_id, int tok) {
-    auto fe = std::make_unique<parse::Node>();
-    fe->kind = parse::Kind::kFieldExpr;
-    fe->name = field;
-    fe->file_id = file_id;
-    fe->tok = tok;
-    fe->children.push_back(buildRecvDeref(file_id, tok));
-    return fe;
 }
 
 // `Base:member` inside a DERIVED class member (Base = the immediate base) reframes
@@ -1280,6 +1254,43 @@ std::unique_ptr<parse::Node> buildBaseReceiver(int depth, int file_id, int tok) 
     return recv;
 }
 
+// Lower a bare reference that resolved to a class FIELD (a kField entry) to the receiver
+// access `_$recv^.field` (own field, depth 0) or `_$recv^._$base…field` (a base field).
+// Mutates `node` IN PLACE from a kIdentExpr to a kFieldExpr and resolves the synthesized
+// receiver. Returns true when it fired. THE single field-access lowering — every
+// bare-name resolution site calls it right after resolveName, so no context can "forget"
+// to reach `self` the way the old per-site method_fields rewrites could.
+bool lowerFieldRef(parse::Tree& tree, parse::Node& node, int id,
+                   diagnostic::Sink& diag) {
+    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kField) return false;
+    int depth = tree.entries[id].field_depth;
+    std::unique_ptr<parse::Node> recv = (depth == 0)
+        ? buildRecvDeref(node.file_id, node.tok)
+        : buildBaseReceiver(depth, node.file_id, node.tok);
+    node.kind = parse::Kind::kFieldExpr;   // node.name stays the field name
+    node.resolved_entry_id = -1;           // no longer an entry ref; classify types the field
+    node.children.clear();
+    node.children.push_back(std::move(recv));
+    resolveExpr(tree, *node.children[0], diag);   // resolve the receiver `_$recv^`
+    return true;
+}
+
+// A resolved `_$recv^.field` lvalue node for a bare field NAME (id = its kField entry).
+// The whole-name store / aug-assign rewrites start from the STATEMENT name (not an ident
+// node), so they mint the ident here and lower it — the same field access lowerFieldRef
+// produces for an in-place node.
+std::unique_ptr<parse::Node> buildFieldLvalue(parse::Tree& tree, std::string const& name,
+                                              int id, int file, int tok,
+                                              diagnostic::Sink& diag) {
+    auto n = std::make_unique<parse::Node>();
+    n->kind = parse::Kind::kIdentExpr;
+    n->name = name;
+    n->file_id = file;
+    n->tok = tok;
+    lowerFieldRef(tree, *n, id, diag);
+    return n;
+}
+
 // The `_$base` hop count to reach a transitive BASE CLASS named `className` from the
 // current class (1 = immediate base), else 0. Used by the `Base:` qualifier.
 int baseClassDepth(parse::Tree& tree, std::string const& className) {
@@ -1295,26 +1306,6 @@ int baseClassDepth(parse::Tree& tree, std::string const& className) {
         if (it == tree.classes.end()) return 0;
         if (it->second.name == className) return depth;
         cls = parse::baseTypeOf(it->second);
-    }
-    return 0;
-}
-
-// base field reads through `self._$base...(_$base).name`.
-int baseFieldDepth(parse::Tree& tree, std::string const& name) {
-    if (tree.current_base_name.empty()) return 0;
-    int id = resolveName(tree, tree.current_base_name);
-    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
-    widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
-    // Backstop only: a cyclic base chain is diagnosed by checkClassByValueAcyclic
-    // (a base is a by-value `_$base` field); this guard just bounds the walk.
-    int guard = (int)tree.classes.size() + 2;
-    for (int depth = 1; cls != widen::kNoType && guard-- > 0; depth++) {
-        auto it = tree.classes.find(cls);
-        if (it == tree.classes.end()) return 0;
-        parse::ClassInfo const& info = it->second;
-        if (parse::classHasField(info, name)) return depth;   // a user name never matches _$base
-        cls = parse::baseTypeOf(info);
-        if (cls == widen::kNoType) return 0;
     }
     return 0;
 }
@@ -1439,28 +1430,11 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                          {b.file_id, b.tok, "or this one"}}});
                     return;
                 }
+                // A bare name resolving to a class FIELD (own or base) lowers to
+                // `_$recv^.field` — the single field-access rewrite, so a body local of
+                // the same name (which resolveNameDetail found first) shadows the field.
+                if (lowerFieldRef(tree, e, id, diag)) return;
                 if (id < 0) {
-                    // Inside a member body, a bare name matching a class field is
-                    // `self.field`. Locals shadow fields (we only reach here when
-                    // no local/const/etc. resolved), so rewrite this READ node to a
-                    // kFieldExpr over `self` (buildSelfField) and resolve that.
-                    if (isMethodField(tree, e.name)) {
-                        auto fe = buildSelfField(e.name, e.file_id, e.tok);
-                        e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
-                        e.children = std::move(fe->children);
-                        resolveExpr(tree, *e.children[0], diag, unevaluated);
-                        return;
-                    }
-                    // A bare BASE field (not shadowed by a derived field) reads through
-                    // the base sub-object: `self._$base...(_$base).field`.
-                    if (int depth = baseFieldDepth(tree, e.name); depth > 0) {
-                        auto recv = buildBaseReceiver(depth, e.file_id, e.tok);
-                        e.kind = parse::Kind::kFieldExpr;   // e.name stays the field
-                        e.children.clear();
-                        e.children.push_back(std::move(recv));
-                        resolveExpr(tree, *e.children[0], diag, unevaluated);
-                        return;
-                    }
                     if (namespaceMemberExists(tree, e.name)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
                             "'" + e.name + "' needs a namespace qualifier.", {}});
@@ -1610,18 +1584,32 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     || peek->kind == parse::Kind::kFieldExpr) {
                     peek = peek->children[0].get();
                 }
-                if (peek->kind == parse::Kind::kIdentExpr
-                    && !isQualified(*peek)
-                    && resolveName(tree, peek->name) < 0
-                    && isMethodField(tree, peek->name)) {
-                    auto self_id = std::make_unique<parse::Node>();
-                    self_id->kind = parse::Kind::kIdentExpr;
-                    self_id->name = "self";
-                    self_id->file_id = peek->file_id;
-                    self_id->tok = peek->tok;
+                if (int pid = (peek->kind == parse::Kind::kIdentExpr
+                               && !isQualified(*peek))
+                                  ? resolveName(tree, peek->name) : -1;
+                    pid >= 0 && tree.entries[pid].kind == parse::EntryKind::kField) {
+                    // Rewrite the base field to `self._$base…(depth).field` over the `self`
+                    // LOCAL — the address-of walk below descends to the base IDENT, so the
+                    // receiver must bottom out at `self` (an ident), not `_$recv^` (a deref
+                    // — what lowerFieldRef uses for a value read).
+                    int depth = tree.entries[pid].field_depth;
+                    auto recv = std::make_unique<parse::Node>();
+                    recv->kind = parse::Kind::kIdentExpr;
+                    recv->name = "self";
+                    recv->file_id = peek->file_id;
+                    recv->tok = peek->tok;
+                    for (int h = 0; h < depth; h++) {
+                        auto hop = std::make_unique<parse::Node>();
+                        hop->kind = parse::Kind::kFieldExpr;
+                        hop->name = "_$base";
+                        hop->file_id = peek->file_id;
+                        hop->tok = peek->tok;
+                        hop->children.push_back(std::move(recv));
+                        recv = std::move(hop);
+                    }
                     peek->kind = parse::Kind::kFieldExpr;   // peek->name stays the field
                     peek->children.clear();
-                    peek->children.push_back(std::move(self_id));
+                    peek->children.push_back(std::move(recv));
                 }
             }
             parse::Node* base = e.children[0].get();
@@ -1824,6 +1812,11 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             int id = qualified ? resolveQualifiedRef(tree, operand, diag)
                                : resolveName(tree, operand.name);
             if (id >= 0) {
+                // A bare FIELD -> `_$recv^.field`, so ##type reports the FIELD's type.
+                if (tree.entries[id].kind == parse::EntryKind::kField) {
+                    lowerFieldRef(tree, operand, id, diag);
+                    return;
+                }
                 parse::EntryKind k = tree.entries[id].kind;
                 if (k == parse::EntryKind::kClass) {
                     // A class name is a type; ##type reports the class itself.
@@ -1860,18 +1853,6 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                         "'" + operand.name + "' is a " + what
                             + ", not a value or an alias.", {}});
                 }
-                return;
-            }
-            // A bare FIELD name in a method body: rewrite the operand to `self.field`
-            // (the same kFieldExpr the value-position ident path mints), so ##type
-            // reports the FIELD's type. resolveName found nothing because a field is a
-            // kSlid slot, not a frame entry (and a local shadowing the field would
-            // have resolved above).
-            if (!qualified && isMethodField(tree, operand.name)) {
-                auto fe = buildSelfField(operand.name, operand.file_id, operand.tok);
-                operand.kind = parse::Kind::kFieldExpr;   // operand.name stays the field
-                operand.children = std::move(fe->children);
-                resolveExpr(tree, *operand.children[0], diag, /*unevaluated=*/true);
                 return;
             }
             // qualified: resolveQualifiedRef already reported the resolution error.
@@ -2791,6 +2772,11 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
     if (lv.kind == parse::Kind::kIdentExpr) {
         int id = isQualified(lv) ? resolveQualifiedRef(tree, lv, diag)
                                  : resolveName(tree, lv.name);
+        // A bare index/deref base that is a class FIELD lowers to `_$recv^.field` — the
+        // SAME rewrite the read path gets (this was the missing site: `field[i] = v`
+        // never reached `self` and errored "undeclared"). lowerFieldRef leaves a resolved
+        // kFieldExpr; the enclosing index/deref store then targets the field's element.
+        if (lowerFieldRef(tree, lv, id, diag)) return;
         if (id < 0) {
             if (!isQualified(lv)) {
                 diagnostic::report(diag, {lv.file_id, lv.tok,
@@ -2969,7 +2955,7 @@ bool tryInferredMoveSwapInit(parse::Tree& tree, parse::Node& s, bool swap,
                              diagnostic::Sink& diag) {
     parse::Node* lhs = s.children.empty() ? nullptr : s.children[0].get();
     if (!lhs || lhs->kind != parse::Kind::kIdentExpr) return false;
-    if (resolveName(tree, lhs->name) >= 0 || isMethodField(tree, lhs->name))
+    if (resolveName(tree, lhs->name) >= 0)
         return false;   // an existing variable / a bare field -> the normal path
     DeclInfo d;
     d.name = lhs->name;
@@ -3084,12 +3070,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // read rewrite. Without this it would fall into the inferred-init path
             // below and invent a phantom local that shadows the field. Becomes a
             // kStoreStmt [self.field, rhs]; the rhs's own field reads rewrite too.
-            if (!isQualified(s) && resolveName(tree, s.name) < 0
-                && isMethodField(tree, s.name)) {
-                auto lvalue = buildSelfField(s.name, s.file_id, s.name_tok);
+            if (int fid = isQualified(s) ? -1 : resolveName(tree, s.name);
+                fid >= 0 && tree.entries[fid].kind == parse::EntryKind::kField) {
+                s.children.insert(s.children.begin(),
+                    buildFieldLvalue(tree, s.name, fid, s.file_id, s.name_tok, diag));
                 s.kind = parse::Kind::kStoreStmt;
-                s.children.insert(s.children.begin(), std::move(lvalue));
-                resolveStoreTarget(tree, *s.children[0], diag);
                 if (s.children.size() > 1 && s.children[1])
                     resolveExpr(tree, *s.children[1], diag);
                 return Completion::Normal;
@@ -3142,10 +3127,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // — rewrite to the complex-lvalue form [self.field, rhs] (mirror of the
             // kAssignStmt field rewrite). Without this the bare name falls into
             // resolveAssignTarget and errors "undeclared variable".
-            if (s.children.size() == 1 && !isQualified(s)
-                && resolveName(tree, s.name) < 0 && isMethodField(tree, s.name)) {
-                auto lvalue = buildSelfField(s.name, s.file_id, s.name_tok);
-                s.children.insert(s.children.begin(), std::move(lvalue));
+            if (int fid = (s.children.size() == 1 && !isQualified(s))
+                              ? resolveName(tree, s.name) : -1;
+                fid >= 0 && tree.entries[fid].kind == parse::EntryKind::kField) {
+                s.children.insert(s.children.begin(),
+                    buildFieldLvalue(tree, s.name, fid, s.file_id, s.name_tok, diag));
                 s.name.clear();
             }
             // Complex lvalue form (`arr[i] += v`): [0]=lvalue chain, [1]=rhs.
@@ -4180,6 +4166,31 @@ Completion resolveStmtList(parse::Tree& tree,
     return result;
 }
 
+// Collect every field reachable BARE in a method of class `cls`: its own fields (depth
+// 0) then transitive base fields (depth 1…), a derived field SHADOWING a same-named base
+// one (first-seen wins). Skips the internal `_$base` slot. Populates the method's field
+// frame with kField entries — replacing the old method_fields name-list + baseFieldDepth
+// per-site walk.
+void collectMethodFields(parse::Tree& tree, widen::TypeRef cls,
+                         std::vector<std::tuple<std::string, widen::TypeRef, int>>& out) {
+    std::set<std::string> seen;
+    int guard = static_cast<int>(tree.classes.size()) + 2;
+    for (int depth = 0; cls != widen::kNoType && guard-- > 0; depth++) {
+        auto it = tree.classes.find(cls);
+        if (it == tree.classes.end()) break;
+        parse::ClassInfo const& info = it->second;
+        for (std::size_t i = 0; i < info.field_names.size(); i++) {
+            std::string const& n = info.field_names[i];
+            if (n == "_$base") continue;                 // internal base subobject slot
+            if (!seen.insert(n).second) continue;        // a derived field shadows a base's
+            widen::TypeRef ty = i < info.field_types.size()
+                                    ? info.field_types[i] : widen::kNoType;
+            out.emplace_back(n, ty, depth);
+        }
+        cls = parse::baseTypeOf(info);
+    }
+}
+
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                          diagnostic::Sink& diag, bool nested) {
     if (!nested) tree.nested_call_checks.clear();   // per top-level function body
@@ -4209,6 +4220,33 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     }
     int saved_floor = tree.capture_floor;
     parse::Node* saved_capture_node = tree.capture_node;
+    // A METHOD body resolves inside a transient FIELD FRAME (pushed OUTSIDE the body
+    // frame): the class's fields — own + base — are kField entries, so a bare `f`
+    // resolves like a local and is SHADOWED by a same-named body local (pushed inside).
+    // Detected by the receiver param `_$recv`; a free/nested function has none. This
+    // replaces tree.method_fields entirely.
+    int field_frame_pushed = 0;
+    for (auto& p : fn.params) {
+        if (!p || p->name != "_$recv") continue;
+        widen::TypeRef cls =
+            widen::get(widen::strip(p->return_type)).pointee;
+        if (cls == widen::kNoType) break;
+        parse::pushFrame(tree);
+        field_frame_pushed = 1;
+        std::vector<std::tuple<std::string, widen::TypeRef, int>> fields;
+        collectMethodFields(tree, cls, fields);
+        for (auto& [n, ty, d] : fields) {
+            parse::Entry fe;
+            fe.kind = parse::EntryKind::kField;
+            fe.name = n;
+            fe.slids_type = ty;
+            fe.field_depth = d;
+            fe.file_id = fn.file_id;
+            fe.tok = fn.name_tok;
+            parse::addEntry(tree, std::move(fe));
+        }
+        break;
+    }
     parse::pushFrame(tree);
     if (nested) {
         // A kLocalVar resolved below this frame (a host local/param) is a capture.
@@ -4363,6 +4401,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     tree.capture_floor = saved_floor;
     tree.capture_node = saved_capture_node;
     parse::popFrame(tree);
+    if (field_frame_pushed) parse::popFrame(tree);   // drop the method's field frame
 }
 
 void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,

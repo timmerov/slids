@@ -374,6 +374,12 @@ enum class EntryKind {
     kNamespace,    // namespace name; ns_frame_id identifies its member set
     kClass,        // class name; a type (slids_type = its kSlid) AND a namespace
                    // (ns_frame_id holds its member aliases/consts/enums).
+    kField,        // a CLASS FIELD, registered as a transient lexical entry in a
+                   // method body's field frame (so a bare `f` resolves like a local and
+                   // is shadowed by a same-named body local). A reference to one is
+                   // lowered to `_$recv^.f` (field_depth base hops) at resolution.
+                   // slids_type = the field's type; NOT storage (never a store target
+                   // directly — the lowering turns it into a field access first).
 };
 
 struct Entry {
@@ -429,6 +435,9 @@ struct Entry {
     // the ns_frame_id of the owning namespace. -1 for ordinary (non-member)
     // entries. The entry still lives at parent_frame_id for lifetime.
     int owner_ns_frame = -1;
+    // kField: the number of `_$base` hops from the method's own class to the class that
+    // declares this field (0 = an own field -> `_$recv^.f`; N -> `_$recv^._$base…f`).
+    int field_depth = 0;
     // kConst — filled by constfold; substitution at use sites reads these.
     std::string literal_text;     // canonical-precision text at declared type
     Kind literal_kind = Kind::kProgram;  // sentinel; valid after constfold capture
@@ -512,12 +521,6 @@ struct Tree {
     // per definition via def_id — see ClassInfo). Populated by resolve's class
     // pre-pass; read by classify + desugar.
     std::map<widen::TypeRef, ClassInfo> classes;
-
-    // Transient — while resolving a ctor/dtor body: the field names of the
-    // enclosing class. An UNRESOLVED bare name matching one is rewritten to
-    // `self.field` (locals shadow fields, so this is only a fallback). nullptr
-    // outside a class member body.
-    std::vector<std::string> const* method_fields = nullptr;
 
     // The immediate base class name while resolving a DERIVED class member body, else
     // empty. A qualified `Base:member` whose qualifier is this base reframes `self` to
