@@ -468,12 +468,14 @@ struct ClassInfo {
     // (single-file: all appends are seen in Phase 1 before Phase 2 interns).
     bool is_open = false;
     std::vector<Node*> pending_fields;
-    // The `_$ctor` / `_$dtor` members contributed by RE-OPENS (still OWNED by their
-    // re-open node, like pending_fields). A class's lifecycle is the union of every
-    // opening — "as if everything was declared within a single class definition" — but
-    // a re-open node skips the class BODY passes, so its hooks would otherwise be
-    // invisible to registerClassBody's lifecycle scan (has_ctor false -> the hook is
-    // never called and its `__impl` is emitted dead).
+    // The IMPLICITLY-INVOKED members contributed by RE-OPENS — ctor, dtor, copy, move,
+    // swap (still OWNED by their re-open node, like pending_fields). A class's lifecycle
+    // is the union of every opening — "as if everything was declared within a single
+    // class definition" — but a re-open node skips the class BODY passes, so these would
+    // otherwise be invisible to registerClassBody, which is the only place that sees the
+    // whole class and so is where every per-CLASS lifecycle question is answered (the
+    // hook scan: has_ctor false -> the hook is never called and its `__impl` is emitted
+    // dead; and the header-class ADD check).
     std::vector<Node*> pending_hooks;
     int fieldIndex(std::string const& f) const {
         for (std::size_t i = 0; i < field_names.size(); ++i)
@@ -494,6 +496,17 @@ struct Tree {
     // by grammar from the token list. Consumed by resolve to mark a declaration
     // whose file is imported as external (its definition is in another TU).
     std::vector<bool> file_imported;
+
+    // Indexed by file_id: true if that file is an imported header whose BASE NAME
+    // matches the primary source's (`library.slh` <-> `library.sl`) — i.e. THIS TU is
+    // that header's SIBLING implementation. A module's identity is its base name, so the
+    // two may live in different directories. The sibling is the ONE TU that emits a
+    // header class's SYNTHESIZED symbols (complete ctor/dtor, default copy/move/swap);
+    // every other importer only declares them. Hence every `.slh` needs a sibling `.sl`,
+    // even for a class with no methods at all — nothing else would ever define them.
+    // (A member the author WROTE is not this: it may be defined in ANY .sl, so one header
+    // can declare several classes that each have their own source file.)
+    std::vector<bool> file_sibling;
 
     // Class layouts keyed by the class's interned kSlid handle (which is unique
     // per definition via def_id — see ClassInfo). Populated by resolve's class
@@ -637,6 +650,14 @@ int  classEntryForFrame(Tree const& t, int ns_frame);
 // The class->frame bridge (inverse of classEntryForFrame), built on classEntryForType.
 int  classNsFrame(Tree const& t, widen::TypeRef cls);
 widen::TypeRef entryType(Tree const& t, int entry_id);
+
+// The IMPLICITLY-INVOKED members, by member name: the constructor, the destructor, and
+// the copy / move / swap operators. What sets these five apart from every other method
+// is that a call to one is emitted WITHOUT the author naming it — from a declaration
+// going out of scope, from a `=`, from a slot-wise transfer. THE single spelling of the
+// list; `noun` is the phrase a diagnostic uses ("a constructor"), "" for a non-member.
+bool        isImplicitMember(std::string const& name);
+char const* implicitMemberNoun(std::string const& name);
 
 // Build the implicit method-receiver param `_$recv` of the given (already-interned)
 // type, stamped at `file_id`/`tok`. THE one construction of the receiver-param node —

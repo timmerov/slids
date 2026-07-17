@@ -1,1 +1,8 @@
 Hello, World!
+Animal:ctor: 1 2
+Animal:print: 1 2
+Vegetable:ctor: 3 4
+Vegetable:print: 3 4
+Goodbye, World!
+Vegetable:dtor: 3 4
+Animal:dtor: 1 2

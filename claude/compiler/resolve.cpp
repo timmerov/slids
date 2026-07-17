@@ -323,6 +323,15 @@ bool fileIsImported(parse::Tree const& tree, int file_id) {
         && tree.file_imported[file_id];
 }
 
+// True if `file_id` names THIS TU's sibling header — an imported `.slh` whose base name
+// matches the primary source's (`library.slh` <-> `library.sl`; grammar filled
+// file_sibling). This TU is that header's implementation, so it is the ONE TU that emits
+// its classes' SYNTHESIZED symbols; every other importer declares them.
+bool fileIsSibling(parse::Tree const& tree, int file_id) {
+    return file_id >= 0 && file_id < (int)tree.file_sibling.size()
+        && tree.file_sibling[file_id];
+}
+
 // Resolve a declared type IN PLACE to its structured form (alias leaves become
 // transparent kAlias), then require the result to be a known type. A cycle was
 // already reported, so skip the redundant "Unknown type" the broken chain emits.
@@ -4473,7 +4482,28 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             // stays a duplicate too: only class methods + file-scope functions resolve
             // overloaded calls today.
             bool is_class_frame = (node.kind == parse::Kind::kClassDef);
-            if (int prev = findMemberDeclared(tree, frame, m->name); prev >= 0
+            int prev = findMemberDeclared(tree, frame, m->name);
+            // A NAMESPACE function's DECLARATION and DEFINITION merge into ONE entry —
+            // the rule a file-scope function already has. A namespace does not overload,
+            // so a same-name pair can only be a decl + its def, never two functions; and
+            // the pair is now routine, since a header declares `void Space:goodbye_world();`
+            // and its source defines it. Without the merge the two read as a duplicate.
+            // (A CLASS frame keeps separate entries — same-name methods ARE overloads —
+            // and desugar's methodSymbol counts distinct SIGNATURES so a decl+def pair
+            // there does not read as one.)
+            if (!is_class_frame && prev >= 0
+                && tree.entries[prev].kind == parse::EntryKind::kFunction
+                && m->kind == parse::Kind::kFunctionDef
+                && !tree.entries[prev].defined) {
+                parse::Entry& pe = tree.entries[prev];
+                pe.defined = true;
+                pe.is_external = false;      // declared in a header, but defined HERE
+                pe.def_file_id = m->file_id;
+                pe.def_tok = m->name_tok;
+                m->resolved_entry_id = prev;
+                continue;
+            }
+            if (prev >= 0
                 && !(is_class_frame
                      && tree.entries[prev].kind == parse::EntryKind::kFunction)) {
                 parse::Entry const& pe = tree.entries[prev];
@@ -4575,12 +4605,12 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
                     {{prev.file_id, prev.tok, "first defined here"}}});
                 return;
             }
-            // A re-open's ctor/dtor are the PRIMARY's lifecycle: point at them so
-            // registerClassBody's scan sees every opening's hooks (they stay owned by
-            // this node, so the body phase resolves them here). Without this the
+            // A re-open's implicitly-invoked members are the PRIMARY's lifecycle: point at
+            // them so registerClassBody's per-class scans see every opening (they stay
+            // owned by this node, so the body phase resolves them here). Without this the
             // primary reads has_ctor=false and the hook is never called.
             for (auto& m : node.children)
-                if (m && (m->name == "_$ctor" || m->name == "_$dtor"))
+                if (m && parse::isImplicitMember(m->name))
                     info.pending_hooks.push_back(m.get());
             // The layout is the primary's regardless (a re-open node skips the class
             // BODY passes); any appended fields flow to the primary via pending_fields.
@@ -4678,6 +4708,50 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // in different openings — the author reads them as one class definition — so both
     // the presence answer and the obligation a declaration creates are per CLASS, and
     // this is the only place that sees the whole class.
+    // WHERE THE CLASS IS DECLARED decides how this TU emits its symbols. A `.sl` class is
+    // private to this TU (kInternal — nothing outside can name it, so two unrelated
+    // sources may each declare a class of the same name). A `.slh` class is shared: its
+    // SIBLING `.sl` emits the synthesized symbols (kDefine) and every other importer only
+    // declares them (kDeclare).
+    bool header_class = fileIsImported(tree, node.file_id);
+    widen::setSlidLinkage(widen::strip(type),
+        !header_class                            ? widen::Type::Linkage::kInternal
+        : fileIsSibling(tree, node.file_id)      ? widen::Type::Linkage::kDefine
+                                                 : widen::Type::Linkage::kDeclare);
+    // A source file cannot ADD an implicitly-invoked member to a class declared in a
+    // HEADER. The five are called without the author naming them, so every importing TU
+    // emits those calls off the header ALONE: one that exists only in some `.sl` would
+    // make that TU disagree, silently, with every other about what constructing or
+    // copying the class does — and its symbol would collide with the sibling's
+    // synthesized default besides.
+    //
+    // The ban is on ADDING, not on defining. A member the header DECLARES may be defined
+    // in any one source (that is the whole `_();` + `_(){}` pattern, and it holds for the
+    // sibling and non-sibling alike), so the question this asks is whether the HEADER
+    // declared it — never where the definition lives. Asked per CLASS, over every
+    // opening, because a re-open in a `.sl` is one of the spellings that adds one.
+    if (header_class) {
+        for (char const* member : {"_$ctor", "_$dtor", "op=", "op<--", "op<-->"}) {
+            parse::Node const* added = nullptr;
+            bool in_header = false;
+            auto scanAdd = [&](parse::Node const* m) {
+                if (!m || m->name != member) return;
+                if (m->kind != parse::Kind::kFunctionDef
+                    && m->kind != parse::Kind::kFunctionDecl) return;
+                if (fileIsImported(tree, m->file_id)) in_header = true;
+                else if (!added) added = m;
+            };
+            for (auto& m : node.children) scanAdd(m.get());
+            for (parse::Node* m : info.pending_hooks) scanAdd(m);
+            if (added && !in_header) {
+                diagnostic::report(diag, {added->file_id, added->name_tok,
+                    "A source file cannot add "
+                    + std::string(parse::implicitMemberNoun(member)) + " to class '"
+                    + node.name + "', which is declared in a header.",
+                    {{node.file_id, node.name_tok, "class declared here"}}});
+            }
+        }
+    }
     // A DUPLICATE hook is diagnosed here too, and for the same reason: the two definitions
     // may sit in different openings. Keeping the first def node gives the "first defined
     // here" note a method's duplicate already gets.
@@ -4716,13 +4790,18 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
             has_ctor ? "A constructor requires a matching destructor."
                      : "A destructor requires a matching constructor.", {}});
     } else {
-        // A forward-declared hook must be defined in SOME opening of the class.
-        if (ctor_declared && !ctor_defined)
-            diagnostic::report(diag, {node.file_id, node.name_tok,
-                "A forward-declared constructor must be defined.", {}});
-        if (dtor_declared && !dtor_defined)
-            diagnostic::report(diag, {node.file_id, node.name_tok,
-                "A forward-declared destructor must be defined.", {}});
+        // A forward-declared hook must be defined in SOME opening of the class — but only
+        // for a class this TU OWNS. A hook declared in an imported HEADER may be defined in
+        // any other `.sl`, which this TU cannot see, so "is it defined?" is a LINK-time
+        // question there (an undefined `@C__$ctor__impl`), not a compile-time one.
+        if (!header_class) {
+            if (ctor_declared && !ctor_defined)
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "A forward-declared constructor must be defined.", {}});
+            if (dtor_declared && !dtor_defined)
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "A forward-declared destructor must be defined.", {}});
+        }
     }
     info.needs_ctor = has_ctor;
     info.needs_dtor = has_dtor;

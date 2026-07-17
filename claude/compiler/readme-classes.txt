@@ -1000,9 +1000,12 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   both with no declaration anywhere (`Late`). But an is_reopen node skips the class BODY passes,
   so its hooks are invisible to the primary's lifecycle scan — the same problem pending_fields
   solves for fields, solved the same way: the re-open branch of registerClassName points
-  ClassInfo.pending_hooks at its `_$ctor`/`_$dtor` members (still OWNED by the re-open node, so
+  ClassInfo.pending_hooks at its IMPLICITLY-INVOKED members (still OWNED by the re-open node, so
   the body pass resolves them there), and registerClassBody scans the primary's own members PLUS
-  pending_hooks. That scan is also where the WHOLE contract is enforced, classifying each hook as
+  pending_hooks. pending_hooks carries all FIVE — ctor, dtor, copy, move, swap (parse::
+  isImplicitMember, THE single spelling of the list) — not just the two hooks: every per-CLASS
+  question asked in registerClassBody has to see a member a re-open added, and the header-class
+  ADD ban below asks about the other three. That scan is also where the WHOLE contract is enforced, classifying each hook as
   declaration-or-definition by node kind: PAIRING first, which GATES the must-be-defined
   obligation (so a lone `_();` reports the missing dtor once, not that plus "must be defined";
   and declaring the pair while defining one half names the missing DEFINITION rather than a
@@ -1167,3 +1170,57 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   rewrite) while the body is chosen dynamically — a base pointer uses the base's default even
   when it dispatches to a derived override. Deliberate (the C++ rule); see todo "VIRTUAL
   DEFAULT ARGUMENTS". A class returned BY VALUE (sret), float64, and int64 all dispatch fine.
+
+
+A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh` module)
+
+  WHERE A CLASS IS DECLARED DECIDES ITS LINKAGE. Not where it is used, not which file is being
+  compiled — the declaration site alone. widen::Type::Linkage rides the class TYPE, set in
+  resolve's registerClassBody (the only place that sees every opening) and read by codegen as
+  the choice between three emissions:
+
+    kInternal  the class is declared in a `.sl`. It is PRIVATE to this TU — nothing outside can
+               name it — so every member, synthesized or written, emits `define internal`. This
+               is also a FIX, not just a policy: two unrelated `.sl` files each declaring a
+               class named `Sh` used to emit the same global `@Sh__$ctor` twice and fail to
+               link. Two such classes are now unrelated by construction.
+    kDefine    the class is declared in a `.slh` AND this TU is its SIBLING (same base name;
+               the directories may differ). The sibling emits the SYNTHESIZED members —
+               complete ctor/dtor, default copy/move/swap — as real external definitions.
+    kDeclare   the class is declared in a `.slh` and this TU is not the sibling. It only
+               `declare`s those symbols and links to the sibling's.
+
+  EVERY `.slh` REQUIRES A SIBLING `.sl`. Confirmed intent, even for a POD class, even if the
+  `.sl` is empty: a header-only module is impossible, because SOMEONE must emit the synthesized
+  members exactly once and the sibling is the only TU-independent answer to "who". (Templates
+  will want the same rule, so it is a rule about headers, not about classes.)
+
+  SYNTHESIZED IS THE SIBLING'S; DECLARED IS ANYONE'S. The two halves have different rules and
+  the difference is the whole design. A SYNTHESIZED member is emitted only by the sibling —
+  nobody wrote it, so no source file's location can select an owner. A DECLARED member (a
+  method, an operator, a hook body) may be defined in ANY ONE `.sl` — the use case is a
+  `library.slh` declaring several classes with a source file each. Zero or two definitions is a
+  LINK error, not a compile error: this compiler sees one TU and cannot know what the others
+  define, and that is the same deal `foo()` declared in `foo.slh` already gets.
+
+  A SOURCE FILE CANNOT ADD AN IMPLICIT MEMBER TO A HEADER CLASS. The five implicitly-invoked
+  members — ctor, dtor, copy, move, swap — are called WITHOUT the author naming them, off a
+  declaration going out of scope, off a `=`, off a slot-wise transfer. So every importing TU
+  emits those calls from the HEADER ALONE. One that exists only in some `.sl` would make that
+  TU disagree, silently, with every other about what constructing or copying the class does,
+  and its symbol would collide with the sibling's synthesized default besides. THE BAN IS ON
+  ADDING, NOT ON DEFINING — that word is load-bearing: `Animal:_() { }` in the sibling is legal
+  because `library.slh` declares `_();`. So the check asks whether the HEADER declared the
+  member, never where the definition lives, and it applies to the sibling exactly as to any
+  other source. Enforced in registerClassBody over every opening (a re-open in a `.sl` is one
+  of the spellings that adds one), against parse::isImplicitMember. Canon test/import.
+
+  A HEADER HOLDS DECLARATIONS ONLY — the companion rule, enforced in the PARSER because it is
+  about author code; see readme.txt's grammar entry for why no later stage can ask it.
+
+  THE VTABLE STAYS PRIVATE. It is stamped by the ctor, so only the ctor's implementation needs
+  to know what it is — and that is the sibling's. No `@C__$vtable` crosses a TU.
+
+  OPEN. `sizeof` (an external synthesized function for an INCOMPLETE class, an internal constant
+  otherwise — deferred with cross-TU incomplete classes); cross-TU globals; overloads (they
+  mangle per-TU); and a HOOK BODY IN A NON-SIBLING TU, which mis-compiles today — see todo.txt.

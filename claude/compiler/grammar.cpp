@@ -104,6 +104,23 @@ struct Parser {
             && peekKind(ahead + 1) == token::Kind::kLParen;
     }
 
+    // A header DECLARES; it never defines. The rule bites exactly where a declaration
+    // and its definition are SEPARABLE things — a function, method, hook, or operator.
+    // A const / enum / alias is not separable: its declaration IS its definition, so a
+    // header carries those whole and they are none of this check's business.
+    //
+    // This is a PARSE-time check because it asks about AUTHOR code. By resolve the tree
+    // also holds SYNTHESIZED definitions — the default ctor/dtor/copy/move/swap — minted
+    // with the class's file_id, i.e. the HEADER's; those are exactly what a header is
+    // supposed to produce, and a later pass could not tell them from a body someone
+    // typed there.
+    bool rejectBodyInHeader(int file_id, int tok) {
+        if (file_id < 0 || file_id >= static_cast<int>(tokens.files.size())) return false;
+        if (tokens.files[file_id].imported_by == -1) return false;
+        errorAt(tok, "A header file holds declarations only.");
+        return true;
+    }
+
     void advance() {
         if (pos + 1 < static_cast<int>(tokens.tokens.size())) pos++;
     }
@@ -3685,6 +3702,7 @@ struct Parser {
                 return nullptr;
             }
             advance();   // {
+            if (rejectBodyInHeader(m_file, m_tok)) return nullptr;
             // (A DUPLICATE hook is diagnosed per CLASS in registerClassBody, not here:
             // the two definitions may sit in different OPENINGS, which this loop cannot
             // see. Catching it here caught only the same-body spelling and let the
@@ -3885,6 +3903,7 @@ struct Parser {
             return node;
         }
         if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+        if (rejectBodyInHeader(node->file_id, node->name_tok)) return nullptr;
 
         std::string saved_func = current_func;
         current_func = node->name;   // ##func in the body names this function
@@ -3915,12 +3934,29 @@ struct Parser {
 
 }  // namespace
 
+// A path's base name — no directory, no extension (`../lib/library.slh` -> `library`).
+// A module is identified by this alone, so a header and its sibling source may sit in
+// different directories.
+std::string baseNameOf(std::string const& path) {
+    std::size_t slash = path.find_last_of('/');
+    std::string file = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    std::size_t dot = file.find_last_of('.');
+    return (dot == std::string::npos) ? file : file.substr(0, dot);
+}
+
 void run(token::List const& in, parse::Tree& out, diagnostic::Sink& diag) {
     // Record which files were imported (`.slh` headers, imported_by != -1) so
-    // resolve can tell a header-origin declaration from a primary-source one.
+    // resolve can tell a header-origin declaration from a primary-source one, and
+    // which of those is THIS TU's sibling (same base name) — the one header whose
+    // classes this TU owns the synthesized symbols for. files[0] is the primary source.
     out.file_imported.resize(in.files.size());
-    for (size_t i = 0; i < in.files.size(); i++)
+    out.file_sibling.resize(in.files.size());
+    std::string self = in.files.empty() ? std::string() : baseNameOf(in.files[0].path);
+    for (size_t i = 0; i < in.files.size(); i++) {
         out.file_imported[i] = in.files[i].imported_by != -1;
+        out.file_sibling[i] =
+            out.file_imported[i] && baseNameOf(in.files[i].path) == self;
+    }
     Parser p{in, out, diag};
     p.parseProgram();
 }

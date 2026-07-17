@@ -32,7 +32,13 @@ set -u
 # Input is a single tab-delimited arg: key<TAB>src<TAB>substring<TAB>body_start<TAB>body_end.
 if [ "${1:-}" = "--worker" ]; then
     IFS=$'\t' read -r key src substring body_start body_end <<< "$2"
-    case_file="$NEG_TMPDIR/case_$key.sl"
+    # Each case gets its OWN directory, and the variant keeps the source's real base
+    # name. Both matter to a catalog that imports: a header's synthesized members are
+    # defined by the `.sl` of the SAME base name, so a variant renamed to case_00001_x.sl
+    # would be nobody's sibling.
+    case_dir="$NEG_TMPDIR/$key"
+    mkdir -p "$case_dir"
+    case_file="$case_dir/$(basename "$src")"
     awk -v b="$body_start" -v e="$body_end" '
         function strip_brackets(s,    out) {
             out = ""
@@ -55,7 +61,19 @@ if [ "${1:-}" = "--worker" ]; then
         }
         { print }
     ' "$src" > "$case_file"
-    err=$("$SLIDSC" "$case_file" -o "$NEG_TMPDIR/case_$key.ll" -I . 2>&1)
+    # A header is not compiled; it is IMPORTED. So a `.slh` catalog's cases run through
+    # the directory's `testhdr.sl` — a stub whose whole body is `import <header>;` — which
+    # is COPIED IN beside the variant: an import searches the importing source's own
+    # directory first, so a stub compiled from anywhere else would import the real header
+    # and the variant would never be read. Anything else is compiled directly; `-I .`
+    # resolves its imports back to the real headers, which is what a `.sl` case wants.
+    if [ "${src##*.}" = "slh" ]; then
+        cp "$(dirname "$src")/testhdr.sl" "$case_dir/"
+        compile_file="$case_dir/testhdr.sl"
+    else
+        compile_file="$case_file"
+    fi
+    err=$("$SLIDSC" "$compile_file" -o "$case_dir/out.ll" -I . 2>&1)
     rc=$?
     # Strip rendered source-context lines so the marker substring can't match
     # its own appearance in the listing slidsc prints with each diagnostic.

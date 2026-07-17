@@ -999,6 +999,14 @@ void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor) {
     arena().types[ref].needs_dtor = needs_dtor;
 }
 
+void setSlidLinkage(TypeRef ref, Type::Linkage linkage) {
+    arena().types[ref].linkage = linkage;
+}
+
+Type::Linkage slidLinkage(TypeRef ref) {
+    return get(ref).linkage;
+}
+
 // The LLVM symbol base for a class (`<Name>__$ctor` etc. append to it). Minted
 // HERE — the only place a class name is disambiguated — from the bare name plus
 // the def_id (a local class's defining frame). File-scope (def_id < 0) stays the

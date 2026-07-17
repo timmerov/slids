@@ -4467,6 +4467,21 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
                 cands.push_back((int)id);
             }
         }
+        // An EXTERNAL declaration — from an imported header, defined in some other TU —
+        // is a dispatch target for the same reason a pure virtual is: it has no
+        // definition HERE by design, and the call binds at link. Considered only when
+        // nothing in this frame DEFINES the name, which is what keeps the defining TU's
+        // decl+def pair (separate entries, same signature) from reading as an ambiguous
+        // overload — there, the definition wins above and this never runs.
+        if (cands.empty()) {
+            for (std::size_t id = 0; id < tree.entries.size(); id++) {
+                parse::Entry const& e = tree.entries[id];
+                if (e.kind == parse::EntryKind::kFunction && e.is_external
+                    && e.owner_ns_frame == fr && e.name == s.name) {
+                    cands.push_back((int)id);
+                }
+            }
+        }
         if (!cands.empty()) break;   // most-derived frame with the name shadows bases
     }
     if (cands.empty()) {

@@ -786,14 +786,23 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   outside (a function is not a namespace). Two bodies' same-named internals are distinct.
 
   DEFERRED (Phase 8): a global declared in a `.slh` header is visible to all linked
-  files; a `.sl` global stays file-local. Rides the cross-TU `.slh` propagation work.
+  files; a `.sl` global stays file-local. The cross-TU CLASS model has since landed
+  (readme-classes.txt "A CLASS ACROSS TRANSLATION UNITS") and is the precedent to
+  follow — declaration site decides linkage, the sibling defines. See todo
+  "CROSS-TU GLOBALS".
 
 
 STAGE FILES (.h / .cpp pairs)
 
   lex       text -> tokens. Wraps the scanner in an ImportWrapper that
             recursively expands `import X;` at depth-0 file scope into one
-            unified token list. Tracks bracket-kind balance ( { [ only.
+            unified token list. `import X;` seeks `X.slh` in the IMPORTING
+            SOURCE'S OWN DIRECTORY FIRST, then each `-I` dir in order — so a
+            header sitting beside its importer can NOT be shadowed by a `-I`,
+            and a tool that wants a substitute header (test/run_negatives.sh)
+            must place the importing source beside it. Each path is imported
+            ONCE per compile (imported_once, keyed by resolved path).
+            Tracks bracket-kind balance ( { [ only.
             Emits kEndOfFile per file, kEndOfInput once at the outermost
             return. Numeric literals: strips underscores, emits source-form
             text per kind (char/int/uint/float); rejects only structural
@@ -931,7 +940,18 @@ STAGE FILES (.h / .cpp pairs)
             null, [1]=addr-or-null, [2]=ctor-args-or-null)). `delete p;` is
             a statement (kDeleteStmt). Stamps (file_id, tok)
             on every node for source
-            attribution. No identifier resolution, no scope tracking,
+            attribution. A HEADER HOLDS DECLARATIONS ONLY: a body parsed out of
+            an imported file (rejectBodyInHeader, called at each of the two sites
+            that consume a `{` — parseFunctionDef and parseClassDef's ctor/dtor
+            loop) is rejected. The rule bites exactly where a declaration and its
+            definition are SEPARABLE — function / method / hook / operator; a
+            const / enum / alias is not separable (its declaration IS its
+            definition) and passes through, which is most of what a header is for.
+            It is checked HERE, in the parser, because it is a question about
+            AUTHOR code: by resolve the tree also holds SYNTHESIZED definitions
+            (the default ctor/dtor/copy/move/swap) minted with the class's file_id
+            — i.e. the header's — and no later stage could tell those from a body
+            someone typed there. No identifier resolution, no scope tracking,
             no type inference, no literal folding — all deferred to
             later stages. Errors are single-shot ("expected '...'") with
             caret at the offending token; sets fatal + early-returns
@@ -1231,7 +1251,10 @@ STAGE FILES (.h / .cpp pairs)
             imported `.slh` header (Entry.is_external, stamped at registration
             from Tree.file_imported): its definition lives in another translation
             unit, linked in, so being bodyless here is not an orphan. Multi-source
-            notes point at prior decls. Owns
+            notes point at prior decls. Also decides a class's LINKAGE and
+            enforces the header-class ADD ban — both in registerClassBody, the
+            only place that sees every opening of a class; see readme-classes.txt
+            "WHERE A CLASS IS DECLARED DECIDES ITS LINKAGE". Owns
             the "what does this name refer to" decision; types are not
             resolve's job.
   constfold parse tree -> parse tree. Iterative post-order walker.
@@ -1494,6 +1517,24 @@ STAGE FILES (.h / .cpp pairs)
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
             params, param_types, file_id, tok).
 
+            A SYMBOL MUST BE A FUNCTION OF THE LANGUAGE, NEVER OF THIS TU. Every
+            symbol is minted here (functionSymbol / methodSymbol / classSymbol),
+            and once a `.slh` is in play TWO TUs mint the same symbol independently
+            — the definer and the importer — so any input that differs between them
+            silently un-links. ENTRY IDS ARE PER-TU and were the recurring offender:
+              - a NAMESPACE member mangles from its SCOPE PATH (`Space:goodbye_world`
+                -> `Space__goodbye_world`), never from an entry id;
+              - "is this name OVERLOADED?" counts DISTINCT SIGNATURES, not entries —
+                a declaration and its definition are two entries sharing one
+                signature (for a METHOD they cannot be merged: same-name methods are
+                overloads), so counting entries read a plain declared-then-defined
+                function as overloaded and suffixed it `.entry_id`, which the
+                importer — seeing only the declaration, one entry — did not.
+            An entry id is still the disambiguator for a genuinely OVERLOADED name
+            and for a NESTED function; the nested case is sound (TU-local by
+            construction, nothing outside can name it), the overload case is the
+            open limit — see todo.txt CROSS-TU MANGLING FOR OVERLOADS.
+
             THE LOWERING PASSES RUN PER FUNCTION — AND "EVERY FUNCTION" INCLUDES
             NESTED ONES. run() collects every kFunctionDef in a program subtree
             (collectFunctionDefs: top-level AND nested, recursively) and runs the four
@@ -1612,7 +1653,14 @@ STAGE FILES (.h / .cpp pairs)
             emits a types-only `declare <ret> @name(...)` (emitDeclare) so its
             call site is a valid reference the linker binds to the defining
             object — the cross-TU declare-only path. A local forward-decl merges
-            into its definition (entry defined) and emits no stray declare. ALL local allocas are HOISTED to the function
+            into its definition (entry defined) and emits no stray declare. The
+            external_decl flag is honored BEFORE the node-kind dispatch, not
+            inside the kFunctionDecl arm: a SYNTHESIZED member is a kFunctionDef
+            (it has a real body — resolve built one), so a kind-first dispatch
+            emitted that body in every importing TU and the sibling's definition
+            collided at link. A class's three linkages (readme-classes.txt) land
+            here as the choice between `declare`, `define`, and `define internal`.
+            ALL local allocas are HOISTED to the function
             entry block (emitFunction pre-walks the body via collectVarDecls): an
             alloca emitted at its declaration site would re-allocate stack on
             every pass through an enclosing loop — unbounded growth → stack

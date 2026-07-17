@@ -3578,14 +3578,20 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         if (n->kind != ast::Kind::kProgram) continue;
         for (auto const& fn : n->children) {
             if (diagnostic::hasErrors(diag)) break;   // stop at the first error
-            if (fn->kind == ast::Kind::kFunctionDef) {
+            if (fn->external_decl) {
+                // NOT written in this TU — either a header's DECLARATION (defined in
+                // another TU), or a SYNTHESIZED member of a class whose symbols another
+                // TU owns (desugar flags those; they arrive as real kFunctionDefs with a
+                // body resolve minted, and emitting it would collide with the owner's).
+                // Either way it is a `declare`, never a body. Checked before the kind
+                // dispatch precisely because the second case is a kFunctionDef.
+                emitDeclare(*fn, body);
+            } else if (fn->kind == ast::Kind::kFunctionDef) {
                 emitFunction(*fn, pool, body, diag);
                 collectNestedFunctions(*fn, nested);
             } else if (fn->kind == ast::Kind::kFunctionDecl) {
-                // A local forward declaration carries no body to emit (its def
-                // emits the define). An EXTERNAL decl (imported header, defined in
-                // another TU) needs a `declare` so the call site links.
-                if (fn->external_decl) emitDeclare(*fn, body);
+                // A local forward declaration carries no body to emit — its definition
+                // emits the define.
             } else if (fn->kind == ast::Kind::kVarDeclStmt && fn->is_const) {
                 // intentional n/a: file-scope const has no runtime form;
                 // constfold substituted every use to a literal.
@@ -3610,19 +3616,36 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // in emitConstructHooks / emitDestructHooks). Only a NON-TRIVIAL class (a hook at
     // some leaf) gets a method; a trivial class emits none and its sites do value-init
     // only. Emitted for virtual AND non-virtual classes (the vtable stamp is gated).
+    // WHERE they are emitted follows the class's LINKAGE. A `.sl` class is private to this
+    // TU, so its complete methods stay `internal`. A header class's are emitted ONCE, by
+    // the sibling `.sl`, with external linkage; every other importer only DECLARES them.
+    // A non-sibling must not synthesize its own: it cannot see the user hook bodies the
+    // complete method calls (an undefined `@C__$ctor__impl`), and it would collide with the
+    // sibling's definition even if it could.
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
         widen::TypeRef cs = widen::strip(ct);
         std::string sym = widen::classSymbol(cs);
+        bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare;
+        char const* def = (widen::slidLinkage(cs) == widen::Type::Linkage::kInternal)
+                        ? "define internal void @" : "define void @";
         if (typeNeedsHook(cs, /*ctor=*/true)) {
-            body << "define internal void @" << sym << "__$ctor(ptr %o) {\n";
-            emitClassCtorBody("%o", cs, body);
-            body << "  ret void\n}\n\n";
+            if (declare_only) {
+                body << "declare void @" << sym << "__$ctor(ptr)\n\n";
+            } else {
+                body << def << sym << "__$ctor(ptr %o) {\n";
+                emitClassCtorBody("%o", cs, body);
+                body << "  ret void\n}\n\n";
+            }
         }
         if (typeNeedsHook(cs, /*ctor=*/false)) {
-            body << "define internal void @" << sym << "__$dtor(ptr %o) {\n";
-            emitClassDtorBody("%o", cs, body);
-            body << "  ret void\n}\n\n";
+            if (declare_only) {
+                body << "declare void @" << sym << "__$dtor(ptr)\n\n";
+            } else {
+                body << def << sym << "__$dtor(ptr %o) {\n";
+                emitClassDtorBody("%o", cs, body);
+                body << "  ret void\n}\n\n";
+            }
         }
     }
     // (No whole-value blit synthesis for @<Name>__$move / __$copy / __$swap: EVERY class —

@@ -20,6 +20,7 @@ void hello_world();
 
 Animal(int a, int b) {
     _(); ~();
+    op=(Animal^ rhs);
     void print();
 }
 
@@ -36,3 +37,39 @@ Space {
 }
 
 NoCtor(int a_) { }
+
+/* no definitions in a header file. a declaration and its definition are separable for
+   a function / method / hook / operator, so the header may only declare them. (For a
+   const / enum / alias the declaration IS the definition, so those stay.) each case
+   carries its own class declaration: the runner uncomments ONE block at a time, and a
+   Wrong left declared in the live header would have hooks no source ever defines. */
+
+//-EXPECT-ERROR: A header file holds declarations only
+//Wrong(int a_) {
+//    _(); ~();
+//}
+//Wrong:_() { __println("compile error"); }
+
+//-EXPECT-ERROR: A header file holds declarations only
+//Wrong(int a_) {
+//    _(); ~();
+//}
+//Wrong:~() { __println("compile error"); }
+
+//-EXPECT-ERROR: A header file holds declarations only
+//Wrong(int a_) {
+//    op=(Wrong^ rhs);
+//}
+//Wrong:op=(Wrong^ rhs) { __println("compile error"); }
+
+//-EXPECT-ERROR: A header file holds declarations only
+//Wrong(int a_) {
+//    void wrong();
+//}
+//void Wrong:wrong() { __println("compile error"); }
+
+/* the in-class form is the same violation — a body is a body wherever it is written. */
+//-EXPECT-ERROR: A header file holds declarations only
+//Inline(int a_) {
+//    void m() { __println("compile error"); }
+//}

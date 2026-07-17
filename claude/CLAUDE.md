@@ -107,8 +107,3 @@ into storage goes through one set of helpers), the *destructor-balance invariant
 instance destroyed exactly once, in reverse order, on every exit), and the *transfer
 invariant* (a whole-class copy/move/swap always calls the class's operator, never a blit).
 Breaking one produces a leak, a double-free, or a silently skipped user operator.
-
-## Not implemented — do not assume otherwise
-
-- **Templates.** plan.txt Phase 9, unstarted. There is no template machinery in this compiler. (v1 had a full cross-TU template system; that is v1's, and it is not here.)
-- **The cross-TU model.** plan.txt Phase 8, not landed. `import <module>;` is a LEXER-level textual include of `<module>.slh` — nothing more. There are no declare-only headers: the orphan check rejects any declared-but-never-defined function regardless of file.

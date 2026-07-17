@@ -1487,26 +1487,48 @@ Phase 8 — namespaces + cross-TU
       (`Type name();`) and so rejected it; the gate takes an in_class flag that
       short-circuits that tail, because a class body holds no variable declarations
       (a field is a slot in the field tuple) and nothing there can be a construction.
-      The statement-context call site keeps the ambiguity. PARSE ONLY — it moves the
-      error, it does not make test/import work: flattenScope lifts only kFunctionDef,
-      so a declare-only method (and a declare-only NAMESPACE function) is silently
-      dropped rather than reaching codegen as a `declare`. The cross-TU class model
-      below is the rest.
-    - CROSS-TU CLASSES (NOT started). A class declared in a `.slh` and used in
-      another TU needs its ctor/dtor to LINK, and the seam is the COMPLETE
-      `@<Name>__$ctor` — one symbol, defined once in the TU holding the `_(){}`,
-      declared elsewhere, exactly as `hello_world` works. NOT the `__impl` split:
-      that is a compiler-internal artifact of the per-TU synthesis model, and
-      exporting it would make the link-time ABI surface scaffolding AND leave every
-      importing TU re-synthesizing its own copy of the field walk. The rule is the
-      one that already exists (`!is_def && fileIsImported`): declared in a header,
-      not defined here -> `declare`; defined here -> drop the `internal` from
-      codegen's `define internal void @<Name>__$ctor`; not from a header -> today's
-      per-TU internal synthesis, unchanged (a class needing a ctor only transitively
-      has no defining TU to name, so it must stay internal). Note the prerequisite
-      landed above: a header's `_();` and the sibling `.sl`'s `_(){}` are different
-      OPENINGS of one class, so "is it defined in this TU" is only answerable now
-      that registerClassBody sees every opening's hooks.
+      The statement-context call site keeps the ambiguity. (flattenScope now lifts a
+      kFunctionDecl as well as a kFunctionDef, so a declare-only method / namespace
+      function reaches codegen as a `declare` rather than being silently dropped —
+      that was the rest of this slice, landed with the cross-TU class model below.)
+    - CROSS-TU CLASSES (LANDED 2026-07-16). test/import's consumer.sl now compiles,
+      links, and runs: a class declared in `library.slh`, defined in `library.sl`,
+      constructed and used in `consumer.sl`. The seam is the COMPLETE `@<Name>__$ctor`
+      — one symbol, exactly as `hello_world` works — and NOT the `__impl` split, which
+      is a compiler-internal artifact of the per-TU synthesis model: exporting it would
+      make the link-time ABI surface scaffolding AND leave every importing TU
+      re-synthesizing its own field walk. ("there's only one hello_world. there's no
+      hello_world_impl.")
+      WHERE A CLASS IS DECLARED DECIDES ITS LINKAGE — the whole model in one rule, now
+      carried on the class TYPE (widen::Type::Linkage), decided in registerClassBody and
+      read by codegen. A `.sl` class is kInternal (private to this TU, `define internal`
+      throughout — which also FIXED two unrelated `.sl` files each declaring a class of
+      the same name failing to link). A `.slh` class is kDefine in its SIBLING `.sl`
+      (same base name, directories may differ), which emits the SYNTHESIZED members, and
+      kDeclare everywhere else. Every `.slh` therefore REQUIRES a sibling `.sl` — even
+      an empty one for a POD class; a header-only module is impossible, because someone
+      must emit the synthesized members exactly once and the sibling is the only
+      TU-independent answer. A DECLARED member is different from a synthesized one and
+      may be defined in ANY one `.sl` (a header declaring several classes with a source
+      file each); zero or two definitions is a LINK error, not a compile error.
+      TWO NEW COMPILE-TIME RULES fell out, both in readme-classes.txt: a source file
+      cannot ADD an implicitly-invoked member (ctor/dtor/copy/move/swap) to a header
+      class — the ban is on ADDING, not defining, so a member the header declares may be
+      defined anywhere; and a header holds DECLARATIONS ONLY (checked in the parser,
+      since by resolve the tree also holds synthesized definitions stamped with the
+      header's file_id).
+      THE REST OF IT WAS MANGLING. Every symbol is a function of the language, never of
+      this TU — and per-TU ENTRY IDS leaked into three symbols before this linked: a
+      namespace member now mangles by SCOPE PATH, and "is this overloaded?" now counts
+      DISTINCT SIGNATURES rather than entries (a decl + its def are two entries sharing
+      one signature, so the definer suffixed `@C__print.8` while the importer called the
+      unsuffixed `@C__print`). See readme.txt's desugar entry.
+      The prerequisite landed above: a header's `_();` and the sibling's `_(){}` are
+      different OPENINGS of one class, so "is it defined in this TU" only became
+      answerable once registerClassBody saw every opening's hooks.
+      OPEN: overloads across a `.slh` (todo CROSS-TU MANGLING FOR OVERLOADS); a hook
+      body defined in a NON-SIBLING TU (todo, mis-compiles today); cross-TU globals;
+      `sizeof` (deferred with cross-TU incomplete classes); multi-header modules.
     - DEPENDENCY OUTPUT (LANDED 2026-07-15). slidsc `-MF <file>` / `-M` emit a
       make rule `<out.ll>: <in.sl> <imported.slh>...` (gcc-style, v1 had it as
       -M/-MF). The source list is `tokens.files` read right after lex — the file

@@ -229,30 +229,62 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node, int& next_id) {
 // at the definition and every call site from the same resolved_entry_id — never
 // stored as a canonical-name string). Two namespaces may both define `foo`; this
 // keeps their symbols distinct without a scope-path string.
+// The scope path of a frame, outermost segment first (`Space`, or `A`,`B` for `A:B`);
+// empty at file scope. Walks entry.ns_frame_id -> entry.owner_ns_frame, so it crosses
+// namespaces and classes alike.
+std::vector<std::string> framePath(parse::Tree const& tree, int frame) {
+    std::vector<std::string> out;
+    int guard = static_cast<int>(tree.entries.size()) + 2;
+    while (frame >= 0 && guard-- > 0) {
+        int found = -1;
+        for (std::size_t i = 0; i < tree.entries.size(); i++) {
+            parse::Entry const& q = tree.entries[i];
+            if (q.ns_frame_id != frame) continue;
+            if (q.kind != parse::EntryKind::kNamespace
+                && q.kind != parse::EntryKind::kClass) continue;
+            found = static_cast<int>(i);
+            break;
+        }
+        if (found < 0) break;
+        out.push_back(tree.entries[found].name);
+        frame = tree.entries[found].owner_ns_frame;
+    }
+    std::reverse(out.begin(), out.end());
+    return out;
+}
+
 std::string functionSymbol(parse::Node const& p, parse::Tree const& tree) {
     if (p.resolved_entry_id < 0) return p.name;
     parse::Entry const& e = tree.entries[p.resolved_entry_id];
     if (e.kind != parse::EntryKind::kFunction) return p.name;
-    // A namespace member is already disambiguated by its entry id; a NESTED
-    // function (registered in a body frame, parent_frame_id != the global frame
-    // 0) is lifted to a top-level symbol mangled the same way, so it can't
-    // collide with a file-scope name.
-    if (e.owner_ns_frame >= 0 || e.parent_frame_id != 0) {
+    // A NESTED function (registered in a body frame, parent_frame_id != the global
+    // frame 0, and in no namespace) is lifted to a top-level symbol. It is TU-LOCAL by
+    // construction — nothing outside can name it — so the entry id both disambiguates it
+    // and cannot collide with a file-scope name.
+    if (e.owner_ns_frame < 0 && e.parent_frame_id != 0) {
         return e.name + "." + std::to_string(p.resolved_entry_id);
     }
-    // A free function is mangled by entry id ONLY when its name is overloaded
-    // (2+ free-function entries share it), so a single function — and main —
-    // keeps its plain symbol. A call and its chosen definition share the entry
-    // id, so they mangle identically.
-    int count = 0;
+    // A NAMESPACE member is mangled from its SCOPE PATH (`Space:goodbye_world` ->
+    // `Space__goodbye_world`) — NEVER from an entry id. Every TU that imports the
+    // namespace must mint the same symbol, and entry ids are per-TU: the importer
+    // numbered its entries differently from the definer, so the call did not link.
+    std::string base;
+    for (std::string const& seg : framePath(tree, e.owner_ns_frame)) base += seg + "__";
+    base += e.name;
+    // Overloaded? Count DISTINCT SIGNATURES in the same scope — a forward declaration and
+    // its definition share one — so a single function (and main) keeps its plain symbol.
+    // The `.entry_id` suffix an overload still gets is per-TU, so overloads remain
+    // un-linkable across TUs (todo: CROSS-TU MANGLING FOR OVERLOADS).
+    std::vector<std::vector<widen::TypeRef>> sigs;
     for (parse::Entry const& q : tree.entries) {
-        if (q.kind == parse::EntryKind::kFunction && q.owner_ns_frame < 0
-            && q.name == e.name) {
-            count++;
-        }
+        if (q.kind != parse::EntryKind::kFunction
+            || q.owner_ns_frame != e.owner_ns_frame || q.name != e.name) continue;
+        bool seen = false;
+        for (auto const& s : sigs) if (s == q.param_types) { seen = true; break; }
+        if (!seen) sigs.push_back(q.param_types);
     }
-    if (count > 1) return e.name + "." + std::to_string(p.resolved_entry_id);
-    return p.name;
+    if (sigs.size() > 1) return base + "." + std::to_string(p.resolved_entry_id);
+    return base;
 }
 
 // An operator method name ("op+", "op<--", "op[]", …) carries characters that are
@@ -317,14 +349,22 @@ std::string methodSymbol(parse::Tree const& tree, widen::TypeRef defCls,
     std::string base = widen::classSymbol(defCls) + "__" + sanitizeSymbolName(name);
     if (entry_id < 0) return base;
     int frame = tree.entries[entry_id].owner_ns_frame;
-    int count = 0;
+    // Overloaded? Count DISTINCT SIGNATURES, not entries. A method's DECLARATION and its
+    // DEFINITION are separate entries sharing one signature (registration cannot merge
+    // them — same-name methods are overloads), so counting entries reads a plain
+    // declared-then-defined method as overloaded and suffixes it `.entry_id`. That
+    // suffix is per-TU, so the defining TU emitted `@C__m.8` while an importing TU —
+    // which sees only the declaration, one entry — called the unsuffixed `@C__m`, and
+    // they did not link.
+    std::vector<std::vector<widen::TypeRef>> sigs;
     for (parse::Entry const& q : tree.entries) {
-        if (q.kind == parse::EntryKind::kFunction
-            && q.owner_ns_frame == frame && q.name == name) {
-            count++;
-        }
+        if (q.kind != parse::EntryKind::kFunction
+            || q.owner_ns_frame != frame || q.name != name) continue;
+        bool seen = false;
+        for (auto const& s : sigs) if (s == q.param_types) { seen = true; break; }
+        if (!seen) sigs.push_back(q.param_types);
     }
-    if (count > 1) return base + "." + std::to_string(entry_id);
+    if (sigs.size() > 1) return base + "." + std::to_string(entry_id);
     return base;
 }
 
@@ -425,6 +465,25 @@ void buildVtables(parse::Tree const& tree, ast::Tree& out) {
     }
 }
 
+// Does SOME OTHER entry define this declaration's exact signature — i.e. is the
+// definition in THIS TU? A free function's forward decl merges into its defining entry,
+// so `Entry.defined` answers it directly; a class METHOD's does not (same-name methods
+// are overloads, so registration must keep them as separate entries), leaving `defined`
+// false on the decl even when the body sits right below it. Asking the entry set covers
+// both, and matters for a header-declared method: the TU that defines it must emit only
+// the `define`, while every other TU emits only the `declare`.
+bool signatureDefinedHere(parse::Tree const& tree, int decl_entry) {
+    if (decl_entry < 0) return false;
+    parse::Entry const& d = tree.entries[decl_entry];
+    for (parse::Entry const& e : tree.entries) {
+        if (&e == &d) continue;
+        if (e.kind != parse::EntryKind::kFunction || !e.defined) continue;
+        if (e.owner_ns_frame != d.owner_ns_frame || e.name != d.name) continue;
+        if (e.param_types == d.param_types) return true;
+    }
+    return false;
+}
+
 // next_id is a single program-wide counter, seeded by run() at the (frozen)
 // parse::Tree::entries size, threaded through every copy so the helper locals a
 // lowered short-for mints get globally-unique resolved_entry_ids that never
@@ -505,11 +564,16 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     // An external function DECLARATION (from an imported `.slh`, defined in another
     // TU) reaches codegen as a bodyless kFunctionDecl; flag it so codegen emits a
     // `declare`. (A local forward-decl merges into its defining entry, so `defined`
-    // is true and this stays false — no stray declare beside the define.)
+    // is true and this stays false — no stray declare beside the define.) A class
+    // METHOD's decl and def do NOT merge — same-name methods are overloads, so
+    // registration keeps them as separate entries — so `defined` is false on the decl
+    // even when the definition sits in this very TU; signatureDefinedHere asks the entry
+    // set instead, else the declare lands beside the define and llc rejects the pair.
     node->external_decl = p.kind == parse::Kind::kFunctionDecl
         && p.resolved_entry_id >= 0
         && tree.entries[p.resolved_entry_id].is_external
-        && !tree.entries[p.resolved_entry_id].defined;
+        && !tree.entries[p.resolved_entry_id].defined
+        && !signatureDefinedHere(tree, p.resolved_entry_id);
     // ast.is_const means a SUBSTITUTED constant — codegen emits no storage for it.
     // A const VARIABLE (a non-foldable type routed to kLocalVar in resolve) is NOT
     // substituted: it has real storage, so it lowers with is_const=false even though
@@ -1056,22 +1120,61 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
 // repopulates their members at program scope where codegen emits them.)
 void flattenScope(parse::Node const& node, ast::Node* prog,
                   parse::Tree const& in, int& next_id) {
+    // A member this TU does not AUTHOR still has to reach codegen — as a `declare`, so a
+    // call to it links against the TU that does. Two shapes: a bodyless DECLARATION
+    // (kFunctionDecl — the header's `void print();`), and, for a class whose synthesized
+    // symbols this TU does not own, a SYNTHESIZED member (resolve mints those with the
+    // CLASS's file_id, i.e. the header's, so an imported file_id on a definition means
+    // "not written here"). Dropping either — which is what filtering to kFunctionDef did —
+    // leaves the call site referencing a symbol the module never declares.
+    // `name` empty = keep the symbol copyNode minted (a namespace free function is
+    // already mangled there by functionSymbol; only a CLASS member is renamed here).
+    auto liftMember = [&](parse::Node const& f, std::string name,
+                          widen::TypeRef owner) -> std::unique_ptr<ast::Node> {
+        auto fn = copyNode(f, in, next_id);
+        if (!name.empty()) fn->name = std::move(name);
+        // copyNode already decided a DECLARATION's fate (is_external + nothing defines
+        // the signature here). The case it cannot see is a SYNTHESIZED member of a class
+        // whose symbols this TU does not own: resolve mints those as real definitions,
+        // stamped with the CLASS's file_id, so an imported file_id on a definition means
+        // "this TU did not write this" — declare it and link to the sibling's.
+        if (f.kind == parse::Kind::kFunctionDef && owner != widen::kNoType
+            && widen::slidLinkage(owner) == widen::Type::Linkage::kDeclare
+            && f.file_id >= 0 && f.file_id < (int)in.file_imported.size()
+            && in.file_imported[f.file_id]) {
+            fn->external_decl = true;
+        }
+        return fn;
+    };
     for (auto const& m : node.children) {
         if (!m) continue;
         if (m->kind == parse::Kind::kNamespaceDecl) {
-            for (auto const& f : m->children)
-                if (f && f->kind == parse::Kind::kFunctionDef)
-                    prog->children.push_back(copyNode(*f, in, next_id));
-        } else if (m->kind == parse::Kind::kClassDef) {
-            std::string sym = widen::classSymbol(widen::strip(m->return_type));
             for (auto const& f : m->children) {
-                if (!f || f->kind != parse::Kind::kFunctionDef) continue;
-                auto fn = copyNode(*f, in, next_id);
-                if      (f->name == "_$ctor") fn->name = sym + "__$ctor";
-                else if (f->name == "_$dtor") fn->name = sym + "__$dtor";
-                else fn->name = methodSymbol(in, widen::strip(m->return_type),
-                                             f->name, f->resolved_entry_id);
-                prog->children.push_back(std::move(fn));
+                if (!f) continue;
+                if (f->kind != parse::Kind::kFunctionDef
+                    && f->kind != parse::Kind::kFunctionDecl) continue;
+                prog->children.push_back(liftMember(*f, {}, widen::kNoType));
+            }
+        } else if (m->kind == parse::Kind::kClassDef) {
+            widen::TypeRef owner = widen::strip(m->return_type);
+            std::string sym = widen::classSymbol(owner);
+            for (auto const& f : m->children) {
+                if (!f) continue;
+                if (f->kind != parse::Kind::kFunctionDef
+                    && f->kind != parse::Kind::kFunctionDecl) continue;
+                bool hook = (f->name == "_$ctor" || f->name == "_$dtor");
+                // A hook DECLARATION mints no symbol. `_();` exists to tell every TU that
+                // the class HAS a ctor — that lands in has_ctor, which drives the complete
+                // method — and the only caller of `@C__$ctor__impl` is the complete
+                // `@C__$ctor`, emitted by whoever owns the class's synthesized symbols.
+                // So a bodyless hook needs no declare; emitting one collides with the
+                // definition in the TU that has the body.
+                if (hook && f->kind != parse::Kind::kFunctionDef) continue;
+                std::string name;
+                if      (f->name == "_$ctor") name = sym + "__$ctor";
+                else if (f->name == "_$dtor") name = sym + "__$dtor";
+                else name = methodSymbol(in, owner, f->name, f->resolved_entry_id);
+                prog->children.push_back(liftMember(*f, std::move(name), owner));
             }
         }
         flattenScope(*m, prog, in, next_id);   // recurse: deeper scopes, fn bodies

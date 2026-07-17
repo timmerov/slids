@@ -19,12 +19,22 @@ OBJS = \
 	consumer \
 	library
 
+# Every file holding negative cases. Unlike the other test dirs this is not just
+# $(SAMPLES): a rule about imports has a side per FILE ROLE, and each has to be
+# violated where it applies — the consumer, the sibling that defines the library,
+# and the header itself. A .slh case runs through testhdr.sl (see run_negatives.sh),
+# which is why that stub is not a SAMPLE and has no golden.
+NEGATIVES = \
+	consumer.sl \
+	library.sl \
+	library.slh
+
 .PHONY: all clean negatives positives $(SAMPLES)
 
 all: $(SAMPLES)
 
 negatives:
-	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
+	@../run_negatives.sh $(NEGATIVES)
 
 positives: all
 	@../run_positives.sh $(DIR) $(SAMPLES)

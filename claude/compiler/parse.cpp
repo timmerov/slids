@@ -155,6 +155,19 @@ widen::TypeRef entryType(Tree const& t, int entry_id) {
     return t.entries[entry_id].slids_type;
 }
 
+char const* implicitMemberNoun(std::string const& name) {
+    if (name == "_$ctor")  return "a constructor";
+    if (name == "_$dtor")  return "a destructor";
+    if (name == "op=")     return "a copy operator";
+    if (name == "op<--")   return "a move operator";
+    if (name == "op<-->")  return "a swap operator";
+    return "";
+}
+
+bool isImplicitMember(std::string const& name) {
+    return implicitMemberNoun(name)[0] != '\0';
+}
+
 std::unique_ptr<Node> makeReceiverParam(widen::TypeRef type, int file_id, int tok) {
     auto n = std::make_unique<Node>();
     n->kind = Kind::kParam;

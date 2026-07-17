@@ -68,6 +68,18 @@ struct Type {
     bool has_dtor = false;                 //   <Name>__$ctor/__$dtor symbol exists
     bool needs_ctor = false;               // kSlid: TRANSITIVE — explicit, or a
     bool needs_dtor = false;               //   field whose class needs it (run hooks)
+    // kSlid: how THIS TU emits the class's symbols. Set by resolve from the file the
+    // class is DECLARED in; read by codegen.
+    //   kInternal — declared in a `.sl`: the class is private to this TU, so EVERY
+    //               symbol it owns is `internal`. Nothing outside can name the class, so
+    //               nothing outside can call them — and two unrelated `.sl` files may
+    //               each declare a class of the same name without colliding at link.
+    //   kDefine   — declared in a `.slh` whose SIBLING is this TU: emit the synthesized
+    //               symbols with EXTERNAL linkage. This is the only TU that does.
+    //   kDeclare  — declared in a `.slh`, this TU is not the sibling: emit no synthesized
+    //               definitions at all, only `declare`s to link against the sibling's.
+    enum class Linkage { kInternal, kDefine, kDeclare };
+    Linkage linkage = Linkage::kInternal;
 };
 
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
@@ -121,6 +133,11 @@ void setSlidLifecycle(TypeRef ref, bool has_ctor, bool has_dtor);
 // Set a class's TRANSITIVE needs (explicit OR a field-class needs it), computed
 // by resolve's fixpoint after all classes are registered. Takes the class handle.
 void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor);
+
+// Set how this TU emits the class's symbols (see Type::Linkage). Resolve decides it
+// from the file the class is DECLARED in; codegen reads it back via slidLinkage.
+void setSlidLinkage(TypeRef ref, Type::Linkage linkage);
+Type::Linkage slidLinkage(TypeRef ref);
 
 // The disambiguated LLVM symbol base for a class kSlid handle (file-scope = bare
 // name; local = name + ".<frame>"). The ONE place a class name is mangled, and
