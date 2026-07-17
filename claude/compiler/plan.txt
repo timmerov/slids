@@ -1631,7 +1631,14 @@ Phase 8 — namespaces + cross-TU
     class / function) and every TYPE (scalar / array / tuple / class, incl. aggregates
     containing classes): the short/bare form, named + anonymous groups, static + lazy
     ctor/dtor with a runtime LIFO dtor registry, the `global;` scope statement + its
-    region-flow errors, and function-internal scoped statics. A GROUP is the lazy unit —
+    region-flow errors, and function-internal scoped statics. BARE NON-SCALAR (2026-07-17):
+    a keyword-less file-scope global may be an ARRAY (`int a[N]`) or a TUPLE (`(int,bool) t`),
+    not only a scalar — grammar's looksLikeBareVarDecl now recognizes the full type grammar
+    via the shared `skipTypeSuffixes` (a `(`-led tuple core, a type-first suffix run, a
+    postfix `name[N]` dims run), keeping the trailing `=`/`;` as the decl-vs-function
+    discriminator; a type-first SIZED `int[N] a` is recognized-then-rejected with the proper
+    "size belongs on the name" message (not the old "Expected '('"). Canon assign/global.sl.
+    A GROUP is the lazy unit —
     its compound MEMBERS construct as one on first touch of any member (declaration
     order), then the user `_()`; teardown is the user `~()` then members reversed. Holds
     for all four forms (named/anon x with/without hooks); a hook-bearing group must

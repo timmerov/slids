@@ -592,16 +592,12 @@ struct Parser {
         return typeSuffixesThenName(o);
     }
 
-    // From offset `o` (just past a core type), skip a MAXIMAL run of type-suffix
-    // tokens, then require the declared name. The suffix run is `^` / `^^`
-    // (reference levels) and bracket groups — empty `[]` (iterator) OR sized
-    // `[N]` / `[a,b]` — interleaved in ANY order, mirroring parseType's real
-    // suffix chain (`int[3]^`, `int^[3]`, `(const int)[5]^` are all types). The
-    // TRAILING IDENTIFIER is the decl-vs-statement discriminator: a store or
-    // call puts an operator (`=`, `.`, `(`, `;`, ...) after the suffix run, never
-    // a bare name — so `arr[i] = v` and `p^ = v` stay statements. Consumes
-    // nothing (operates on a copy of `o`).
-    bool typeSuffixesThenName(int o) const {
+    // From offset `o`, skip a MAXIMAL run of type-suffix tokens and return the offset
+    // just past it. The run is `^` / `^^` (reference levels) and bracket groups — empty
+    // `[]` (iterator) OR sized `[N]` / `[a,b]` — interleaved in ANY order, mirroring
+    // parseType's real suffix chain (`int[3]^`, `int^[3]`, `(const int)[5]^`). Also serves
+    // for a POSTFIX array-dims run after a var name (`arr[3][4]`). Consumes nothing.
+    int skipTypeSuffixes(int o) const {
         while (true) {
             if (peekKind(o) == token::Kind::kBitXor
                 || peekKind(o) == token::Kind::kXorXor) {   // ^ / ^^
@@ -614,7 +610,7 @@ struct Parser {
                 while (depth > 0) {
                     token::Kind k = peekKind(o);
                     if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
-                        return false;
+                        return o;
                     if (k == token::Kind::kLBracket) depth++;
                     else if (k == token::Kind::kRBracket) depth--;
                     o++;
@@ -623,7 +619,15 @@ struct Parser {
             }
             break;
         }
-        return peekKind(o) == token::Kind::kIdentifier;
+        return o;
+    }
+
+    // Skip the type-suffix run then require the declared name. The TRAILING IDENTIFIER is
+    // the decl-vs-statement discriminator: a store or call puts an operator (`=`, `.`,
+    // `(`, `;`, ...) after the suffix run, never a bare name — so `arr[i] = v` and
+    // `p^ = v` stay statements. Consumes nothing.
+    bool typeSuffixesThenName(int o) const {
+        return peekKind(skipTypeSuffixes(o)) == token::Kind::kIdentifier;
     }
 
     // Pure lookahead: does a leading `(...)` form a tuple-TYPE declaration —
@@ -3489,7 +3493,22 @@ struct Parser {
         if (peekKind(0) == token::Kind::kIdentifier
             && peekKind(1) == token::Kind::kEquals) return true;
         int o = 0;
-        if (isTypeStart(peekKind(o))) {
+        // The CORE type: a keyword type (`int`), a qualified/identifier type (`Space:Dir`,
+        // `Integer`), or a TUPLE type (`(int, bool)`) — the parenthesized form the
+        // keyword-optional path used to miss, so a bare tuple/array global fell through to
+        // function parsing ("Expected '('"). A class-typed core is the identifier case.
+        if (peekKind(o) == token::Kind::kLParen) {
+            int depth = 1;
+            o = 1;
+            while (depth > 0) {
+                token::Kind k = peekKind(o);
+                if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                    return false;
+                if (k == token::Kind::kLParen) depth++;
+                else if (k == token::Kind::kRParen) depth--;
+                o++;
+            }
+        } else if (isTypeStart(peekKind(o))) {
             o++;
         } else if (peekKind(o) == token::Kind::kColonColon
                    || peekKind(o) == token::Kind::kIdentifier) {
@@ -3501,13 +3520,15 @@ struct Parser {
         } else {
             return false;
         }
-        if (peekKind(o) == token::Kind::kBitXor
-            || peekKind(o) == token::Kind::kXorXor) o++;
-        else if (peekKind(o) == token::Kind::kLBracket
-                 && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+        // Type-FIRST suffix run (`int^ x`, `int[] x`, `int[3] x`), the var name, then a
+        // POSTFIX array-dims run (`int a[3]`, `int a[3][4]`) — both spellings are valid.
+        o = skipTypeSuffixes(o);
         if (peekKind(o) != token::Kind::kIdentifier) return false;   // var name
-        token::Kind after = peekKind(o + 1);
-        return after == token::Kind::kEquals || after == token::Kind::kSemicolon;
+        o = skipTypeSuffixes(o + 1);
+        // `=` / `;` after the name discriminates a decl from a function (`(` follows the
+        // name) — including a tuple-returning function `(int,int) f(...)`.
+        return peekKind(o) == token::Kind::kEquals
+            || peekKind(o) == token::Kind::kSemicolon;
     }
 
     // Parse a parenthesized parameter / field list — the `(` already consumed —

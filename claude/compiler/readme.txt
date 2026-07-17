@@ -696,7 +696,13 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
 
   SPELLINGS (all desugar to the same two shapes — a plain global or a named group):
     * SHORT / BARE — `global [Type] name = init;`, or at namespace/file scope the
-      keyword is OPTIONAL (`int x = 0;` IS a global). Typed or inferred.
+      keyword is OPTIONAL (`int x = 0;` IS a global). Typed or inferred, and for a
+      NON-scalar type too — an array (`a[N]`) or a tuple (`(int,bool) t`), not only a
+      scalar. (The keyword-optional path routes through grammar's file-scope
+      var-vs-function lookahead `looksLikeBareVarDecl`, which recognizes the full type
+      grammar via the shared `skipTypeSuffixes` — a `(`-led tuple type, a type-first
+      suffix run, and a postfix `name[N]` dims run — keeping the trailing `=`/`;` as the
+      decl-vs-function discriminator.)
     * NAMED GROUP — `global name(decls){body}` is a NAMESPACE (`kNamespaceDecl`,
       is_global); members are `name:member`. Because namespaces nest in every scope
       (incl. functions), a named group works everywhere with no special casing.
@@ -842,9 +848,13 @@ STAGE FILES (.h / .cpp pairs)
             looksLikeQualifiedTypedDecl lookahead routes an identifier-typed decl
             to a var-decl (vs `Space:foo()` / `Space:kX = 1` / `p^ = v` /
             `arr[i] = v`, name-led statements): it scans the (qualified) name, then
-            a type-suffix run, then requires the var name. The suffix run + trailing
-            name is the shared typeSuffixesThenName helper (used by BOTH this gate
-            and the `(`-led looksLikeTupleTypeDecl): it skips a MAXIMAL, interleaved
+            a type-suffix run, then requires the var name. The suffix run is the shared
+            `skipTypeSuffixes` helper; typeSuffixesThenName = it + a trailing-name check,
+            used by this gate, the `(`-led looksLikeTupleTypeDecl, AND the file-scope
+            keyword-optional-global gate looksLikeBareVarDecl (which additionally accepts a
+            `(`-led tuple core and a POSTFIX `name[N]` dims run — so a bare non-scalar
+            global `int a[N] = …` / `(int,bool) t = …` parses, where it used to fall through
+            to function parsing). It skips a MAXIMAL, interleaved
             run of `^`/`^^` (reference levels; `^^` is one logical-xor token read as
             TWO) and bracket groups — empty `[]` (iterator) OR sized `[N]`/`[a,b]`
             (scanned by bracket depth) — mirroring parseType's real suffix chain, so

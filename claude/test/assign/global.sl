@@ -289,8 +289,12 @@ function gives function-internal statics with a shared lazy lifetime (`taggify` 
 BARE form — at namespace / file scope (where there are no statements) the `global`
 keyword is optional: a plain var-decl IS a global (`int x = 0;` desugars to `global int
 x = 0;`), typed or inferred, nesting into its scope's namespace like the keyword form.
-In a CODE BLOCK the keyword stays required (no keyword = a local). Exercised below
-(`bare_`, `loose_`, `Space:height_`).
+This holds for a NON-scalar type too — an array (`a[N]`) and a tuple `(T0,T1) t` — not
+just a scalar (the file-scope var-vs-function lookahead now recognizes the full type
+grammar, not only `Type name`; a type-first SIZED `int[N] a` is recognized as a decl and
+then rejected with the proper "size belongs on the name" message rather than "Expected
+'('"). In a CODE BLOCK the keyword stays required (no keyword = a local). Exercised below
+(`bare_`, `loose_`, `barr_`, `btup_`, `Space:height_`), plus the type-first negative.
 
 ANONYMOUS group — `global (a=…, b=…) {…}`: its members promote into the ENCLOSING
 scope (bare / `::` at file scope, `Enclosing:member` in a namespace/class), NOT under a
@@ -373,6 +377,13 @@ global Hue hue_ = Hue:kGreen;
    global (`int x = 0;` desugars to `global int x = 0;`). Typed and inferred. */
 int bare_ = 100;
 loose_ = 7;                  /* bare + inferred type: int */
+
+/* BARE non-scalar globals — the keyword is optional for an ARRAY (`a[N]`) and a TUPLE
+   too, not just a scalar. (Compound -> lazy, like their `global`-keyword twins.) A
+   type-first SIZED array `int[N] a` is still rejected — with the helpful "size belongs
+   on the name" message, not the old confusing "Expected '('" — see the negative below. */
+int barr_[3] = (4, 5, 6);       /* bare postfix array */
+(int, bool) btup_ = (3, true);  /* bare tuple */
 
 /* ANONYMOUS group (empty body) — the canonical long form: its members promote into
    the ENCLOSING scope, reached bare / via `::` at file scope (no group qualifier). */
@@ -755,6 +766,10 @@ int32 main() {
     __println("bare=" + bare_);              // 101
     __println("loose=" + loose_);            // 7
 
+    /* bare (keyword-less) NON-scalar globals: a postfix array and a tuple */
+    __println("barr=" + barr_[0] + "," + barr_[1] + "," + barr_[2]);   // 4,5,6
+    __println("btup=" + btup_[0] + "," + btup_[1]);                     // 3,true
+
     /* anonymous group: its members are bare, like standalone globals */
     __println("p=" + anon_p_);               // 11
     anon_p_ = anon_p_ + 1;
@@ -943,6 +958,12 @@ int32 main() {
 /* `global;` is only legal in `main`. */
 //-EXPECT-ERROR: may appear only in 'main'
 //void elsewhere() { global; }
+
+/* a type-first SIZED array is rejected — a size goes on the declared NAME (`int a[N]`),
+   not the type. The keyword-less file-scope lookahead recognizes it as a decl, so it
+   reaches this proper message instead of the old confusing "Expected '('". */
+//-EXPECT-ERROR: size belongs on the declared name
+//int[2] tfsize_ = (8, 9);
 
 /* a global constructor without a matching destructor (the pairing rule). */
 //-EXPECT-ERROR: requires a matching destructor
