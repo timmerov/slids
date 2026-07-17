@@ -574,6 +574,23 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         && tree.entries[p.resolved_entry_id].is_external
         && !tree.entries[p.resolved_entry_id].defined
         && !signatureDefinedHere(tree, p.resolved_entry_id);
+    // LINKAGE of a DEFINITION. Everything a TU defines is PRIVATE — emitted `internal`
+    // — unless it is DECLARED in a `.slh` header, the same rule a class follows (the
+    // declaration site decides). A free / namespace function whose entry's declaration
+    // file is an imported header is the visible cross-TU symbol; a `.sl`-only free
+    // function, and a lifted nested function, stay file-local. `main` is the sole
+    // exception — it is the program entry point (the one function that may open the
+    // `global;` scope), so its symbol stays external for the linker; that is the same
+    // name-based decision grammar/resolve already make about main. A CLASS member's
+    // linkage is its OWNER's, stamped authoritatively in liftMember AFTER this copy —
+    // the value set here for a member is overwritten there.
+    if (p.kind == parse::Kind::kFunctionDef) {
+        int fid = p.resolved_entry_id >= 0
+                      ? tree.entries[p.resolved_entry_id].file_id : -1;
+        bool decl_in_header = fid >= 0 && fid < (int)tree.file_imported.size()
+                           && tree.file_imported[fid];
+        node->internal_def = p.name != "main" && !decl_in_header;
+    }
     // ast.is_const means a SUBSTITUTED constant — codegen emits no storage for it.
     // A const VARIABLE (a non-foldable type routed to kLocalVar in resolve) is NOT
     // substituted: it has real storage, so it lowers with is_const=false even though
@@ -1147,11 +1164,13 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
         // A member of a class this TU keeps PRIVATE is emitted `internal`. THIS is the
         // last place that knows a lifted member's owner — flattening drops the class node
         // and codegen sees only a mangled string — so the class's linkage has to be
-        // stamped on the node here or it is unrecoverable. Only a CLASS member: this
-        // lambda is never called for a free function, which is external on purpose.
-        if (owner != widen::kNoType
-            && widen::slidLinkage(owner) == widen::Type::Linkage::kInternal) {
-            fn->internal_def = true;
+        // stamped on the node here or it is unrecoverable. The class's linkage is
+        // AUTHORITATIVE over copyNode's free-function default: a member is internal iff
+        // its owner is, external otherwise (a header class defined here). owner==kNoType
+        // is a namespace member — a free function — which keeps copyNode's decision.
+        if (owner != widen::kNoType) {
+            fn->internal_def =
+                widen::slidLinkage(owner) == widen::Type::Linkage::kInternal;
         }
         return fn;
     };

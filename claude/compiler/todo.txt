@@ -13,14 +13,6 @@ BUGS
     should use itanium mangling so link errors are readable. but need special handling
     for tuples. and ^ is gonna show up as *. fine. see plan-mangle.txt.
 
-  * functions are incorrectly implemented as external symbols.
-    spec is everything is private unless it is declared in a .slh file - either
-    explicitly or implicitly by synthesis.
-    there are a few exceptions: like main and the global dtor registry.
-    i tried to explain this to claude and it wrote up a beautiful plan that asserted
-    all functions are external symbols and how it was going to implement that.
-    complete hallucination.
-
 UNBLOCKED FEATURES
 
   * should we be able to take the address of a temporary variable?

@@ -2,6 +2,9 @@
 test import and linked files.
 this is the library header file.
 
+everything declared in this source file is public.
+public members are visible outside this source file.
+
 declarations only.
 no definitions here.
 the definitions are in the library source file.

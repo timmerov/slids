@@ -1,10 +1,17 @@
 /*
 test import and linked files.
 this is the library source file.
-it must define all of the things declared in the header file.
+
+everything defined in this source file is private.
+private members have no visibility outside this source file.
 
 in a source file, we cannot add a ctor/dtor or copy, move, swap
 operator to a class first declared in a header file.
+
+things to test:
+two source files defining different local functions (or methods) with the same name.
+link error when to two source files define the same header function (or method) with
+the same name.
 */
 
 /*
@@ -37,8 +44,33 @@ because the model requires it.
 
 import library;
 
+/* PRIVATE to this TU — same names as consumer.sl's, distinct bodies: a free function, a
+   namespace member, and a local class Widget with a method. Each is called from a header
+   function this TU defines, so a consumer that links here still runs library's own copy.
+   All are `internal`; were a source-defined function or a local-class method external (the
+   bug), @note / @Util__tag / @Widget__hum would clash with consumer.sl's and the link
+   would fail. Widget also covers the CLASS half — a `.sl`-local class's methods are
+   internal, whereas a header class's stay external so importers link to them. */
+void note() {
+    __println("library: note");
+}
+
+Util {
+    void tag() {
+        __println("library: Util:tag");
+    }
+}
+
+Widget() {
+    void hum() {
+        __println("library: Widget:hum");
+    }
+}
+
 void hello_world() {
     __println("Hello, World!");
+    note();
+    Widget lw; lw.hum();
 }
 
 Animal() {
@@ -62,6 +94,7 @@ void Animal:print() {
 Space {
     void goodbye_world() {
         __println("Goodbye, World!");
+        Util:tag();
     }
 
     Vegetable() {

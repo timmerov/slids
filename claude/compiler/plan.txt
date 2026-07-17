@@ -1537,6 +1537,27 @@ Phase 8 — namespaces + cross-TU
       external_decl path cannot answer it. Canon test/import/bird.sl.
       OPEN: overloads across a `.slh` (todo CROSS-TU MANGLING FOR OVERLOADS); cross-TU
       globals; `sizeof` (deferred with cross-TU incomplete classes); multi-header modules.
+    - FUNCTION LINKAGE — PRIVATE BY DEFAULT (LANDED 2026-07-17). The class-linkage rule
+      extended to FREE and NAMESPACE functions, which the cross-TU class slice had left
+      external. SPEC: everything a TU DEFINES is `define internal` (private) unless a
+      `.slh` header DECLARES it — explicitly or by synthesis — the same "declaration site
+      decides" rule classes follow. main is the one exception (external, keyed on the
+      name — the same decision grammar/resolve already make about the function that opens
+      `global;`). Two spots in desugar: copyNode stamps ast internal_def on every function
+      DEFINITION (internal unless its entry's declaration file is an imported header);
+      liftMember was made AUTHORITATIVE over that default for a CLASS member (internal iff
+      the owner class is), a namespace member keeping copyNode's decision. This FIXES the
+      mirror of the class bug: two `.sl` files each defining a same-named free function (or
+      namespace function, or local-class method) emitted duplicate external symbols and
+      failed to link; now each is internal and each TU calls its own. Nested lifted
+      functions go internal too (TU-local by construction). NOTE this REVERSES an earlier
+      belief that a source function is external by the user's decision — todo.txt bug #2
+      records the correction: the spec is private-by-default, `main` and the global dtor
+      registry the only external exceptions. Canon test/import: consumer.sl + library.sl
+      each define a private note() / Util:tag() / Widget with the same names. STILL
+      EXTERNAL + PER-TU (latent multi-TU collision, deferred with cross-TU globals): the
+      global-runtime helpers on codegen's own path — __$global_register, __$global_dtor_all,
+      the per-group touch/ctor/dtor thunks.
     - DEPENDENCY OUTPUT (LANDED 2026-07-15). slidsc `-MF <file>` / `-M` emit a
       make rule `<out.ll>: <in.sl> <imported.slh>...` (gcc-style, v1 had it as
       -M/-MF). The source list is `tokens.files` read right after lex — the file

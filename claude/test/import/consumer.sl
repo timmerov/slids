@@ -2,8 +2,16 @@
 test import and linked files.
 this is the consumer file.
 
+everything defined in this source file is private.
+private members have no visibility outside this source file.
+
 in a source file, we cannot add a ctor/dtor or copy, move, swap
 operator to a class first declared in a header file.
+
+things to test:
+two source files defining different local functions (or methods) with the same name.
+link error when to two source files define the same header function (or method) with
+the same name.
 */
 
 /*
@@ -30,6 +38,15 @@ what each line is actually holding down:
                             (@Space__goodbye_world), never by entry id, or this file and
                             library.sl number their entries differently and never link.
   Space:Vegetable peas(3,4) the nested-class case, same seam.
+  note() / Util:tag() /     PRIVATE symbols this file defines. library.sl defines its OWN
+  Widget:hum()              note(), Util:tag(), and a local class Widget with hum(), same
+                            names and different bodies. none is declared in a header, so all
+                            are `internal` — each TU calls its own. If a source-defined
+                            function or a local-class method were external (the bug), the two
+                            @note / @Util__tag / @Widget__hum defines would COLLIDE at link
+                            and this program would not build. (Widget also proves the CLASS
+                            path: a `.sl`-local class's methods are internal, unlike a header
+                            class's, which stay external so importers link to them.)
 the golden's line ORDER is load-bearing: the two dtors run in reverse declaration order
 at the close of main.
 
@@ -40,7 +57,31 @@ is. neither file may add one.
 
 import library;
 
+/* PRIVATE to this TU — same names as library.sl's, distinct bodies. A free function,
+   a namespace member, and a local CLASS METHOD: all three mangle to the same symbol as
+   library.sl's (`@note`, `@Util__tag`, `@Widget__hum`), and coexist only because none
+   is header-declared, so each is `internal` and each TU calls its own. */
+void note() {
+    __println("consumer: note");
+}
+
+Util {
+    void tag() {
+        __println("consumer: Util:tag");
+    }
+}
+
+Widget() {
+    void hum() {
+        __println("consumer: Widget:hum");
+    }
+}
+
 int32 main() {
+
+    note();
+    Util:tag();
+    Widget cw; cw.hum();
 
     hello_world();
 

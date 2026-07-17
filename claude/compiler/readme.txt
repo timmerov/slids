@@ -1660,6 +1660,16 @@ STAGE FILES (.h / .cpp pairs)
             emitted that body in every importing TU and the sibling's definition
             collided at link. A class's three linkages (readme-classes.txt) land
             here as the choice between `declare`, `define`, and `define internal`.
+            A FREE or NAMESPACE function follows the SAME declaration-site rule: its
+            DEFINITION is `define internal` (private to this TU) unless a `.slh` header
+            DECLARES it — in which case it stays external so importers link to it. `main`
+            is the sole exception: external, keyed on the name (the one function that may
+            open `global;`, the same name-based decision grammar/resolve already make).
+            desugar's copyNode stamps ast internal_def on every function def from its
+            entry's declaration file; liftMember overrides it for a CLASS member with the
+            owner class's linkage (a namespace member is a free function and keeps the
+            default). Landed 2026-07-17 — before it, a `.sl`'s `void helper()` was wrongly
+            external, and two TUs' same-named private functions collided at link.
             ALL local allocas are HOISTED to the function
             entry block (emitFunction pre-walks the body via collectVarDecls): an
             alloca emitted at its declaration site would re-allocate stack on

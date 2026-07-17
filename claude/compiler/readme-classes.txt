@@ -1189,9 +1189,12 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
                named `Sh` emitted the same global `@Sh__$ctor__impl` / `@Sh__$copy` /
                `@Sh__method` twice and failed to link. TWO EMITTERS, ONE RULE — applying it
                at only one of them is exactly the bug, and the half that was missed is the
-               half that emits most of the symbols. Note a FREE function is untouched: a
-               `.sl`'s `void do_a()` is external ON PURPOSE, that being how another TU
-               calls it. Only a CLASS MEMBER goes internal.
+               half that emits most of the symbols. A FREE or NAMESPACE function follows
+               the SAME rule (landed 2026-07-17): private-by-default, external only when a
+               `.slh` declares it — the function-linkage detail lives in readme.txt's
+               codegen entry. So liftMember's owner-linkage stamp here is AUTHORITATIVE
+               over that per-function default for a class member; a namespace member is a
+               free function and keeps the default.
     kDefine    the class is declared in a `.slh` AND this TU is its SIBLING (same base name;
                the directories may differ). The sibling emits the SYNTHESIZED members —
                complete ctor/dtor, default copy/move/swap — as real external definitions.

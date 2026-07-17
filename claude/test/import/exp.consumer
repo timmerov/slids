@@ -1,9 +1,15 @@
+consumer: note
+consumer: Util:tag
+consumer: Widget:hum
 Hello, World!
+library: note
+library: Widget:hum
 Animal:ctor: 1 2
 Animal:print: 1 2
 Vegetable:ctor: 3 4
 Vegetable:print: 3 4
 Goodbye, World!
+library: Util:tag
 Bird:ctor: 5 6
 Bird:chirp: 5 6
 Bird:dtor: 5 6
