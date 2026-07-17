@@ -770,10 +770,14 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
       so its members group too. A hook-bearing group MUST declare a member (grammar
       rejects a memberless one — nothing would trigger its gate).
     * FIRST-TOUCH gate + LIFO teardown: each lazy group has a sentinel bool + a touch
-      thunk (checks/sets the sentinel, REGISTERS the group dtor thunk with a runtime LIFO
-      list BEFORE running the ctor, so registration order == ctor-invocation order — each
-      group registers exactly ONE dtor thunk). Access sites call the touch thunk; a
-      never-touched group is neither built nor destroyed.
+      thunk (checks/sets the sentinel, REGISTERS the group dtor thunk BEFORE running the
+      ctor, so registration order == ctor-invocation order — each group registers exactly
+      ONE dtor thunk). Access sites call the touch thunk; a never-touched group is neither
+      built nor destroyed. The registry is a `linkonce_odr` singly-linked list — one head
+      pointer + walker (`__$global_dtor_head` / `__$global_dtor_all`) every TU emits
+      identically (the linker keeps one), plus a static per-group `{ next, fn }` node
+      PREPENDED at touch. Size-independent, so it composes across TUs (v1's design; it
+      replaced a per-TU fixed `[K x ptr]` array that could neither size nor compose).
 
   THE `global;` SCOPE STATEMENT — a real scope-registered lifetime (a `DtorScope`
   entry): at its scope's exit the `__$global_dtor_all` registry walker runs. Auto-
@@ -785,11 +789,24 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   the body frame, so it persists across calls, is reached bare inside, and is invisible
   outside (a function is not a namespace). Two bodies' same-named internals are distinct.
 
-  DEFERRED (Phase 8): a global declared in a `.slh` header is visible to all linked
-  files; a `.sl` global stays file-local. The cross-TU CLASS model has since landed
-  (readme-classes.txt "A CLASS ACROSS TRANSLATION UNITS") and is the precedent to
-  follow — declaration site decides linkage, the sibling defines. See todo
-  "CROSS-TU GLOBALS".
+  CROSS-TU (LANDED): a global declared in a `.slh` header is an EXTERNAL symbol visible
+  to all linked files; a `.sl` global stays `internal`. Declaration site decides linkage,
+  the same rule classes/functions follow — EXCEPT any one `.sl` may DEFINE it (a global is
+  authored data, like a declared member, not synthesized), and the header decl + the
+  definition MERGE (resolve's tryMergeGlobalDecl, both the file-scope and group-member
+  registration sites). The symbol is STABLE (`__g_<scope>_<name>`, no per-TU entry id) so
+  every TU mints it identically; codegen emits `global` in the definer, `external global`
+  in an importer, `internal` for a `.sl`-local. A header-declared GROUP shares one external
+  touch thunk (stable name); its sentinel/ctor/dtor/node stay internal to the definer, and
+  an importer emits only a `declare` for the touch thunk + calls it. Two facts must agree
+  across TUs even when the definer holds them: a group's `has_hook` (gates every member,
+  so an importer's access fires the shared init) and that a cross-TU AGGREGATE is ALWAYS
+  lazy (the importer can't see the definer's init). A group RE-OPENED across a header + its
+  sibling merges into ONE GlobalGroup (keyed by entry id in desugar's `named` map), or two
+  hooked openings emit the same symbols twice. A header initializer is a cross-check: a
+  definition giving a DIFFERENT value is an error (desugar `sameInitConst`). Canon
+  test/import. STILL DEFERRED: a never-defined header global is a link error, not a compile
+  one (as with functions). Cross-TU CLASS model precedent: readme-classes.txt.
 
 
 STAGE FILES (.h / .cpp pairs)
@@ -1534,7 +1551,13 @@ STAGE FILES (.h / .cpp pairs)
             collide to one `define`; `A`<n>`_`<T> an array; and a vendor source-name
             `u<len><spelling>` for every LEAF (primitive, class, tuple), injective and
             demangler-readable — the tuple (`u<len>tupleN$...`) being the one form
-            itanium cannot spell. EXCEPTIONS keep a fixed name: `main` (the C entry
+            itanium cannot spell. A LEAF does NOT deepStrip: `const` IS stripped (it is an
+            exact-match for overloading, so it never distinguishes a symbol), but an ALIAS
+            is NOT — a parameter's alias vs its underlying are DISTINCT overloads
+            (`aov(int32)` vs `aov(Integer)`), so an alias mangles by its own name. A
+            spelling can carry chars illegal in an unquoted LLVM identifier (a qualified
+            alias `Maker:Widget` has a `:`), so `symbolSafe` encodes them (`:`->`$58`).
+            EXCEPTIONS keep a fixed name: `main` (the C entry
             point), a NESTED function (an entry-id suffix — TU-local by construction,
             nothing outside names it), and the synthesized class canonicals
             `__$copy`/`__$move`/`__$swap`. This closed the last cross-TU leak: overloads

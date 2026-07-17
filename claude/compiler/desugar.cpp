@@ -243,6 +243,22 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node, int& next_id) {
 std::string sanitizeSymbolName(std::string const& name);   // defined below
 std::string mangleType(widen::TypeRef ref);
 
+// Make a type SPELLING legal in an unquoted LLVM identifier: alnum / `_` / `$` / `.`
+// pass; anything else — a qualified alias's `:` (`Maker:Widget`), a space — becomes
+// `$<byte>`. Injective, so two distinct spellings stay distinct symbols. A leaf type is
+// mangled by its spelling (a user alias is a DISTINCT overload from its underlying, so it
+// is NOT stripped — it must keep its own name), and a spelling can carry these chars.
+std::string symbolSafe(std::string const& s) {
+    std::string out;
+    for (unsigned char c : s) {
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+               || (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '.';
+        if (ok) out += static_cast<char>(c);
+        else { out += '$'; out += std::to_string(static_cast<int>(c)); }
+    }
+    return out;
+}
+
 // A tuple's readable, symbol-legal element token: a scalar spells as its name
 // (`tuple3$int$int$int`), structure gets a suffix. Kept human-readable rather than
 // recursively Itanium-coded — the tuple name is the best-effort escape hatch.
@@ -264,9 +280,9 @@ std::string tupleSlotToken(widen::TypeRef ref) {
         case widen::Type::Form::kVoid:
         case widen::Type::Form::kAnyptr:
         case widen::Type::Form::kAlias:
-        case widen::Type::Form::kConst: return widen::spell(ref);
+        case widen::Type::Form::kConst: return symbolSafe(widen::spell(ref));
     }
-    return widen::spell(ref);   // unreachable; every Form is handled above
+    return symbolSafe(widen::spell(ref));   // unreachable; every Form is handled above
 }
 
 // The Itanium <type> encoding of a parameter type. Compound structure uses the
@@ -274,9 +290,14 @@ std::string tupleSlotToken(widen::TypeRef ref) {
 // class, tuple — is a vendor-extended source-name `u<len><name>`, which is injective
 // (the length self-delimits) and demangles to the readable slids spelling.
 std::string mangleType(widen::TypeRef ref) {
-    ref = widen::deepStrip(ref);
     widen::Type const& t = widen::get(ref);
     switch (t.form) {
+        // `const` is transparent for overloading (ranked an exact match), so it does NOT
+        // distinguish a symbol — strip it. An ALIAS is the opposite: a parameter's alias
+        // and its underlying are DISTINCT overloads (overload_fn.sl `aov(int32)` vs
+        // `aov(Integer)`), so it must mangle distinctly — the leaf `spell()` gives the
+        // alias NAME. So DON'T deepStrip (it drops both); handle each explicitly.
+        case widen::Type::Form::kConst:  return mangleType(t.underlying);
         case widen::Type::Form::kVoid:   return "v";
         case widen::Type::Form::kAnyptr: return "Pv";
         // The two slids pointer-like types take DISTINCT Itanium codes so they never
@@ -298,14 +319,14 @@ std::string mangleType(widen::TypeRef ref) {
             std::string tn = tupleSlotToken(ref);
             return "u" + std::to_string(tn.size()) + tn;
         }
-        // primitive (and the deepStrip-removed kAlias/kConst, kNone): `u<len><spelling>`
-        // — vendor source-name, injective (int vs int32) and demangler-readable.
+        // A LEAF — primitive or alias: `u<len><spelling>`, a vendor source-name that is
+        // injective (int vs int32, int32 vs an Integer alias) and demangler-readable.
+        // (kConst is handled above; it never reaches here.)
         case widen::Type::Form::kNone:
         case widen::Type::Form::kPrimitive:
-        case widen::Type::Form::kAlias:
-        case widen::Type::Form::kConst: break;
+        case widen::Type::Form::kAlias: break;
     }
-    std::string s = widen::spell(ref);
+    std::string s = symbolSafe(widen::spell(ref));
     return "u" + std::to_string(s.size()) + s;
 }
 
@@ -3267,18 +3288,74 @@ bool astHasGlobalScope(ast::Node const& n) {
     return false;
 }
 
-// Record a file-local global (kGlobalVar) for codegen: mint a stable `@`-symbol,
-// carry its declared/inferred type, and lower its folded initializer to a literal
-// ast node (codegen emits it as the static LLVM constant; a null init zero-fills).
+// True if a global's DECLARATION file is an imported `.slh` — i.e. it is a cross-TU
+// global (external), not a `.sl`-local one.
+bool globalIsExternal(parse::Tree const& in, int file_id) {
+    return file_id >= 0 && file_id < (int)in.file_imported.size()
+        && in.file_imported[file_id];
+}
+
+// The cross-TU-STABLE symbol for a header-declared global: its scope path + name,
+// `__g_`-prefixed, with NO per-TU entry id — so the defining TU and every importer mint
+// the identical symbol (the same "a symbol is a function of the language" rule the
+// function mangler follows; a global is never overloaded, so a plain name suffices).
+std::string stableGlobalName(parse::Tree const& in, parse::Entry const& e) {
+    std::string s = "__g_";
+    for (std::string const& seg : scopeSegments(in, e.owner_ns_frame)) s += seg + "_";
+    return s + e.name;
+}
+
+// The stable base for a header-declared GROUP's shared touch thunk (`__g_<path><Group>`).
+std::string stableGroupBase(parse::Tree const& in, int ns_entry_id) {
+    parse::Entry const& e = in.entries[ns_entry_id];
+    std::string s = "__g_";
+    for (std::string const& seg : scopeSegments(in, e.owner_ns_frame)) s += seg + "_";
+    return s + e.name;
+}
+
+// Structural equality of two FOLDED initializer literals (kind + value text, recursing
+// aggregate slots) — constfold has run, so a scalar init is a literal with its value in
+// `text` and a tuple/array init is a literal tree.
+bool sameInitConst(ast::Node const& a, ast::Node const& b) {
+    if (a.kind != b.kind || a.text != b.text) return false;
+    if (a.children.size() != b.children.size()) return false;
+    for (std::size_t i = 0; i < a.children.size(); i++) {
+        if ((bool)a.children[i] != (bool)b.children[i]) return false;
+        if (a.children[i] && !sameInitConst(*a.children[i], *b.children[i])) return false;
+    }
+    return true;
+}
+
+// Record a global (kGlobalVar) for codegen: mint its `@`-symbol, carry its
+// declared/inferred type, and lower its folded initializer to a literal ast node
+// (codegen emits it as the static LLVM constant; a null init zero-fills). A header-
+// declared global gets a STABLE external symbol + linkage flags; a `.sl`-local one keeps
+// its entry-id symbol and internal linkage. A header global appears in the tree twice
+// (the imported decl, then this TU's definition, which follows it and wins the init) —
+// and if BOTH carry an initializer they must MATCH, a cross-check the defining TU (which
+// sees the header decl and its own definition) can verify.
 void recordGlobal(parse::Node const& n, parse::Tree const& in, ast::Tree& out,
-                  int& next_id) {
+                  int& next_id, diagnostic::Sink& diag) {
     int id = n.resolved_entry_id;
     if (id < 0) return;
+    parse::Entry const& e = in.entries[id];
     ast::GlobalVar gv;
-    gv.symbol = "__global_" + n.name + "_" + std::to_string(id);
-    gv.type = in.entries[id].slids_type;
-    if (!n.children.empty() && n.children[0])
+    gv.external_link = globalIsExternal(in, e.file_id);
+    gv.defined_here = e.defined;   // a merged/def global: true; an imported-only decl: false
+    gv.symbol = gv.external_link ? stableGlobalName(in, e)
+                                 : "__global_" + n.name + "_" + std::to_string(id);
+    gv.type = e.slids_type;
+    if (!n.children.empty() && n.children[0]) {
         gv.init = copyNode(*n.children[0], in, next_id);
+        auto it = out.globals.find(id);
+        if (it != out.globals.end() && it->second.init
+            && !sameInitConst(*it->second.init, *gv.init))
+            diagnostic::report(diag, {n.file_id, n.name_tok,
+                "Global '" + n.name + "' is defined with an initializer that differs "
+                "from its declaration.", {}});
+    } else if (out.globals.count(id) && out.globals[id].init) {
+        gv.init = std::move(out.globals[id].init);   // keep a def's init over a bodyless decl
+    }
     out.globals[id] = std::move(gv);
 }
 
@@ -3318,7 +3395,8 @@ bool needsSynth(widen::TypeRef type, bool has_init) {
 // wire the survivors to the group touch, and name the synth ctor/dtor thunks. Returns
 // false for an inert group (no gated member, no user hook) — the caller drops it.
 bool finalizeGroup(ast::GlobalGroup& g, ast::Tree& out) {
-    bool has_hook = !g.user_ctor_symbol.empty() || !g.user_dtor_symbol.empty();
+    bool has_hook = g.has_hook
+                 || !g.user_ctor_symbol.empty() || !g.user_dtor_symbol.empty();
     bool need_dtor = !g.user_dtor_symbol.empty();
     std::vector<int> gated;
     for (int id : g.member_ids) {
@@ -3344,7 +3422,8 @@ bool finalizeGroup(ast::GlobalGroup& g, ast::Tree& out) {
 // touch_symbol so its access sites gate on first-touch construction.
 void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
                     parse::Tree const& in, ast::Tree& out, int& next_id,
-                    std::map<int, ast::GlobalGroup>& lazy_anon) {
+                    std::map<int, ast::GlobalGroup>& lazy_anon,
+                    std::map<int, ast::GlobalGroup>& named, diagnostic::Sink& diag) {
     for (auto const& n : nodes) {
         if (!n) continue;
         // A dissolved LAZY anonymous group's ctor/dtor — a receiver-less free function
@@ -3358,11 +3437,11 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
             std::string sym = functionSymbol(*n, in);
             if (isGlobalCtorName(n->name)) g.user_ctor_symbol = sym;
             else g.user_dtor_symbol = sym;
-            collectGlobals(n->children, in, out, next_id, lazy_anon);
+            collectGlobals(n->children, in, out, next_id, lazy_anon, named, diag);
             continue;
         }
         if (n->kind == parse::Kind::kVarDeclStmt && n->is_global) {
-            recordGlobal(*n, in, out, next_id);
+            recordGlobal(*n, in, out, next_id, diag);
             // A dissolved anon member joins its group (in declaration order). Its
             // gating (vs static) is decided in finalizeGroup, once the group's hooks
             // are known — the ctor/dtor functions may be visited after this member.
@@ -3378,32 +3457,52 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
             // A named group is its own gate: construct every compound member on first
             // touch of any member, then run the user `_()`; tear down in reverse. Class
             // members ride the group gate whether or not the group has a user ctor/dtor.
-            ast::GlobalGroup g;
-            setGroupGateSymbols(g, "__global_", n->resolved_entry_id);
+            // A group is RE-OPENED (across openings, and across a header + its sibling) —
+            // every opening merges into ONE GlobalGroup keyed by the group's entry id, or
+            // two hooked openings would emit the same symbols twice.
+            int gid = n->resolved_entry_id;
+            ast::GlobalGroup& g = named[gid];
+            setGroupGateSymbols(g, "__global_", gid);   // idempotent (same gid each opening)
             for (auto const& m : n->children) {
-                if (!m || m->kind != parse::Kind::kFunctionDef) continue;
+                if (!m) continue;
+                if (m->kind != parse::Kind::kFunctionDef
+                    && m->kind != parse::Kind::kFunctionDecl) continue;
+                if (isGlobalCtorName(m->name) || isGlobalDtorName(m->name))
+                    g.has_hook = true;   // decl OR def — gates members in every TU
+                if (m->kind != parse::Kind::kFunctionDef) continue;
                 if (isGlobalCtorName(m->name)) g.user_ctor_symbol = functionSymbol(*m, in);
                 else if (isGlobalDtorName(m->name)) g.user_dtor_symbol = functionSymbol(*m, in);
             }
             for (auto const& m : n->children) {
                 if (!(m && m->kind == parse::Kind::kVarDeclStmt && m->is_global)) continue;
-                recordGlobal(*m, in, out, next_id);
-                if (m->resolved_entry_id >= 0) g.member_ids.push_back(m->resolved_entry_id);
+                recordGlobal(*m, in, out, next_id, diag);
+                int mid = m->resolved_entry_id;
+                if (mid >= 0 && std::find(g.member_ids.begin(), g.member_ids.end(), mid)
+                                    == g.member_ids.end())
+                    g.member_ids.push_back(mid);   // dedup across openings
             }
-            if (finalizeGroup(g, out)) out.global_groups.push_back(std::move(g));
-            continue;
+            // Cross-TU linkage rides the MEMBERS (their decl site + defined-here state).
+            // A header-declared group shares one external touch thunk (stable name); its
+            // sentinel/ctor/dtor stay internal to the defining TU (nobody else names them).
+            if (!g.member_ids.empty()) {
+                parse::Entry const& m0 = in.entries[g.member_ids[0]];
+                g.external_link = globalIsExternal(in, m0.file_id);
+                g.defined_here = m0.defined;
+            }
+            if (g.external_link)
+                g.touch_symbol = stableGroupBase(in, gid) + "_touch";
+            continue;   // finalized once in run(), after every opening is merged
         }
         if (n->kind == parse::Kind::kProgram
             || n->kind == parse::Kind::kNamespaceDecl
             || n->kind == parse::Kind::kClassDef
             || n->kind == parse::Kind::kFunctionDef
             || n->kind == parse::Kind::kBlockStmt)
-            collectGlobals(n->children, in, out, next_id, lazy_anon);
+            collectGlobals(n->children, in, out, next_id, lazy_anon, named, diag);
     }
 }
 
 void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
-    (void)diag;
     // One program-wide id counter, seeded past every real entry. resolve/classify
     // are done and constfold doesn't append, so entries.size() is frozen here; the
     // counter is never restarted per loop, so two lowered short-fors can't collide.
@@ -3413,8 +3512,11 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     // lowerMethodCall can stamp each virtual call's slot (via g_entry_slot).
     buildVtables(in, out);
     std::map<int, ast::GlobalGroup> lazy_anon;
-    collectGlobals(in.nodes, in, out, next_id, lazy_anon);
+    std::map<int, ast::GlobalGroup> named;   // one entry per NAMED group, openings merged
+    collectGlobals(in.nodes, in, out, next_id, lazy_anon, named, diag);
     for (auto& [gid, g] : lazy_anon)
+        if (finalizeGroup(g, out)) out.global_groups.push_back(std::move(g));
+    for (auto& [gid, g] : named)
         if (finalizeGroup(g, out)) out.global_groups.push_back(std::move(g));
     // Lone COMPOUND globals (array / tuple / class) NOT in any group are LAZY (the
     // all-compound-lazy policy): zero-init storage + a SYNTHESIZED ctor/dtor that
@@ -3423,10 +3525,26 @@ void run(parse::Tree const& in, ast::Tree& out, diagnostic::Sink& diag) {
     // to store (a zero-init scalar array stays a static `zeroinitializer`).
     for (auto& [id, gv] : out.globals) {
         if (!gv.touch_symbol.empty()) continue;      // already in a group
-        if (!needsSynth(gv.type, (bool)gv.init)) continue;   // scalars / zero-init stay static
+        // A cross-TU AGGREGATE is ALWAYS lazy — the importer cannot see the definer's
+        // init, so both TUs must agree to gate it, or the importer would call a touch
+        // thunk the definer (thinking it static) never emitted. A `.sl`-local aggregate
+        // keeps the init-driven decision (a zero-init scalar array stays static).
+        widen::Type::Form f = widen::form(widen::strip(gv.type));
+        bool aggregate = f == widen::Type::Form::kArray || f == widen::Type::Form::kTuple
+                      || f == widen::Type::Form::kSlid;
+        if (!needsSynth(gv.type, (bool)gv.init) && !(gv.external_link && aggregate))
+            continue;   // scalars / zero-init local aggregates stay static
         ast::GlobalGroup g;
         g.synth_global_id = id;
+        // A lone compound global carries the SAME cross-TU linkage as its storage: a
+        // header-declared one is built + destructed by the DEFINING TU only, its touch
+        // thunk shared (a stable name off the storage symbol); an importer emits just the
+        // `declare`. Without this the synth ctor/dtor ran in EVERY TU — double
+        // construction of the one shared object, and a dtor registered twice.
+        g.external_link = gv.external_link;
+        g.defined_here = gv.defined_here;
         setGroupGateSymbols(g, "__cg_", id);
+        if (gv.external_link) g.touch_symbol = gv.symbol + "_touch";
         g.ctor_symbol = "__cgctor_" + std::to_string(id);
         g.dtor_symbol = widen::hasInPlaceClass(gv.type)
                             ? "__cgdtor_" + std::to_string(id) : std::string();

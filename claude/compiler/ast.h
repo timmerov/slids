@@ -190,6 +190,11 @@ struct GlobalVar {
     std::unique_ptr<Node> init;      // a literal node (may be null → zero-init)
     std::string touch_symbol;        // "" = static; else the lazy group's touch thunk,
                                      // called before any access (first-touch ctor gate)
+    // Cross-TU linkage. A global DECLARED in a `.slh` is an EXTERNAL symbol (a stable,
+    // entry-id-free name): the one TU that defines it emits `@sym = global`, every other
+    // emits `@sym = external global`. A `.sl`-local global keeps `internal`.
+    bool external_link = false;      // header-declared → external symbol
+    bool defined_here = true;        // this TU emits the storage (else: declare only)
 };
 
 // A LAZY global group (ctor/dtor present): its members are constructed on first
@@ -218,6 +223,15 @@ struct GlobalGroup {
     // are SYNTHESIZED to construct/destruct this global's `@symbol` in place. Keyed by the
     // global's id (into `globals`). Mutually exclusive with member_ids.
     int synth_global_id = -1;
+    // Cross-TU linkage (as GlobalVar). A header-declared group's touch thunk is external
+    // (stable name); the DEFINING TU emits the full machinery, an importer emits just a
+    // `declare` for the touch thunk and calls it on access.
+    bool external_link = false;
+    bool defined_here = true;
+    // The group has a user `_()`/`~()` — a per-group fact both TUs agree on from the
+    // header, so it gates EVERY member (even a scalar) in importer and definer alike,
+    // even when the hook BODY (user_ctor_symbol) is defined only in the sibling.
+    bool has_hook = false;
 };
 
 struct Tree {

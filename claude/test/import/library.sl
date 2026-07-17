@@ -67,10 +67,13 @@ Widget() {
     }
 }
 
+int priv_ = 6;   /* .sl-LOCAL (not in the header) — PRIVATE, same name as consumer's */
+
 void hello_world() {
     __println("Hello, World!");
     note();
     Widget lw; lw.hum();
+    __println("library priv: " + priv_);   // library's own internal priv_
 }
 
 Animal() {
@@ -150,6 +153,26 @@ void Space:Vegetable:print() {
     __println("Vegetable:print: " + a + " " + b);
 }
 
+global Query(who_ = 1) { }
+global what_ = 2;
+int where_ = 3;
+global Query(when_ = 4) {
+    _() {
+        __println("Query:ctor");
+    }
+    ~() {
+        __println("Query:dtor");
+    }
+}
+
+/* the definitions of the header's cross-TU data globals. */
+int shared_ = 10;
+void bump_shared() {
+    shared_ = shared_ + 1;   // reads the other TU's write, writes back
+}
+global int nums[3] = (7, 8, 9);
+/* from_bird is DEFINED in bird.sl, not here — this TU only declares it (via the header). */
+
 /*
 in a source file, we cannot add a ctor/dtor or copy, move, swap operator to a class
 first declared in a header file. these five are IMPLICITLY invoked, so every importing
@@ -158,6 +181,11 @@ disagree with every other about what constructing or copying a NoCtor does, sile
 the ban is on ADDING: Animal's hooks and op= ARE declared in the header, so defining
 them (above) is legal. this file is the sibling, and it is still not allowed.
 */
+/* the header declares `int mismatch_ = 2;` — DEFINING it with a different value is an
+   error. (In the normal build mismatch_ is only declared, never defined, so no conflict.) */
+//-EXPECT-ERROR: differs from its declaration
+//int mismatch_ = 5;
+
 //-EXPECT-ERROR: cannot add a constructor
 //NoCtor:_() { __println("compile error."); }
 

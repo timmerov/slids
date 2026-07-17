@@ -116,12 +116,6 @@ BLOCKED FEATURES
 
   * TEMPLATED ALIAS — `alias X<...> = T;`.
 
-  * CROSS-TU GLOBALS — a global declared in a `.slh` should be visible to all linked
-    files; a `.sl` global stays file-local. Deferred by the user with the cross-TU
-    class slice. The class-linkage model (widen::Type::Linkage, declaration-site
-    decides) is the precedent to follow; a global needs the same three-way
-    internal/define/declare split and the same sibling rule for who defines it.
-
   * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local
     sweep (resolve) covers only body-declared locals; parameters are exempt
     (vardecl.sl's `unused_param` compiles). Proposal: flag a parameter that is

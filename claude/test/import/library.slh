@@ -8,6 +8,11 @@ public members are visible outside this source file.
 declarations only.
 no definitions here.
 the definitions are in the library source file.
+
+globals in an imported header are declarations, not definitions.
+exactly one source file must define the globals declared here.
+the initializer is optional.
+but must match the value in the defining source file.
 */
 
 /*
@@ -100,6 +105,32 @@ Bird(int a, int b) {
     _(); ~();
     void chirp();
 }
+
+global Query(who_ = 1) { }
+global what_ = 2;
+int where_;
+global Query(when_ = 4) {
+    _();
+    ~();
+}
+
+/* MUTATED across the seam: written in one TU and read in another — the real proof the
+   two TUs address ONE storage cell, not two symbols that happened not to collide. */
+int shared_ = 10;
+void bump_shared();
+
+/* a COMPOUND (array) global across the seam: the lone-compound lazy path, which the
+   DEFINING TU constructs/destructs while an importer only declares + touches. (The
+   `global` keyword is required for an array — the bare form is scalar-only.) */
+global int nums[3];
+
+/* defined in bird.sl — a NON-SIBLING source. any one .sl may define a header global. */
+int from_bird = 77;
+
+/* the header's initializer is a cross-check: a definition that gives a DIFFERENT value
+   is an error (verified by the negative in library.sl). This decl is never defined or
+   read in the normal build — a header value with no definer is a harmless external. */
+int mismatch_ = 2;
 
 NoCtor(int a_) { }
 

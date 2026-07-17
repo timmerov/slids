@@ -4394,7 +4394,29 @@ int addVarEntry(parse::Tree& tree, parse::EntryKind kind, parse::Node const& d,
     e.file_id = d.file_id;
     e.tok = d.name_tok;
     e.owner_ns_frame = owner_ns_frame;
+    // A GLOBAL declared in an imported `.slh` is a cross-TU DECLARATION (external),
+    // defined in exactly one linked `.sl`; a `.sl` global is a definition. (A const is
+    // always local — its value is substituted, so there is nothing to link.)
+    if (kind == parse::EntryKind::kGlobalVar) {
+        e.is_external = fileIsImported(tree, d.file_id);
+        e.defined = !e.is_external;
+    }
     return parse::addEntry(tree, std::move(e));
+}
+
+// A header-declared global (is_external) MERGES with its definition in this TU — the
+// same decl+def merge a namespace function gets. Returns the merged entry id, or -1 if
+// `prev` is not a mergeable header-global declaration.
+int tryMergeGlobalDecl(parse::Tree& tree, int prev, parse::Node const& d) {
+    if (prev < 0 || !d.is_global) return -1;
+    parse::Entry& pe = tree.entries[prev];
+    if (pe.kind != parse::EntryKind::kGlobalVar || !pe.is_external) return -1;
+    if (fileIsImported(tree, d.file_id)) return -1;   // another header decl, not a def
+    pe.is_external = false;
+    pe.defined = true;
+    pe.def_file_id = d.file_id;
+    pe.def_tok = d.name_tok;
+    return prev;
 }
 
 void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
@@ -4467,6 +4489,8 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
         if (!m) continue;
         if (m->kind == parse::Kind::kVarDeclStmt && (m->is_const || m->is_global)) {
             if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
+            int merged = tryMergeGlobalDecl(tree, findMemberDeclared(tree, frame, m->name), *m);
+            if (merged >= 0) { m->resolved_entry_id = merged; continue; }
             if (isDup(*m)) continue;
             parse::EntryKind kind = m->is_global ? parse::EntryKind::kGlobalVar
                                                  : parse::EntryKind::kConst;
@@ -5895,6 +5919,9 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
             int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
             if (existing >= 0) {
+                // A header-declared global MERGES with its definition here (decl+def).
+                int merged = tryMergeGlobalDecl(tree, existing, *ch);
+                if (merged >= 0) { ch->resolved_entry_id = merged; continue; }
                 parse::Entry const& prev = tree.entries[existing];
                 reportNameCollision(diag, "Duplicate declaration of '" + ch->name + "'.",
                                     prev.file_id, prev.tok, ch->file_id, ch->name_tok);

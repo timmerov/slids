@@ -11,6 +11,7 @@ probe.iter: 2
 Hello, World!
 library: note
 library: Widget:hum
+library priv: 6
 Animal:ctor: 1 2
 Animal:print: 1 2
 sum1: 11
@@ -21,6 +22,17 @@ Goodbye, World!
 library: Util:tag
 Bird:ctor: 5 6
 Bird:chirp: 5 6
+Query:ctor
+who   = 1
+what  = 2
+where = 3
+when  = 4
+shared0 = 10
+shared1 = 100
+nums  = 7 8 9
+from_bird = 77
+consumer priv: 5
 Bird:dtor: 5 6
 Vegetable:dtor: 3 4
 Animal:dtor: 1 2
+Query:dtor

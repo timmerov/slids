@@ -25,6 +25,10 @@ form and the method in the EXTERNAL form: same file, both spellings, both non-si
 
 import library;
 
+/* a header-declared global DEFINED in this NON-SIBLING source (library.sl declares it
+   too, via the header, but does not define it). any one .sl may be the definer. */
+int from_bird = 77;
+
 Bird() {
     _() {
         __println("Bird:ctor: " + a + " " + b);

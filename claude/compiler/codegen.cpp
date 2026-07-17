@@ -3490,6 +3490,12 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     for (auto const& [id, gv] : tree.globals) {
         g_globals[id] = &gv;
         std::string llty = llvmForRef(gv.type);
+        // A header-declared global NOT defined in this TU is a `declare` — an `external
+        // global`, no storage, no init; every access links to the defining object's.
+        if (gv.external_link && !gv.defined_here) {
+            body << "@" << gv.symbol << " = external global " << llty << "\n";
+            continue;
+        }
         std::string init = "zeroinitializer";
         if (gv.init && gv.touch_symbol.empty()) {
             SymTab no_syms;
@@ -3504,7 +3510,10 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             assert(scratch.str().empty()
                 && "static global initializer must fold to a pure constant");
         }
-        body << "@" << gv.symbol << " = internal global " << llty << " "
+        // A header-declared global DEFINED here is the external symbol importers link to;
+        // a `.sl`-local global stays `internal`.
+        char const* link = gv.external_link ? "" : "internal ";
+        body << "@" << gv.symbol << " = " << link << "global " << llty << " "
              << init << "\n";
     }
     if (!tree.globals.empty()) body << "\n";
@@ -3514,37 +3523,49 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // the reverse-order teardown is correct), then run the ctor.
     g_has_lazy_globals = !tree.global_groups.empty();
     if (g_has_lazy_globals) {
-        std::size_t K = tree.global_groups.size();
-        body << "@__$global_dtors = internal global [" << K
-             << " x ptr] zeroinitializer\n";
-        body << "@__$global_dtor_count = internal global i64 0\n\n";
-        body << "define void @__$global_register(ptr %fn) {\n"
-             << "  %c = load i64, ptr @__$global_dtor_count\n"
-             << "  %slot = getelementptr [" << K
-             << " x ptr], ptr @__$global_dtors, i64 0, i64 %c\n"
-             << "  store ptr %fn, ptr %slot\n"
-             << "  %c1 = add i64 %c, 1\n"
-             << "  store i64 %c1, ptr @__$global_dtor_count\n"
-             << "  ret void\n}\n\n";
-        body << "define void @__$global_dtor_all() {\n"
+        // The global dtor registry is a program-wide singly-linked list: one
+        // `linkonce_odr` head pointer + walker (every TU emits an identical copy and the
+        // linker keeps ONE), plus a statically-allocated node per lazy group PREPENDED at
+        // first touch. Size-independent, so it composes across TUs — a global defined in
+        // one object and torn down by `main` in another share the one list. (Replaced a
+        // per-TU fixed `[K x ptr]` array + count, which neither composed nor sized across
+        // TUs — main would have run only its own object's array.) A node is `{ next, fn }`;
+        // touch sets next = old head then head = node, so the newest is at the front and
+        // the walker (head-first) tears down in reverse construction order. The walker
+        // CLEARS the head, so a second `global;` sees an empty list.
+        body << "@__$global_dtor_head = linkonce_odr global ptr null\n\n";
+        body << "define linkonce_odr void @__$global_dtor_all() {\n"
              << "entry:\n"
-             << "  %c = load i64, ptr @__$global_dtor_count\n"
+             << "  %head = load ptr, ptr @__$global_dtor_head\n"
+             << "  store ptr null, ptr @__$global_dtor_head\n"
              << "  br label %loop\n"
              << "loop:\n"
-             << "  %i = phi i64 [ %c, %entry ], [ %ni, %bodyb ]\n"
-             << "  %z = icmp eq i64 %i, 0\n"
+             << "  %n = phi ptr [ %head, %entry ], [ %next, %bodyb ]\n"
+             << "  %z = icmp eq ptr %n, null\n"
              << "  br i1 %z, label %exitb, label %bodyb\n"
              << "bodyb:\n"
-             << "  %ni = sub i64 %i, 1\n"
-             << "  %slot = getelementptr [" << K
-             << " x ptr], ptr @__$global_dtors, i64 0, i64 %ni\n"
-             << "  %fn = load ptr, ptr %slot\n"
+             << "  %fslot = getelementptr { ptr, ptr }, ptr %n, i32 0, i32 1\n"
+             << "  %fn = load ptr, ptr %fslot\n"
              << "  call void %fn()\n"
+             << "  %nslot = getelementptr { ptr, ptr }, ptr %n, i32 0, i32 0\n"
+             << "  %next = load ptr, ptr %nslot\n"
              << "  br label %loop\n"
              << "exitb:\n"
              << "  ret void\n}\n\n";
         for (ast::GlobalGroup const& g : tree.global_groups) {
+            // A header-declared group NOT defined here: the machinery (sentinel, node,
+            // touch, ctor/dtor) is the DEFINING TU's. This TU only `declare`s the shared
+            // touch thunk so its access sites can call it.
+            if (g.external_link && !g.defined_here) {
+                body << "declare void @" << g.touch_symbol << "()\n\n";
+                continue;
+            }
             body << "@" << g.sentinel_symbol << " = internal global i1 false\n";
+            // A group with a dtor gets a static list node { next, fn }, fn baked to its
+            // dtor thunk; touch fills next and prepends it onto the shared head.
+            if (!g.dtor_symbol.empty())
+                body << "@" << g.dtor_symbol << ".node = internal global { ptr, ptr } "
+                     << "{ ptr null, ptr @" << g.dtor_symbol << " }\n";
             body << "define void @" << g.touch_symbol << "() {\n"
                  << "entry:\n"
                  << "  %s = load i1, ptr @" << g.sentinel_symbol << "\n"
@@ -3552,7 +3573,12 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                  << "init:\n"
                  << "  store i1 true, ptr @" << g.sentinel_symbol << "\n";
             if (!g.dtor_symbol.empty())
-                body << "  call void @__$global_register(ptr @" << g.dtor_symbol << ")\n";
+                body << "  %old = load ptr, ptr @__$global_dtor_head\n"
+                     << "  %nx = getelementptr { ptr, ptr }, ptr @" << g.dtor_symbol
+                     << ".node, i32 0, i32 0\n"
+                     << "  store ptr %old, ptr %nx\n"
+                     << "  store ptr @" << g.dtor_symbol
+                     << ".node, ptr @__$global_dtor_head\n";
             body << "  call void @" << g.ctor_symbol << "()\n"
                  << "  br label %done\n"
                  << "done:\n"
@@ -3564,6 +3590,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         // THEN destructs its members in REVERSE. A lone compound global is the
         // degenerate one-member group (synth_global_id), constructed identically.
         for (ast::GlobalGroup const& g : tree.global_groups) {
+            if (g.external_link && !g.defined_here) continue;   // definer's, declared above
             std::vector<int> members = g.member_ids;
             if (g.synth_global_id >= 0) members = { g.synth_global_id };
             body << "define void @" << g.ctor_symbol << "() {\nentry:\n";

@@ -1828,15 +1828,28 @@ struct Parser {
                     return nullptr;
                 }
                 advance();   // )
-                if (!expect(token::Kind::kLBrace, "{")) return nullptr;
                 if (is_ctor && ctor_def) { errorAt(m_tok, "Duplicate constructor."); return nullptr; }
                 if (is_dtor && dtor_def) { errorAt(m_tok, "Duplicate destructor."); return nullptr; }
+                if (is_ctor) ctor_def = true; else dtor_def = true;   // present, decl or def
+                // A hook is a DECLARATION (`_();` — the header form; the group is defined
+                // in a `.sl`) or a DEFINITION (`_(){…}`). Mirrors a class hook: `;` is a
+                // bodyless kFunctionDecl, `{` a body that a header rejects.
+                if (peek().kind == token::Kind::kSemicolon) {
+                    advance();   // ;
+                    auto decl = newNodeAt(parse::Kind::kFunctionDecl, m_file, m_tok);
+                    decl->name = is_ctor ? "_$gctor" : "_$gdtor";
+                    decl->name_tok = m_tok;
+                    decl->return_type = widen::internOrNone("void");
+                    node->children.push_back(std::move(decl));
+                    continue;
+                }
+                if (!expect(token::Kind::kLBrace, "{")) return nullptr;
+                if (rejectBodyInHeader(m_file, m_tok)) return nullptr;
                 auto member = newNodeAt(parse::Kind::kFunctionDef, m_file, m_tok);
                 member->name = is_ctor ? "_$gctor" : "_$gdtor";
                 member->name_tok = m_tok;
                 member->return_type = widen::internOrNone("void");
                 if (!parseStmtsThroughRBrace(member->children)) return nullptr;
-                if (is_ctor) ctor_def = true; else dtor_def = true;
                 node->children.push_back(std::move(member));
             }
             if (!expect(token::Kind::kRBrace, "}")) return nullptr;

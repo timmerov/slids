@@ -65,6 +65,8 @@ void note() {
     __println("consumer: note");
 }
 
+int priv_ = 5;   /* .sl-LOCAL (not in the header) — PRIVATE, same name as library's 6 */
+
 Util {
     void tag() {
         __println("consumer: Util:tag");
@@ -122,6 +124,25 @@ int32 main() {
     // here that is invisible: same import, same construction, same call.
     Bird tweety(5,6);
     tweety.chirp();
+
+    __println("who   = " + Query:who_);
+    __println("what  = " + ::what_);
+    __println("where = " + where_);
+    __println("when  = " + Query:when_);
+
+    // MUTATION across the seam: read library's init, write here, let library read+bump,
+    // read library's write back — proves both TUs share ONE storage cell.
+    __println("shared0 = " + shared_);   // 10, library's init read here
+    shared_ = 99;                        // written here
+    bump_shared();                       // library reads 99, writes 100
+    __println("shared1 = " + shared_);   // 100, library's write read here
+
+    // a COMPOUND (array) global built by the definer, read here.
+    __println("nums  = " + nums[0] + " " + nums[1] + " " + nums[2]);
+    // a header global defined in the NON-SIBLING bird.sl.
+    __println("from_bird = " + from_bird);
+    // this TU's PRIVATE priv_ (5); library's own priv_ (6) never collides.
+    __println("consumer priv: " + priv_);
 
     return 0;
 }
