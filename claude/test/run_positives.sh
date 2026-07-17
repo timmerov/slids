@@ -40,6 +40,19 @@ for sample in "$@"; do
         fail=$((fail + 1))
         continue
     fi
+    # Staleness guard. `make positives` rebuilds first and aborts on a build error, so a
+    # bad compile never reaches here through it — but a DIRECT run of this script would
+    # otherwise happily test a leftover binary from an earlier (valid) build and PASS,
+    # hiding that the current compiler produces bad IR. A binary older than its source OR
+    # older than the compiler was not rebuilt: fail loudly instead of trusting it.
+    src="$SCRIPT_DIR/$subdir/$sample.sl"
+    slidsc="$BIN_DIR/slidsc"
+    if { [ -f "$src" ] && [ "$src" -nt "$bin" ]; } \
+       || { [ -x "$slidsc" ] && [ "$slidsc" -nt "$bin" ]; }; then
+        echo "  FAIL  $sample: binary older than its source or the compiler (stale build)"
+        fail=$((fail + 1))
+        continue
+    fi
     if [ ! -f "$exp" ]; then
         echo "  FAIL  $sample: missing $exp"
         fail=$((fail + 1))

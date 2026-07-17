@@ -1,3 +1,7 @@
+# A failed recipe (slidsc/llc error) removes its target, so a partial or stale
+# .ll/.o is never left looking up-to-date on the next build.
+.DELETE_ON_ERROR:
+
 SLIDSC    = ../../bin/slidsc
 LLC       = llc
 CXX       = g++
