@@ -17,6 +17,9 @@ BUGS
     spec is everything is private unless it is declared in a .slh file - either
     explicitly or implicitly by synthesis.
     there are a few exceptions: like main and the global dtor registry.
+    i tried to explain this to claude and it wrote up a beautiful plan that asserted
+    all functions are external symbols and how it was going to implement that.
+    complete hallucination.
 
 UNBLOCKED FEATURES
 
