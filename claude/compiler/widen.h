@@ -90,6 +90,13 @@ struct Type {
     //               definitions at all, only `declare`s to link against the sibling's.
     enum class Linkage { kInternal, kDefine, kDeclare };
     Linkage linkage = Linkage::kInternal;
+    // kSlid: the class is DECLARED incomplete (a trailing `...` in its header) — it has
+    // PRIVATE fields hidden from an importer, whose layout/size the importer cannot know.
+    // So its `__$sizeof` is an EXTERNAL function (the completer defines it, importers call
+    // it), an importer sizes an instance at runtime + constructs via `__$ctor`, and never
+    // sees the layout. True in EVERY TU that sees the incomplete header (the completer AND
+    // importers), even though the completer holds the full layout.
+    bool opaque = false;
 };
 
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
@@ -148,6 +155,11 @@ void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor);
 // from the file the class is DECLARED in; codegen reads it back via slidLinkage.
 void setSlidLinkage(TypeRef ref, Type::Linkage linkage);
 Type::Linkage slidLinkage(TypeRef ref);
+
+// Set/read whether the class is DECLARED incomplete (opaque to importers; see
+// Type::opaque). Resolve sets it from a header's trailing `...`; codegen reads it.
+void setSlidOpaque(TypeRef ref, bool opaque);
+bool slidOpaque(TypeRef ref);
 
 // Set whether each hook's BODY is written in this TU (see Type::ctor_here). Resolve
 // decides it in registerClassBody, where every OPENING of the class is visible — the

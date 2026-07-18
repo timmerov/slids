@@ -840,10 +840,12 @@ Phase 5 — classes
     `@<Class>__$ctor(self)` / `@<Class>__$dtor(self)` (materialized in codegen run()) that
     wraps the user body (emitted as `__$ctor__impl` / `__$dtor__impl`). Sites do value-init
     inline then dispatch (emitConstructHooks/emitDestructHooks -> `call @<Class>__$ctor`);
-    aggregates walk to a class leaf; a trivial class emits no method (gated on typeNeedsHook).
+    aggregates walk to a class leaf; a trivial class emits no method (gated on typeNeedsHook —
+    an OPAQUE class is the exception, always routed, see OPAQUE CLASSES in Phase 8).
     The virtual complete dtor `__$vdtor` collapsed into `__$dtor` (vtable slot 0 points at it).
-    Behavior-preserving (same calls/order); value-init stays inline (visible layout only —
-    opaque cross-TU construction is a separate future param-ctor). See [[project_ctor_dtor_injection]].
+    Behavior-preserving (same calls/order); value-init stays inline for a VISIBLE layout — an
+    opaque cross-TU class instead default-constructs through its own `@C__$ctor` (LANDED, see
+    Phase 8 OPAQUE CLASSES). See [[project_ctor_dtor_injection]].
     * copy/move/swap AS FIRST-CLASS OPERATOR METHODS — LANDED. The default op=(Self^) /
     op<--(Self^) / op<-->(Self^) are REAL memberwise methods, synthesized by resolve's
     `synthesizeClassTransferOps` (kFunctionDef + kFunction entry, Entry.synthesized; body one
@@ -1444,9 +1446,9 @@ Phase 7 — class advanced
     UNTOUCHED: an interned incomplete class is ORDINARY (construction, field access, sizeof; no
     privacy single-file; optional defaults; empty completed class = 1 byte). Negatives:
     add-field-to-complete, re-incomplete-a-complete, leading/mid-list `...`, dup-field-across-
-    openings, typeless-no-default appended. Multi-file (Phase 8) rides the same model: a
-    never-closed TU keeps the type open -> link-time __$sizeof(). Canon test/class/
-    incomplete.sl. [[project_incomplete_classes]]
+    openings, typeless-no-default appended. Cross-file LANDED (Phase 8): a `.slh` incomplete
+    class is OPAQUE to an importer — see OPAQUE CLASSES below. Canon test/class/
+    incomplete.sl. [[project_incomplete_classes]] [[project_opaque_classes]]
   * REFINEMENTS (run-time-scope re-open) — PLANNED (stub test/class/refine.sl). Re-opening
     a class from a scope that ISN'T its own is an ILLUSION: it desugars to an anonymous
     zero-field DERIVED class ($T : T) that USURPS the base's name within that lexical scope,
@@ -1461,7 +1463,7 @@ Phase 7 — class advanced
     conformance (slids's answer to a comparator / trait-impl, no orphan-rule problem). MOTIVATION:
     `sort<T>(T^ c){ if (c[j].lessthan(c[i])) c[i] <--> c[j]; }` — refine the element type to
     supply `lessthan` locally. Internal name for $T: the "usurper". [[project_refinements]]
-  * incomplete-class semantics (`...`)  — OUT OF SCOPE for now
+  * incomplete-class semantics (`...`)  — LANDED (single-file above; cross-TU opaque in Phase 8)
   * inheritance contracts (`= default`, `= delete`)
   * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)
 
@@ -1535,9 +1537,34 @@ Phase 8 — namespaces + cross-TU
       (as opposed to has_ctor's "does the class HAVE one", which comes from the header
       and every TU agrees on); a hook is not a frame entry, so the entry-driven
       external_decl path cannot answer it. Canon test/import/bird.sl.
-      OPEN: `sizeof` (deferred with cross-TU incomplete classes); multi-header modules.
-      (Overloads across a `.slh` now link — see ITANIUM MANGLING; cross-TU globals landed
-      — see CROSS-TU GLOBALS.)
+      OPEN: multi-header modules; deriving from an imported incomplete class (runtime field
+      offsets). (Overloads across a `.slh` now link — see ITANIUM MANGLING; cross-TU globals
+      landed — see CROSS-TU GLOBALS; cross-TU incomplete classes landed — see OPAQUE CLASSES.)
+    - OPAQUE CLASSES (cross-TU incomplete — LANDED 2026-07-17). An incomplete class (trailing
+      `...`) declared in a `.slh` is OPAQUE to an importer: it names the class + its methods but
+      not its fields/size/offsets (those live only in the sibling). widen::Type.opaque, set in
+      registerClassBody as `header_class && declared_incomplete` (declared_incomplete is the
+      PERSISTENT flag; is_open is cleared by the closing re-open). A `.sl`-local incomplete class
+      is never opaque (complete within its TU). Three consequences:
+      SIZE runtime: `@C__$sizeof` goes EXTERNAL (completer defines the folded constant, importer
+      declares + calls). Every opaque local allocas `i8, i64 %sz, align 16`; `new C` sizes malloc
+      the same way — never the placeholder `{ i8 }` view.
+      CONSTRUCTION split between two sites (the whole feature): public fields at the call site,
+      hidden fields by the class's own ctor. `@C__$ctor` (external) is the COMPLETE ctor an
+      importer calls — SYNTHESIZED in resolve (synthesizeOpaqueCtor, only kDefine) as a method
+      whose body is a PLACEMENT NEW `new(_$recv) C`, reusing the whole construction funnel
+      (classifyClassInit fills default/zero/recursion; emitConstructHooks runs hooks) so the exact
+      same rules a normal `C c;` obeys apply — no hand-rolled fill. `@C__$pctor` (internal) is that
+      hook body alone, called DIRECTLY by a known-layout site after it fills the fields itself.
+      emitConstructHooks routes by TU role: kDeclare→$ctor, kDefine→$pctor. Symbol forced to
+      `<C>__$ctor` (desugar renames `_$octor`; ast.complete_ctor skips the `__impl` suffix).
+      DESTRUCTION uniform: both TUs call `@C__$dtor`. A POD opaque class STILL routes construct/
+      destruct through $ctor/$dtor — emitConstructed / emitDestructHooks / the emission gates now
+      test `typeNeedsHook || slidOpaque`, or the importer reads uninitialized hidden fields (the
+      bug that was here). Rejections in an importer (no static offset/stride): by-value in an
+      aggregate (field/array/tuple), a bare opaque global, `new C[n]`. A bare local, a pointer,
+      and single `new C` are fine. Canon test/import String / Mix (all field kinds) / Flat (POD).
+      Detail: readme-classes.txt OPAQUE CLASSES. [[project_opaque_classes]]
     - ITANIUM NAME MANGLING (LANDED 2026-07-17). Every user function and method mangles
       to an Itanium `_Z<name><params>` symbol, minted through ONE core symbolFor(entry)
       (functionSymbol / methodSymbol became thin adapters; the check confirmed all four

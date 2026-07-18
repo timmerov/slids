@@ -1007,6 +1007,14 @@ Type::Linkage slidLinkage(TypeRef ref) {
     return get(ref).linkage;
 }
 
+void setSlidOpaque(TypeRef ref, bool opaque) {
+    arena().types[ref].opaque = opaque;
+}
+
+bool slidOpaque(TypeRef ref) {
+    return get(ref).opaque;
+}
+
 void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here) {
     arena().types[ref].ctor_here = ctor_here;
     arena().types[ref].dtor_here = dtor_here;

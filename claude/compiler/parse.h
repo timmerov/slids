@@ -476,6 +476,11 @@ struct ClassInfo {
     // primary's own fields — the whole feature freezes the layout in ONE place
     // (single-file: all appends are seen in Phase 1 before Phase 2 interns).
     bool is_open = false;
+    // PERSISTENT (unlike is_open, which the closing re-open clears): the class was declared
+    // incomplete at some opening (a trailing `...`). Stays true after completion, so the
+    // COMPLETER still knows the class is opaque to importers. With a header declaration this
+    // makes the class OPAQUE cross-TU (widen::Type::opaque).
+    bool declared_incomplete = false;
     std::vector<Node*> pending_fields;
     // The IMPLICITLY-INVOKED members contributed by RE-OPENS — ctor, dtor, copy, move,
     // swap (still OWNED by their re-open node, like pending_fields). A class's lifecycle

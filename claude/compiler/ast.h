@@ -167,6 +167,12 @@ struct Node {
                                                  // string. A free function is never this: a
                                                  // `.sl`'s `void do_a()` is external ON
                                                  // PURPOSE — that is how another TU calls it.
+    bool complete_ctor = false;                  // kFunctionDef: the SYNTHESIZED complete ctor
+                                                 // of an opaque class (@C__$ctor). Its name is
+                                                 // already the final `<C>__$ctor`, so emitSymbol
+                                                 // must NOT append the `__impl` suffix it adds to
+                                                 // a user `_$ctor` body — this flag says "emit
+                                                 // this name verbatim".
 };
 
 // A per-class vtable: the class's symbol and, per slot, the implementing method's

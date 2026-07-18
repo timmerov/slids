@@ -1508,7 +1508,10 @@ STAGE FILES (.h / .cpp pairs)
             TUPLE (compile-time typeByteSize, the tuple laid out with LLVM-default
             struct alignment) OR a CLASS (runtime __$sizeof, so it IS allocatable);
             void / a tuple with a class slot / unsized -> "Cannot allocate" (carets
-            the element type, name_tok). An array size must be integer-class; a
+            the element type, name_tok). An ARRAY of an imported OPAQUE class is also
+            rejected (`new C[n]` — the element stride is unknown here, the heap twin of
+            the stack `C a[n]` ban; single `new C` needs no stride and is fine — see
+            readme-classes.txt OPAQUE CLASSES). An array size must be integer-class; a
             placement address must be a buffer-class pointer (isBufferClassPtr, the
             cast set void^/int8^/uint8^);
             `new T(args)` ctor args (children[2]) belong to a single class; an ARRAY

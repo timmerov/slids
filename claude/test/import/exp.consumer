@@ -8,7 +8,8 @@ pick.i64: 2
 pairsum: 15
 probe.ref: 1
 probe.iter: 2
-Hello, World!
+Hello, World! 42
+dc tag: 7
 library: note
 library: Widget:hum
 library priv: 6
@@ -32,6 +33,14 @@ shared1 = 100
 nums  = 7 8 9
 from_bird = 77
 consumer priv: 5
+goodbye 7
+mix a=11 b=0 s=4 r=000
+flat a=55 b=0
+copy tag: 7
+move tag: 7
+swap tag: 7
+assign tag: 7
+return tag: 7
 Bird:dtor: 5 6
 Vegetable:dtor: 3 4
 Animal:dtor: 1 2

@@ -1542,6 +1542,19 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Cannot allocate '" + elem + "'.", {}});
             }
+            // `new C[n]` of an imported OPAQUE class: the array indexes and constructs its
+            // elements at a STATIC stride this TU does not have (only the completer knows
+            // the element size). A single `new C` is fine — it needs no stride, just the
+            // runtime __$sizeof() for the one object. So reject only the array form, the
+            // heap twin of the rejected stack `C a[n]`. (A pointer `C^` is always allowed.)
+            if (is_array && widen::form(es) == widen::Type::Form::kSlid
+                && widen::slidOpaque(es)
+                && widen::slidLinkage(es) == widen::Type::Linkage::kDeclare) {
+                diagnostic::report(diag, {e.file_id, e.name_tok,
+                    "Cannot allocate an array of imported incomplete class '" + elem
+                    + "'; its element stride is not known here (allocate a single '"
+                    + elem + "' with 'new " + elem + "', or hold each by pointer).", {}});
+            }
             // (The abstract-class check is not here: `new Class` builds its object through
             // constructClass -> classifyClassInit below, where the check lives.)
             // Constructor args (children[2]) belong to a SINGLE class object, OR — for

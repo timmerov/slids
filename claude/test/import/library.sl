@@ -71,8 +71,13 @@ int priv_ = 6;   /* .sl-LOCAL (not in the header) — PRIVATE, same name as cons
 
 void hello_world() {
     String hw(nullptr, 42);
-    gw.set("Hello, World!");
-    __println(gw.get() + " " + gw.tag());
+    hw.set("Hello, World!");
+    __println(hw.get() + " " + hw.tag());
+    // DEFINER-side default construction (no initializer): this TU owns the layout, so it
+    // fills the field DEFAULTS at the site (str_=null, tag_=7) and calls @String__$pctor
+    // directly — the site-fill path, distinct from an importer's @String__$ctor default-fill.
+    String dc;
+    __println("dc tag: " + dc.tag());
     note();
     Widget lw; lw.hum();
     __println("library priv: " + priv_);   // library's own internal priv_
@@ -188,6 +193,29 @@ String(char[] str_ = nullptr, int tag_ = 7) {
     }
     char[] get() { return str_; }
     int tag() { return tag_; }
+}
+
+/* helper for Mix's by-value class field: p_ has a default, q_ does NOT — so a default Cell
+   must come out {4, 0}, proving the recursive fill zeros a nested no-default field too. */
+Cell(int p_ = 4, int q_) { }
+
+/* complete Mix (see the header). Its @Mix__$ctor — synthesized as a placement-new — must
+   default-construct all four hidden fields for an importer: a_ from its default, b_ to zero,
+   s_ recursively (a default Cell), and every element of r_ to zero. */
+Mix(int a_ = 11, int b_, Cell s_, int r_[3]) {
+    _() { }
+    ~() { }
+    int a() { return a_; }
+    int b() { return b_; }
+    int s() { return s_.p_ + s_.q_; }
+    int r(int i) { return r_[i]; }
+}
+
+/* complete Flat — a POD (no hooks). a_ has a default, b_ does not, so an importer's default
+   construction via @Flat__$ctor must come out {55, 0}. */
+Flat(int a_ = 55, int b_) {
+    int a() { return a_; }
+    int b() { return b_; }
 }
 
 /*

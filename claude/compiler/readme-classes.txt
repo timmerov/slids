@@ -978,9 +978,9 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   UNTOUCHED: once interned it is an ordinary class (construction, field access, sizeof reuse
   existing paths; no privacy single-file; defaults optional on every field; an empty completed
   class is 1 byte). A COMPLETE class rejects a field-bearing re-open (above) and cannot be
-  re-opened as incomplete. Canon test/class/incomplete.sl. Multi-file (future) rides the same
-  model: a TU that never sees the close keeps the type open -> size deferred to link-time
-  __$sizeof().
+  re-opened as incomplete. Canon test/class/incomplete.sl. Cross-file (LANDED): a `.slh`
+  incomplete class is OPAQUE to an importer that never sees the close — size deferred to a
+  link-time `__$sizeof()`, construction split across the seam. See OPAQUE CLASSES below.
 
   BLOCK RE-OPEN. A same-name class with an EMPTY field list re-opens the existing one.
   registerClassName points the re-open node's resolved_entry_id at the PRIMARY's entry and
@@ -1247,7 +1247,55 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   THE VTABLE STAYS PRIVATE. It is stamped by the ctor, so only the ctor's implementation needs
   to know what it is — and that is the sibling's. No `@C__$vtable` crosses a TU.
 
-  OPEN. `sizeof` (an external synthesized function for an INCOMPLETE class, an internal constant
-  otherwise — deferred with cross-TU incomplete classes); cross-TU globals. (Overloads across a
-  `.slh` now LINK — every function/method mangles to an Itanium `_Z...` symbol off its signature,
-  not a per-TU entry id; see readme.txt's desugar entry.)
+  OPAQUE CLASSES (cross-TU incomplete — LANDED). An INCOMPLETE class (trailing `...`, above)
+  declared in a `.slh` is OPAQUE to an importer: it can name the class and its methods but not
+  its fields, size, or offsets, because the completing fields live only in the sibling `.sl`.
+  widen::Type.opaque records it, set in registerClassBody as `header_class && declared_incomplete`
+  (ClassInfo.declared_incomplete is the PERSISTENT flag — is_open is cleared by the closing
+  re-open, opaque must not be). A `.sl`-LOCAL incomplete class is never opaque: it is complete
+  within its own TU, so nobody sees it incompletely. Opaque changes three things — its size is a
+  RUNTIME function, its construction is SPLIT across the seam, and its layout-needing uses are
+  REJECTED in an importer.
+    SIZE. `@C__$sizeof` becomes EXTERNAL: the completer `define`s it (the folded GEP-null/ptrtoint
+    constant), every importer `declare`s it and CALLS it. An importer must never compute the size
+    from its own (placeholder `{ i8 }`) view — every opaque local allocas `i8, i64 %sz, align 16`
+    off that call (codegen's entry-block hoist), and `new C` sizes the malloc the same way.
+    CONSTRUCTION IS DIVIDED BETWEEN TWO SITES, and this is the whole feature: the PUBLIC fields
+    (any before the `...`) are filled at the call site as usual; the HIDDEN fields are filled by
+    the class's OWN ctor. Two symbols carry the split:
+      @C__$ctor  (external) is the COMPLETE ctor an importer calls. It fully default-constructs
+                 the object — every hidden field to its author default, else ZERO, recursing into
+                 class / array / tuple fields exactly as a normal `C c;` site does — then runs the
+                 hooks. It is SYNTHESIZED in resolve (synthesizeOpaqueCtor, at the resolveScopeBodies
+                 choke point, only for kDefine) as a real method whose body is a PLACEMENT NEW into
+                 the receiver pointer: `void _(C^ _$recv){ void^ _p = _$recv; _p = new(_p) C; }`.
+                 That reuses THE construction funnel wholesale (classifyClassInit fills the defaults
+                 / zeros / recursion; emitConstructHooks runs the hooks) — nothing is re-derived by
+                 hand. Its emitted symbol is forced to `<C>__$ctor` (desugar renames `_$octor`; the
+                 ast.complete_ctor flag tells emitSymbol to skip the `__impl` suffix it adds to a
+                 user `_$ctor` body).
+      @C__$pctor (internal) is that hook body ALONE (emitClassCtorBody: field/base ctors + vtable
+                 stamp + `@C__$ctor__impl`). A same-TU (known-layout) construction fills the fields
+                 at the site and calls `@C__$pctor` DIRECTLY, skipping the default-fill; the
+                 placement-new inside `@C__$ctor` dispatches its hook phase here too. So
+                 emitConstructHooks routes an opaque class by TU ROLE: kDeclare → `@C__$ctor`,
+                 kDefine → `@C__$pctor`.
+    DESTRUCTION is uniform — both TUs call `@C__$dtor` (no default-fill counterpart needed). A
+    POD opaque class (no hooks) STILL emits/declares both `@C__$ctor` and `@C__$dtor` and STILL
+    routes construction/destruction through them: emitConstructed / emitDestructHooks gate on
+    `typeNeedsHook || slidOpaque`, because the "trivial class, do nothing" shortcut would leave an
+    importer reading fields it cannot see. Canon test/import Flat.
+    REJECTED IN AN IMPORTER (layout unknown, so no static offset/stride): embedding one BY VALUE in
+    an aggregate — a class field, an array element, a tuple slot (checkClassByValueAcyclic + a
+    var-entry pass in resolve); a BARE opaque GLOBAL (static storage has no runtime-alloca twin);
+    `new C[n]` (element stride unknown — classify, the heap twin of the stack rejection). A bare
+    LOCAL, a pointer `C^`, and a single `new C` are all fine. Reaching a hidden field or passing an
+    initializer already errors (the importer sees no such field / zero fields). Canon test/import
+    String (str_ + tag_), Mix (every field kind: default, no-default→0, recursive class field,
+    array, exercised through getters), Flat (POD).
+
+  OPEN. cross-TU globals (LANDED — see readme.txt); multi-header modules; classes DERIVING from an
+  imported incomplete class (the derived TU needs runtime field offsets past the opaque base —
+  same family as the deferred REFINEMENTS runtime-offset work). (Overloads across a `.slh` now LINK
+  — every function/method mangles to an Itanium `_Z...` symbol off its signature, not a per-TU
+  entry id; see readme.txt's desugar entry.)

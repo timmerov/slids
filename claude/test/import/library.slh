@@ -140,6 +140,25 @@ String(...) {
     int tag();
 }
 
+/* a second incomplete class that stresses EVERY FIELD KIND the completer's @Mix__$ctor
+   must default-construct on behalf of an importer that cannot see the layout: a primitive
+   WITH a default, a primitive with NONE (the ctor must zero it), a by-value CLASS field
+   (constructed recursively, its own defaults/zeros filled), and an ARRAY field (each
+   element zeroed). The consumer only ever calls the getters — it never names a field. */
+Mix(...) {
+    _(); ~();
+    int a();       // primitive field with a default
+    int b();       // primitive field with NO default -> 0
+    int s();       // a by-value class field, default-constructed recursively
+    int r(int i);  // an array field element, zeroed
+}
+
+/* a POD incomplete class — NO ctor/dtor hooks. An importer must STILL route construction
+   (and destruction) through @Flat__$ctor / @Flat__$dtor to fill the fields it cannot see:
+   the "trivial class, construct nothing" shortcut a normal POD gets does NOT apply when the
+   layout is hidden, or the importer reads uninitialized storage. */
+Flat(...) { int a(); int b(); }
+
 NoCtor(int a_) { }
 
 /* no definitions in a header file. a declaration and its definition are separable for

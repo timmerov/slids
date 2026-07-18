@@ -1313,8 +1313,14 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
                 std::string name;
                 if      (f->name == "_$ctor") name = sym + "__$ctor";
                 else if (f->name == "_$dtor") name = sym + "__$dtor";
+                else if (f->name == "_$octor") name = sym + "__$ctor";
                 else name = methodSymbol(in, owner, f->name, f->resolved_entry_id);
-                prog->children.push_back(liftMember(*f, std::move(name), owner));
+                auto lifted = liftMember(*f, std::move(name), owner);
+                // @C__$octor IS the complete ctor @C__$ctor (a synthesized placement-new
+                // over an opaque class). Its name is already final, so emitSymbol must NOT
+                // append `__impl` the way it does for a user `_$ctor` body.
+                if (f->name == "_$octor") lifted->complete_ctor = true;
+                prog->children.push_back(std::move(lifted));
             }
         }
         flattenScope(*m, prog, in, next_id);   // recurse: deeper scopes, fn bodies

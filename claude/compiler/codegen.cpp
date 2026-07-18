@@ -1884,6 +1884,18 @@ void emitConstructHooks(std::string const& addr, widen::TypeRef type,
         return;
     }
     if (ct.form == widen::Type::Form::kSlid) {
+        // An OPAQUE class dispatches by TU ROLE. The importer's storage is runtime-sized
+        // and its fields are invisible, so it calls @C__$ctor (which default-fills them).
+        // The completer filled the fields at the site (known layout), so it calls
+        // @C__$pctor — the hook body only — skipping the default-fill.
+        if (widen::slidOpaque(cs)) {
+            char const* suffix =
+                widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare
+                    ? "__$ctor" : "__$pctor";
+            out << "  call void @" << widen::classSymbol(cs) << suffix << "(ptr "
+                << addr << ")\n";
+            return;
+        }
         // Only a NON-TRIVIAL class has a complete ctor (the synthesis in run() gates
         // on the same predicate); a trivial class constructs nothing.
         if (typeNeedsHook(cs, /*ctor=*/true))
@@ -1951,8 +1963,11 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
     }
     if (ct.form == widen::Type::Form::kSlid) {
         // Only a NON-TRIVIAL class has a complete dtor (the synthesis in run() gates
-        // on the same predicate); a trivial class destructs nothing.
-        if (typeNeedsHook(cs, /*ctor=*/false))
+        // on the same predicate); a trivial class destructs nothing. An OPAQUE class
+        // ALWAYS routes through @C__$dtor — the importer can't see whether it has hidden
+        // fields to tear down, so destruction is uniform across both TUs (unlike
+        // construction, which splits $ctor vs $pctor).
+        if (typeNeedsHook(cs, /*ctor=*/false) || widen::slidOpaque(cs))
             out << "  call void @" << widen::classSymbol(cs) << "__$dtor(ptr "
                 << addr << ")\n";
         return;
@@ -2259,8 +2274,12 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
 void emitConstructed(std::string const& addr, widen::TypeRef type,
                      bool register_dtor, DtorScope* scope, std::ostream& out) {
     widen::TypeRef st = widen::strip(type);
-    if (!typeNeedsHook(st, /*ctor=*/true)) return;
-    assert(typeNeedsHook(st, /*ctor=*/false)
+    // An OPAQUE class is construct/destruct-paired through its @C__$ctor / @C__$dtor even
+    // when it needs no hooks (typeNeedsHook sees no hidden fields HERE): an importer cannot
+    // fill or tear down fields it can't see, so it must always route through those two.
+    bool opaque = widen::slidOpaque(st);
+    if (!typeNeedsHook(st, /*ctor=*/true) && !opaque) return;
+    assert((opaque || typeNeedsHook(st, /*ctor=*/false))
            && "ctor/dtor hook need diverged — must be language-paired");
     emitConstructHooks(addr, st, out);
     if (register_dtor) {
@@ -3277,6 +3296,9 @@ void collectVarDecls(ast::Node const& s, std::vector<ast::Node const*>& out) {
 // suffix lived inline in emitFunction only, so a hook DECLARATION emitted a `declare`
 // naming the COMPLETE method — a symbol that TU also defines — instead of the impl.
 std::string emitSymbol(ast::Node const& fn) {
+    // The synthesized complete ctor of an opaque class already carries the final
+    // `<C>__$ctor` symbol — it IS the complete method, not a user body — so emit it verbatim.
+    if (fn.complete_ctor) return fn.name;
     auto endsWith = [](std::string const& s, std::string const& suf) {
         return s.size() >= suf.size()
             && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
@@ -3389,7 +3411,21 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         }
         std::string regname = std::string("%") + d->name + "."
             + std::to_string(d->resolved_entry_id);
-        out << "  " << regname << " = alloca " << llty << "\n";
+        // An OPAQUE class an importer only DECLARES has an unknown layout here (its LLVM
+        // type is the `{ i8 }` placeholder), so size the storage at runtime from the
+        // completer's @C__$sizeof(). Over-align to 16 — the importer can't know the real
+        // alignment, and 16 satisfies any scalar field. (The completer knows the layout,
+        // so its own instances alloca the real struct.)
+        widen::TypeRef ds = widen::strip(d->return_type);
+        if (widen::form(ds) == widen::Type::Form::kSlid && widen::slidOpaque(ds)
+            && widen::slidLinkage(ds) == widen::Type::Linkage::kDeclare) {
+            std::string sz = newTmp("osz");
+            out << "  " << sz << " = call i64 @" << widen::classSymbol(ds)
+                << "__$sizeof()\n";
+            out << "  " << regname << " = alloca i8, i64 " << sz << ", align 16\n";
+        } else {
+            out << "  " << regname << " = alloca " << llty << "\n";
+        }
         syms[d->resolved_entry_id] = {regname, llty, d->return_type};
     }
     // The function body is the outermost dtor scope: a class instance declared
@@ -3669,9 +3705,26 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         // other `.sl`, which the model allows for any declared member — the call needs a
         // `declare`. Without it this module referenced a value it never defined: IR that
         // slidsc emitted happily and only llc rejected.
-        if (typeNeedsHook(cs, /*ctor=*/true)) {
+        // An OPAQUE class ALWAYS needs a complete ctor even with no hooks: an importer
+        // can't fill its hidden fields, so it must call @C__$ctor to default-construct them.
+        bool opaque = widen::slidOpaque(cs);
+        if (typeNeedsHook(cs, /*ctor=*/true) || opaque) {
             if (declare_only) {
+                // Importer: it calls @C__$ctor (full default construction). $pctor is the
+                // completer's private business — never referenced here.
                 body << "declare void @" << sym << "__$ctor(ptr)\n\n";
+            } else if (opaque) {
+                // Completer of an incomplete class. The complete ctor @C__$ctor is a
+                // SYNTHESIZED placement-new method (resolve → the ordinary function path),
+                // so it is NOT emitted here. What IS emitted is @C__$pctor (internal): the
+                // hook body a same-TU (known-layout) construction calls directly after
+                // filling fields at the site, and the target @C__$ctor's placement-new
+                // dispatches to for the hooks.
+                if (widen::get(cs).has_ctor && !widen::slidCtorHere(cs))
+                    body << "declare void @" << sym << "__$ctor__impl(ptr)\n\n";
+                body << "define internal void @" << sym << "__$pctor(ptr %o) {\n";
+                emitClassCtorBody("%o", cs, body);
+                body << "  ret void\n}\n\n";
             } else {
                 if (widen::get(cs).has_ctor && !widen::slidCtorHere(cs))
                     body << "declare void @" << sym << "__$ctor__impl(ptr)\n\n";
@@ -3680,7 +3733,11 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                 body << "  ret void\n}\n\n";
             }
         }
-        if (typeNeedsHook(cs, /*ctor=*/false)) {
+        // An OPAQUE class ALWAYS needs a complete dtor too — the importer routes every
+        // destruction through @C__$dtor (it can't see whether there are hidden fields to
+        // tear down), so the completer must emit it and every importer must declare it,
+        // even when the class is a POD with no hooks.
+        if (typeNeedsHook(cs, /*ctor=*/false) || opaque) {
             if (declare_only) {
                 body << "declare void @" << sym << "__$dtor(ptr)\n\n";
             } else {
@@ -3703,9 +3760,22 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // inline expression so it resolves at link time for cross-TU classes (Phase 8).
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
-        std::string llty = llvmForRef(ct);
+        widen::TypeRef cs = widen::strip(ct);
         std::string name = widen::classSymbol(ct);
-        body << "define internal i64 @" << name << "__$sizeof() {\n";
+        // An OPAQUE class (declared incomplete in a header): its size is only known to the
+        // TU that COMPLETES it, so `__$sizeof` is an EXTERNAL function — the completer
+        // defines it (the folded layout constant), every importer DECLARES it and calls it
+        // at runtime. An importer must NOT compute the size from its own (partial) view.
+        if (widen::slidOpaque(cs)) {
+            if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
+                body << "declare i64 @" << name << "__$sizeof()\n\n";
+                continue;
+            }
+            body << "define i64 @" << name << "__$sizeof() {\n";   // completer: external
+        } else {
+            body << "define internal i64 @" << name << "__$sizeof() {\n";
+        }
+        std::string llty = llvmForRef(ct);
         body << "  %g = getelementptr " << llty << ", ptr null, i32 1\n";
         body << "  %s = ptrtoint ptr %g to i64\n";
         body << "  ret i64 %s\n";

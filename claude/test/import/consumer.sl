@@ -79,6 +79,13 @@ Widget() {
     }
 }
 
+/* returns an OPAQUE class by value across the seam: the caller's result slot is sized at
+   runtime (@String__$sizeof) and the return is built into it by NRVO — no copy. */
+String make_string() {
+    String s;
+    return s;
+}
+
 int32 main() {
 
     note();
@@ -148,6 +155,32 @@ int32 main() {
     hello.set("goodbye");
     __println(hello.get() + " " + hello.tag());
 
+    // A second incomplete class: default-construct it and read every FIELD KIND the
+    // completer's @Mix__$ctor initialized for us (we can see none of them). Proves the
+    // ctor default-fills exactly like a normal site: a=11 (default), b=0 (NO default → 0),
+    // s=4 (a recursively-built Cell: p_=4 default + q_=0), r=000 (array field zeroed).
+    Mix mx;
+    __println("mix a=" + mx.a() + " b=" + mx.b() + " s=" + mx.s()
+            + " r=" + mx.r(0) + mx.r(1) + mx.r(2));
+
+    // A POD incomplete class (no hooks). The importer can't see its fields, so it must
+    // still call @Flat__$ctor — the "trivial POD, construct nothing" shortcut would leave
+    // a_ / b_ uninitialized here. Expect a=55 (default), b=0 (no default).
+    Flat fl;
+    __println("flat a=" + fl.a() + " b=" + fl.b());
+
+    // Cross-TU TRANSFER of an opaque class: its copy / move / swap ops are SYNTHESIZED and
+    // EXTERNAL (library.sl emits them), so each call here links to the sibling's symbol.
+    // str_ stays null (the importer can't set tag_, and copying a buffer-owning String would
+    // double-free on its shallow memberwise copy — a String-semantics matter, not an opaque
+    // one), so these prove the external transfer symbols link and the runtime-sized instances
+    // build, copy, and destroy without crashing. tag_ is the default 7 throughout.
+    String cp; String cp2 = cp;        __println("copy tag: " + cp2.tag());
+    String mv; String mv2 <-- mv;      __println("move tag: " + mv2.tag());
+    String sw1; String sw2; sw1 <--> sw2;  __println("swap tag: " + sw1.tag());
+    String asrc; String adst; adst = asrc; __println("assign tag: " + adst.tag());
+    String rv = make_string();         __println("return tag: " + rv.tag());
+
     return 0;
 }
 
@@ -170,3 +203,44 @@ about the class being declared in a header, not about which source file this is.
 
 //-EXPECT-ERROR: cannot add a swap operator
 //NoCtor:op<-->(mutable NoCtor^ rhs) { __println("compile error."); }
+
+/*
+String is declared incomplete in the header (`String(...)`) and completed in library.sl,
+so from HERE its layout is opaque: this TU knows the class exists and can name its methods,
+but not its fields, size, or offsets. That is enough to hold a `String` by pointer, to make
+a bare local (sized at runtime via @String__$sizeof and default-constructed via @String__$ctor
+— `String hello;` in main above proves it), and to `new` one. It is NOT enough for anything
+that needs a static layout: embedding one BY VALUE in an aggregate (a field, an array element,
+a tuple slot) would mis-size the container, and reaching a hidden field or filling one at a
+construction site would offset into memory this TU can't see. Each is a compile error here,
+and would NOT be one in library.sl, which completes the class and owns the layout.
+*/
+
+//-EXPECT-ERROR: embeds imported incomplete class 'String'
+//Wrap(String s_) { }
+
+//-EXPECT-ERROR: embeds imported incomplete class 'String'
+//void neg_array() { String a[3]; a[0].tag(); }
+
+//-EXPECT-ERROR: embeds imported incomplete class 'String'
+//void neg_tuple() { (String, int) t; t; }
+
+//-EXPECT-ERROR: has no field 'str_'
+//void neg_field() { String h; int x = h.str_; x; }
+
+//-EXPECT-ERROR: initializer(s) were given
+//void neg_init() { String s("x"); s; }
+
+/* a GLOBAL is the one place a BARE opaque class is also illegal: its storage is static
+   (sized at compile time), so the runtime-sizing that makes a bare opaque LOCAL work has no
+   analogue. A global must be a pointer instead. */
+//-EXPECT-ERROR: a global needs static storage
+//global String gbad;
+
+//-EXPECT-ERROR: embeds imported incomplete class 'String'
+//global String garr[3];
+
+/* `new C[n]` is the heap twin: the array indexes and constructs its elements at a static
+   stride this TU lacks. A single `new C` is fine (no stride), so only the array form is out. */
+//-EXPECT-ERROR: array of imported incomplete class
+//void neg_newarr() { String[] p = new String[3]; delete p; }

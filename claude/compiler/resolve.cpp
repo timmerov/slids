@@ -31,6 +31,8 @@ void relocateOutOfLineMembers(parse::Tree& tree,
 // resolveScopeBodies — the single per-class body choke point — can call it.
 void synthesizeClassTransferOps(parse::Tree& tree, parse::Node& cnode,
                                 diagnostic::Sink& diag);
+void synthesizeOpaqueCtor(parse::Tree& tree, parse::Node& cnode,
+                          diagnostic::Sink& diag);
 
 namespace {
 
@@ -878,6 +880,9 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         // final (the TYPES phase ran) and user ops are registered, so the appended methods
         // resolve in place in the member loop below. Covers EVERY class kind uniformly.
         synthesizeClassTransferOps(tree, node, diag);
+        // And, for a completed-incomplete header class, the complete ctor (@C__$ctor) an
+        // opaque importer cannot construct itself. Same choke point, same reason.
+        synthesizeOpaqueCtor(tree, node, diag);
         // Field-default exprs, with the class frame open (a default may name a
         // sibling member bare).
         for (auto& p : node.params) {
@@ -4711,6 +4716,7 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     info.def_tok = node.name_tok;
     info.type = type;
     info.is_open = node.is_incomplete;   // an INCOMPLETE primary accepts appended fields
+    info.declared_incomplete = node.is_incomplete;   // persistent (see ClassInfo)
     tree.classes.emplace(type, std::move(info));   // placeholder; fields filled in Phase 2
     // NAME-only: the class's members are registered by the caller (registerScopeNames
     // recurses into this class's frame), so all class NAMES across all scopes register
@@ -4781,6 +4787,11 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
         !header_class                            ? widen::Type::Linkage::kInternal
         : fileIsSibling(tree, node.file_id)      ? widen::Type::Linkage::kDefine
                                                  : widen::Type::Linkage::kDeclare);
+    // OPAQUE cross-TU: a HEADER class declared incomplete (a `...`) has private fields an
+    // importer cannot see — its size is a runtime function, not a folded constant. True in
+    // the completer too (it must export the size for importers). A `.sl`-local incomplete
+    // class is complete within its own TU (no importer), so it is never opaque.
+    widen::setSlidOpaque(widen::strip(type), header_class && info.declared_incomplete);
     // A source file cannot ADD an implicitly-invoked member to a class declared in a
     // HEADER. The five are called without the author naming them, so every importing TU
     // emits those calls off the header ALONE: one that exists only in some `.sl` would
@@ -5042,11 +5053,23 @@ void collectByValueClasses(widen::TypeRef ft, std::vector<widen::TypeRef>& out) 
     }
 }
 
+// A class this TU only IMPORTS whose layout is hidden (declared incomplete in a header,
+// completed by another module). Its size/field-offsets are unknown here, so it may only
+// be a bare local (Slice 2 sizes it at runtime), a pointer, or a `new` — never embedded
+// by value in an aggregate.
+bool isImportOpaque(widen::TypeRef s) {
+    return widen::form(s) == widen::Type::Form::kSlid && widen::slidOpaque(s)
+        && widen::slidLinkage(s) == widen::Type::Linkage::kDeclare;
+}
+
 // A class whose by-value field graph cycles back to itself has INFINITE size —
 // reject it (classify's recursive construction and codegen's struct lowering both
 // recurse forever otherwise: a SIGSEGV, not a diagnostic). A `^` / `[]` field
 // breaks the cycle. Now that the two-phase makes a class's own name known while
 // its fields resolve, this is reachable (`Foo(Foo f_)`, mutual `A(B)`/`B(A)`).
+// The SAME by-value walk also rejects embedding an imported OPAQUE class (its layout
+// is unknown here, so the enclosing class's offsets are uncomputable — the silent
+// mis-size an importer would otherwise emit).
 void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
                               diagnostic::Sink& diag) {
     if (node.resolved_entry_id < 0) return;
@@ -5065,12 +5088,50 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
                 "size); use a reference '^' field.", {}});
             return;
         }
+        if (isImportOpaque(cur)) {
+            auto cit = tree.classes.find(cur);
+            std::string oname = cit != tree.classes.end() ? cit->second.name : "?";
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "Class '" + node.name + "' embeds imported incomplete class '" + oname
+                + "' by value; its layout is private to the module that completes it — "
+                "use a reference '" + oname + "^'.", {}});
+            return;
+        }
         if (!seen.insert(cur).second) continue;
         auto cit = tree.classes.find(cur);
         if (cit == tree.classes.end()) continue;
         for (widen::TypeRef ft : cit->second.field_types)
             collectByValueClasses(ft, stack);
     }
+}
+
+// The imported OPAQUE class that materializing `t` BY VALUE as an AGGREGATE MEMBER would
+// need the (hidden) layout of, or kNoType. A bare opaque local/global is fine — only an
+// array element, tuple slot, or by-value class field of one is illegal in an importer.
+// So the top-level type is NOT itself flagged; its aggregate members are. A pointer /
+// iterator breaks the walk. `seen` bounds recursion through class fields (cycles are
+// rejected elsewhere, but a self-referential graph must not loop here).
+widen::TypeRef aggregateEmbedsOpaque(widen::TypeRef t, std::set<widen::TypeRef>& seen) {
+    widen::TypeRef s = widen::strip(t);
+    using F = widen::Type::Form;
+    F form = widen::form(s);
+    if (form == F::kArray) {
+        widen::TypeRef e = widen::strip(widen::get(s).elem);
+        if (isImportOpaque(e)) return e;
+        return aggregateEmbedsOpaque(e, seen);
+    }
+    // A tuple, or a NON-opaque class (whose real fields are visible here): scan slots. An
+    // opaque class's own placeholder slots are not its fields, so don't descend into them.
+    if (form == F::kTuple || (form == F::kSlid && !isImportOpaque(s))) {
+        if (form == F::kSlid && !seen.insert(s).second) return widen::kNoType;
+        for (widen::TypeRef sl : widen::get(s).slots) {
+            widen::TypeRef ss = widen::strip(sl);
+            if (isImportOpaque(ss)) return ss;
+            widen::TypeRef r = aggregateEmbedsOpaque(ss, seen);
+            if (r != widen::kNoType) return r;
+        }
+    }
+    return widen::kNoType;
 }
 
 // Register the classes defined DIRECTLY in one scope (a statement list), TWO-PHASE
@@ -5685,6 +5746,89 @@ void synthesizeClassTransferOps(parse::Tree& tree, parse::Node& cnode,
     }
 }
 
+// Synthesize @C__$ctor — the COMPLETE constructor of an OPAQUE class (one declared
+// incomplete in a header, completed by its sibling `.sl`). An importer sees the class as
+// opaque: it knows the class exists and can name its methods, but not its fields, size, or
+// offsets, so it cannot construct one itself. The completer — the only TU with the layout —
+// exports @C__$ctor, which fully default-constructs an object at a caller-provided address.
+//
+// The body is a PLACEMENT NEW into the receiver pointer: `new(_$recv) C`. That reuses THE
+// construction funnel wholesale — classifyClassInit fills every field with its author
+// default, else zero, recursing into class / array / tuple fields, and emitConstructHooks
+// runs the ctor hooks (which, for an opaque class, dispatch to @C__$pctor). So the exact
+// same rules a normal `C c;` site obeys apply here; nothing is re-derived by hand. Only the
+// completer (kDefine) synthesizes it; a `.sl`-local incomplete class is never opaque.
+//
+// It is a METHOD whose receiver IS the object (`void @C__$ctor(ptr %o)` — one pointer, the
+// storage to construct into), matching the call emitConstructHooks makes at an importer.
+void synthesizeOpaqueCtor(parse::Tree& tree, parse::Node& cnode,
+                          diagnostic::Sink& diag) {
+    (void)diag;
+    if (cnode.resolved_entry_id < 0) return;
+    parse::Entry const& ce = tree.entries[cnode.resolved_entry_id];
+    widen::TypeRef cstrip = widen::strip(ce.slids_type);
+    if (!widen::slidOpaque(cstrip)) return;
+    if (widen::slidLinkage(cstrip) != widen::Type::Linkage::kDefine) return;
+    int frame = ce.ns_frame_id;
+    // Idempotent: a class reached by two drivers (primary + re-open) must synth once.
+    for (parse::Entry const& e : tree.entries)
+        if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == frame
+            && e.name == "_$octor")
+            return;
+    widen::TypeRef voidTy = widen::internOrNone("void");
+    widen::TypeRef voidPtr = widen::internOrNone("void^");   // buffer ptr for placement
+    widen::TypeRef selfPtr = widen::internPointer(cstrip);   // `C^`
+    int file = cnode.file_id, tok = cnode.name_tok;
+    auto ident = [&](std::string nm) {
+        auto n = std::make_unique<parse::Node>();
+        n->kind = parse::Kind::kIdentExpr;
+        n->name = std::move(nm);
+        n->file_id = file; n->tok = tok; n->name_tok = tok;
+        return n;
+    };
+    auto fn = std::make_unique<parse::Node>();
+    fn->kind = parse::Kind::kFunctionDef;
+    fn->name = "_$octor";
+    fn->file_id = file; fn->tok = tok; fn->name_tok = tok;
+    fn->return_type = voidTy;
+    fn->params.push_back(parse::makeReceiverParam(selfPtr, file, tok));
+    // void^ _p = _$recv;   (a placement address must be a buffer pointer; C^ converts)
+    auto decl = std::make_unique<parse::Node>();
+    decl->kind = parse::Kind::kVarDeclStmt;
+    decl->name = "_p";
+    decl->file_id = file; decl->tok = tok; decl->name_tok = tok;
+    decl->return_type = voidPtr;
+    decl->children.push_back(ident("_$recv"));
+    fn->children.push_back(std::move(decl));
+    // _p = new(_p) C;      (placement construct AT _p; result discarded back into _p, so _p
+    // is read — no unused-variable halt — and the object is default-built + hooked in place)
+    auto newx = std::make_unique<parse::Node>();
+    newx->kind = parse::Kind::kNewExpr;
+    newx->return_type = cstrip;
+    newx->file_id = file; newx->tok = tok; newx->name_tok = tok;
+    newx->children.push_back(nullptr);        // [0] array size — single object
+    newx->children.push_back(ident("_p"));    // [1] placement address
+    newx->children.push_back(nullptr);        // [2] ctor args — none => all defaults
+    auto asn = std::make_unique<parse::Node>();
+    asn->kind = parse::Kind::kAssignStmt;
+    asn->name = "_p";
+    asn->file_id = file; asn->tok = tok; asn->name_tok = tok;
+    asn->children.push_back(std::move(newx));
+    fn->children.push_back(std::move(asn));
+    parse::Entry e;
+    e.kind = parse::EntryKind::kFunction;
+    e.name = "_$octor";
+    e.slids_type = voidTy;
+    e.param_types = {selfPtr};
+    e.defined = true;
+    e.synthesized = true;
+    e.def_file_id = file;
+    e.def_tok = tok;
+    e.owner_ns_frame = frame;
+    fn->resolved_entry_id = parse::addEntry(tree, std::move(e));
+    cnode.children.push_back(std::move(fn));
+}
+
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
     parse::Node* program = nullptr;
     for (auto& n : tree.nodes) {
@@ -6101,6 +6245,39 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // class VALUE param is rejected (param types are now resolved).
     for (auto& ch : program->children) {
         if (ch) mungeParamTypes(tree, *ch, diag);
+    }
+
+    // A variable (local or global) whose type EMBEDS an imported opaque class by value in
+    // an aggregate — `String a[3]`, `(String, int) t` — needs a static size/stride this TU
+    // does not have. A bare `String h` LOCAL is fine (Slice 2 sizes it at runtime); a class
+    // FIELD is caught at the class definition (checkClassByValueAcyclic). A GLOBAL is the
+    // exception: its storage is STATIC (sized at compile time), so the runtime-alloca trick
+    // has no analogue — even a BARE opaque global is illegal. Runs last: every class's
+    // opaque flag and every variable type is final.
+    for (parse::Entry const& e : tree.entries) {
+        if (e.kind != parse::EntryKind::kLocalVar
+            && e.kind != parse::EntryKind::kGlobalVar)
+            continue;
+        widen::TypeRef s = widen::strip(e.slids_type);
+        if (e.kind == parse::EntryKind::kGlobalVar && isImportOpaque(s)) {
+            auto oit = tree.classes.find(s);
+            std::string oname = oit != tree.classes.end() ? oit->second.name : "?";
+            diagnostic::report(diag, {e.file_id, e.tok,
+                "Global '" + e.name + "' has imported incomplete class type '" + oname
+                + "'; its size is unknown here and a global needs static storage — "
+                "use a reference '" + oname + "^'.", {}});
+            continue;
+        }
+        std::set<widen::TypeRef> seen;
+        widen::TypeRef op = aggregateEmbedsOpaque(e.slids_type, seen);
+        if (op == widen::kNoType) continue;
+        auto oit = tree.classes.find(op);
+        std::string oname = oit != tree.classes.end() ? oit->second.name : "?";
+        std::string what = e.kind == parse::EntryKind::kGlobalVar ? "Global" : "Variable";
+        diagnostic::report(diag, {e.file_id, e.tok,
+            what + " '" + e.name + "' embeds imported incomplete class '" + oname
+            + "' by value; its layout is private to the module that completes it — "
+            "use a reference '" + oname + "^'.", {}});
     }
 
     parse::popFrame(tree);
