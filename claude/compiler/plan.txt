@@ -77,6 +77,15 @@ Phase 1 — expression core (LANDED)
     deleted). AGGREGATE operands (`++tuple`/`--arr`, nested, array-of-iterators) ride
     this same path with no new lowering — kBumpExpr leaf-walks (emitAggBump) and reuses
     the per-leaf scalar/iterator step (emitLeafBump); classify gates with isIncDecable.
+    THE `*p++` FAMILY — inc/dec in an assignment TARGET / complex operand — LANDED
+    2026-07-17: `++`/`--` chains as a postfix operator (parsePostfix + finishLvalueChain),
+    so `p++^` is `deref(postinc p)`; `<ident>++` routes through the lvalue-chain (not a bare
+    `p++;` commit). lowerAssignTarget lifts a top-level bump off a store target keeping an
+    LVALUE residual (bare ident -> name assign; complex lvalue -> bind `&leaf` once so the
+    two exit-bumps are order-independent = the canon ordering). A PREFIX bump on the target
+    (`++x = 3`, `++p^ = 7`) is a compile error (the increment would be discarded); a POSTFIX
+    one (`x++ = 3`, `p++^ = 7`, `arr[k++]++ = 5`) is allowed. RESIDUAL: swap-operand ppid
+    (`x++ <--> y++`) parses but the swap lvalue check rejects it (todo). [[project_ppid_lvalue_target]]
     Canon: test/expression/ppid.sl.                                      LANDED
   * call-as-expression — kCallExpr via parsePostfix on a bare ident; shared
     resolveUserCall + emitCall with kCallStmt; void-return + print-intrinsic-
@@ -1271,7 +1280,12 @@ Phase 6 — const correctness
   ENFORCEMENT — STILL THIS PHASE (none landed; const is transparent for now, so
   the const->mutable direction is silently accepted):
   * `const T` lvalue carries const, rvalue read is mutable (the value-category half)
-  * method-level const (`name(params) const { ... }`); const self (receiver munge)
+  * method-level const — the PARSE landed 2026-07-17: a `const` between the return type
+    and the method/operator name (`void const m()`, `(const int)^ const op[]()` — const
+    directly before the name, NOT a trailing `m() const`; canon test/class/method.sl) is
+    consumed by looksLikeFunctionDef + parseFunctionDef and recorded as parse::Node.
+    const_method. Also grouped return types `(const int)^` now reach the function-def look.
+    PARSE-ONLY: the const-self semantics (receiver munge, reject field writes) stay deferred.
   * const-overload matcher (canonical-type strips "const" for match-key)
   * const->mutable rejection at call sites (without an explicit `<mutable>`)
   * write-through-const rejection at every assign-family site

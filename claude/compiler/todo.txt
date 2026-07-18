@@ -9,6 +9,13 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
+  * SWAP WITH AN INC/DEC OPERAND — `x++ <--> y++` (and `--`) now parses, but the swap
+    rejects it with "a swap operand must be an lvalue": the operand is the incremented
+    form, not a plain one. Store / assignment targets already handle this — the bump lifts
+    to the phrase edge and the residual lvalue is what's written — so the fix is to give
+    both swap operands that same target lowering. Small, parallels the landed store path.
+
+
 UNBLOCKED FEATURES
 
   * should we be able to take the address of a temporary variable?
@@ -123,17 +130,6 @@ BLOCKED FEATURES
     unused (interface conformance, overload / signature symmetry, a callback that
     ignores an arg), so this likely wants an opt-out (a name convention or an
     explicit discard) rather than a blanket error. Decide the policy first.
-
-  * x++ AS AN LVALUE (but NOT ++x) — the PPID model lifts the bump off the lvalue,
-    so a POST-inc target is well-defined: `x++ = 42` -> `x = 42; x++` (store, THEN
-    bump — the stored value is incremented to 43). A PRE-inc target is rejected:
-    `++x = 42` would bump THEN store (`x = x+1; x = 42`), so the pre-bump is dead.
-    So `x++` may be an lvalue; `++x` may not. This also makes chained `x++ ++` well
-    defined (two bumps of x — see CHAIN POSTFIX PPID). Today parseIncDecStmt
-    (grammar.cpp:1467) commits to the bare `x++;` statement the moment it sees
-    `ident ++` and demands `;`, so the lvalue form never parses. Needs the
-    statement/lvalue parse to accept a postfix-inc lvalue + desugar to lift the bump
-    after the store.
 
   * TYPELESS CONST FROM A RUNTIME SCALAR — `int y = 42; const x = y;` errors
     "Initializer for 'x' is not a constant expression." x can't be a substituted

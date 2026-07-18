@@ -24,7 +24,7 @@ if/while/for condition.
 the rhs of && and || operations is a sub-phrase.
 this ensures a short-circuited ppid is not evaluated.
 
-Canonical examples:
+canonical examples:
 x = p++^;             // p incremented AFTER x is assigned
 x = (++p)^ + (++p)^;  // p incremented twice BEFORE the assignment
 x = (cond && b++);    // b incremented iff cond is true
@@ -33,8 +33,11 @@ x = foo(a++, ++a);    // foo(1, 3) — args are separate phrases
 desugaring does not duplicate ppid evaluation.
 side effects are extracted from the lvalue.
 p++^ += 1;  -->  p^ = p^ + 1; p++;
-++(arr[k++]) = 5;  -->  ++arr[k]; arr[k] = 5; k++;
 row[++k] += (10,20)  -->  ++k; row[k][0] += 10; row[k][1] += 20;
+
+ordering:
+arr[k++]++ = 5; --> arr[k] = 5; arr[k]++; k++;
+not             --> arr[k] = 5; k++; arr[k]++;
 */
 
 /*
@@ -80,9 +83,9 @@ covered here:
   - prefix ppid in a short-circuited && rhs is skipped too (pf && ++pi -> pi=0).
   - store / move statements are phrases: a store rhs (stp^ = stx++) and an index
     bump (ar[kk++] = 99 -> store ar[1], then kk++) and a move rhs (mvb <-- mva++)
-    all lift the bump after the statement. (Swap-OPERAND ppid x++ <--> y++ is a
-    PARSER block — parseIncDecStmt commits to a bare x++; — so the kSwapStmt arm is
-    defensive / unreachable today; see the deferred x++-as-lvalue item.)
+    all lift the bump after the statement. (Swap-OPERAND ppid x++ <--> y++ now PARSES
+    but is rejected later by the swap-operand lvalue check — a residual gap, not in the
+    canon; the store/aug-assign TARGET forms below are the ones that landed.)
   - alias transparency: an inc on an alias-typed var (Counter=int32) stays a binary
     OPERAND whose own type drives the common-type rule (no spelling round-trip that
     would clobber 'Counter' to an unknown slid).
@@ -98,9 +101,10 @@ covered here:
     `arr[i]++;` aug-assign rewrite and the bare-ident-only prefix) are gone.
 
 negatives: ++ on a const, on bool (operator undefined), on a non-lvalue (5++), on
-a function name (main++). Distinct from the supported complex OPERAND above: a ppid
-RESULT used as an assignment TARGET (cp++^ = 7 -> "Expected ';'" — parseIncDecStmt
-commits to the bare `cp++;`) is the deferred x++-as-lvalue gap, still rejected.
+a function name (main++). And a PREFIX inc/dec ON an assignment target (`++x = 3`,
+`++p^ = 7` — the bump fires then the same lvalue is overwritten, so it is dead) is a
+compile error (parseIncDecStmt). A POSTFIX bump on the target is NOT wasted and is
+allowed (see the `*p++` family below).
 
 fixed while writing these tests: tuple-literal slots not being separate phrases
 (kTupleExpr arm in lowerInPhrase); destructure rhs ppid (kDestructureStmt arm); and
@@ -112,11 +116,16 @@ diagnostic now carets the operand, not the operator. The for-range bound was NOT
 separate bug — an earlier crash there was the destructure crash misattributed (the
 assert fires at the first surviving inc/dec); lowerForLong already lowers it.
 
-not covered (aspirational):
-  - a ppid RESULT used as an assignment / compound-assign TARGET (`p++^ += 1`,
-    `++(arr[k++]) = 5`) — the deferred x++-as-lvalue gap, still a parse error.
-    (A complex OPERAND — `arr[i]++`, `++p^` — is covered above; what is missing is
-    treating the ppid's own result as a writable lvalue.)
+the `*p++` family — a postfix bump on an assignment TARGET — LANDED. The parser chains
+`++`/`--` (parsePostfix + finishLvalueChain), so `p++^` is `deref(postinc p)`; the desugar
+lifts the bump off the target and keeps an lvalue residual (lowerAssignTarget): a bare
+ident (`x++ = 3`) becomes a name assign, a complex lvalue (`arr[k++]++ = 5`) binds &leaf
+once so the two exit-bumps are order-independent (the canon ordering). A PREFIX bump on the
+target is the rejection (above), not a gap. Exercised: rvalue `x = p++^`, store `p++^ = v`,
+aug-assign `p++^ += 1`, complex `arr[k++]++ = 5`, bare `bare++ = 3`.
+
+not covered (residual): swap-OPERAND ppid (`x++ <--> y++`) — parses, but the swap-operand
+lvalue check rejects a bumped operand (would need the target lowering on both operands).
 */
 
 int32 show2(int32 a, int32 b) {
@@ -473,9 +482,25 @@ int32 main() {
               + tt[1][0] + " " + tt[1][1]);           // 1 2 4 5
     __println("aggsubv= " + e1[0] + " " + e1[1] + " " + e2[0] + " " + e2[1]);   // 2 3 4 5
 
-    /* swap-OPERAND ppid (`x++ <--> y++`) is blocked at the PARSER — parseIncDecStmt
-       commits to a bare `x++;` (the deferred x++-as-lvalue gap) — so the kSwapStmt
-       PPID arm is defensive / unreachable today, not exercised here. */
+    /* PPID in an assignment TARGET and complex operand — the `*p++` family. A postfix bump
+       ON the target lifts to the phrase edge and the RESIDUAL lvalue remains; a PREFIX bump
+       on the target is rejected (below), because it would be discarded. */
+    int32 pbuf[4]; pbuf[0] = 10; pbuf[1] = 20; pbuf[2] = 30; pbuf[3] = 40;
+    int32[] pw1 = pbuf;
+    int32 prd = pw1++^;                          // read *pw1, advance: prd=10, pw1 -> pbuf[1]
+    __println("rd= " + prd + " wpv= " + pw1^);                       // 10 20
+    int32[] pw2 = pbuf;
+    pw2++^ = 77;                                 // *pw2 = 77, advance: pbuf[0]=77, pw2 -> pbuf[1]
+    __println("st= " + pbuf[0] + " spv= " + pw2^);                   // 77 20
+    int32[] pw3 = pbuf;
+    pw3++^ += 3;                                 // *pw3 += 3, advance: pbuf[0]=80, pw3 -> pbuf[1]
+    __println("au= " + pbuf[0] + " apv= " + pw3^);                   // 80 20
+    int32 pj = 0;
+    pbuf[pj++]++ = 5;                            // pbuf[0]=5; pbuf[0]++ ->6; pj++ ->1
+    __println("cx= " + pbuf[0] + " buf1= " + pbuf[1] + " j= " + pj); // 6 20 1
+    int32 pbare = 42;
+    pbare++ = 3;                                 // pbare = 3; pbare++ -> 4 (postfix NOT wasted)
+    __println("bare= " + pbare);                                    // 4
 
     //-EXPECT-ERROR: Constant 'K' cannot be incremented
     //const int32 K = 5;
@@ -495,13 +520,19 @@ int32 main() {
     //-EXPECT-ERROR: is a function, not a variable
     //main++;
 
-    /* a ppid on a complex (deref) lvalue is not supported: the inc commits to a
-       bare `p++;` statement, so the deref/store after it is a parse error. */
-    //-EXPECT-ERROR: Expected ';'
-    //int32 cx = 5;
-    //int^ cp = ^cx;
-    //cp++^ = 7;
-    //__println("cx= " + cx);
+    /* a PREFIX inc/dec on an assignment TARGET is rejected: the increment fires at phrase
+       entry, then the very same lvalue is overwritten, so the '++' is dead. (A POSTFIX bump
+       on the target — `bare++ = 3` above — is not wasted and IS allowed.) */
+    //-EXPECT-ERROR: pre-incremented target
+    //int32 pv = 1;
+    //++pv = 3;
+
+    /* the same through a deref — `++pp^` is `++(pp^)`, a pre-inc of the pointee (the
+       target), NOT `(++pp)^`; still dead, still rejected. */
+    //-EXPECT-ERROR: pre-incremented target
+    //int32 pw = 1;
+    //int32^ pp = ^pw;
+    //++pp^ = 7;
 
     return 0;
 }

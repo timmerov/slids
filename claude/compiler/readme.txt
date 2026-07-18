@@ -1636,7 +1636,16 @@ STAGE FILES (.h / .cpp pairs)
             kSeqExpr arm emits its address store. So bare/complex x pre/post x
             statement/expression all flow through this ONE PPID path -- both grammar
             shortcuts (the postfix `arr[i]++;` -> aug-assign rewrite, the bare-ident-
-            only prefix) are gone. The statement-bump
+            only prefix) are gone. INC/DEC IN AN ASSIGNMENT TARGET (the `*p++` family):
+            the grammar chains `++`/`--` as a postfix operator (parsePostfix +
+            finishLvalueChain), so `p++^` parses to `deref(postinc p)`, and a store's
+            TARGET (children[0]) is lowered by lowerAssignTarget -- a top-level bump lifts
+            to the phrase edge but the residual stays an LVALUE (a plain lowerInPhrase
+            would make it a read): a bare-ident target becomes a name-based kAssignStmt,
+            a complex one binds `&leaf` once (`_$lv`) so the exit-bumps are order-
+            independent. A PREFIX bump on the target (`++x = 3`) is rejected in the parser
+            (the increment would be discarded); a POSTFIX one (`p++^ = 7`, `arr[k++]++ = 5`)
+            is allowed. The statement-bump
             splice (lowerStatementList) recurses into a kBlockStmt, a kIfStmt
             (lowerIfStmt: the condition is a self-contained phrase whose bumps fire
             before the branch, and the arms recurse), a kWhileStmt / kDoWhileStmt

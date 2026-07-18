@@ -70,3 +70,8 @@ aggft= 2.5 3.5
 aggai= 200 400
 aggsub= 1 2 4 5
 aggsubv= 2 3 4 5
+rd= 10 wpv= 20
+st= 77 spv= 20
+au= 80 apv= 20
+cx= 6 buf1= 20 j= 1
+bare= 4

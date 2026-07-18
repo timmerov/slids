@@ -1559,6 +1559,46 @@ std::unique_ptr<ast::Node> makeBumpStmt(std::unique_ptr<ast::Node> bump) {
 // inside a sub-phrase (call args, the rhs of && / ||) stay in a seq, since that
 // phrase genuinely exits before the store. A return embeds its bump: there is
 // no slot after a terminator, and its value is read before the bump anyway.
+// Extract a top-level postfix bump from an assignment TARGET (children[0] of a store),
+// keeping the residual as an LVALUE — lowerInPhrase alone would turn it into a READ, which a
+// store target can't be. `arr[k++]++ = 5` binds &arr[k] once (pre), leaves `_$lv^` as the
+// target, and bumps it + k at exit (the binding makes the two exit-bumps order-independent).
+// `x++ = 3` leaves the bare ident, so the store becomes a name-based assign. A bump NESTED
+// under a deref/index (`p++^`) needs nothing special — the surviving deref of the read
+// pointer is already an lvalue — so it falls through to the generic lower below. A PRE-inc
+// target was rejected at parse, so only POST reaches here.
+void lowerAssignTarget(ast::Node& stmt,
+                       std::vector<std::unique_ptr<ast::Node>>& pre,
+                       std::vector<std::unique_ptr<ast::Node>>& post, int& next_id) {
+    auto& tgt = stmt.children[0];
+    if (tgt && tgt->kind == ast::Kind::kPostIncExpr) {
+        if (isComplexLvalue(*tgt->children[0])) {
+            lowerInPhrase(tgt->children[0], pre, post, next_id);   // nested bumps (`k++`)
+            int file = tgt->file_id, tok = tgt->tok;
+            std::string op = tgt->text;
+            widen::TypeRef leaf = tgt->inferred_type;
+            widen::TypeRef refT; int lv_id;
+            auto decl = makeLvDecl(std::move(tgt->children[0]), next_id, refT, lv_id);
+            pre.push_back(std::move(decl));                                    // bind &arr[k]
+            post.push_back(makeComplexBump(lv_id, refT, leaf, op, file, tok)); // arr[k]++ at exit
+            tgt = makeLvDeref(lv_id, refT, leaf, file, tok);                   // residual lvalue
+        } else {
+            // A bare-ident target — the residual is a NAME, so the store becomes a name-based
+            // kAssignStmt (children[0] = rhs), with the bump lifted to phrase exit.
+            auto ident = std::move(tgt->children[0]);
+            post.push_back(makeBump(*ident, tgt->text));
+            auto rhs = std::move(stmt.children[1]);
+            stmt.kind = ast::Kind::kAssignStmt;
+            stmt.name = ident->name;
+            stmt.name_tok = ident->name_tok;
+            stmt.resolved_entry_id = ident->resolved_entry_id;
+            stmt.children.clear();
+            stmt.children.push_back(std::move(rhs));
+        }
+    }
+    for (auto& ch : stmt.children) lowerInPhrase(ch, pre, post, next_id);
+}
+
 void lowerStatementPPID(ast::Node& stmt,
                         std::vector<std::unique_ptr<ast::Node>>& pre,
                         std::vector<std::unique_ptr<ast::Node>>& post,
@@ -1574,12 +1614,17 @@ void lowerStatementPPID(ast::Node& stmt,
             }
             return;
         case ast::Kind::kStoreStmt:
+            // store: [0]=lvalue TARGET, [1]=rhs. A bump lifts off either; a top-level bump
+            // ON the target (`arr[k++]++ = v`, `x++ = v`) must keep an lvalue residual, so
+            // route the target through lowerAssignTarget (which may also turn the store into
+            // a name-based assign). `p++^ = v` (bump nested in a deref) falls through it.
+            lowerAssignTarget(stmt, pre, post, next_id);
+            return;
         case ast::Kind::kMoveStmt:
         case ast::Kind::kSwapStmt:
-            // store: [0]=lvalue, [1]=rhs; move: [0]=lhs, [1]=rhs; swap: [0],[1] both
-            // lvalues. Each is a direct operand of the statement phrase, so a bump
-            // lifts off it and the post fires AFTER the store/move/swap — e.g.
-            // `x++ <--> y++` -> `x <--> y; x++; y++`, `arr[k++] = v` -> `arr[k]=v; k++`.
+            // move: [0]=lhs, [1]=rhs; swap: [0],[1] both lvalues. Each is a direct operand of
+            // the statement phrase, so a bump lifts off it and the post fires AFTER — e.g.
+            // `x++ <--> y++` -> `x <--> y; x++; y++`.
             for (auto& ch : stmt.children) {
                 if (ch) lowerInPhrase(ch, pre, post, next_id);
             }

@@ -1314,18 +1314,22 @@ struct Parser {
                 base = std::move(call);
                 continue;
             }
+            // Postfix `++` / `--`. INSIDE the loop so a further postfix chains off it —
+            // `p++^` (= `*p++`), `arr[k++]++`, `p++.field`. The PPID pass extracts the bump
+            // to the phrase edge and leaves the residual lvalue (`p^`, `arr[k]`) behind.
+            if (peek().kind == token::Kind::kPlusPlus
+                || peek().kind == token::Kind::kMinusMinus) {
+                char const* op = peek().kind == token::Kind::kPlusPlus ? "++" : "--";
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                advance();
+                auto node = newNodeAt(parse::Kind::kPostIncExpr, op_file, op_tok);
+                node->text = op;
+                node->children.push_back(std::move(base));
+                base = std::move(node);
+                continue;
+            }
             break;
-        }
-        if (peek().kind == token::Kind::kPlusPlus
-            || peek().kind == token::Kind::kMinusMinus) {
-            char const* op = peek().kind == token::Kind::kPlusPlus ? "++" : "--";
-            int op_file = peek().file_id;
-            int op_tok = pos;
-            advance();
-            auto node = newNodeAt(parse::Kind::kPostIncExpr, op_file, op_tok);
-            node->text = op;
-            node->children.push_back(std::move(base));
-            return node;
         }
         return base;
     }
@@ -1953,10 +1957,16 @@ struct Parser {
         auto finishLvalueChain =
             [&](std::unique_ptr<parse::Node> lhs,
                 bool allow_bare_expr) -> std::unique_ptr<parse::Node> {
+            // A postfix `++`/`--` anywhere in the chain (`p++^`, `arr[k++]++`): the target's
+            // own bump is legal (it feeds the phrase edge via PPID), and a bare trailing bump
+            // is a discarded-inc statement. Track it so a plain `;` tail is accepted.
+            bool had_bump = false;
             while (peek().kind == token::Kind::kLBracket
                    || peek().kind == token::Kind::kBitXor
                    || peek().kind == token::Kind::kXorXor
                    || peek().kind == token::Kind::kDot
+                   || peek().kind == token::Kind::kPlusPlus
+                   || peek().kind == token::Kind::kMinusMinus
                    || (peek().kind == token::Kind::kLParen
                        && lhs->kind == parse::Kind::kFieldExpr)) {
                 if (peek().kind == token::Kind::kLParen) {
@@ -2003,6 +2013,20 @@ struct Parser {
                     f->name_tok = pos;
                     advance();   // field name
                     lhs = std::move(f);
+                } else if (peek().kind == token::Kind::kPlusPlus
+                           || peek().kind == token::Kind::kMinusMinus) {
+                    // A postfix bump ON the target (`p++^`, `arr[k++]++`) — wrap and keep
+                    // chaining so a following `^` / `[i]` / `.` continues the lvalue. PPID
+                    // extracts the bump to the phrase edge and the residual lvalue remains.
+                    char const* op =
+                        peek().kind == token::Kind::kPlusPlus ? "++" : "--";
+                    int op_tok = pos;
+                    advance();   // ++ / --
+                    auto inc = newNodeAt(parse::Kind::kPostIncExpr, stmt_file, op_tok);
+                    inc->text = op;
+                    inc->children.push_back(std::move(lhs));
+                    lhs = std::move(inc);
+                    had_bump = true;
                 } else {
                     // `^` is one deref, `^^` (one logical-xor token) is two.
                     int levels = peek().kind == token::Kind::kXorXor ? 2 : 1;
@@ -2043,28 +2067,11 @@ struct Parser {
                 node->children.push_back(std::move(rhs));
                 return node;
             }
-            if (peek().kind == token::Kind::kPlusPlus
-                || peek().kind == token::Kind::kMinusMinus) {
-                // `lvalue++;` / `lvalue--;` on a complex lvalue — the same PPID
-                // path as the expression form. Build a kPostIncExpr over the chain
-                // wrapped in a kExprStmt; desugar lowers it (the value is
-                // discarded, so only the bump survives).
-                char const* op =
-                    peek().kind == token::Kind::kPlusPlus ? "++" : "--";
-                int op_tok = pos;
-                advance();   // ++ / --
-                if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
-                auto inc = newNodeAt(parse::Kind::kPostIncExpr, stmt_file, op_tok);
-                inc->text = op;
-                inc->children.push_back(std::move(lhs));
-                auto node = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
-                node->children.push_back(std::move(inc));
-                return node;
-            }
-            if (allow_bare_expr && peek().kind == token::Kind::kSemicolon) {
-                // `Class(args).field;` — a discarded chain value off a construction
-                // temp (no trailing store/op). The construction has no lvalue to
-                // assign to, so the whole chain is an expression statement.
+            if ((had_bump || allow_bare_expr)
+                && peek().kind == token::Kind::kSemicolon) {
+                // A discarded chain value: a trailing bump (`p++;`, `arr[k++]++;`, `p++^;` —
+                // the value is dropped, only the bump survives), or a construction-temp chain
+                // (`Class(args).field;`). Either becomes an expression statement.
                 advance();   // ;
                 auto node = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
                 node->children.push_back(std::move(lhs));
@@ -2091,12 +2098,13 @@ struct Parser {
 
         token::Kind next = peek().kind;
         if (next == token::Kind::kBitXor || next == token::Kind::kXorXor
-            || next == token::Kind::kLBracket || next == token::Kind::kDot) {
-            // Lvalue-expression store: `name[i]... = rhs`, `name.field = rhs`, or
-            // `name^ = rhs`. The bare name becomes a kIdentExpr, then the postfix
-            // chain (subscripts, field accesses, and derefs, left to right) wraps
-            // it into the store target. (A `^` here is unambiguously deref — a
-            // trailing operand would be XOR, not a statement.)
+            || next == token::Kind::kLBracket || next == token::Kind::kDot
+            || next == token::Kind::kPlusPlus || next == token::Kind::kMinusMinus) {
+            // Lvalue-expression store: `name[i]... = rhs`, `name.field = rhs`,
+            // `name^ = rhs`, or an inc-bearing target (`name++^ = rhs`, `name++;`). The
+            // bare name becomes a kIdentExpr, then the postfix chain (subscripts, field
+            // accesses, derefs, and `++`/`--`, left to right) wraps it into the store
+            // target. (A `^` here is unambiguously deref — a trailing operand would be XOR.)
             auto lhs = newNodeAt(parse::Kind::kIdentExpr, stmt_file, stmt_tok);
             lhs->name = name;
             lhs->name_tok = name_tok;
@@ -2266,29 +2274,23 @@ struct Parser {
     std::unique_ptr<parse::Node> parseIncDecStmt() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
-        bool prefix = peek().kind == token::Kind::kPlusPlus
-                   || peek().kind == token::Kind::kMinusMinus;
-        std::unique_ptr<parse::Node> inc;
-        if (prefix) {
-            // `++<lvalue>;` — parse the full operand chain via parseUnary, which
-            // consumes the leading `++` and builds a kPreIncExpr over a bare ident
-            // OR a complex lvalue (`++arr[i];`, `++b.f;`, `++p^;`), identical to
-            // the expression form. resolve / classify check the operand.
-            inc = parseUnary();
-            if (!inc) return nullptr;
-        } else {
-            // `<ident>++;` — dispatched only for a bare ident followed by ++/--.
-            int name_tok = pos;
-            std::string name = peek().text;
-            advance();   // ident
-            token::Kind opk = peek().kind;
-            int op_tok = pos;
-            advance();   // ++ / --
-            auto operand = newNodeAt(parse::Kind::kIdentExpr, stmt_file, name_tok);
-            operand->name = std::move(name);
-            inc = newNodeAt(parse::Kind::kPostIncExpr, stmt_file, op_tok);
-            inc->text = opk == token::Kind::kPlusPlus ? "++" : "--";
-            inc->children.push_back(std::move(operand));
+        // Only the leading-PREFIX form reaches here (`++<lvalue>;`, `--<lvalue>;`); a
+        // `<ident>++` statement routes through parseNameLedStmt's lvalue chain. parseUnary
+        // consumes the `++`/`--` and builds a kPreIncExpr over a bare ident or a complex
+        // lvalue (`++arr[i]`, `++p^`); resolve/classify check the operand.
+        std::unique_ptr<parse::Node> inc = parseUnary();
+        if (!inc) return nullptr;
+        // A PREFIX inc/dec on an assignment TARGET is a compile error: `++x = 3` /
+        // `++p^ = 7` would run the increment at phrase entry, then immediately overwrite
+        // the very same lvalue — the increment is dead. (A POSTFIX bump on the target,
+        // `x++ = 3`, is NOT wasted and IS allowed — it lowers to `x = 3; x++`.)
+        if (peek().kind == token::Kind::kEquals || augAssignOp(peek().kind)
+            || peek().kind == token::Kind::kArrowLeft
+            || peek().kind == token::Kind::kArrowBoth) {
+            errorAt(stmt_tok,
+                "Cannot assign to a pre-incremented target — the '++'/'--' would be "
+                "discarded. Write the increment as a separate statement.");
+            return nullptr;
         }
         if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
         auto stmt = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
@@ -3087,8 +3089,10 @@ struct Parser {
         if (t.kind == token::Kind::kIdentifier) {
             token::Kind next = peekKind(1);
             if (next == token::Kind::kLBrace) return parseNamespaceDecl();
-            if (next == token::Kind::kPlusPlus
-                || next == token::Kind::kMinusMinus) return parseIncDecStmt();
+            // `name++` / `name++^ = v` / `name++;` route through parseNameLedStmt's
+            // lvalue-chain (finishLvalueChain), which parses the full inc-bearing target
+            // and then the assignment / bare-statement tail. (parseIncDecStmt handles only
+            // the leading-PREFIX form `++name`.)
             // `<ident> <ident>` is a declaration with an identifier type
             // (alias / class / enum), e.g. `Integer x = 42;`.
             if (next == token::Kind::kIdentifier) return parseVarDeclStmt();
