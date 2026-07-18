@@ -1,0 +1,237 @@
+/*
+String class declaration.
+
+include link option: -lc
+
+also included are helper functions for:
+concatenating strings,
+length of a null terminated string,
+copying null terminated strings,
+copying null terminated strings limited by length.
+
+work in progress.
+search for tsc.
+*/
+
+String(...)
+{
+    /* constructor/destructor */
+    _();
+    ~();
+
+    /*
+    assignment from String.
+    copy operator.
+    rhs may be self.
+    */
+    op=(String^ s);
+
+    /*
+    move operator.
+    rhs may be self.
+    */
+    op<--(mutable String^ s);
+
+    /*
+    assignment and type conversion from
+    null terminated string literal.
+    */
+    op=(char[] s);
+
+    /*
+    assignment and type conversion from
+    character literal.
+    */
+    op=(char c);
+
+    /*
+    assignment and type conversion from int64.
+    all smaller signed ints should promote to int64.
+    excluding char.
+    */
+    op=(int64 x);
+
+    /*
+    assignment and type conversion from unsigned-int64.
+    all smaller unsigned ints should promote to uint64.
+    excluding char.
+    */
+    op=(uint64 x);
+
+    /* assignment and type converstion from bool. */
+    op=(bool b);
+
+    /* assignment and type converstion from float64. */
+    op=(float64 x);
+
+    /* overload += to append a string. */
+    op+=(String^ s);
+
+    /* overload += to append a string literal. */
+    op+=(char[] s);
+
+    /* overload += to append a character. */
+    op+=(char c);
+
+    /* overload += to append a bool. */
+    op+=(bool b);
+
+    /* overload + to concatenate two String-s. */
+    op+(String^ sa, String^ sb);
+
+    /* binary comparisons */
+    /* ==tsc==
+    bool const op==(String^ s);
+    bool const op!=(String^ s);
+    bool const op<=(String^ s);
+    bool const op>=(String^ s);
+    bool const op<(String^ s);
+    bool const op>(String^ s);
+    */
+
+    /*
+    overload index operation to fetch/set the indexed character.
+    char ch = str[3];
+    str[3] = '!';
+    */
+    char^ const op[](intptr index);
+
+    /* return size of string. */
+    intptr const size();
+
+    /* begin iterator */
+    char^ const begin();
+
+    /* end iterator */
+    char^ const end();
+
+    /* update iterator */
+    char^ const next(char^ prev);
+
+    /* set to empty string. */
+    void clear();
+
+    /* return true if the string is empty. */
+    bool const empty();
+
+    /*
+    increase capacity.
+    preserves existing value.
+    */
+    void reserve(intptr capacity);
+
+    /* reverse the characters in the string. */
+    void reverse();
+
+    /*
+    compare this string to another. results:
+        -1: self <  other
+         0: self == other
+        +1: self >  other
+    */
+    int const compare(String^ other);
+
+    /* return the substring. */
+    String const slice(intptr start, intptr count);
+}
+
+/* print the string. */
+void print(String^ s);
+void println(String^ s);
+
+/* return length of null terminated string. */
+intptr strlen(char[] s);
+
+/* copy null terminated string from src to dst. */
+void strcpy(mutable char[] dst, char[] src);
+
+/* copy at most count characters from src to dst. */
+void strcpy(mutable char[] dst, char[] src, intptr count);
+
+/*
+compare null terminated strings. return:
+    0: sa == sb
+    +1: sa > sb
+    -1: sa < sb
+*/
+int strcmp(char[] sa, char[] sb);
+
+/*
+compare at most count characters. return:
+    0: sa == sb
+    +1: sa > sb
+    -1: sa < sb
+*/
+int strcmp(char[] sa, char[] sb, int count);
+
+/* fill the string with the character. */
+void strfill(mutable char[] s, char ch, intptr count);
+
+/* formatted strings. */
+/* ==tsc==
+String : Format(
+    Option justify_ = kAuto,
+    Option float_style_ = kAuto,
+    char pad_ = ' ',
+    bool leading_plus_ = false,
+    int min_width_ = 0,
+    int max_width_ = -1,
+    int precision_ = 6
+) {
+    enum Option (
+        kAuto,
+        kLeftJustify,
+        kRightJustify,
+        kFixedPoint,
+        kScientificNotation
+    );
+
+    /* constructor/destructor */
+    _();
+    ~();
+
+    /*
+    format a string.
+    rhs may be self.
+    */
+    op=(String^ s);
+
+    /* format a null terminated string literal. */
+    op=(char[] s);
+
+    /* format a character literal. */
+    op=(char c);
+
+    /*
+    format an int64.
+    all smaller signed ints should promote to int64.
+    excluding char.
+    */
+    op=(int64 x);
+
+    /*
+    format a uint64.
+    all smaller unsigned ints should promote to uint64.
+    excluding char.
+    */
+    op=(uint64 x);
+
+    /* format a bool. */
+    op=(bool b);
+
+    /* format a float64. */
+    op=(float64 x);
+
+    /* overload * to format a string in place. */
+    op*(Format^ fmt, String^ s);
+
+    /* overload * to format a signed number in place. */
+    op*(Format^ fmt, int64 x);
+
+    /* overload * to format an unsigned number in place. */
+    op*(Format^ fmt, uint64 x);
+
+    /* overload * to format a floating point number in place. */
+    op*(Format^ fmt, float64 x);
+}
+*/

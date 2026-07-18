@@ -64,6 +64,15 @@ Method(int x_) {
         x_ = x_ + 1;
         return x_;
     }
+
+    void const constfn() {
+        __println("Method:constfn: " + x_);
+    }
+
+    (const int)^ const op[](intptr idx) {
+        __println("Method:const_op[]: " + x_);
+        return ^x_;
+    }
 }
 
 /* a method with PARAMETERS, on a multi-field class; the args ride alongside the

@@ -223,6 +223,9 @@ struct Node {
     std::string label;
     int loop_levels = -1;
     bool is_const = false;       // kVarDeclStmt: declared with leading `const`
+    bool const_method = false;   // kFunctionDef: a `const` between the return type and the
+                                 // method/operator name (`Ret const m(...)`) — const receiver.
+                                 // PARSE-ONLY today; the const-self semantics are deferred.
     bool is_global = false;      // kVarDeclStmt: a GLOBAL variable (`global T x=…;`
                                  // or a bare file-scope decl) — mutable static
                                  // storage; resolve registers it as kGlobalVar.

@@ -3395,7 +3395,19 @@ struct Parser {
         // type is present it is scanned exactly as for a named function, and the
         // name slot then holds `op<sym>` instead of an identifier.
         if (peekKind(o) != token::Kind::kOp) {
-            if (isTypeStart(peekKind(o))) {
+            if (peekKind(o) == token::Kind::kLParen) {
+                // A GROUPED / tuple return type — `(const int)^ m(...)`, `(int, int) m(...)`.
+                // isTypeStart only knows primitive keywords, so skip the balanced `(...)`
+                // by hand to reach the name (parseFunctionDef parses it via parseDeclarator).
+                int depth = 0;
+                do {
+                    token::Kind k = peekKind(o);
+                    if (k == token::Kind::kEndOfInput) return false;
+                    if (k == token::Kind::kLParen) depth++;
+                    else if (k == token::Kind::kRParen) depth--;
+                    o++;
+                } while (depth > 0);
+            } else if (isTypeStart(peekKind(o))) {
                 o++;
             } else if (peekKind(o) == token::Kind::kColonColon
                        || peekKind(o) == token::Kind::kIdentifier) {
@@ -3415,6 +3427,9 @@ struct Parser {
             else if (peekKind(o) == token::Kind::kLBracket
                 && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
         }
+        // A const METHOD qualifier sits between the return type and the (possibly qualified)
+        // name — `Ret const m(...)`, `Ret const op[](...)`. Skip it so the shape is recognized.
+        if (peekKind(o) == token::Kind::kConst) o++;
         if (peekKind(o) == token::Kind::kOp) {
             // `op<sym>`: `op` plus one operator token, or the two-token `[]`. An
             // `op`-led shape with no return type reaches here with o == 0.
@@ -3802,6 +3817,16 @@ struct Parser {
             }
         }
         std::string ret_type = std::move(d.type);
+        // A const METHOD qualifier — `Ret const name(...)` — sits between the return type and
+        // the (possibly qualified) name (canon test/class/method.sl). Consume it here; for a
+        // lead-identifier out-of-line head (`Class:m()`, no return type) the token after the
+        // declarator is `:`, never `const`, so this never disturbs the qualifier-reinterpret
+        // token math below. PARSE-ONLY: the const-self semantics are deferred.
+        bool const_method = false;
+        if (!is_op && peek().kind == token::Kind::kConst) {
+            const_method = true;
+            advance();
+        }
         std::string name;
         int name_tok;
         std::vector<std::string> qualifier;
@@ -3904,6 +3929,7 @@ struct Parser {
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
         node->name_tok = name_tok;
+        node->const_method = const_method;
         node->qualifier = std::move(qualifier);
         node->qualifier_toks = std::move(qualifier_toks);
         node->return_type = widen::internOrNone(ret_type);

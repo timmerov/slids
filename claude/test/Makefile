@@ -10,6 +10,7 @@ SUBDIRS = \
 	lex \
 	misc \
 	pointer \
+	progress \
 	tuple
 
 .PHONY: all clean test negatives positives $(SUBDIRS)
