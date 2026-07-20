@@ -42,3 +42,6 @@ m_sub= 6
 m_mul= 42
 m_div= 6
 m_mod= 2
+round16= 112
+u_maskz= 0
+u_notF= 18446744073709551600

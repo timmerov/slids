@@ -586,7 +586,12 @@ bool literalFitsContext(parse::Node const& lit, widen::TypeRef context) {
     if (lit.kind == parse::Kind::kFloatLiteral) {
         return widen::floatLiteralFits(lit.text, context);
     }
-    return widen::intLiteralFits(literalTextForFit(lit), context);
+    if (widen::intLiteralFits(literalTextForFit(lit), context)) return true;
+    // Upper-bits case: the value overflows context's magnitude, but the literal's
+    // NOMINAL type still widens (e.g. ~0x0F is nominal uint8 -> flexes into int64,
+    // its 0xFF..F0 value reinterpreting as -16). The materialization truncates the
+    // bit pattern directly at codegen.
+    return widen::nominalWidensTo(lit.nominal_type, context);
 }
 
 // The single weak/strong test. A WEAK literal (a bare / typeless-const literal, no

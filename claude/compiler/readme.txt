@@ -230,6 +230,23 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
   cells compress into M<N; the three footnoted cells are the value/sign seams where
   a nominal category stops lining up with a width boundary.
 
+  UPPER-BITS NOMINAL -- a uflexN's nominal width is the smallest width whose upper
+  bits are uniform (all 0 or all 1), NOT the raw magnitude: constfold nominalForUint
+  flips the value when bit 63 is set ("absolute value"), then runs the normal width
+  ladder. So `~0x0F` (value 0xFF..FFF0) is uflex8, not uflex64 -- it presents as a
+  uflexM into intptr and shares a common type with a signed value. Its value then
+  EXCEEDS int64's positive range, so the magnitude fit-check (checkIntLiteralFits)
+  would reject it; the widen is instead admitted on the NOMINAL by
+  widen::nominalWidensTo -- an integer-class nominal widens to any STRICTLY WIDER
+  integer-class target, never signed -> unsigned -- and the value materializes by
+  direct bit-truncation (0xFF..FFF0 -> -16). This gate is consulted at BOTH the
+  classify literal-flex (literalFitsContext, so the flex succeeds) and the codegen
+  literal emit (emitExpr skips the magnitude check when the nominal widens). A
+  SAME-WIDTH step (uflex64 -> int64, e.g. 9223372036854775808) is not wider, so a
+  genuine large literal is still rejected. This is the canonical "a constant's value
+  need not fit its nominal type" case (fold.sl): the NOMINAL drives type
+  compatibility, the full 64-bit VALUE drives materialization.
+
   FLOAT (the `widen` cell, float family) -- per target, the source kinds accepted;
   for an INFERRED target, the sources that resolve to that spelling. float / float32
   / float64 are the strong types (no-width / 32 / 64); flex is a weak float literal.

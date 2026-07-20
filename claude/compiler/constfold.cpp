@@ -68,6 +68,13 @@ std::string nominalForInt(uint64_t mag, bool negative) {
 }
 
 std::string nominalForUint(uint64_t mag) {
+    // Upper-bits rule: the nominal width is the smallest where the bits above it
+    // are all uniform (all 0 or all 1). That collapses to the magnitude ladder
+    // below once we take the "absolute value" — flip all bits when the top bit is
+    // set (mirrors nominalForInt's negate-if-negative). So `~0x0F` (0xFF..F0)
+    // flips to 0x0F -> uint8, and `~0` (0xFF..FF) flips to 0 -> uint1, while the
+    // real 64-bit value is carried unchanged for downstream widening.
+    if (mag >> 63) mag = ~mag;
     if (mag <= 1ULL) return "uint1";
     if (mag <= 255ULL) return "uint8";
     if (mag <= 65535ULL) return "uint16";

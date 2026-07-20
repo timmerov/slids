@@ -1347,8 +1347,15 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         case ast::Kind::kUintLiteral:
         case ast::Kind::kCharLiteral:
         case ast::Kind::kBoolLiteral: {
-            widen::checkIntLiteralFits(expr.text, dest_type,
-                                       expr.file_id, expr.tok, diag);
+            // A literal whose nominal type widens to dest is materialized by direct
+            // bit-truncation (the upper-bits case, e.g. ~0x0F nominal uint8 -> int64
+            // as -16); the magnitude fit-check would wrongly reject its 0xFF..F0
+            // value. A genuine overflow (nominal uint64 -> int64) does NOT widen, so
+            // it still reports here.
+            if (!widen::nominalWidensTo(expr.nominal_type, dest_type)) {
+                widen::checkIntLiteralFits(expr.text, dest_type,
+                                           expr.file_id, expr.tok, diag);
+            }
             return expr.text;
         }
         case ast::Kind::kFloatLiteral: {

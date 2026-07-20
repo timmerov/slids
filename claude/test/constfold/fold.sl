@@ -76,6 +76,23 @@ the string encoding of the result is determined by kind.
 it is possible for the value of a constant to not fit into its nominal type.
 this is valid and unambiguous.
 these cases will be handled downstream.
+clarification:
+signed and unsigned integers are converted from string representation to signed
+or unsigned 64 bit representations.
+the width of the nominal type (8, 16, 32, 64 bits) is the smallest width where
+all of the upper bits are all zeros or all ones.
+for signed integers, the upper bits are copies of the sign bit.
+for unsigned integers, let's work an example.
+0x0F is uint8.
+~0x0F is 0xFFFF_FFFF_FFFF_FFF0.
+with the upper bits rule, ~0x0F is still uint8, as expected.
+without the upper bits rule, ~0x0F would be uint64.
+which would make this use case awkward.
+there's no common type between type(x)=int64 and type(~0x0F)=uint64.
+
+    intptr round_size_to_multiple_of_16(intptr x) {
+        return (x + 0x0F) & ~0x0F;
+    }
 
 invalid math operations are compile errors.
 for examples:
@@ -161,11 +178,15 @@ value that no longer fits demotes. the computation types (int64/uint64/float64)
 govern only how the VALUE is computed. rules 5b ("otherwise the kind is integer")
 and 6 ("the computation type determines the kind") are superseded by this.
 
-suspect, flagged for review (NOT encoded as passing tests below):
-- unary ~ on a char REJECTS the out-of-range result (`~'A'` -> "value does not
-  fit char") instead of deferring per the "value need not fit its nominal" note.
-- unary ~ on bool/unsigned reports a uint64 nominal (by value), not the operand's
-  nominal size that rule 1e states.
+the unsigned upper-bits rule (canon above) governs an unsigned literal's nominal:
+~0x0F (value 0xFF..F0) keeps nominal uint8 — not uint64 — so it shares a common
+type with a signed value. that lets `(x + 0x0F) & ~0x0F` compile, the value
+reinterpreting as -16 by bit-truncation when it widens into the signed target; a
+same-width partner (nominal uint64 -> int64, e.g. 9223372036854775808) is still
+rejected. standalone, the same ~0x0F materializes at its uint64 computation type
+(18446744073709551600). the two earlier flagged suspects are resolved by this: ~
+of an unsigned literal reports the small nominal, and ~'A' yields a char (value
+190) rather than rejecting.
 */
 
 int32 main() {
@@ -242,6 +263,16 @@ int32 main() {
     __println("m_mul= " + (6 * 7));      // 42
     __println("m_div= " + (20 / 3));     // 6
     __println("m_mod= " + (20 % 3));     // 2
+
+    // D8 — unsigned upper-bits nominal (canon: the nominal width is the smallest
+    // where the upper bits are all-zeros or all-ones). ~0x0F keeps nominal uint8 —
+    // not uint64 — so it shares a common type with the signed intptr; its full value
+    // (0xFF..F0) reinterprets as -16 by bit-truncation on the widen. Standalone, the
+    // same ~0x0F materializes at its uint64 computation type.
+    intptr cap = 100;
+    __println("round16= " + ((cap + 0x0F) & ~0x0F));  // 112  (round up to mult of 16)
+    __println("u_maskz= " + (0 & ~0x0F));             // 0
+    __println("u_notF= "  + (~0x0F));                 // 18446744073709551600 (uint64)
 
     /* compile errors — invalid fold operations (the negative-test runner
        uncomments one block at a time). float+int mix and the >uint64 integer

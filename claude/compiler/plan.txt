@@ -48,6 +48,17 @@ Phase 0 — foundations (LANDED)
     reported, not silently folded — see const_truncate_model memory). commonType
     ported to TypeRef. NOT constfold's job: algebraic identities (see
     OPTIMIZE — LLVM's instcombine).
+    UNSIGNED UPPER-BITS NOMINAL (2026-07-20): a uint literal's nominal width is the
+    smallest whose upper bits are uniform (all 0/all 1) — nominalForUint flips the
+    value when bit 63 is set, then the normal ladder — so `~0x0F` (0xFF..FFF0) is
+    uint8, not uint64, and shares a common type with a signed value. The widen is
+    admitted on the NOMINAL (widen::nominalWidensTo: an integer-class nominal widens
+    to a STRICTLY WIDER integer-class target, never signed->unsigned), consulted at
+    both classify's literal-flex and codegen's literal emit, even though the value
+    overflows the target's magnitude; it materializes by bit-truncation. A same-width
+    step (uint64->int64, e.g. 9223372036854775808) is NOT wider, so a genuine large
+    literal is still rejected. Enables the round-to-16 mask `(x + 0x0F) & ~0x0F`
+    (string.sl). Detail: readme.txt integer-widen section.
   * diagnostic sink + source rendering
   * single-source error pipeline (main.cpp early-out between stages)
   * build hygiene (-Wall -Werror -Wswitch-enum)

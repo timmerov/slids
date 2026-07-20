@@ -284,6 +284,19 @@ static bool floatLiteralFitsKind(std::string const& literal_text, TypeKind tk) {
     return false;   // no silent float → int-class
 }
 
+bool nominalWidensTo(TypeRef nominal, TypeRef target) {
+    if (nominal == kNoType || target == kNoType) return false;
+    TypeKind kn, kt;
+    if (!classify(nominal, kn) || !classify(target, kt)) return false;
+    if (kn.cat == Category::kFloat || kt.cat == Category::kFloat) return false;
+    // A signed nominal never silently crosses to an unsigned target (a negative
+    // literal like -1 must stay signed — canon: "-27 may be int8..int64", never
+    // uintN). Unsigned->signed IS allowed: that is the upper-bits case (uint8 ~0x0F
+    // -> int64), and unsigned->unsigned / signed->signed widen normally.
+    if (kn.cat == Category::kSignedInt && kt.cat == Category::kUnsignedInt) return false;
+    return kt.bits > kn.bits;   // strictly wider integer-class target
+}
+
 bool intLiteralFits(std::string const& literal_text, std::string const& dest_type) {
     if (dest_type.empty()) return true;
     TypeKind tk;

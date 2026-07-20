@@ -253,6 +253,16 @@ bool checkFloatLiteralFits(std::string const& literal_text,
                            int file_id, int tok,
                            diagnostic::Sink& diag);
 
+// A literal whose NOMINAL type is `nominal` silently widens to `target` when both
+// are integer-class and `target` is strictly wider (canon: "integer-class literals
+// may be silently widened to any LARGER integer-class type"). This is the sole
+// gate that admits the upper-bits case: `~0x0F` has nominal uint8 but a value
+// (0xFF..F0) exceeding int64's positive range — the widen is legal on the nominal
+// even though the value would fail a magnitude fit, because the widen truncates
+// the bit pattern directly. A same-width nominal (uint64 -> int64) is NOT wider,
+// so a genuine large literal like 9223372036854775808 is still rejected.
+bool nominalWidensTo(TypeRef nominal, TypeRef target);
+
 // Silent variants used by the binary-op literal-flex rule.
 bool intLiteralFits(std::string const& literal_text, std::string const& dest_type);
 bool floatLiteralFits(std::string const& literal_text, std::string const& dest_type);
