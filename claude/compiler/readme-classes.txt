@@ -765,10 +765,17 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     [[project_self_and_method_calls]].
   * BARE-FIELD REWRITE reaches MORE expression contexts. Besides reads / `=` writes /
     compound writes, the `bare field -> self.field` rewrite now fires for a `##type`
-    OPERAND (`##type(field)` -> the field's type) and an ADDRESS-OF operand (`^field`
+    OPERAND (`##type(field)` -> the field's type), an ADDRESS-OF operand (`^field`
     -> `^self.field`, using the `self` keyword so the addr-of walk descends to a
-    resolvable base). So a bare field works as a value, a store target, a `##type`
-    operand, and under `^`. Canon test/class/field.sl.
+    resolvable base), and a MOVE / SWAP target (`field <-- e` / `field <--> e` —
+    resolveMoveSwapLvalue lowers a bare-field target via lowerFieldRef and routes it
+    through resolveStoreTarget BEFORE its local/global-only resolveAssignTarget arm,
+    so a bare field joins the field-aware store funnel instead of being rejected
+    "Cannot assign to field"). The field-lowering is centralized for READS (every
+    resolveExpr site calls lowerFieldRef) but the WRITE side hand-copies the rewrite
+    per statement kind — kAssignStmt, kAugAssignStmt, and now resolveMoveSwapLvalue.
+    So a bare field works as a value, a store target, a `##type` operand, under `^`,
+    and as a move/swap target. Canon test/class/field.sl.
   * METHOD / FUNCTION PARITY — methods get OVERLOADING + DEFAULT PARAMS + INFER-PARAM-
     TYPE-FROM-DEFAULT (the three callable features free functions already had) through
     ONE shared overload engine. The RANKING is factored into a single pure core

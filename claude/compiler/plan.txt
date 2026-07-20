@@ -637,8 +637,10 @@ Phase 4 — types beyond primitives
     SWAP exchanges two EXACTLY-same-type lvalues via SSA temporaries (no stack
     temp; whole-value load/store handles tuples). Forms: a default-move-init decl
     (`T x <-- y`, the default_move_init flag) + statement; operand forms ident, array
-    element, tuple slot, CLASS FIELD (kFieldExpr — resolveMoveSwapLvalue accepts
-    it, routing to resolveStoreTarget), deref, AND a SUB-AGGREGATE — a partial array
+    element, tuple slot, CLASS FIELD (a kFieldExpr OR a bare field NAME —
+    resolveMoveSwapLvalue lowers a bare field to `self.field` via lowerFieldRef, both
+    routing to resolveStoreTarget; a bare-field target used to be rejected "Cannot
+    assign to field"), deref, AND a SUB-AGGREGATE — a partial array
     index (sub-array row `g[i]`) or a tuple slot that is itself a tuple/array
     (emitLvalueAddr threads allow_partial=true for swap/move, whole-value load/store
     at the operand type; codegen-only). BOTH swap operands and a move's LHS

@@ -1491,8 +1491,11 @@ STAGE FILES (.h / .cpp pairs)
             is a general expression, so `x <--> 7` would otherwise crash codegen)
             — BOTH swap operands and a move's LHS must be lvalues ("A swap operand"
             / "A move target" must be an lvalue); the accepted forms are a bare
-            ident, an array element, a tuple slot, a class field (kFieldExpr), or a
-            deref. a move's RHS is a plain read, so an rvalue source is allowed. DA: a move lhs is a pure write (need not
+            ident, an array element, a tuple slot, a class field (a kFieldExpr, OR a
+            BARE field name — resolveMoveSwapLvalue lowers it to `self.field` via
+            lowerFieldRef before the local/global-only bare-ident arm, so
+            `storage_ <-- e` is a field store, not a "Cannot assign to field"
+            reject), or a deref. a move's RHS is a plain read, so an rvalue source is allowed. DA: a move lhs is a pure write (need not
             be pre-init); a swap reads+writes both (both must be init).
             A SUB-AGGREGATE operand works too: a PARTIAL array index (a sub-array
             row `g[i]`) or a tuple SLOT (whether the slot is a tuple or an array) is

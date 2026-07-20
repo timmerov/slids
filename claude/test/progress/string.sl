@@ -336,8 +336,6 @@ String (
             --sizea;
             --sizeb;
         }
-        /* unreachable but required by the compiler. */
-        return 0;
     }
 
     /* return the substring. */

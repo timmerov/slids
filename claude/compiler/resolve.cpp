@@ -2860,6 +2860,17 @@ void resolveMoveSwapLvalue(parse::Tree& tree, parse::Node& lv,
         resolveStoreTarget(tree, lv, diag);
         return;
     }
+    // A bare field NAME target: lower `field` -> `self.field` and store through it,
+    // the SAME funnel the read / index / deref paths use (lowerFieldRef). Mirrors the
+    // kAssignStmt / kAugAssignStmt bare-field rewrite; without it a field reaches
+    // resolveAssignTarget's local/global-only allowlist and is wrongly rejected.
+    if (lv.kind == parse::Kind::kIdentExpr && !isQualified(lv)) {
+        int fid = resolveName(tree, lv.name);
+        if (lowerFieldRef(tree, lv, fid, diag)) {   // fires only for a kField
+            resolveStoreTarget(tree, lv, diag);
+            return;
+        }
+    }
     if (lv.kind != parse::Kind::kIdentExpr) {
         resolveExpr(tree, lv, diag);   // resolve sub-exprs so inner errors surface
         diagnostic::report(diag, {lv.file_id, lv.tok,
