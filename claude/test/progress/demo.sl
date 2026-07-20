@@ -6,7 +6,8 @@ import string;
 
 int main() {
 
-    __println("Hello, World!");
+    String str = "Hello, World!";
+    str.print();
 
     return 0;
 }

@@ -1212,13 +1212,30 @@ struct Parser {
         int op_file = peek().file_id;
         int op_tok = pos;
         advance();   // [
+        auto first = parseExpr();
+        if (!first) return nullptr;
+        // Range slice `base[lo..hi]` — a substring marker: a kIndexExpr with text
+        // ".." and children [base, lo, hi]. STRICTLY a __print / __println argument
+        // (classify rejects it in any other context); no comma-list mixing.
+        if (peek().kind == token::Kind::kDotDot) {
+            advance();   // ..
+            auto hi = parseExpr();
+            if (!hi) return nullptr;
+            if (!expect(token::Kind::kRBracket, "]")) return nullptr;
+            auto node = newNodeAt(parse::Kind::kIndexExpr, op_file, op_tok);
+            node->text = "..";
+            node->children.push_back(std::move(base));    // [0] base
+            node->children.push_back(std::move(first));   // [1] lo
+            node->children.push_back(std::move(hi));       // [2] hi
+            return node;
+        }
         std::vector<std::unique_ptr<parse::Node>> indices;
-        while (true) {
+        indices.push_back(std::move(first));
+        while (peek().kind == token::Kind::kComma) {
+            advance();   // ,
             auto index = parseExpr();
             if (!index) return nullptr;
             indices.push_back(std::move(index));
-            if (peek().kind != token::Kind::kComma) break;
-            advance();   // ,
         }
         if (!expect(token::Kind::kRBracket, "]")) return nullptr;
         for (std::size_t k = indices.size(); k-- > 0; ) {

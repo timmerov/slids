@@ -57,6 +57,17 @@ bool isFloatType(widen::TypeRef t) {
     return widen::classify(t, k) && k.cat == widen::Category::kFloat;
 }
 
+// Widen a already-emitted integer value of type `t` to i64 (sext/zext by sign),
+// so a slice bound of any int width feeds sub / getelementptr uniformly.
+std::string toI64(std::string const& v, widen::TypeRef t, std::ostream& out) {
+    IntDesc d;
+    if (!classifyInt(t, d) || d.bits >= 64) return v;
+    std::string ext = newTmp("s64");
+    out << "  " << ext << " = " << (d.is_unsigned ? "zext " : "sext ")
+        << d.llty << " " << v << " to i64\n";
+    return ext;
+}
+
 }  // namespace
 
 bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
@@ -103,6 +114,35 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
             }
             fmt += "%g";
             args.push_back({"double", v});
+            continue;
+        }
+
+        // A range slice `base[lo..hi]` (kIndexExpr marked ".."): print exactly
+        // (hi - lo) chars starting at base+lo, length-bounded via printf `%.*s`
+        // (a substring is NOT NUL-terminated). __print-only — classify guarantees a
+        // char[] base and integer bounds.
+        if (seg->kind == ast::Kind::kIndexExpr && seg->text == "..") {
+            ast::Node const& base = *seg->children[0];
+            ast::Node const& lo = *seg->children[1];
+            ast::Node const& hi = *seg->children[2];
+            std::string bv = codegen::emitExpr(base, syms, pool, out, diag,
+                                               base.inferred_type);
+            std::string lov = toI64(codegen::emitExpr(lo, syms, pool, out, diag,
+                                                      lo.inferred_type),
+                                    lo.inferred_type, out);
+            std::string hiv = toI64(codegen::emitExpr(hi, syms, pool, out, diag,
+                                                      hi.inferred_type),
+                                    hi.inferred_type, out);
+            std::string len = newTmp("slen");
+            out << "  " << len << " = sub i64 " << hiv << ", " << lov << "\n";
+            std::string len32 = newTmp("slen");
+            out << "  " << len32 << " = trunc i64 " << len << " to i32\n";
+            std::string start = newTmp("sptr");
+            out << "  " << start << " = getelementptr i8, ptr " << bv
+                << ", i64 " << lov << "\n";
+            fmt += "%.*s";
+            args.push_back({"i32", len32});
+            args.push_back({"ptr", start});
             continue;
         }
 

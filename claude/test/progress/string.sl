@@ -392,14 +392,12 @@ String (
 
 /* print the string. */
 void print(String^ s) {
-    // ==tsc==
-    //__print(s^.storage_[0..s^.size_]);
+    __print(s^.storage_[0..s^.size_]);
 }
 
 /** print the string on a line. */
 void println(String^ s) {
-    // ==tsc==
-    //__println(s^.storage_[0..s^.size_]);
+    __println(s^.storage_[0..s^.size_]);
 }
 
 /* helper functions. */

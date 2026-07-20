@@ -831,6 +831,44 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
     }
 }
 
+// A range slice `base[lo..hi]` used as a print segment (kIndexExpr, text ".."):
+// the substring `hi - lo` chars from `base + lo`. STRICTLY __print-only — the base
+// must be a char[] string and the bounds integers; the print backend emits a
+// length-bounded write (not NUL-terminated). This is NOT general array slicing:
+// the generic kIndexExpr path rejects a ".." node anywhere but here.
+void inferPrintSlice(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
+    assert(e.children.size() == 3 && "print slice needs [base, lo, hi]");
+    parse::Node& base = *e.children[0];
+    parse::Node& lo = *e.children[1];
+    parse::Node& hi = *e.children[2];
+    inferExpr(tree, base, widen::kNoType, diag);
+    inferExpr(tree, lo, widen::kNoType, diag);
+    inferExpr(tree, hi, widen::kNoType, diag);
+    // A sized char array decays to its element pointer, like a bare char[] segment.
+    if (isArrayType(base.inferred_type)
+        && widen::deepStrip(arrayFirstElem(base.inferred_type))
+           == widen::deepStrip(widen::intern("char"))) {
+        wrapArrayAsElemAddr(base);
+        inferExpr(tree, base, widen::kNoType, diag);
+    }
+    if (widen::deepStrip(base.inferred_type) != widen::intern("char[]")) {
+        diagnostic::report(diag, {e.file_id, e.tok,
+            "A '[a..b]' print slice requires a char[] operand, not '"
+            + widen::spell(base.inferred_type) + "'.", {}});
+        return;
+    }
+    for (parse::Node const* b : {&lo, &hi}) {
+        widen::TypeKind k;
+        if (!widen::classify(b->inferred_type, k)
+            || k.cat == widen::Category::kFloat) {
+            diagnostic::report(diag, {e.file_id, e.tok,
+                "A '[a..b]' print slice bound must be an integer.", {}});
+            return;
+        }
+    }
+    e.inferred_type = widen::intern("char[]");   // the print backend keys on the node
+}
+
 // Walk a left-leaning '+' chain in a print-intrinsic argument. Each leaf
 // segment infers in isolation — '+' here is print's concatenation marker,
 // not the arith operator.
@@ -839,6 +877,10 @@ void inferPrintArg(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
         && e.children.size() == 2) {
         inferPrintArg(tree, *e.children[0], diag);
         inferPrintArg(tree, *e.children[1], diag);
+        return;
+    }
+    if (e.kind == parse::Kind::kIndexExpr && e.text == "..") {
+        inferPrintSlice(tree, e, diag);
         return;
     }
     inferExpr(tree, e, widen::kNoType, diag);
@@ -1183,6 +1225,15 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             return;
         }
         case parse::Kind::kIndexExpr: {
+            // A range slice `base[lo..hi]` (text "..") is print-only; inferPrintArg
+            // handles it as a segment. Reaching the general index path means it was
+            // written somewhere else — reject.
+            if (e.text == "..") {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "A '[a..b]' slice is only valid as a __print / __println "
+                    "argument.", {}});
+                return;
+            }
             // `base[index]` -> an element. The base must be an array; the result
             // strips one (leftmost) dimension. A constant index is bounds-checked.
             assert(e.children.size() == 2 && "kIndexExpr needs base + index");
