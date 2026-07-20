@@ -1225,7 +1225,20 @@ Phase 5 — classes
     method FORWARD DECL is satisfied by a same-(exact-scope)-signature definition
     (orphan check matches owner_ns_frame + parent_frame_id + param_types; inferMethodCall
     gathers only DEFINED candidates) — full decl+def parity. Detail: plan-method-
-    parity.txt; canon test/class/overload_cls.sl + method.sl. Constructors have NO overload analog — `_()` is nullary (a hook
+    parity.txt; canon test/class/overload_cls.sl + method.sl.
+    UPDATE (2026-07-20): candidate GATHERING for a class member is now ONE funnel,
+    declaredMemberOverloads — inferMethodCall, findClassOperator, classHasOperatorArity,
+    and stampClassBinary all route through it (SUPERSEDES "gathers only DEFINED candidates"
+    above). A candidate is any DECLARED same-name entry — DEFINED, PURE, or EXTERNAL
+    (declared in a `.slh`, defined in the sibling, bound at link) — NOT "defined here":
+    three hand-rolled `e.defined`-only operator scans predated cross-TU classes and never
+    saw an imported operator, so a user `op=(char[])` / `op[]` / `op+` declared in a header
+    was invisible to importers (fell through to construction-by-initializer or "cannot
+    convert 'int' to 'C'"). A decl+def PAIR is collapsed by SIGNATURE — the external decl
+    drops only when a local definition of the SAME param types covers it — so a
+    distinct-signature external SURVIVES beside the synthesized default op=(Self^) (which is
+    `defined` in EVERY TU, importers included, and shares the name). Canon test/import
+    (Counter's op=(int) / op[] / op+ across the seam). Constructors have NO overload analog — `_()` is nullary (a hook
     over tuple-initialized fields, not a signature-bearing callable); the `Class(args)`
     "args" are field initializers. The adjacent overloadable construct is post-
     construction assignment (`op=`), under operator overloading — not a ctor feature.

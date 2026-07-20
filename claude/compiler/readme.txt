@@ -1548,6 +1548,22 @@ STAGE FILES (.h / .cpp pairs)
             ladder (exact 0 / alias 1 / cast 2 / smallest same-sign 3-5 / cross-sign 6-8
             widen) and scores a candidate by the MAX rung over its args, reporting a tie
             via reportAmbiguity, citing each conflicting declaration.
+            CANDIDATE GATHERING for a class member (method / operator / hook) is ONE funnel,
+            declaredMemberOverloads (inferMethodCall, findClassOperator, classHasOperatorArity,
+            stampClassBinary all route through it). A candidate is any DECLARED same-name entry
+            in the receiver's class + base chain — DEFINED, PURE (a bodyless virtual slot), or
+            EXTERNAL (declared in an imported `.slh`, defined in the sibling, bound at link).
+            "Declared", not "defined here": an imported operator is as callable as a local one.
+            A decl+def PAIR (the defining TU holds the header declaration AND its local definition
+            as SEPARATE entries) is collapsed by SIGNATURE — the external decl is dropped only
+            when a local definition of the SAME param types covers it, so a distinct-signature
+            external SURVIVES: the user `op=(int)` sits beside the synthesized default `op=(Self^)`
+            (which is `defined` in EVERY TU, importers included, and shares the name). The
+            most-derived frame naming the member shadows its bases. This retired three hand-rolled
+            `e.defined`-only operator scans that predated cross-TU classes and never saw an
+            imported operator — so a user operator declared in a `.slh` was invisible to its
+            importers (fell through to construction-by-initializer or "cannot convert"). Canon
+            test/import (Counter's op=(int) / op[] / op+ across the seam).
             THE OVERLOAD SET ITSELF IS CHECKED AT ITS DECLARATION —
             checkOverloadDefaultCollisions, run right after the signature pre-pass (the
             point where every param type, incl. one INFERRED from its default, and every

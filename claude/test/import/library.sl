@@ -101,6 +101,23 @@ void Animal:print() {
     __println("Animal:print: " + a + " " + b);
 }
 
+/* Counter's USER operators — declared in the header, so DEFINING them here is legal (the
+   sibling owns the bodies). Each result is offset from a plain field-init so the importer's
+   printed value proves the operator DISPATCHED rather than a construction winning. */
+Counter:op=(int a) {
+    n_ = a + 1;
+}
+int Counter:get() {
+    return n_;
+}
+int^ Counter:op[](int i) {
+    i;
+    return ^n_;
+}
+Counter:op+(Counter^ a, int b) {
+    n_ = a^.n_ + b;
+}
+
 /* the definitions of the header's overloaded function + method. */
 int add(int a) {
     return a;

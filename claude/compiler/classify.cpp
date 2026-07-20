@@ -4495,6 +4495,59 @@ void classifyStmtList(parse::Tree& tree,
     }
 }
 
+// THE ONE member-overload gather. Every DECLARED member (method / operator / hook)
+// named `name` in `cls`'s class + base chain is a candidate — a candidate is any entry
+// that is DEFINED, PURE (an un-overridden virtual slot, bodyless by design), or EXTERNAL
+// (declared in an imported header, defined in the sibling TU and bound at link). Whether a
+// body was seen in THIS TU is NOT a match criterion; only whether the member is declared.
+// The subtlety this folds in: in the DEFINING TU a header declaration and its local
+// definition are SEPARATE entries with the same signature (an overload set allows the
+// name), so the external declaration is a candidate ONLY when the frame defines none — the
+// defined body wins and the pair counts once (no false ambiguity). The most-derived frame
+// that names the member shadows its bases. Arity-agnostic: callers filter param_types.size().
+//
+// This retires three hand-rolled `e.defined`-only scans (findClassOperator,
+// classHasOperatorArity, stampClassBinary) that predated cross-TU classes and never grew
+// the external arm — so a user operator declared in a header was invisible to its importers.
+std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
+                                         std::string const& name) {
+    std::vector<int> cands;
+    for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
+        if (fr < 0) continue;
+        // Every DECLARED member of this name in the frame — defined, pure, OR external.
+        std::vector<int> frame;
+        for (std::size_t id = 0; id < tree.entries.size(); id++) {
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == fr
+                && e.name == name && (e.defined || e.is_pure || e.is_external))
+                frame.push_back((int)id);
+        }
+        if (frame.empty()) continue;   // name absent here — fall through to a base frame
+        // Collapse a decl+def PAIR: in the defining TU a header declaration and its local
+        // definition are SEPARATE entries with the same signature — keep the definition,
+        // drop the redundant external decl (else the pair reads as an ambiguous overload).
+        // Dedup by SIGNATURE, not by "is anything defined": a distinct-signature external
+        // is NOT a duplicate — e.g. a user `op=(int)` beside the synthesized default
+        // `op=(Self^)` (which is `defined` in every TU). The old coarse "external only if
+        // nothing defined" dropped that user op= and made it invisible to importers.
+        for (int id : frame) {
+            parse::Entry const& e = tree.entries[id];
+            if (e.is_external) {
+                bool covered = false;
+                for (int jd : frame)
+                    if (jd != id && !tree.entries[jd].is_external
+                        && tree.entries[jd].param_types == e.param_types) {
+                        covered = true; break;
+                    }
+                if (covered) continue;
+            }
+            cands.push_back(id);
+        }
+        break;   // most-derived frame with the name shadows its bases
+    }
+    return cands;
+}
+
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     // obj.method(args) — infer the receiver, resolve the method on its class's
     // member frame, arity-check + infer the args. desugar reads the receiver's
@@ -4518,41 +4571,7 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     // chain — the first frame (most-derived) that has the name shadows the rest (a
     // derived overload set hides the base's). A method found in a BASE frame runs on
     // the receiver's base sub-object (offset 0, so the same address).
-    std::vector<int> frames = parse::classAndBaseFrames(tree, rs);
-    std::vector<int> cands;
-    for (int fr : frames) {
-        if (fr < 0) continue;
-        for (std::size_t id = 0; id < tree.entries.size(); id++) {
-            parse::Entry const& e = tree.entries[id];
-            // Only DEFINED methods are candidates — a forward declaration shares the
-            // name + signature with its definition (separate entries), so skipping
-            // undefined entries keeps a decl+def pair from looking like an ambiguous
-            // overload. A decl with no definition is already an orphan error. A PURE
-            // virtual (`= delete`) is the exception: it has no definition by design and
-            // IS a valid dispatch target (the call resolves to its vtable slot, which a
-            // concrete override fills), so it stays a candidate.
-            if (e.kind == parse::EntryKind::kFunction && (e.defined || e.is_pure)
-                && e.owner_ns_frame == fr && e.name == s.name) {
-                cands.push_back((int)id);
-            }
-        }
-        // An EXTERNAL declaration — from an imported header, defined in some other TU —
-        // is a dispatch target for the same reason a pure virtual is: it has no
-        // definition HERE by design, and the call binds at link. Considered only when
-        // nothing in this frame DEFINES the name, which is what keeps the defining TU's
-        // decl+def pair (separate entries, same signature) from reading as an ambiguous
-        // overload — there, the definition wins above and this never runs.
-        if (cands.empty()) {
-            for (std::size_t id = 0; id < tree.entries.size(); id++) {
-                parse::Entry const& e = tree.entries[id];
-                if (e.kind == parse::EntryKind::kFunction && e.is_external
-                    && e.owner_ns_frame == fr && e.name == s.name) {
-                    cands.push_back((int)id);
-                }
-            }
-        }
-        if (!cands.empty()) break;   // most-derived frame with the name shadows bases
-    }
+    std::vector<int> cands = declaredMemberOverloads(tree, rs, s.name);
     if (cands.empty()) {
         diagnostic::report(diag, {s.file_id, s.name_tok,
             "Class '" + widen::spell(rs) + "' has no method '" + s.name + "'.", {}});
@@ -4616,14 +4635,9 @@ bool isArithBitBinaryOp(std::string const& op) {
 // user parameters (i.e. param_types.size() == nUserParams + 1, the receiver first).
 bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams) {
-    for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
-        if (fr < 0) continue;
-        for (parse::Entry const& e : tree.entries)
-            if (e.kind == parse::EntryKind::kFunction && e.defined
-                && e.owner_ns_frame == fr && e.name == opname
-                && e.param_types.size() == nUserParams + 1)
-                return true;
-    }
+    for (int id : declaredMemberOverloads(tree, cls, opname))
+        if (tree.entries[id].param_types.size() == nUserParams + 1)
+            return true;
     return false;
 }
 
@@ -4637,20 +4651,9 @@ bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
 int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& rhs,
                       std::string const& opname, diagnostic::Sink& diag) {
     std::vector<int> cands;
-    for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
-        if (fr < 0) continue;
-        bool any_here = false;
-        for (std::size_t id = 0; id < tree.entries.size(); id++) {
-            parse::Entry const& e = tree.entries[id];
-            if (e.kind != parse::EntryKind::kFunction || !e.defined
-                || e.owner_ns_frame != fr || e.name != opname)
-                continue;
-            any_here = true;                            // name present in this frame
-            if (e.param_types.size() != 2) continue;    // [_$recv, one user param]
-            cands.push_back((int)id);
-        }
-        if (any_here) break;   // most-derived frame with the name shadows bases
-    }
+    for (int id : declaredMemberOverloads(tree, cls, opname))
+        if (tree.entries[id].param_types.size() == 2)   // [_$recv, one user param]
+            cands.push_back(id);
     // recv_offset = 1: `_$recv` is implicit, so only the single user operand `rhs` is
     // ranked (an assignment operator is arity-1). A cast drops rhs's const only for the
     // read-only argConvertCost scoring inside the shared core.
@@ -4988,20 +4991,9 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
         // A 2-arg operator is ranked over BOTH operands, so it needs the full overload
         // core rather than findClassOperator's arity-1 probe.
         std::vector<int> cands;
-        for (int fr : parse::classAndBaseFrames(tree, C)) {
-            if (fr < 0) continue;
-            bool any_here = false;
-            for (std::size_t id = 0; id < tree.entries.size(); id++) {
-                parse::Entry const& en = tree.entries[id];
-                if (en.kind != parse::EntryKind::kFunction || !en.defined
-                    || en.owner_ns_frame != fr || en.name != opname)
-                    continue;
-                any_here = true;
-                if (en.param_types.size() != 3) continue;   // [_$recv, lhs, rhs]
-                cands.push_back((int)id);
-            }
-            if (any_here) break;
-        }
+        for (int id : declaredMemberOverloads(tree, C, opname))
+            if (tree.entries[id].param_types.size() == 3)   // [_$recv, lhs, rhs]
+                cands.push_back(id);
         std::vector<parse::Node*> args{&lhs, &rhs};
         OverloadRank r = rankOverload(tree, cands, args, 1);
         if (r.tied.size() > 1) {

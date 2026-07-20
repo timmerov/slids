@@ -122,7 +122,11 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     default op=(Self^) / op<--(Self^) / op<-->(Self^) are REAL memberwise methods — resolve's
     `synthesizeClassTransferOps` mints them (unless the user declared one, which shadows) as
     kFunctionDef + kFunction entries (marked Entry.synthesized) in the class's op tree, body
-    one statement per field `_$recv^.fi OP _$src^.fi` (copy / move / swap). It runs at the
+    one statement per field `_$recv^.fi OP _$src^.fi` (copy / move / swap). The default
+    op=(Self^) is `defined` in EVERY TU (importers included), so it shares the name `op=`
+    with any user CONVERTING operator (`op=(int)`); member-overload gathering therefore
+    dedups by SIGNATURE, not by "anything defined," or the default would hide the user op=
+    from an importer (see readme.txt "CANDIDATE GATHERING"). It runs at the
     resolveScopeBodies choke point — the SINGLE per-class body pass every driver funnels
     through (file-scope, hoisted, reopened, derived, virtual, class-nested, AND function/
     block-LOCAL classes), so EVERY class is covered by one mechanism. Each per-field stmt

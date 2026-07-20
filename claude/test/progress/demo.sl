@@ -7,7 +7,7 @@ import string;
 int main() {
 
     String str = "Hello, World!";
-    str.print();
+    println(^str);
 
     return 0;
 }

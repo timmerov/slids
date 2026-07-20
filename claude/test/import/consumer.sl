@@ -120,6 +120,18 @@ int32 main() {
     int s1 = dog.sum(10);      __println("sum1: " + s1);      // OVERLOADED method
     int s2 = dog.sum(10, 20);  __println("sum2: " + s2);
 
+    // USER OPERATORS on a header-declared class are EXTERNAL here (bodies link from
+    // library.sl). Each dispatch must match a DECLARED-not-defined operator — the
+    // cross-TU hole. op=(int) -> findClassOperator; op[] -> classHasOperatorArity +
+    // findClassOperator; op+ -> classHasOperatorArity + stampClassBinary. Each printed
+    // value pins the dispatch (the bodies offset from a plain field-init).
+    Counter cn = 5;                 // default-construct, then cn.op=(5) -> n_ = 6
+    __println("counter: " + cn.get());        // 6
+    int ce = cn[0];                 // (cn.op[](0))^ -> n_ -> 6
+    __println("counter idx: " + ce);          // 6
+    Counter cs = cn + 3;            // cs.op+(cn, 3) -> n_ = 6 + 3 = 9
+    __println("counter sum: " + cs.get());    // 9
+
     Space:Float f = 3.14; f;
     x = Space:Result:kSuccess;
     Space:Vegetable peas(3,4);

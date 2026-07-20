@@ -83,6 +83,21 @@ Animal(int a, int b) {
     int sum(int x, int y);
 }
 
+/* USER OPERATORS across the seam: declared here, DEFINED in library.sl, so from an
+   importer they are EXTERNAL — the operator dispatch must match a DECLARED-not-defined
+   operator. That is the case the operator-lookup scans used to miss (they required a
+   local definition), so each of these hits a different scan: a CONVERTING op=(int)
+   (findClassOperator), an op[] read (classHasOperatorArity + findClassOperator), and a
+   binary op+ (classHasOperatorArity + stampClassBinary). Animal's op=(Animal^) is a
+   SAME-TYPE copy that routes through the transfer path, not these scans, so it never
+   exercised the hole. */
+Counter(int n_) {
+    op=(int a);
+    int get();
+    int^ op[](int i);
+    op+(Counter^ a, int b);
+}
+
 Space {
     alias Float = float;
     enum Result ( kSuccess, kFailure );

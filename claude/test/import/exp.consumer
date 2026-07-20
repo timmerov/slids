@@ -17,6 +17,9 @@ Animal:ctor: 1 2
 Animal:print: 1 2
 sum1: 11
 sum2: 31
+counter: 6
+counter idx: 6
+counter sum: 9
 Vegetable:ctor: 3 4
 Vegetable:print: 3 4
 Goodbye, World!
