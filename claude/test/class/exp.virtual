@@ -55,3 +55,29 @@ empty k = 42
 Plain:render
 plain cost = 7
 Plain:render
+-- tuple of virtual --
+Vt:ctor 1
+Vt:ctor 2
+Vt:tag 1
+Vt:tag 2
+Vt:dtor 2
+Vt:dtor 1
+-- array of virtual --
+Vt:ctor 3
+Vt:ctor 4
+Vt:tag 3
+Vt:tag 4
+Vt:dtor 4
+Vt:dtor 3
+-- tuple of derived virtual --
+Vt:ctor 5
+Vd:ctor 6
+Vt:ctor 7
+Vd:ctor 8
+Vd:tag 6
+Vd:tag 8
+Vd:tag 6
+Vd:dtor 8
+Vt:dtor 7
+Vd:dtor 6
+Vt:dtor 5

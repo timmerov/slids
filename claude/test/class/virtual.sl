@@ -229,6 +229,22 @@ Widget : Label(int w_) {
     virtual void render() { __println("Label:render"); }
 }
 
+/* A virtual class held BY VALUE in an aggregate — a tuple slot / array element. The vptr
+   is a hidden field like any other, so each slot is an ordinary instance: constructed in
+   slot order, destroyed in REVERSE, its vptr stamped by its own ctor. Ctor and dtor print
+   DISTINCT text so the golden pins the count and the order, not just that something ran.
+   Vt is deliberately given a base, so a slot also exercises a real override. */
+Vt(int t_) {
+    _() { __println("Vt:ctor " + t_); }
+    virtual ~() { __println("Vt:dtor " + t_); }
+    virtual void tag() { __println("Vt:tag " + t_); }
+}
+Vt : Vd(int d_) {
+    _() { __println("Vd:ctor " + d_); }
+    virtual ~() { __println("Vd:dtor " + d_); }
+    virtual void tag() { __println("Vd:tag " + d_); }
+}
+
 /* A re-open may IMPLEMENT an inherited virtual slot (here, an inherited pure) — that is
    an override, not a new virtual method, so it is allowed. */
 Gadget(int g_) {
@@ -489,6 +505,39 @@ int32 main() {
         Widget^ wpl = ^pl;
         wpl^.render();                     // Plain:render (dispatch through the abstract base)
     }
+
+    /* COVERAGE — a virtual class BY VALUE in a TUPLE. Each slot is a full instance: its
+       own ctor stamps its own vptr. Constructed in slot order, destroyed in REVERSE at
+       the block's close. */
+    {
+        __println("-- tuple of virtual --");
+        (Vt, Vt) tv = ((1), (2));          // Vt:ctor 1, Vt:ctor 2
+        tv[0].tag();                       // Vt:tag 1
+        tv[1].tag();                       // Vt:tag 2
+    }                                      // Vt:dtor 2, Vt:dtor 1  (REVERSE)
+
+    /* COVERAGE — a virtual class BY VALUE in an ARRAY, same rules by element. */
+    {
+        __println("-- array of virtual --");
+        Vt av[2] = ((3), (4));             // Vt:ctor 3, Vt:ctor 4
+        av[0].tag();                       // Vt:tag 3
+        av[1].tag();                       // Vt:tag 4
+    }                                      // Vt:dtor 4, Vt:dtor 3  (REVERSE)
+
+    /* COVERAGE — a DERIVED virtual class in a slot: the whole chain runs per element, and
+       a call through the slot reaches the OVERRIDE. A by-value slot's dynamic type is its
+       static type, so this pins the chain and the override, not runtime selection. */
+    {
+        __println("-- tuple of derived virtual --");
+        (Vd, Vd) td = ((5, 6), (7, 8));    // Vt:ctor 5, Vd:ctor 6, Vt:ctor 7, Vd:ctor 8
+        td[0].tag();                       // Vd:tag 6   (override, not Vt:tag)
+        td[1].tag();                       // Vd:tag 8
+        /* through a BASE reference to a slot — the vptr the slot's own ctor stamped
+           selects the override at run time. */
+        Vt^ b0 = ^td[0];
+        b0^.tag();                         // Vd:tag 6
+    }                                      // Vd:dtor 8, Vt:dtor 7, Vd:dtor 6, Vt:dtor 5
+
     return 0;
 }
 

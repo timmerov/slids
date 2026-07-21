@@ -100,16 +100,10 @@ Class() {
 can derived classes have non-const dtors?
 hrm...
 
-virtual classes in tuples probably don't work right.
-
 unhelpful caret:
 alisa TupleType =
                 ^
 return-type function-name expected-(
-
-alleged compile error:
-type mismatch int v float.
-tuple = (5, 5) + 1.5
 
 alleged error:
 function returns tuple.
@@ -121,11 +115,6 @@ no need until can index at runtime.
 
 test if works as expected:
 x = ^y^;
-
-optimize tuple construction:
-a tuple of objects constructs temp objects,
-then copies them into the tuple.
-might be done.
 
 revisit for loops.
 some uncharted territory.
