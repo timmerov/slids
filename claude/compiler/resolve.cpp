@@ -5085,12 +5085,19 @@ void validateVirtualClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink
             // A re-open may implement/override an existing slot (found above) but not
             // introduce a NEW virtual method — unless a matching slot was declared in the
             // class's PRIMARY body (same frame, a different entry).
+            // The message must NOT call the class virtual: this ALSO fires when the class
+            // is not virtual yet and the re-open is what would make it — the more damaging
+            // case, since the first virtual method inserts `_$vptr` at slot 0 and shifts
+            // every field an importer already folded from the class's declaration. Naming
+            // the consequence is the point; "a re-opened virtual class" described a
+            // situation the author may not even be in.
             if (findMethodInFrames(tree, self_and_base, em.name, em.param_types,
                                    m->resolved_entry_id) < 0) {
                 diagnostic::report(diag, {m->file_id, m->name_tok,
-                    "A re-opened virtual class may not add the new virtual method '"
-                    + m->name + "'; all virtual methods must be in the original "
-                    "declaration.", {}});
+                    "Class '" + node.name + "' may not add the new virtual method '"
+                    + m->name + "' in a re-open; every virtual method must be in the "
+                    "original declaration (the first one places a vtable pointer at "
+                    "offset 0 and fixes the slot layout).", {}});
             }
         }
     }

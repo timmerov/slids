@@ -13,7 +13,7 @@ one of claude's current favorite fuck-ups is to use default move
 @Class_$move/copy/swap instead of calling the class's operator.
 
 remaining class todo:
-refine, cross-tu
+refine
 
 these need to move to optimizations.
 operations may be reduced:
@@ -34,12 +34,6 @@ for examples:
 shift by negative value: anything << -1
 shift floating point: 3.14 << anything, anything << 3.14
 divide by zero: x / 0.0
-
-test/implement unnamed cross-TU globals.
-might need a __$global_ctor_all that instantiates
-all of them at start of main:global scope.
-
-test/implement named and unnamed globals in .slh.
 
 main should be a keyword.
 claude says no cause it's not a keyword in any other language.
@@ -106,25 +100,12 @@ Class() {
 can derived classes have non-const dtors?
 hrm...
 
-claude thinks:
-"Virtual dispatch through chained AIE/FieldAccess still falls
-to static dispatch — the indirect flag (codegen_stmt.cpp:2535)
-only triggers on DerefExpr or self."
-
-claude thinks:
-"Method call on a non-lvalue receiver (foo().bar(), (a + b).bar())
-still errors. Out of scope; would require a temp-spill before dispatch,
-similar to the rvalue-base spill in the emitExpr(AIE) wrapper."
-
 virtual classes in tuples probably don't work right.
 
 unhelpful caret:
 alisa TupleType =
                 ^
 return-type function-name expected-(
-
-allegedly new tuple doesn't work:
-tuple_ptr = new (int, int);
 
 alleged compile error:
 type mismatch int v float.

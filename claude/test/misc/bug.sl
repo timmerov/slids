@@ -133,5 +133,12 @@ int32 main() {
     //__println(##line + ": "); { SuperCtor s(makeCtor(),4); s; }
     //__println(##line + ": "); { SuperCtor s = (makeCtor(),4); s; }
 */
+    V() {
+        _() { __println("V:ctor"); }
+        virtual ~() { __println("V:ctor"); }
+        virtual void print() { __println("V:print"); }
+    }
+    (V, V) tuple; tuple;
+
     return 0;
 }

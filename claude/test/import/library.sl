@@ -290,3 +290,20 @@ them (above) is legal. this file is the sibling, and it is still not allowed.
 //    _() { __println("compile error."); }
 //    ~() { __println("compile error."); }
 //}
+
+/* a `.sl` may add an ordinary method to a header class, but NOT a virtual one. the first
+   virtual method inserts the vtable pointer at slot 0 and shifts every field an importer
+   already folded from the header, and it fixes a slot layout every importing TU derives
+   from that same header — so the whole vtable must be decided where everyone can see it.
+   Animal is not virtual at all, which is exactly the damaging case: this re-open would be
+   what MAKES it virtual. (the general rule is per re-open, not per header — see
+   test/class/virtual.sl; these two pin that it reaches ACROSS the seam, and by which
+   spellings.) */
+//-EXPECT-ERROR: may not add the new virtual method
+//Animal() { virtual void late_v() {} }
+
+/* the EXTERNAL member form cannot even carry `virtual` — the grammar admits it only
+   inside a class body, so this spelling is stopped a stage earlier than the one above.
+   both roads are closed, by different mechanisms. */
+//-EXPECT-ERROR: Expected type.
+//virtual void Animal:late_v() { }
