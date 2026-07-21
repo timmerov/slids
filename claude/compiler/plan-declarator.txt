@@ -317,6 +317,12 @@ CODEGEN — the funnel (LANDED, Slice C)
       ELEMENT runs its op too; a POD value stays an inline store (+ null for a move). No
       hooks, no registration. See [[project_ctor_dtor_injection]] (copy/move/swap AS
       FIRST-CLASS operator methods, synthesized at the resolveScopeBodies choke point).
+      ONE class of destination fills NOTHING here: an OPAQUE class in a TU that only
+      DECLARES it. Its construction is split across the seam, and the whole default-fill
+      belongs to the completer's `@C__$ctor` — so a tuple-literal init (the field fill
+      classify built) is dropped at the top of emitInitFill. A whole-VALUE init is not
+      that case and still dispatches to the transfer function below. See
+      readme-classes.txt DERIVING FROM AN OPAQUE CLASS.
     emitConstructed(addr, type, register_dtor, scope)   — FINALIZE raw storage: run ctor
       hooks + register the dtor (unless the caller owns it). The SINGLE hooks+register
       pairing — one typeNeedsHook flag governs both, so they cannot diverge.

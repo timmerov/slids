@@ -1309,7 +1309,13 @@ STAGE FILES (.h / .cpp pairs)
             notes point at prior decls. Also decides a class's LINKAGE and
             enforces the header-class ADD ban — both in registerClassBody, the
             only place that sees every opening of a class; see readme-classes.txt
-            "WHERE A CLASS IS DECLARED DECIDES ITS LINKAGE". Owns
+            "WHERE A CLASS IS DECLARED DECIDES ITS LINKAGE". Once every class is
+            registered, propagateRuntimeLayout marks (by fixpoint down the base
+            chains) each class DERIVING from an opaque base: its own field offsets
+            are a link-time fact, not a constant. It runs BEFORE the by-value
+            acyclic walk, which asks the flag to tell that one legal embedding —
+            the `_$base` slot — from an illegal field one. See readme-classes.txt
+            "DERIVING FROM AN OPAQUE CLASS". Owns
             the "what does this name refer to" decision; types are not
             resolve's job.
   constfold parse tree -> parse tree. Iterative post-order walker.
@@ -1858,7 +1864,16 @@ STAGE FILES (.h / .cpp pairs)
             ast-side endsInReturn / endsInReturnNode (return only) that recurses
             into a trailing block and a both-arms-return if, mirroring classify.
             Mangled names are baked in by desugar (functionSymbol); field offsets
-            are the index-GEP here in codegen (LLVM owns the byte offset).
+            are the index-GEP here in codegen (LLVM owns the byte offset). ONE
+            exception, and it is still LLVM that owns it: a class DERIVING from an
+            imported opaque base has no compile-time offsets in an importer, so the
+            COMPLETER folds them into an exported `@C__$offsets` table (a ptrtoint of
+            a null-GEP per slot, off its real struct) and the importer LOADS the entry
+            and GEPs by bytes. Both the write path (emitElementAddr's kSlid arm) and
+            the read path (emitExpr kIndexExpr) go through it — the read side must NOT
+            take its whole-object-load + extractvalue shortcut there, since the object
+            is a runtime-sized blob typed `{ i8 }`. See readme-classes.txt DERIVING
+            FROM AN OPAQUE CLASS.
               Pointers & arrays (Phase 4). References (`T^`) and iterators
             (`T[]`) are both LLVM `ptr`; `anyptr` (nullptr) too. kAddrOfExpr
             `^var` is the operand's alloca register (no load); kDerefExpr loads

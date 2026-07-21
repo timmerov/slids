@@ -32,12 +32,6 @@ UNBLOCKED FEATURES
     requires a class type". Swap-init default-constructs the target and then re-dispatches
     as an ordinary swap statement, and only the construct half is class-only.
 
-  * SIZEOF ACROSS TUs — `sizeof` is an internal CONSTANT today (the GEP-null/ptrtoint
-    `__$sizeof` helper, folded per TU), which is correct while every importing TU can
-    see the whole layout. For an INCOMPLETE class it can't, so sizeof must become an
-    external FUNCTION, synthesized by the sibling like the other synthesized members.
-    Deferred until incomplete classes cross a TU — the two land together or not at all.
-
 
 BLOCKED FEATURES
 

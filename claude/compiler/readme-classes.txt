@@ -1317,8 +1317,52 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     String (str_ + tag_), Mix (every field kind: default, no-default→0, recursive class field,
     array, exercised through getters), Flat (POD).
 
-  OPEN. cross-TU globals (LANDED — see readme.txt); multi-header modules; classes DERIVING from an
-  imported incomplete class (the derived TU needs runtime field offsets past the opaque base —
-  same family as the deferred REFINEMENTS runtime-offset work). (Overloads across a `.slh` now LINK
-  — every function/method mangles to an Itanium `_Z...` symbol off its signature, not a per-TU
-  entry id; see readme.txt's desugar entry.)
+  DERIVING FROM AN OPAQUE CLASS (LANDED). `Base : Derived` where Base is an imported incomplete
+  class. The base sub-object KEEPS SLOT 0 — every upcast stays a no-op, and that is exactly why
+  the base stays first — but its size is known only to the completer, so the derived class's OWN
+  field offsets are not compile-time constants in an importer. They become a LINK-TIME constant
+  instead.
+    THE FLAG. widen::Type.runtime_layout, set by resolve's propagateRuntimeLayout — a fixpoint
+    over the base chains, run just before checkClassByValueAcyclic (which asks the flag to tell a
+    legal base embedding from an illegal field one). It keys ONLY on the base's persistent `...`
+    header fact, never on anything per-TU, so the completer and every importer compute the same
+    answer. A layout rule that could disagree across the seam would be silent memory corruption,
+    not a diagnostic.
+    IT IMPLIES OPAQUE — the point of the design. An opaque class already has a runtime size, a
+    construction split into `@C__$ctor`/`@C__$pctor` across the seam, and the importer-side
+    layout rejections. Those are precisely the three things a derived class needs, so it joins
+    that machinery (propagateRuntimeLayout sets slidOpaque too) instead of a second copy of it.
+    Sizeof, the ctor/dtor routing, and the runtime-sized alloca all come for free.
+    OFFSETS. `@C__$offsets` is a `[N x i64]` table, one entry per SLOT (including the base at 0).
+    The COMPLETER folds it off its real struct — `ptrtoint (getelementptr (<struct>, null, 0, k))`
+    per slot, so LLVM computes every offset and the two halves cannot drift — and exports it; an
+    importer emits `external constant` and LOADS the entry it needs, then GEPs by bytes. ONE
+    symbol per class, not one per field. Slot 0 folds to 0, so an upcast rides the same path with
+    no special case. The completer's own layout and GEPs are UNTOUCHED: there the offsets ARE
+    constants, and it keeps indexing the struct directly.
+    CODEGEN. llvmForRef lowers a runtime-layout class in a kDeclare TU to the `{ i8 }` placeholder
+    — the same placeholder an opaque class gets — so nothing can structurally index it. BOTH field
+    paths consult the table: the write side (emitElementAddr's kSlid arm) and the read side
+    (emitExpr's kIndexExpr). The read side used to shortcut with a whole-object load +
+    extractvalue; there is no whole object to load here, and routing it back through the address
+    funnel is what guarantees a read and a write of one field land on the same bytes. emitInitFill
+    skips the SITE FIELD-FILL for any opaque class in an importer — `@C__$ctor` owns the entire
+    default-fill. That skip was a latent bug before this landing: invisible for a class with no
+    visible fields (an empty `store undef`), fatal for one that has them.
+    REJECTED IN AN IMPORTER: an initializer list (classifyClassInit — the site can NAME the fields
+    but not PLACE them, and silently dropping the list is worse than refusing it). REJECTED
+    OUTRIGHT: a `.sl`-LOCAL class over an opaque base (nothing outside the TU can name it, so no
+    sibling exports its offsets, and it cannot fold them itself); a VIRTUAL one (the base occupies
+    the slot the vptr needs, and the base's own vptr is hidden besides). Everything barred for the
+    base is barred for the derived class for the identical reason — by-value embedding, a bare
+    global, `new T[n]` — because runtime_layout implies opaque. checkClassByValueAcyclic lets the
+    `_$base` slot through while still descending into the base for the CYCLE check; a NAMED field
+    of the same opaque type stays rejected.
+    Canon test/import Tagged: own fields read and written through the table then read back through
+    a method the SIBLING compiled against the real struct (if table and struct disagreed the write
+    and the read would pass each other), base methods on a derived receiver, a base field read by
+    a derived method, the upcast, `new`, copy/move/swap/assign, and six negatives.
+
+  OPEN. cross-TU globals (LANDED — see readme.txt); multi-header modules. (Overloads across a
+  `.slh` now LINK — every function/method mangles to an Itanium `_Z...` symbol off its signature,
+  not a per-TU entry id; see readme.txt's desugar entry.)
