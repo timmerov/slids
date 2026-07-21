@@ -136,7 +136,17 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     cross-family reject). intptr is in the integer family here.
   * ptr    — pointer rules (classify ptrImplicitOk): a typed pointer target needs
     a MATCHING pointee, or an iterator->reference demote of the same pointee.
-    Unrelated pointees are an error (an explicit cast is required). An ARRAY source
+    Unrelated pointees are an error (an explicit cast is required). A COMPARISON
+    uses these same rules — ptrImplicitOk plus ptrBaseUpcastOk (derived->base, the
+    base at offset 0) — to settle on the type BOTH operands convert to, rather than
+    demanding the two sides already match. So `Base^ == Derived^`, `intptr == ptr`,
+    and `T^ == T[]` all compare, and a comparison can never disagree with a call
+    about what a pointer implicitly becomes. Direction is forced, not chosen:
+    pointer->intptr is implicit while intptr->pointer needs an explicit cast, so a
+    mixed pair settles on intptr; a derived/base pair settles on the base. A
+    reference still admits only `==` / `!=` (no sequence position), which also
+    rejects ordering an iterator AGAINST one — the pair settles on the reference.
+    Canon test/expression/compare.sl. An ARRAY source
     DECAYS to a pointer: a bare array implicitly casts to the ELEMENT pointer
     `Type[]`/`Type^` — classify rewrites it to `^arr[0]` (checkValueAssign /
     wrapArrayAsElemAddr), so it flows through the normal pointer path. The
@@ -1912,7 +1922,12 @@ STAGE FILES (.h / .cpp pairs)
             Iterator
             arithmetic: `iter ± int` is a signed element GEP, `iter - iter` is
             ptrtoint-diff / elemBytes, `++`/`--` GEP ±1 element. Pointer
-            comparisons icmp the raw pointers (unsigned). A kCastExpr
+            comparisons icmp the raw pointers, SIGNED — pointers are signed in
+            slids, so ordering them uses the same predicates an `intptr` gets.
+            That is not cosmetic: classify settles a mixed `ptr <=> intptr` pair
+            on intptr, so an unsigned pointer ordering would make the same two
+            addresses compare one way against each other and the other way
+            against an intptr holding one of them. A kCastExpr
             (`<Type^> x`) emits the operand then widen::convert twice
             (operand->target->dest); convert's pointer head makes ptr<->ptr a
             value no-op (opaque `ptr`), ptr->intptr a `ptrtoint`, intptr->ptr an

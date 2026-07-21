@@ -954,6 +954,12 @@ SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
   ptrBaseCastOk on `<T^>`), backed by parse::classBaseType/classify.isTransitiveBase
   reading the slot-0 `_$base` marker. An implicit DOWNcast is rejected; so is a cast
   between UNRELATED or SIBLING classes (not on one chain — nothing to reinterpret).
+  A COMPARISON is a third ptrBaseUpcastOk site (with the assignment relation and
+  overload ranking): `Base^ == Derived^` settles on the base and compares the two
+  addresses, rather than demanding the operands already share a type. Unrelated or
+  sibling classes are rejected there for the same reason a cast between them is —
+  being a class is not what makes a pair compatible, the base chain is. See
+  readme.txt's `ptr` conversion bullet; canon test/expression/compare.sl.
 
   SHARED DECODE. The per-step "base of a class" and the whole "class + its base frames"
   walk live ONCE in parse:: — baseTypeOf reads the slot-0 `_$base` field, classBaseType

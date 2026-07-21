@@ -280,7 +280,8 @@ Phase 4 — types beyond primitives
     identically to `^^^x`; a 3+ caret run already lexes as single `^` tokens.
     kStoreStmt is the general lvalue-
     expression store [`ref^ = v`]. Compare-only `== !=` [v1 rule]; ordering and
-    all arithmetic rejected. Both lower to LLVM `ptr`.)
+    all arithmetic rejected. Both lower to LLVM `ptr`. Comparison operand
+    conversion + signed ordering: see POINTER COMPARISON CONVERTS below.)
   * iterators (`T[]`, additive arithmetic)                          LANDED
     (`iter^` deref, `iter[i]` subscript, `^arr[i]` -> iterator [operand-driven:
     var->`^`, indexed->`[]`]; `iter ± int` GEP by element stride, `iter += n` /
@@ -289,6 +290,38 @@ Phase 4 — types beyond primitives
     a pointer."], `iter - iter` -> intptr [byte diff / sizeof elem], `++`/`--`
     step one element; full six comparisons. iterator->reference assignment demotes
     [v1]. `char[]` from a string literal.)
+  * POINTER COMPARISON CONVERTS (LANDED 2026-07-21). A comparison converts its
+    operands like every other binary op. This arm alone used to demand IDENTICAL
+    pointee types (nullptr the lone exemption), so `Base^ == Derived^`,
+    `intptr == ptr`, and `T^ == T[]` were rejected — each a conversion the language
+    already performs at a call, an assignment, and a return.
+    THE COMMON TYPE comes from the SAME two predicates argConvertCost uses to rank a
+    pointer ARGUMENT: ptrImplicitOk (nullptr->any, any->`void^`/`intptr`,
+    iterator->reference of the same pointee) and ptrBaseUpcastOk (derived->base, the
+    base at offset 0). Try lhs->rhs then rhs->lhs; the survivor is op_type, and reject
+    only when NEITHER converts. ONE place decides what a pointer implicitly becomes,
+    so a comparison and a call cannot drift apart on the answer.
+    DIRECTION IS FORCED, not chosen: pointer->intptr is implicit while intptr->pointer
+    needs an explicit cast, so a mixed pair settles on intptr; a derived/base pair
+    settles on the base. Both operands convert to it, so `(p == q)` and `(q == p)`
+    agree.
+    NO CODEGEN WORK: emitBinary already emits both operands against op_type, and
+    widen::convert already lowers ptr->intptr as a ptrtoint and ptr->ptr as a no-op.
+    The bug was entirely classify refusing to name a common type.
+    POINTERS ORDER SIGNED (same landing). codegen's comparison predicate no longer
+    forces unsigned for a pointer op_type — pointers are signed in slids, and with a
+    mixed pair settling on intptr an unsigned pointer ordering would make the same two
+    addresses compare one way against each other and the other way against an intptr
+    holding one of them. The only site that ORDERED pointers; the remaining unsigned
+    icmps are synthesized i64 loop counters, and every other pointer icmp is eq/ne
+    against null.
+    UNCHANGED: a reference has no sequence position, so a pair involving one admits
+    only `==` / `!=` — which also rejects ordering an iterator AGAINST a reference,
+    since the pair settles on the reference. Iterators and intptr admit all six.
+    NOTE the diagnostic still reads "Pointer comparison requires the same pointee
+    type." — it never misfires (only genuinely incompatible pointees reach it), but it
+    understates the rule, which is now compatibility rather than identity.
+    Canon test/expression/compare.sl.)
   * fixed-size arrays (`T name[N]`, multi-dim)                      LANDED
     (decl size after the NAME; multi-dim is STANDARD row-major — `int[5][3]` is 5
     chunks of 3 = LLVM `[5 x [3 x i32]]`, the LEFTMOST dim OUTERMOST; `arr[i]...`

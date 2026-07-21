@@ -2162,17 +2162,40 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         {}});
                     return;
                 }
-                widen::TypeRef anyptr = widen::intern("anyptr");
-                bool lnull = lref == anyptr;
-                bool rnull = rref == anyptr;
-                if (!lnull && !rnull && widen::deepStrip(pointeeType(lref)) != widen::deepStrip(pointeeType(rref))) {
+                // THE OPERANDS CONVERT FIRST, like every other binary op. This arm used
+                // to demand IDENTICAL pointee types (nullptr the lone exemption), so
+                // `Base^ == Derived^`, `intptr == ptr`, and `T^ == T[]` were all rejected
+                // even though each is a conversion the language performs everywhere else
+                // — a call, an assignment, a return. A comparison was the one place that
+                // asked for identity instead of compatibility.
+                // The common type comes from the SAME two predicates argConvertCost uses
+                // to rank a pointer ARGUMENT: ptrImplicitOk (nullptr -> any, any ->
+                // `void^` / `intptr`, iterator -> reference) and ptrBaseUpcastOk
+                // (derived -> base, offset 0). ONE place decides what a pointer implicitly
+                // becomes, so a comparison and a call can never drift apart on the answer.
+                // Direction matters and is not a choice: pointer -> intptr is implicit
+                // while intptr -> pointer needs an explicit cast, so a mixed pair always
+                // settles on intptr. Try lhs->rhs, then rhs->lhs; the survivor is op_type,
+                // and codegen converts BOTH operands to it (emitBinary), which is why no
+                // codegen work is needed here — ptr->intptr is a ptrtoint, ptr->ptr a no-op.
+                widen::TypeRef cmp_type = widen::kNoType;
+                if (widen::deepStrip(lref) == widen::deepStrip(rref)) {
+                    cmp_type = lref;
+                } else if (ptrImplicitOk(lref, rref)
+                        || ptrBaseUpcastOk(tree, lref, rref)) {
+                    cmp_type = rref;
+                } else if (ptrImplicitOk(rref, lref)
+                        || ptrBaseUpcastOk(tree, rref, lref)) {
+                    cmp_type = lref;
+                }
+                if (cmp_type == widen::kNoType) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Pointer comparison requires the same pointee type.",
                         {}});
                     return;
                 }
                 e.inferred_type = widen::intern("bool");
-                e.op_type = lnull ? rref : lref;
+                e.op_type = cmp_type;
                 return;
             }
 

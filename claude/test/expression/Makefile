@@ -12,6 +12,7 @@ DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
 SAMPLES = \
+	compare \
 	condition \
 	int \
 	mixed \

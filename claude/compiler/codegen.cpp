@@ -610,13 +610,12 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") {
         std::string llty = llvmForRef(opty);
         bool flt = isFloatType(opty);
-        // Pointer comparisons (reference / iterator / anyptr) compare addresses
-        // as unsigned.
-        widen::Type::Form of = widen::form(opty);
-        bool ptr_cmp = of == widen::Type::Form::kPointer
-            || of == widen::Type::Form::kIterator
-            || of == widen::Type::Form::kAnyptr;
-        bool uns = isUnsignedType(opty) || opty == widen::intern("bool") || ptr_cmp;
+        // Pointers are SIGNED in slids, so ordering them uses the signed predicates —
+        // the same ones an `intptr` gets. That matters because a mixed comparison
+        // (`ptr < intptr`) settles on intptr: were pointers ordered unsigned, the same
+        // two addresses would compare one way against each other and the other way
+        // against an intptr holding one of them.
+        bool uns = isUnsignedType(opty) || opty == widen::intern("bool");
         char const* pred;
         if      (op == "==") pred = flt ? "oeq" : "eq";
         else if (op == "!=") pred = flt ? "one" : "ne";
