@@ -11,6 +11,7 @@ SUBDIRS = \
 	misc \
 	pointer \
 	progress \
+	template \
 	tuple
 
 .PHONY: all clean test negatives positives $(SUBDIRS)
