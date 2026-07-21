@@ -264,7 +264,9 @@ Phase 3 — functions
     See [[project_nested_fn_desugar]].
   * method dispatch (`.method()`)                                  out of scope (Phase 4/5)
   * function pointers                                              out of scope
-  * function aliases, ##type-of-function, templates                out of scope
+  * function aliases (`alias sin = sinf`)                          LANDED — see FOREIGN C
+    IMPORTS + FUNCTION ALIASES below
+  * ##type-of-function, templates                                  out of scope
 
 Phase 4 — types beyond primitives
   * references (`T^`, no arithmetic)                                LANDED
@@ -1779,6 +1781,29 @@ CROSS-CUTTING — ASSIGNMENT RELATION (spec'd in readme.txt; LANDED end-to-end)
   narrowing / cross-family / sign-change rejects; widen::convert is pure
   lowering and ASSERTS on cases classify should have rejected (caught at the
   inter-stage halt in main.cpp). The CLASS row (op=) waits on Phase 5.
+
+CROSS-CUTTING — FOREIGN C IMPORTS + FUNCTION ALIASES (LANDED 2026-07-20)
+  Binds C-library functions (libm/libc) and renames them. A FOREIGN function (`= import`,
+  an `import { }` block, or the `math import { }` namespace shorthand) has no slids body:
+  Entry.is_foreign, symbolFor emits its BARE C name (no `_Z` mangle), it links via the
+  library flag (`-lm`), and is never an orphan. Valid at ANY definition scope — file,
+  namespace, CLASS (a class is a namespace, so `Class:cfn(…)`, NO receiver — resolve's
+  bare-call receiver rewrite excludes is_foreign), and BLOCK (block-local name; its
+  `declare` still hoists). Switch is excluded for free (case clauses aren't definitions).
+  The lexer's file-include `import name;` is swallowed, so at grammar level `import` always
+  leads a foreign block. Codegen emits each foreign `declare` ONCE, deduped by symbol
+  (collectForeignDecls over the whole tree).
+  FUNCTION ALIASES (`alias sin = sinf`) are an ADDITIVE OVERLOAD MERGE — the target's
+  overloads are DUPLICATED under the alias name as kFunction entries with Entry.alias_of
+  (they emit the TARGET's symbol), so pickOverload resolves `sin(f32)`->@sinf beside
+  `sin(f64)` by argument type. A function alias NEVER mints a colliding kAlias: a
+  function-name pre-scan (Tree.all_function_names) classifies it, and the duplication runs
+  LATE (processFuncAliases, after signatures resolve), deduped by signature (self-alias
+  errors). classifyCall now gathers the overload set for a namespace-member call, so a
+  qualified `math:cos(f32)` overload-resolves. This is v1's mechanism (separate construct,
+  late additive merge, dedup by signature) ported to v2's typed classify-time resolution;
+  it closed todo ALIAS FUNCTION-RENAME. Detail: readme.txt "FOREIGN C IMPORTS" +
+  "FUNCTION ALIASES"; canon test/import/math.sl (namespace + class + block + aliases, -lm).
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

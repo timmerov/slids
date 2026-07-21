@@ -31,9 +31,9 @@ math {
         float32 cosf(float32 x);
     }
 
-    /* alias them after defined. (STAGE 2 — function aliases not yet landed.) */
-    //alias sin = sinf;
-    //alias cos = cosf;
+    /* alias them after defined. */
+    alias sin = sinf;
+    alias cos = cosf;
 }
 
 /*
@@ -104,10 +104,8 @@ math import {
     float32 frexpf(float32 x, int^ exp);
     float32 modff(float32 x, float32^ iptr);
 
-    /* --- power and roots --- */
+    /* --- power and roots (sqrt/cbrt MOVED to non-namespace scope below) --- */
     float64 pow(float64 x, float64 y);
-    float64 sqrt(float64 x);
-    float64 cbrt(float64 x);
     float64 hypot(float64 x, float64 y);
     float32 powf(float32 x, float32 y);
     float32 sqrtf(float32 x);
@@ -173,10 +171,7 @@ math import {
     float32 nanf(char[] tag);
 }
 
-/* reopen math namespace for aliases.
-   STAGE 2 — function aliases (`alias fn = fn`) are not yet landed; this whole block
-   and the third main() block below are commented out for the stage-1 import landing.
-   (Inner block-comments removed so this single comment doesn't close early.)
+/* reopen math namespace for aliases. */
 math {
     // trigonometric
     alias tan = tanf; alias asin = asinf; alias acos = acosf; alias atan = atanf;
@@ -189,8 +184,8 @@ math {
     alias log2 = log2f; alias log10 = log10f; alias log1p = log1pf; alias logb = logbf;
     alias ilogb = ilogbf; alias ldexp = ldexpf; alias scalbn = scalbnf;
     alias scalbln = scalblnf; alias frexp = frexpf; alias modf = modff;
-    // power and roots
-    alias pow = powf; alias sqrt = sqrtf; alias cbrt = cbrtf; alias hypot = hypotf;
+    // power and roots (sqrt/cbrt live in a class / block below, not this namespace)
+    alias pow = powf; alias hypot = hypotf;
     // error and gamma
     alias erf = erff; alias erfc = erfcf; alias lgamma = lgammaf; alias tgamma = tgammaf;
     // nearest integer
@@ -204,7 +199,13 @@ math {
     alias fmin = fminf; alias fma = fmaf; alias nextafter = nextafterf;
     // nan and nanf both take char[] — identical signature, cannot be aliased.
 }
-*/
+
+/* CLASS-scope foreign import: `sqrt` moved out of the `math` namespace into a class. A
+   class is a namespace, so this is a class-scoped free function — called `Powers:sqrt(x)`,
+   NOT a method (a C function has no `self`), no instance needed. */
+Powers() {
+    import { float64 sqrt(float64 x); }
+}
 
 int32 main() {
 
@@ -222,9 +223,8 @@ int32 main() {
         __println(##type(x) + " x = " + x);
         __println(##type(y) + " y = " + y);
     }
-    /* STAGE 2 — needs `alias cos = cosf` / `alias sin = sinf` to route a float32 arg
-       to the f-variant; without it math:cos(float32) picks cos(float64) and the result
-       narrows into a float32, an error.
+    /* the f-variant via alias: `alias cos = cosf` routes a float32 arg to cosf (else
+       math:cos(float32) would pick cos(float64) and narrow into the float32 result). */
     {
         float32 angle = math:kPi32/2.0/3.0;
         float32 x = math:cos(angle);
@@ -232,7 +232,14 @@ int32 main() {
         __println(##type(x) + " x = " + x);
         __println(##type(y) + " y = " + y);
     }
-    */
+
+    /* the same import mechanism at CLASS scope (Powers:sqrt) and BLOCK scope (a
+       function-local `import`) — a foreign import works wherever a definition may live. */
+    __println("sqrt2 = " + Powers:sqrt(2.0));   // class-scope
+    {
+        import { float64 cbrt(float64 x); }     // block-local
+        __println("cbrt27 = " + cbrt(27.0));
+    }
 
     return 0;
 }

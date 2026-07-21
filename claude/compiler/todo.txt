@@ -118,9 +118,6 @@ BLOCKED FEATURES
     on the (now-unreachable) after-code before classify flags it. Low value
     (`while (true)` / empty-cond are the common forms and fully handled), real cost.
 
-  * ALIAS FUNCTION-RENAME — `alias Fn = LongName;` (use case: importing C
-    functions with ugly names).
-
   * TEMPLATED ALIAS — `alias X<...> = T;`.
 
   * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local

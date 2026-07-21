@@ -428,6 +428,10 @@ struct Entry {
                                   // `import { }` block) — no slids body, defined by a C
                                   // library (linked, e.g. `-lm`), so undefined here is NOT
                                   // an orphan. symbolFor emits the BARE C name (no mangle).
+    int alias_of = -1;            // kFunction: a FUNCTION ALIAS (`alias sin = sinf;`) — a
+                                  // duplicate of the target overload registered under the
+                                  // alias name so it joins the overload set; it emits the
+                                  // TARGET's symbol (symbolFor follows this to that entry).
     bool is_external = false;     // kFunction: DECLARED in an imported `.slh` header —
                                   // its definition legitimately lives in another
                                   // translation unit (linked in), so being undefined
@@ -611,6 +615,21 @@ struct Tree {
         int tok;
     };
     std::vector<NestedCallCheck> nested_call_checks;
+    // A FUNCTION ALIAS (`alias name = target;` whose target is a function) recorded at
+    // name registration; processed AFTER types resolve (the target's signature must be
+    // final before it is copied). Each duplicates the target's overloads under `name`.
+    struct FuncAliasReq {
+        std::string name;
+        std::string target;
+        int frame;
+        int file_id;
+        int tok;
+    };
+    std::vector<FuncAliasReq> func_alias_reqs;
+    // Every name declared as a function ANYWHERE (scope-blind) — lets alias registration
+    // tell a FUNCTION alias (`alias sin = sinf`) from a TYPE alias before the target's
+    // frame is known, so a function alias never mints a (colliding) kAlias entry.
+    std::set<std::string> all_function_names;
     // Transient — set while resolving a long-for's UPDATE clause, which may not
     // break / continue / return. in_for_update is true throughout the update
     // subtree (guards return, transitively). for_update_floor is loop_stack.size()

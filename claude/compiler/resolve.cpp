@@ -445,6 +445,78 @@ void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare, reused, diag);
 }
 
+// Collect every name declared as a function anywhere in the tree (scope-blind).
+void collectFunctionNames(parse::Node const& n, std::set<std::string>& out) {
+    if (n.kind == parse::Kind::kFunctionDef || n.kind == parse::Kind::kFunctionDecl)
+        out.insert(n.name);
+    for (auto const& ch : n.children)
+        if (ch) collectFunctionNames(*ch, out);
+}
+
+// A kAliasDecl whose target names a FUNCTION is a FUNCTION alias (`alias sin = sinf`),
+// not a type alias — it never mints a (colliding) kAlias entry; instead the target's
+// overloads are duplicated under the alias name after types resolve (processFuncAliases).
+bool isFuncAlias(parse::Tree const& tree, parse::Node const& s) {
+    return s.kind == parse::Kind::kAliasDecl
+        && s.return_type != widen::kNoType
+        && tree.all_function_names.count(widen::spellOrEmpty(s.return_type)) > 0;
+}
+
+void recordFuncAlias(parse::Tree& tree, parse::Node const& s, int frame) {
+    tree.func_alias_reqs.push_back(
+        {s.name, widen::spellOrEmpty(s.return_type), frame, s.file_id, s.name_tok});
+}
+
+// LATE (post-type-resolution) — duplicate each function alias's target overloads under
+// the alias name as kFunction entries carrying alias_of (so they emit the TARGET's
+// symbol) with the target's now-resolved signature. Additive; deduped by signature.
+void processFuncAliases(parse::Tree& tree, diagnostic::Sink& diag) {
+    for (auto const& req : tree.func_alias_reqs) {
+        // A namespace/class member is owned by its frame; a FILE-scope function is
+        // owner_ns_frame < 0 with parent_frame_id == the global frame.
+        auto inScope = [&](parse::Entry const& e) {
+            if (req.frame == parse::kGlobalFrame)
+                return e.owner_ns_frame < 0 && e.parent_frame_id == parse::kGlobalFrame;
+            return e.owner_ns_frame == req.frame;
+        };
+        std::vector<int> targets;
+        for (std::size_t id = 0; id < tree.entries.size(); id++) {
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind == parse::EntryKind::kFunction && inScope(e)
+                && e.name == req.target && e.alias_of < 0)
+                targets.push_back((int)id);
+        }
+        if (targets.empty()) {
+            diagnostic::report(diag, {req.file_id, req.tok,
+                "Alias target '" + req.target + "' is not a function in this scope.", {}});
+            continue;
+        }
+        for (int tid : targets) {
+            bool dup = false;
+            for (std::size_t id = 0; id < tree.entries.size(); id++) {
+                parse::Entry const& q = tree.entries[id];
+                if (q.kind == parse::EntryKind::kFunction && inScope(q)
+                    && q.name == req.name
+                    && q.param_types == tree.entries[tid].param_types) { dup = true; break; }
+            }
+            if (dup) {
+                diagnostic::report(diag, {req.file_id, req.tok,
+                    "Alias '" + req.name + "' has the same signature as an existing "
+                    "overload of '" + req.name + "'.", {}});
+                continue;
+            }
+            parse::Entry e = tree.entries[tid];   // copy the target's resolved signature
+            e.name = req.name;
+            e.alias_of = tid;
+            e.file_id = req.file_id;
+            e.tok = req.tok;
+            e.def_file_id = -1;
+            e.def_tok = -1;
+            parse::addEntry(tree, std::move(e));
+        }
+    }
+}
+
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                  bool unevaluated = false);
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag);
@@ -4530,6 +4602,9 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
     for (auto& m : node.children) {
         if (!m || m->kind != parse::Kind::kAliasDecl) continue;
         if (isQualified(*m) && m->return_type != widen::kNoType) continue;
+        // A FUNCTION alias merges into the overload set later — no kAlias entry (which
+        // would collide with a same-name function), just a deferred duplication request.
+        if (isFuncAlias(tree, *m)) { recordFuncAlias(tree, *m, frame); continue; }
         if (isDup(*m)) continue;
         parse::Entry e;
         e.kind = parse::EntryKind::kAlias;
@@ -5867,6 +5942,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     int anon_group_counter = 0;
     explodeAnonGlobalGroups(*program, anon_group_counter);
 
+    // Every function name, so alias registration can tell a FUNCTION alias from a TYPE
+    // alias (a function alias merges into the overload set; it must not mint a kAlias).
+    collectFunctionNames(*program, tree.all_function_names);
+
     // Pass 1a-alias — register all file-scope value aliases first, so any decl
     // below (in any order) can resolve through them. Targets are validated after
     // enums / namespaces / classes register (an alias may target one of those —
@@ -5875,7 +5954,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl
             && ch->return_type != widen::kNoType) {
-            registerAlias(tree, *ch, diag);
+            if (isFuncAlias(tree, *ch)) recordFuncAlias(tree, *ch, kGlobalFrame);
+            else registerAlias(tree, *ch, diag);
         }
     }
 
@@ -5938,7 +6018,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // validate each alias target (an alias may name any of them).
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl
-            && ch->return_type != widen::kNoType) {
+            && ch->return_type != widen::kNoType && !isFuncAlias(tree, *ch)) {
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
         }
     }
@@ -6159,6 +6239,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             resolveEnumMemberInits(tree, *ch, diag);
         }
     }
+
+    // Pass 1a-func-alias — every function (namespace AND file-scope) is now registered
+    // with a RESOLVED signature, so duplicate each function alias's target overloads
+    // under the alias name; they join the overload set for the passes below.
+    processFuncAliases(tree, diag);
 
     // Pass 1b — walk each top-level const's / global's init expression to resolve
     // ident references. By now every program-scope entry is in the table,

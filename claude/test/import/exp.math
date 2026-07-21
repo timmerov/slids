@@ -2,3 +2,7 @@ float64 x = 0.866158
 float64 y = 0.49977
 float32 x = 0.866158
 float32 y = 0.49977
+float32 x = 0.866158
+float32 y = 0.49977
+sqrt2 = 1.41421
+cbrt27 = 3

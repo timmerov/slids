@@ -14,12 +14,10 @@ search for tsc.
 import string;
 
 /* import c libaries. */
-/* ==tsc==
 stdc import {
     /* converts float to c string. */
     int32 strfromd(mutable char[] s, intptr n, char[] fmt, float64 fp);
 }
-*/
 
 /* block definitions. */
 String (
@@ -132,8 +130,7 @@ String (
     op=(float64 x) {
         clear();
         reserve(kNumberBufferSize);
-        // ==tsc==
-        //size_ = stdc:strfromd(storage_, capacity_, "%g", x);
+        size_ = stdc:strfromd(storage_, capacity_, "%g", x);
         size_ = 0;
     }
 
@@ -559,8 +556,7 @@ String : Format() {
         }
         /* build format c-string. */
         fmt = String + "%." + precision_ + style + '\0';
-        // ==tsc==
-        //str.size_ += stdc:strfromd(str.storage_ + str.size_, str.capacity_ - str.size_, fmt.storage_, x);
+        str.size_ += stdc:strfromd(str.storage_ + str.size_, str.capacity_ - str.size_, fmt.storage_, x);
         self = str;
     }
 

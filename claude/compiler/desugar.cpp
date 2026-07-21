@@ -383,6 +383,10 @@ std::vector<std::string> scopeSegments(parse::Tree const& tree, int frame) {
 // alone (the four method call sites derived their `defCls` identically from
 // classEntryForFrame(owner_ns_frame), so the entry already carries the defining class).
 std::string symbolFor(parse::Entry const& e, parse::Tree const& tree, int entry_id) {
+    // A FUNCTION ALIAS emits the TARGET's symbol — `alias sin = sinf` calls `@sinf`, not
+    // `@sin` (which is the C double `sin`). Follow it before any name-derived spelling.
+    if (e.alias_of >= 0)
+        return symbolFor(tree.entries[e.alias_of], tree, e.alias_of);
     // A FOREIGN C function (`= import`) links to its BARE C name — no Itanium mangling,
     // no scope path, no entry-id suffix (even inside a namespace or a block: `math:sin`
     // is the C symbol `sin`). Must precede the nested-fn arm, which would id-suffix it.

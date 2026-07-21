@@ -2362,7 +2362,22 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     // free function keeps resolve's resolution.
     std::vector<int> cands;
     bool qualified = !s.qualifier.empty() || s.global_qualified;
-    if (!qualified) {
+    // A call resolved to a NAMESPACE / class-scope member (owner_ns_frame >= 0) — a
+    // qualified `Ns:fn(...)` — gathers its overload set in that member's frame, so
+    // overloads (INCLUDING function aliases) resolve by argument type rather than keeping
+    // resolve's single pick. (resolve may have cleared the qualifier, so key off the entry.)
+    bool member_call = s.resolved_entry_id >= 0
+        && tree.entries[s.resolved_entry_id].kind == parse::EntryKind::kFunction
+        && tree.entries[s.resolved_entry_id].owner_ns_frame >= 0;
+    if (member_call) {
+        int fr = tree.entries[s.resolved_entry_id].owner_ns_frame;
+        for (std::size_t id = 0; id < tree.entries.size(); id++) {
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == fr
+                && e.name == s.name)
+                cands.push_back((int)id);
+        }
+    } else if (!qualified) {
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
             parse::Entry const& e = tree.entries[id];
             // Overload candidates are FILE-SCOPE free functions (parent_frame_id

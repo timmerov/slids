@@ -1611,6 +1611,11 @@ STAGE FILES (.h / .cpp pairs)
             nothing outside names it), and the synthesized class canonicals
             `__$copy`/`__$move`/`__$swap`. This closed the last cross-TU leak: overloads
             across a `.slh` now link (was the open limit, todo CROSS-TU MANGLING).
+            TWO MORE, both checked FIRST: a FOREIGN import (Entry.is_foreign, `= import`)
+            emits its BARE C name — `math:sin` links to `@sin`, no `_Z`, no scope path (it
+            is a libm symbol); and a FUNCTION ALIAS (Entry.alias_of, `alias sin = sinf`)
+            follows alias_of to the TARGET's symbol — `sin(f32)` emits `@sinf`, never `@sin`
+            (the C double). See FOREIGN C IMPORTS below.
 
             THE LOWERING PASSES RUN PER FUNCTION — AND "EVERY FUNCTION" INCLUDES
             NESTED ONES. run() collects every kFunctionDef in a program subtree
@@ -1716,6 +1721,36 @@ STAGE FILES (.h / .cpp pairs)
             LEAF to `@<Class>__$copy` / `__$move` / `__$swap`, the memberwise transfer op).
             Future rewrites (receiver shapes, more operator dispatch) slot in as their
             phases land.
+
+  FOREIGN C IMPORTS (LANDED) — cross-cutting; binds C-library functions (libm, libc).
+  A foreign function has no slids body; its symbol is the BARE C name (symbolFor exception,
+  above); it links with the library flag (e.g. `-lm`). Three spellings, all -> Entry.is_foreign:
+    * `float64 sin(float64 x) = import;`   — an individual declaration (grammar disambiguates
+      `= import` from `= delete` by a two-token lookahead).
+    * `import { T f(params); … }`          — a block whose every decl is foreign.
+    * `math import { … }`                  — shorthand for `math { import { … } }`.
+  SCOPE is anywhere a DEFINITION may live — file, namespace, CLASS (a class is a namespace,
+  so a class-scope import is a namespace-style member callable `Class:cfn(…)`, NO receiver /
+  `self` — parseImportBlock calls parseFunctionDef directly, and resolve's bare-call receiver
+  rewrite excludes is_foreign), and a BLOCK (a block-local name; its `declare` still hoists to
+  module scope). A SWITCH body is excluded for free — it parses case clauses, never
+  definitions. The LEXER's file-include `import name;` is consumed by the ImportWrapper (splices
+  the `.slh`), so at the grammar level `import` always leads a foreign block. Codegen emits each
+  foreign `declare` ONCE, DEDUPED by symbol from a whole-tree walk (collectForeignDecls) — a fn
+  imported in several scopes declares once; a foreign entry is never an orphan (defined by the
+  linked library). Canon test/import/math.sl (namespace + class + block + aliases; links -lm).
+
+  FUNCTION ALIASES (LANDED) — `alias sin = sinf;` where the target is a FUNCTION (not a type).
+  ADDITIVE OVERLOAD MERGE: the target's overloads are DUPLICATED under the alias name as
+  kFunction entries carrying Entry.alias_of (so they emit the TARGET's symbol), so `sin` gains
+  `sin(f32)->@sinf` beside `sin(f64)` and ordinary pickOverload resolves a call by argument
+  type. A function alias NEVER mints a (colliding) kAlias — a function-name PRE-SCAN
+  (Tree.all_function_names) classifies it, and the duplication runs LATE (processFuncAliases,
+  after every signature resolves; the target's param types must be final before they are
+  copied), DEDUPED by signature (a self-alias / signature clash errors, per v1). A TYPE alias is
+  unchanged. classifyCall gathers the overload set for a NAMESPACE-member call, so a qualified
+  `math:cos(f32)` overload-resolves (was resolve's single pick). Works for foreign AND slids
+  targets, at file / namespace scope. Detail: [[project_declared_member_overloads]] neighbor.
   optimize  ast -> ast in place. Slids-aware perf rewrites LLVM can't do
             (compound-fuse, NRVO, identity-temp adoption, build-into-target).
             (TODO stub.)
