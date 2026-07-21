@@ -367,7 +367,9 @@ int32 main() {
     void^ vpp = ^b;
     __println("pk(void) = " + pk(vpp));             // 2 (void^->intptr; typed ptrs rejected)
 
-    //-EXPECT-ERROR: Cannot implicitly cast 'char[]' to 'int'
+    /* a string literal is `const char[N]` — storage, N counting the NUL — so the
+       rejection now names the literal's real type and its size. */
+    //-EXPECT-ERROR: Cannot assign 'const char[14]' to 'int'
     //intparam("passed string");
 
     return 0;

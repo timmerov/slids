@@ -280,6 +280,16 @@ widen::TypeRef arrayFirstElem(widen::TypeRef arr) {
 // no codegen change is needed; the CALLER re-infers. An `int^` target demotes the
 // `Type[]` result to a reference through the normal iterator->reference rule.
 void wrapArrayAsElemAddr(parse::Node& n) {
+    // A STRING LITERAL is already an address at the IR level: it names N bytes in the
+    // constant pool and codegen emits a pointer to them. There is no alloca to index and
+    // no lvalue to take, so its decay is a pure TYPE change — re-stamp it as the element
+    // pointer and leave the node alone. Wrapping it as `^lit[0]` would send codegen
+    // looking for storage that does not exist. Guarded HERE, in the one decay funnel, so
+    // every decay site inherits it.
+    if (n.kind == parse::Kind::kStringLiteral) {
+        n.inferred_type = widen::internIterator(widen::internConst(widen::intern("char")));
+        return;
+    }
     int fid = n.file_id, tk = n.tok;
     auto zero = std::make_unique<parse::Node>();
     zero->kind = parse::Kind::kIntLiteral;
@@ -1214,7 +1224,32 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             return;
         }
         case parse::Kind::kStringLiteral: {
-            e.inferred_type = widen::intern("char[]");
+            // A string literal IS STORAGE, not a pointer: N bytes in the constant pool,
+            // where N is the decoded length PLUS the terminating NUL. Typing it
+            // `const char[N]` makes the type say what the thing already was — sizeof has
+            // always answered N here, not 8 — and lets `char a[6] = "hello"` be an
+            // ordinary same-type array init instead of a special rule. It reaches every
+            // `char[]` parameter through the array->element decay slids already has
+            // (a non-mutable iterator param munges to `(const char)[]`, so the decayed
+            // literal matches it); const is the honest half — the pool is read-only —
+            // and starts being ENFORCED when const enforcement lands.
+            // LIKE nullptr, IT TAKES A POINTER TYPE FROM CONTEXT. At a `char[]` / `char^`
+            // target the literal decays to its element pointer, which is the address
+            // codegen emits for it anyway. Doing it HERE rather than as a later rewrite
+            // is what makes it stick: the decay funnel replaces a node and re-infers, and
+            // a string literal that stayed a string literal would just be re-stamped as
+            // the array again.
+            if (isPtrLikeType(context)) {
+                widen::TypeRef p = pointeeType(context);
+                if (p != widen::kNoType
+                    && widen::deepStrip(p) == widen::deepStrip(widen::intern("char"))) {
+                    e.inferred_type = context;
+                    return;
+                }
+            }
+            e.inferred_type = widen::internConst(
+                widen::internArray(widen::intern("char"),
+                                   {static_cast<int>(e.text.size()) + 1}));
             return;
         }
         case parse::Kind::kNullptrLiteral: {
@@ -1381,6 +1416,18 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (widen::form(ctx_s) == widen::Type::Form::kArray) {
                 e.inferred_type = context;
                 return;
+            }
+            // A tuple VALUE auto-promotes to a tuple-REFERENCE parameter, so the context
+            // at such a call is `(...)^`, not `(...)`. See through it: the slots still
+            // want the pointee's slot types. Invisible until a slot's type could DEPEND
+            // on its context — a string literal is the first — and a slot that infers
+            // context-free then needs a per-leaf conversion the aggregate convert cannot
+            // express (an array element into a pointer slot).
+            if (isPtrLikeType(ctx_s)) {
+                widen::TypeRef pointee = pointeeType(ctx_s);
+                if (pointee != widen::kNoType
+                    && widen::form(widen::strip(pointee)) == widen::Type::Form::kTuple)
+                    ctx_s = widen::strip(pointee);
             }
             std::vector<widen::TypeRef> ctx_slots;
             if (widen::form(ctx_s) == widen::Type::Form::kTuple

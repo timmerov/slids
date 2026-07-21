@@ -259,6 +259,31 @@ int32 main() {
     int^ cpp(^cpv);                             // pointer target: element is a ref
     __println("cpp = " + cpp^);                                        // 9
 
+    /* A CHAR ARRAY FROM A STRING LITERAL. A string literal is `const char[N]` — storage,
+       N counting the terminating NUL — so this is an ordinary same-type array init, not
+       a special initializer rule. The size must match EXACTLY: an array that is too
+       short would drop the NUL (C allows that; it is how an unterminated buffer gets
+       made) and one that is too long has no defined fill, so both are rejected — see
+       the negatives below. */
+    char greet[6] = "hello";              // 5 chars + NUL
+    __println("greet = " + greet[0] + greet[1] + greet[2] + greet[3] + greet[4]);
+    __println("greet nul = " + (greet[5] == '\0'));                    // true
+    __println("greet ty = " + ##type(greet));                          // char[6]
+
+    /* the array is ordinary storage, so it is MUTABLE — the literal it was built from
+       is not, and this writes the copy. */
+    greet[0] = 'H';
+    __println("greet2 = " + greet[0] + greet[1]);                      // He
+
+    /* the empty literal is not empty: it is the NUL alone. */
+    char none[1] = "";
+    __println("none = " + (none[0] == '\0') + " " + ##type(none));     // true char[1]
+
+    /* the ELEMENT type need not be char — char is uint8, so a literal rides the ordinary
+       per-element widen above, exactly like `uint8[3] -> int[3]`. Only the SIZE is fixed. */
+    int codes[6] = "hello";
+    __println("codes = " + codes[0] + " " + codes[4] + " " + codes[5]);  // 104 111 0
+
     {
         /* trivial statement uses x. */
         int x = 42; x;
@@ -622,3 +647,28 @@ the `=` form (`int x = (1, 2)`).
 //    x;
 //    return 0;
 //}
+
+/* A CHAR ARRAY FROM A STRING LITERAL must match the literal's size EXACTLY. The literal
+   is `const char[N]` with N counting the NUL, so these are ordinary array-shape
+   mismatches — no rule of their own. */
+
+/* too SHORT: C would accept this and silently drop the terminating NUL, leaving an
+   unterminated buffer. Slids does not. */
+//-EXPECT-ERROR: Cannot assign 'const char[6]' to 'char[5]'
+//int32 neg_str_short() {
+//    char s[5] = "hello";
+//    s;
+//    return 0;
+//}
+
+/* too LONG: there is no defined fill for the tail. */
+//-EXPECT-ERROR: Cannot assign 'const char[6]' to 'char[10]'
+//int32 neg_str_long() {
+//    char s[10] = "hello";
+//    s;
+//    return 0;
+//}
+
+/* (no negative for a differing ELEMENT type: `int s[6] = "hello"` is legal and lives
+   with the positives above. char is uint8, so it rides the ordinary per-element widen —
+   the same rule as `uint8[3] -> int[3]` earlier in this file. Only the SIZE is fixed.) */

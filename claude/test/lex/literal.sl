@@ -84,6 +84,18 @@ int32 main() {
     int  c5 = '\\';            __println("c5= " + c5);
     int  c6 = '\'';            __println("c6= " + c6);
 
+    // -- string literals: the TYPE is `const char[N]` --
+    // a string literal is STORAGE, not a pointer: N bytes in the constant pool, N
+    // counting the terminating NUL. So its type carries its LENGTH, and every literal
+    // of a different length is a different type. (What it converts INTO — the decay to
+    // `char[]` at a parameter — is pointer/iterator.sl; the byte size is misc/sizeof.sl.)
+    char s1[6] = "hello";      __println("s1= " + ##type(s1));   // char[6]
+    char s2[1] = "";           __println("s2= " + ##type(s2));   // char[1]
+    // an ESCAPE is one byte, so the length is the DECODED length, not the spelling's.
+    char s3[2] = "\0";         __println("s3= " + ##type(s3));   // char[2]
+    char s4[2] = "\\";         __println("s4= " + ##type(s4));   // char[2]
+    char s5[3] = "\t\n";       __println("s5= " + ##type(s5));   // char[3]
+
     //-EXPECT-ERROR: Malformed exponent: expected a digit
     // float bad1 = 1e;
     //-EXPECT-ERROR: Malformed exponent: expected a digit

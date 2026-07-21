@@ -532,8 +532,9 @@ int32 main() {
 //    Class(1, 2);
 //}
 
-/* a construction with an argument of the wrong type. */
-//-EXPECT-ERROR: Cannot implicitly cast 'char[]' to 'int'
+/* a construction with an argument of the wrong type. (a string literal is
+   `const char[N]`, N counting the NUL — so "hi" is const char[3].) */
+//-EXPECT-ERROR: Cannot assign 'const char[3]' to 'int'
 //void neg_wrong_arg_type() {
 //    Class("hi");
 //}

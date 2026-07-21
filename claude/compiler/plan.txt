@@ -289,7 +289,37 @@ Phase 4 — types beyond primitives
     `iter = iter + n`, other compound ops rejected "Arithmetic is not defined on
     a pointer."], `iter - iter` -> intptr [byte diff / sizeof elem], `++`/`--`
     step one element; full six comparisons. iterator->reference assignment demotes
-    [v1]. `char[]` from a string literal.)
+    [v1]. `char[]` from a string literal — by DECAY; see below.)
+  * STRING LITERALS ARE `const char[N]` (LANDED 2026-07-21). A string literal is STORAGE,
+    not a pointer: N bytes in the constant pool, N counting the terminating NUL. It used
+    to be typed `char[]`, which made it a pointer that could never become storage — so
+    `char a[6] = "hello"` was rejected ("Cannot assign 'char[]' to 'char[6]'") and would
+    have needed an initializer rule of its own. Typed as the array it already is, that
+    line is an ORDINARY same-type array init and several special cases retire instead of
+    moving: sizeof's "content + null" stops being an exception to the type (it IS the
+    type), and reaching a `char[]` parameter is the array->element-pointer DECAY slids
+    already has — a non-mutable iterator param munges to `(const char)[]`, which the
+    decayed literal matches at rung 2.
+    CONST IS THE HONEST HALF: the pool is read-only. It buys nothing YET — argConvertCost
+    deepStrips const on both sides, so a literal still binds to a `mutable char[]` param —
+    but it makes the type true now so Phase-6 const enforcement has something real to
+    enforce. THE SIZE IS FIXED, THE ELEMENT TYPE IS NOT: `char a[5]`/`char a[10]` are
+    shape mismatches (the short form is the one C accepts, silently dropping the NUL),
+    while `int a[6] = "hello"` is legal — char is uint8, so it rides the ordinary
+    per-element widen.
+    IT TAKES A POINTER TYPE FROM CONTEXT, exactly as nullptr does (classify's
+    kStringLiteral arm). That is what makes the decay stick: the decay funnel replaces a
+    node and RE-INFERS, and a string literal that stayed a string literal was re-stamped
+    as the array again. Codegen keys on dest_type, not on the literal's own type — the
+    pooled symbol IS the address (right wherever it decayed), and an array-value position
+    loads the N bytes instead (storing the symbol was invalid IR).
+    SURFACED A LATENT BUG: a tuple VALUE auto-promotes to a tuple-REFERENCE param, so the
+    context at such a call is `(...)^` and kTupleExpr's per-slot context threading never
+    fired. Harmless while no slot's type could depend on context; `macros.sl`'s `dump(#x)`
+    broke the moment one could. Fixed by seeing through the pointer.
+    Canon: assign/vardecl.sl (the initializer form + size negatives), lex/literal.sl (the
+    type, and that N is the DECODED length — an escape is one byte), pointer/iterator.sl
+    (the decay, to an iterator / a reference / a parameter), misc/sizeof.sl (the size).
   * POINTER COMPARISON CONVERTS (LANDED 2026-07-21). A comparison converts its
     operands like every other binary op. This arm alone used to demand IDENTICAL
     pointee types (nullptr the lone exemption), so `Base^ == Derived^`,
@@ -622,7 +652,10 @@ Phase 4 — types beyond primitives
     dispatches type-vs-value, like ##type]. Size = widen::typeByteSize: pointer/
     iterator/nullptr 8, fixed array = total bytes [∏dims × elem], TUPLE = struct
     layout [slots laid out with LLVM-default alignment/padding via typeByteAlign],
-    string literal = content + null [NOT char[]=8], else primitive width. Folds to a STRONG `intptr`
+    string literal = content + null [which is now simply typeByteSize of its type — see
+    STRING LITERALS ARE `const char[N]`; constfold/classify keep an explicit arm that
+    computes the same number, redundant rather than wrong], else primitive width.
+    Folds to a STRONG `intptr`
     literal — in CONSTFOLD for the statically-known operands [type / string /
     nullptr / address-of / plain ident] so it can initialize a const or feed a
     const expression, in CLASSIFY for the residual [deref / index / arithmetic].

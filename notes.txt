@@ -190,16 +190,8 @@ alias std;
 alias std :;
 alias std ::;
 
-arrays:
-update docs so an array is semantically a tuple
-where all of the elements are the same type.
-and has special powers.
-revisit the handle of fixed size arrays.
-const index out of bounds.
-assign, move, copy to/from arrays and tuples.
-
 check if this works:
-vec[2] <-> vec[4];
+vec[2] <--> vec[4];
 
 import paths.
 

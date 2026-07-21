@@ -136,7 +136,12 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     cross-family reject). intptr is in the integer family here.
   * ptr    — pointer rules (classify ptrImplicitOk): a typed pointer target needs
     a MATCHING pointee, or an iterator->reference demote of the same pointee.
-    Unrelated pointees are an error (an explicit cast is required). A COMPARISON
+    Unrelated pointees are an error (an explicit cast is required). A STRING LITERAL is
+    `const char[N]` (storage, N counting the NUL), so it reaches a `char[]` / `char^`
+    target through the ARRAY DECAY below, not as a pointer of its own — and it takes a
+    pointer type from CONTEXT (classify's kStringLiteral arm, the same trick nullptr
+    uses), because the decay funnel re-infers and would otherwise re-stamp it as the
+    array. A COMPARISON
     uses these same rules — ptrImplicitOk plus ptrBaseUpcastOk (derived->base, the
     base at offset 0) — to settle on the type BOTH operands convert to, rather than
     demanding the two sides already match. So `Base^ == Derived^`, `intptr == ptr`,
@@ -1423,7 +1428,9 @@ STAGE FILES (.h / .cpp pairs)
             sizeof lowering: the kSizeofExpr cases constfold left (a deref / index /
             arithmetic operand, or a slid type) become a kIntLiteral of type
             `intptr` — widen::typeByteSize of the type/value operand, or content+1
-            for a string literal. A CLASS operand (typeByteSize -1 but a registered
+            for a string literal (an explicit arm that now agrees with typeByteSize of
+            its `const char[N]` type — redundant rather than wrong; see plan.txt STRING
+            LITERALS ARE `const char[N]`). A CLASS operand (typeByteSize -1 but a registered
             class) is the exception: its size is the real struct layout LLVM owns, so
             it rewrites to a CALL to `<Name>__$sizeof()` (a runtime intptr, NOT
             foldable — can't init a const). void / an unregistered slid still reports

@@ -110,7 +110,47 @@ int32 main() {
     __println("none==nullptr= " + (none == nullptr));  // true
     __println("none!=nullptr= " + (none != nullptr));  // false
 
+    /* A STRING LITERAL DECAYS like any other array. Its type is `const char[N]`
+       (lex/literal.sl owns that), so reaching a `char[]` is the ordinary
+       array -> element-pointer decay — the same rung an `int[3]` takes to `int[]`,
+       not a rule of its own. `str` above is already this; these pin the OTHER
+       destinations the decay has to satisfy. */
+
+    /* to a REFERENCE (`char^`), not just an iterator. */
+    char^ cref = "abc";
+    __println("cref^= " + cref^);          // a
+
+    /* through a PARAMETER — the case every string-taking function depends on. A
+       non-mutable iterator param munges to `(const char)[]`, and the decayed literal
+       matches it. */
+    __println("first= " + firstChar("xyz"));      // x
+    __println("len= " + litLen("hello"));         // 5
+
+    /* the decayed pointer is an ordinary iterator: arithmetic and comparison apply. */
+    char[] lit = "abcdef";
+    __println("lit[3]= " + lit[3]);        // d
+    char[] lend = lit + 5;
+    __println("lend^= " + lend^);          // f
+    __println("litdiff= " + (lend - lit)); // 5
+
+    /* two literals are distinct storage, so their addresses differ; a literal is
+       never null. */
+    __println("lit!=null= " + (lit != nullptr));  // true
+
     return 0;
+}
+
+/* the parameters the decay must satisfy: an iterator and a reference. Both are
+   non-mutable, so both munge to a const pointee — a literal is read-only storage
+   and this is the shape that will enforce it when const enforcement lands. */
+char firstChar(char[] s) {
+    return s[0];
+}
+
+intptr litLen(char[] s) {
+    intptr n = 0;
+    for () (s[n]) { ++n; } {}
+    return n;
 }
 
 /* iterators support only additive arithmetic — '*' is rejected. */

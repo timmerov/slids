@@ -133,8 +133,5 @@ int32 main() {
     //__println(##line + ": "); { SuperCtor s(makeCtor(),4); s; }
     //__println(##line + ": "); { SuperCtor s = (makeCtor(),4); s; }
 */
-    char array[6] = "hello";
-    __println(array);
-
     return 0;
 }

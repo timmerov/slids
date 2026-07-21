@@ -19,3 +19,10 @@ fwd^= 4
 arr[2]= 100
 none==nullptr= true
 none!=nullptr= false
+cref^= a
+first= x
+len= 5
+lit[3]= d
+lend^= f
+litdiff= 5
+lit!=null= true

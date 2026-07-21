@@ -1398,7 +1398,28 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
         }
         case ast::Kind::kStringLiteral: {
             int id = strings::add(pool, expr.text);
-            return std::string("@.str_") + std::to_string(id);
+            std::string sym = std::string("@.str_") + std::to_string(id);
+            // The pooled constant is a GLOBAL, so the symbol is its ADDRESS — which is
+            // exactly the value wanted wherever the literal decayed to a `char[]`.
+            // But a string literal is typed `const char[N]`, so it can also land in an
+            // ARRAY-VALUE position (`char a[6] = "hello"`), and there the caller wants
+            // the N bytes, not the address. Load them. Storing the symbol itself was
+            // invalid IR ("global variable reference must have pointer type") — the one
+            // thing codegen must never emit.
+            // Keyed on what the DESTINATION wants, not on what the literal is: the
+            // literal is `const char[N]` at every site, but most sites want the pointer
+            // it decays to (a `char[]` param, a tuple slot), and classify does not
+            // re-infer the node at each of them. dest_type is what emitExpr takes this
+            // parameter FOR; falling back to inferred_type covers a context-free position.
+            widen::TypeRef want = dest_type != widen::kNoType ? dest_type
+                                                              : expr.inferred_type;
+            if (widen::form(widen::strip(want)) == widen::Type::Form::kArray) {
+                std::string llty = llvmForRef(want);
+                std::string tmp = newTmp("strv");
+                out << "  " << tmp << " = load " << llty << ", ptr " << sym << "\n";
+                return tmp;
+            }
+            return sym;
         }
         case ast::Kind::kIdentExpr: {
             assert(expr.resolved_entry_id >= 0
