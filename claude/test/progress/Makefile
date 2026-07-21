@@ -31,7 +31,10 @@ all: $(SAMPLES)
 
 negatives:
 
-positives:
+# Only string_test carries a golden. `demo` is the scratch sandbox — its output changes
+# freely as work in progress moves through it, so pinning it would just be churn.
+positives: all
+	@../run_positives.sh $(DIR) string_test
 
 demo: $(BIN_DIR)/demo
 string_test: $(BIN_DIR)/string_test

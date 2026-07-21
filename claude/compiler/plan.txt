@@ -1890,19 +1890,45 @@ CROSS-CUTTING — FOREIGN C IMPORTS + FUNCTION ALIASES (LANDED 2026-07-20)
   it closed todo ALIAS FUNCTION-RENAME. Detail: readme.txt "FOREIGN C IMPORTS" +
   "FUNCTION ALIASES"; canon test/import/math.sl (namespace + class + block + aliases, -lm).
 
-CROSS-CUTTING — CLASS-BINARY OPERAND COERCION (v1 Phase-2, LANDED 2026-07-20)
-  A class binary's RHS operand that no operator accepts directly, but that the class's op=
-  DOES (an int into op=(int64), a narrower int WIDENS in), is coerced ONE level:
-  stampClassBinary::coerceRhsToClass wraps it in a `(Class = rhs)` class-conversion (reusing
-  lowerClassConversion — default-construct a temp, run op=, yield it), re-infers it to a Class
-  value, and re-probes op<OP> / op<OP>= against it. The coerced value is a Class, so it never
-  re-coerces — exactly one level; it then flows through the chain ladder as an ordinary rvalue
-  operand (one countable temp, dead at the semicolon). Fires only when the direct probes fail,
-  in the continuation and real-operand roles (a collapsed head keeps its op= seed). No new node
-  field, no desugar change. This is v1's Phase-2 (`String + "x=" + x`, string.slh) reached
-  through v2's class-conversion path instead of v1's string-typed codegen match. Detail:
-  readme-classes.txt chain-lowering + plan-evaluate.txt ADDENDUM 2026-07-20; canon
-  operator.sl (class Coerce) + evaluate.sl block CO (class Cvt, the temp count).
+CROSS-CUTTING — ONE-LEVEL OPERAND COERCION (v1 Phase-2, LANDED 2026-07-20;
+                UNIVERSAL 2026-07-21)
+  An argument that no candidate accepts directly, but that the parameter's class op= DOES (an
+  int into op=(int64), a narrower int WIDENS in), is coerced ONE level: it is wrapped in a
+  `(Class = arg)` class-conversion (reusing lowerClassConversion — default-construct a temp,
+  run op=, yield it) and resolution is retried. The coerced value is a Class, so it never
+  re-coerces — exactly one level; it then flows on as an ordinary rvalue operand (one
+  countable temp, dead at the semicolon). No new node field, no desugar change. This is v1's
+  Phase-2 (`String + "x=" + x`, string.slh) reached through v2's class-conversion path instead
+  of v1's string-typed codegen match.
+  IT IS A PARAMETER RULE, NOT AN OPERATOR RULE (2026-07-21). It landed reaching only the
+  class-binary chain, as a lambda closed over stampClassBinary's candidate ids — so `a + i`
+  coerced and `a += i` did not, the same operator disagreeing with itself over the spelling,
+  and a plain `f(i)` for `f(Class^)` was rejected outright. The wrap is now ONE function
+  (classify::coerceOperandToClass, beside findClassOperator; it rewrites the operand node IN
+  PLACE so a caller holding only a Node& can use it) and every dispatch site retries with it:
+    - pickOverload — the shared ranker funnel, so FUNCTIONS and METHODS both get it at once
+      (coerceArgsForClassParams, keyed on classParamTarget: the one decode of "does this
+      position want a class?", seeing through the `Class^` param munge).
+    - the SINGLE-candidate paths in classifyCall / inferMethodCall, which never reach
+      pickOverload: roll back checkArgAssign's rejection, coerce, ask again. inferMethodCall's
+      copy also covers the operators REWRITTEN into method calls — comparison and op[] — so
+      those need no arm of their own.
+    - compound assign (`a += i`), which probes findClassOperator directly.
+    - stampClassBinary, whose lambda is now a thin caller of the shared helper.
+  A RETRY, NOT A RUNG. It deliberately is NOT a rung in argConvertCost: a rung would re-rank
+  every call in the language and could silently move a call that resolves today onto a
+  different overload. The retry runs only after ranking found NO viable candidate, so no
+  program that compiles today can change meaning — the only calls it affects were errors.
+  Canon operator.sl pins this: `pick("s")` still takes the direct `pick(char[])`.
+  NOT WIRED to op<-- / op<--> (they share dispatchAssignInit, so the exclusion is deliberate):
+  a move from a freshly built temp is pointless, and a SWAP with one silently discards the
+  result — the compiler would be manufacturing a bug. Positions where candidates disagree
+  about WHICH class are left uncoerced (picking one would be a guess); the ordinary "No
+  matching overload" stands.
+  Detail: readme-classes.txt chain-lowering + plan-evaluate.txt ADDENDUM 2026-07-20; canon
+  operator.sl (classes Coerce / NoBuild / Ca / Cb) + evaluate.sl block CO (class Cvt, the
+  temp count). This is what unblocked test/progress/string.sl (`str += x` for an int64), so
+  string_test now compiles, links, and runs end to end.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

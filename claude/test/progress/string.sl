@@ -6,9 +6,6 @@ concatenating strings,
 length of a null terminated string,
 copying null terminated strings,
 copying null terminated strings limited by length.
-
-work in progress.
-search for tsc.
 */
 
 import string;

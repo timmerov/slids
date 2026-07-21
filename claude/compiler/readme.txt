@@ -1399,7 +1399,15 @@ STAGE FILES (.h / .cpp pairs)
             a non-literal, breaking the literal->literal contract; scalar
             cases are LLVM's job (see optimize).
   classify  parse tree -> annotated parse tree. Type inference and
-            (Phase 3) overload resolution. Reads resolved_entry_id + entry
+            (Phase 3) overload resolution. ONE-LEVEL OPERAND COERCION rides that
+            resolution: an argument no candidate accepts, whose parameter wants a
+            class the argument can be BUILT into (op=), is wrapped in a
+            `(Class = arg)` conversion and resolution is RETRIED — at pickOverload
+            (functions + methods at once), at the single-candidate paths that skip
+            it, and at compound assign. It is a RETRY, not a rung in argConvertCost:
+            it runs only after ranking found nothing viable, so it can never move a
+            call that resolves today onto a different overload. See plan.txt
+            "ONE-LEVEL OPERAND COERCION". Reads resolved_entry_id + entry
             data stamped by resolve; never builds entries or pushes frames
             itself, with ONE deliberate symbol-table exception: the inferred-init
             write-back (below). Infers every expression's inferred_type and every

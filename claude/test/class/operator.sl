@@ -564,7 +564,39 @@ Coerce(int64 v_) {
     op+=(Coerce^ a)           { v_ = v_ + a^.v_; }
     op+=(char[] s)            { v_ = v_ + 1; }
     op+(Coerce^ x, Coerce^ y) { v_ = x^.v_ + y^.v_; }
+    /* comparison + index take a Coerce, so an int operand must be BUILT before either
+       applies — the same one level, reached through the method-call rewrite rather than
+       the binary chain. */
+    bool op==(Coerce^ a)      { return v_ == a^.v_; }
+    bool op<(Coerce^ a)       { return v_ < a^.v_; }
+    /* a METHOD (not an operator) taking the class: the rule is about parameters, not
+       about which syntax spelled the call. */
+    int64 plus(Coerce^ a)     { return v_ + a^.v_; }
+    /* two same-name methods, so the call goes through the RANKER rather than the
+       single-candidate path — a different road to the same coercion. */
+    int64 pick(char[] s)      { return 1; }
+    int64 pick(Coerce^ a)     { return a^.v_; }
 }
+
+/* a FREE FUNCTION taking the class, and an overloaded pair of them. */
+int64 freePlus(Coerce^ a)        { return a^.v_ + 1000; }
+int64 freePick(char[] s)         { return 1; }
+int64 freePick(Coerce^ a)        { return a^.v_ + 2000; }
+
+/* a class with NO op= from an int: nothing can be built, so nothing is coerced and
+   every one of these sites reports its ordinary error (see the negatives). */
+NoBuild(int64 n_) {
+    _(){} ~(){}
+    op+=(NoBuild^ a)          { n_ = n_ + a^.n_; }
+    int64 take(NoBuild^ a)    { return a^.n_; }
+}
+
+/* two classes, each buildable from an int, to pin the AMBIGUOUS-position rule: when
+   candidates disagree about WHICH class a position wants, nothing is coerced. */
+Ca(int64 a_) { _(){} ~(){} op=(int64 v) { a_ = v; } }
+Cb(int64 b_) { _(){} ~(){} op=(int64 v) { b_ = v; } }
+int64 twoWay(Ca^ x) { return 1; }
+int64 twoWay(Cb^ x) { return 2; }
 
 int32 main() {
 
@@ -953,12 +985,103 @@ int32 main() {
     Coerce cwr = cw + c8;             // int8 WIDENS via op=(int64) -> Coerce(3); op+ -> 23
     __println("cwr = " + cwr.v_);     // cwr = 23
 
+    /* ---- THE SAME ONE LEVEL AT EVERY DISPATCH SITE, not just the binary chain. The rule
+       is about a PARAMETER wanting a class the argument can be built into, so it reaches
+       compound assign, comparison, index, methods, and free functions alike. It is a RETRY:
+       it runs only where resolution would otherwise FAIL, so nothing that already compiles
+       changes meaning. ---- */
+
+    /* compound assign — no op+=(int), but op=(int64) builds one. `String += int`. */
+    Coerce xq(10);
+    int xi = 5;
+    xq += xi;                         // xq.op+=( (Coerce = 5) ) -> 15
+    __println("xq = " + xq.v_);       // xq = 15
+    int8 xq8 = 4;
+    xq += xq8;                        // the WIDEN leg: int8 -> op=(int64) -> 19
+    __println("xq8 = " + xq.v_);      // xq8 = 19
+
+    /* comparison — reached through the method-call rewrite, so it exercises a different
+       road than the binary chain does. */
+    Coerce xcm(19);
+    __println("xeq = " + (xcm == 19));   // xeq = true
+    __println("xne = " + (xcm == 20));   // xne = false
+    __println("xlt = " + (xcm < 20));    // xlt = true
+
+    /* a METHOD taking the class, single candidate and overloaded. */
+    Coerce xm(100);
+    __println("xmm = " + xm.plus(5));    // xmm = 105
+    __println("xmk = " + xm.pick(7));    // xmk = 7   (ranker picks pick(Coerce^))
+    __println("xms = " + xm.pick("s"));  // xms = 1   (the direct match still wins)
+
+    /* a FREE FUNCTION taking the class, single candidate and overloaded. */
+    __println("cfp = " + freePlus(9));       // cfp = 1009
+    __println("cfk = " + freePick(9));       // cfk = 2009
+    __println("cfks = " + freePick("s"));    // cfks = 1
+
+    /* ALREADY the class: no wrap, and this is what bounds the rule to ONE level — a
+       coerced operand is a Coerce, so it can never coerce again. */
+    Coerce xdir(3);
+    __println("xdir = " + freePlus(^xdir));   // xdir = 1003
+
     return 0;
 }
 
 /*
 negatives — one //-block uncommented per run.
 */
+
+/* ---- ONE-LEVEL COERCION: what it does NOT do. The rule is a RETRY that runs only where
+   resolution already failed, and it can only reach for a class the operand can be BUILT
+   into. Where there is nothing to build, or the choice is not the compiler's to make, the
+   ordinary error stands. ---- */
+
+/* NoBuild has op+=(NoBuild^) but no op= from an int: nothing to build, nothing to coerce. */
+//-EXPECT-ERROR: Operator '+=' is not defined on class 'NoBuild'
+//int neg_nobuild_aug() {
+//    NoBuild nb(1);
+//    int i = 2;
+//    nb += i;
+//    return 0;
+//}
+
+/* the same class through a METHOD parameter — the rule is about parameters, so its
+   absence is too. */
+//-EXPECT-ERROR: Cannot implicitly cast 'int' to '(const NoBuild)^'
+//int neg_nobuild_method() {
+//    NoBuild nb(1);
+//    int64 r = nb.take(2);
+//    __println("r" + r);
+//    return 0;
+//}
+
+/* MOVE is not coerced: a move from a freshly built temp is pointless, and letting it
+   through would hide that the author moved from something that was never a Coerce. */
+//-EXPECT-ERROR: Cannot implicitly convert
+//int neg_move_not_coerced() {
+//    Coerce cmv(1);
+//    int i = 2;
+//    cmv <-- i;
+//    return 0;
+//}
+
+/* SWAP is not coerced, and this is the one that would be a manufactured BUG: swapping
+   with a temp writes the operand's old value into an object that is discarded. */
+//-EXPECT-ERROR: Swap operands must be the same type
+//int neg_swap_not_coerced() {
+//    Coerce csw(1);
+//    int i = 2;
+//    csw <--> i;
+//    return 0;
+//}
+
+/* when candidates disagree about WHICH class a position wants, nothing is coerced —
+   picking one on the author's behalf would be a guess. The ordinary no-match stands. */
+//-EXPECT-ERROR: No matching overload for 'twoWay'
+//int neg_ambiguous_target() {
+//    int64 r = twoWay(5);
+//    __println("r" + r);
+//    return 0;
+//}
 
 /* a self-MOVE is rejected: a whole-value move nulls the source's pointer leaves,
    so moving a value onto itself would wipe it after the no-op store. */

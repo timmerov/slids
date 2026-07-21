@@ -637,6 +637,21 @@ bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
 bool isArithBitBinaryOp(std::string const& op);
 bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
                       widen::TypeRef lref, diagnostic::Sink& diag);
+// ONE-LEVEL OPERAND COERCION (defined next to findClassOperator, which it probes with).
+bool coerceOperandToClass(parse::Tree& tree, widen::TypeRef cls,
+                          parse::Node& operand, diagnostic::Sink& diag);
+
+// The CLASS a parameter wants, seeing through a reference / iterator param (`Class^` — the
+// form a non-primitive parameter is munged into), or kNoType when the param is not
+// class-typed. The one decode of "does this position want a class?", shared by the call,
+// method, and operator coercion retries.
+widen::TypeRef classParamTarget(widen::TypeRef param) {
+    widen::TypeRef p = widen::strip(param);
+    widen::Type::Form f = widen::form(p);
+    if (f == widen::Type::Form::kPointer || f == widen::Type::Form::kIterator)
+        p = widen::strip(widen::get(p).pointee);
+    return widen::form(p) == widen::Type::Form::kSlid ? p : widen::kNoType;
+}
 bool stampClassUnary(parse::Tree& tree, parse::Node& e, std::string const& op,
                      widen::TypeRef oref, diagnostic::Sink& diag);
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
@@ -2369,11 +2384,48 @@ void reportAmbiguity(parse::Tree& tree, int file_id, int tok, std::string const&
 // overload" (no viable candidate) / "Ambiguous call" (a tie, with each conflicting
 // declaration cited) and returns -1 on failure. Shared by classifyCall (functions,
 // offset 0) and inferMethodCall (methods, offset 1).
+// ONE-LEVEL COERCION for an overload set that matched NOTHING: at each argument position
+// whose candidates all want the SAME class, wrap the argument in a `(C = arg)` conversion.
+// Returns true if any argument changed, so the caller can re-rank.
+//
+// A RETRY, DELIBERATELY — not a rung in argConvertCost. A rung would re-rank every call in
+// the language and could silently move a call that resolves today onto a different overload.
+// This runs only after ranking found NO viable candidate, so a program that compiles today
+// cannot change meaning: the only calls it affects are the ones that were errors.
+//
+// Positions where candidates disagree about WHICH class are left alone. Coercion picks a
+// type, and picking one on the author's behalf when two are on offer is a guess; leaving it
+// uncoerced falls through to the ordinary "No matching overload", which says so plainly.
+bool coerceArgsForClassParams(parse::Tree& tree, std::vector<int> const& cands,
+                              std::vector<parse::Node*> const& args, int recv_offset,
+                              diagnostic::Sink& diag) {
+    bool any = false;
+    for (std::size_t i = 0; i < args.size(); i++) {
+        if (!args[i]) continue;
+        std::size_t p = i + static_cast<std::size_t>(recv_offset);
+        widen::TypeRef want = widen::kNoType;
+        bool conflict = false;
+        for (int cid : cands) {
+            parse::Entry const& e = tree.entries[cid];
+            if (p >= e.param_types.size()) continue;
+            widen::TypeRef target = classParamTarget(e.param_types[p]);
+            if (target == widen::kNoType) continue;
+            if (want == widen::kNoType) want = target;
+            else if (widen::deepStrip(want) != widen::deepStrip(target)) conflict = true;
+        }
+        if (want == widen::kNoType || conflict) continue;
+        if (coerceOperandToClass(tree, want, *args[i], diag)) any = true;
+    }
+    return any;
+}
+
 int pickOverload(parse::Tree& tree, std::vector<int> const& cands,
                  std::vector<parse::Node*> const& args, int recv_offset,
                  std::string const& name, int file_id, int tok,
                  diagnostic::Sink& diag) {
     OverloadRank r = rankOverload(tree, cands, args, recv_offset);
+    if (r.best < 0 && coerceArgsForClassParams(tree, cands, args, recv_offset, diag))
+        r = rankOverload(tree, cands, args, recv_offset);
     if (r.best < 0) {
         diagnostic::report(diag, {file_id, tok,
             "No matching overload for '" + name + "'.", {}});
@@ -2437,7 +2489,20 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             widen::TypeRef destRef = (i < s.param_types.size())
                 ? s.param_types[i] : widen::kNoType;
             inferExpr(tree, *s.children[i], destRef, diag);
+            // A LONE candidate never reaches pickOverload, so its coercion retry lives here:
+            // let checkArgAssign judge, and if it refuses an argument the param's class can be
+            // BUILT from, coerce one level and ask again. The rejected report is rolled back
+            // first so a successful coercion leaves no trace, and re-asking is what produces
+            // the real diagnostic when the coercion doesn't help (or never happened).
+            std::size_t before = diag.records.size();
             checkArgAssign(tree, destRef, *s.children[i], diag);
+            if (diag.records.size() != before) {
+                diag.records.resize(before);
+                widen::TypeRef want = classParamTarget(destRef);
+                if (want != widen::kNoType)
+                    coerceOperandToClass(tree, want, *s.children[i], diag);
+                checkArgAssign(tree, destRef, *s.children[i], diag);
+            }
         }
         return;
     }
@@ -4684,7 +4749,20 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
         // Type-check each arg against its param (s.param_types is a stable copy; an
         // inferExpr below may realloc tree.entries and dangle a live entry ref).
         inferExpr(tree, *s.children[i], s.param_types[i], diag);
+        // The single-method path never reaches pickOverload, so the coercion retry lives
+        // here too (see classifyCall's twin). It also covers the class OPERATORS that are
+        // rewritten into method calls — a comparison `a == x`, an index `a[x]` — so those
+        // families get the rule without a bespoke arm. An arg pickOverload already coerced
+        // is now the class, and coerceOperandToClass declines it, so there is no second wrap.
+        std::size_t before = diag.records.size();
         checkArgAssign(tree, s.param_types[i], *s.children[i], diag);
+        if (diag.records.size() != before) {
+            diag.records.resize(before);
+            widen::TypeRef want = classParamTarget(s.param_types[i]);
+            if (want != widen::kNoType)
+                coerceOperandToClass(tree, want, *s.children[i], diag);
+            checkArgAssign(tree, s.param_types[i], *s.children[i], diag);
+        }
     }
 }
 
@@ -4730,6 +4808,55 @@ int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& 
         return -2;
     }
     return r.best;
+}
+
+// v1 PHASE-2 OPERAND COERCION (ONE level) — the operand half, shared by every class-operator
+// dispatch family. When an operand is accepted by no overload of the operator directly but IS
+// op='able into the class (an `int` reaching `op=(int64)` by widening), wrap it in a
+// `(C = operand)` conversion: the class-conversion path default-constructs a C temp, dispatches
+// op= from the source, and yields the temp (desugar lifts it). The operand is now a C VALUE, so
+// the C-operators apply — and being a C it can never re-coerce, which is what bounds this to ONE
+// level. Reuses lowerClassConversion wholesale: no new lowering, no desugar change, one
+// countable temp dead at the semicolon.
+//
+// ONLY THE WRAP LIVES HERE. Each caller re-probes its own operator afterwards, because what to
+// re-probe differs per family (op<OP> and op<OP>= for a binary, op<OP>= for a compound assign,
+// op<CMP> for a comparison). One place decides what a class can be built FROM; the families
+// decide what to do with the answer. This used to be a lambda closed over stampClassBinary's
+// candidate ids, which is why `a + i` coerced and `a += i` did not — the rule was a fact about
+// one call site instead of about the type system.
+//
+// NOT wired to `op<--` / `op<-->` (they share dispatchAssignInit, so exclusion is deliberate):
+// a move from a freshly built temp is merely pointless, but a SWAP with one silently discards
+// the result — the compiler would be manufacturing a bug rather than obeying the author.
+//
+// Rewrites the operand NODE IN PLACE (it becomes the conversion, wrapping what it was), so a
+// caller holding only a `parse::Node&` — an entry in an overload ranker's `args` vector, say —
+// can coerce without owning the parent's slot.
+bool coerceOperandToClass(parse::Tree& tree, widen::TypeRef cls,
+                          parse::Node& operand, diagnostic::Sink& diag) {
+    widen::TypeRef cs = widen::strip(cls);
+    if (widen::form(cs) != widen::Type::Form::kSlid) return false;
+    auto itc = tree.classes.find(cs);
+    if (itc == tree.classes.end()) return false;
+    // Already the class: nothing to build, and the ONE-level bound depends on this.
+    if (widen::deepStrip(operand.inferred_type) == widen::deepStrip(cls)) return false;
+    // Probe op= WITHOUT reporting — a miss is not an error here, it just means no coercion is
+    // available and the caller falls to its own diagnostic. An AMBIGUOUS op= (-2) is left alone
+    // for the same reason: this is a probe, and the caller owns what the author sees.
+    std::size_t before = diag.records.size();
+    int eq_id = findClassOperator(tree, cs, operand, "op=", diag);
+    diag.records.resize(before);
+    if (eq_id < 0) return false;
+    auto inner = std::make_unique<parse::Node>(std::move(operand));
+    operand = parse::Node{};
+    operand.kind = parse::Kind::kConvertExpr;
+    operand.return_type = itc->second.type;
+    operand.file_id = inner->file_id;
+    operand.tok = inner->tok;
+    operand.children.push_back(std::move(inner));
+    inferExpr(tree, operand, widen::kNoType, diag);
+    return true;
 }
 
 // Rewrite an assignment-form statement `lvalue = rhs` (a bare-name kAssignStmt) into
@@ -5094,17 +5221,7 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
     // (op+=(C^) / op+(C^, C^)) apply — and it is a C, so it never re-coerces. Fires only in
     // the continuation / real-operand roles below (a collapsed head SEEDS via op= instead).
     auto coerceRhsToClass = [&]() -> bool {
-        if (eq_rhs_id < 0
-            || widen::deepStrip(e.children[1]->inferred_type) == widen::deepStrip(C))
-            return false;
-        auto conv = std::make_unique<parse::Node>();
-        conv->kind = parse::Kind::kConvertExpr;
-        conv->return_type = itc->second.type;
-        conv->file_id = e.children[1]->file_id;
-        conv->tok = e.children[1]->tok;
-        conv->children.push_back(std::move(e.children[1]));
-        inferExpr(tree, *conv, widen::kNoType, diag);
-        e.children[1] = std::move(conv);
+        if (!coerceOperandToClass(tree, C, *e.children[1], diag)) return false;
         parse::Node& nrhs = *e.children[1];
         aug_id = findClassOperator(tree, C, nrhs, opname + "=", diag);
         if (aug_id < 0) aug_id = -1;
@@ -5772,9 +5889,24 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 inferExpr(tree, rhs, widen::kNoType, diag);
                 std::string opname = "op" + op + "=";
+                bool expr_lhs = s.children.size() == 2;
                 if (dispatchAssignInit(tree, s, s.return_type, rhs, opname,
-                                       /*expr_lhs=*/s.children.size() == 2, diag,
+                                       expr_lhs, diag,
                                        prelude, /*needs_construct=*/false)) {
+                    return;
+                }
+                // ONE-LEVEL COERCION, the compound-assign leg. This family probes through
+                // findClassOperator, not pickOverload, so it needs the retry spelled here:
+                // `s += x` where no `op+=` takes x but `op=` can BUILD one from it becomes
+                // `s.op+=( (C = x) )`. Without it, `a + x` coerced and `a += x` did not,
+                // which is the same operator disagreeing with itself over the spelling.
+                std::size_t before = diag.records.size();
+                std::size_t ri = expr_lhs ? 1 : 0;
+                if (diag.records.size() == before
+                    && coerceOperandToClass(tree, s.return_type, *s.children[ri], diag)
+                    && dispatchAssignInit(tree, s, s.return_type, *s.children[ri], opname,
+                                          expr_lhs, diag, prelude,
+                                          /*needs_construct=*/false)) {
                     return;
                 }
                 // NO viable compound operator on a class — reject CLEANLY. The numeric path

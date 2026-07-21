@@ -1,0 +1,49 @@
+Hello, World!
+Hello, World!
+X
+0
+137
+-42
+-2147483648
+2147483648
+-9223372036854775808
+9223372036854775808
+
+9223372036854775808
+
+x=42
+beq=true
+bne=false
+bge=true
+ble=true
+bgt=false
+blt=false
+s1.size()<13>=13
+s1.empty()<false>=false
+s1[1]<'e'>=e
+s1<HEllo, World!>HEllo, World!
+it^<ABC>=A
+it^<ABC>=B
+it^<ABC>=C
+ch<XYZ>=X
+ch<XYZ>=Y
+ch<XYZ>=Z
+s8<World>=World
+left : [Hello, World!...]
+right: [...Hello, World!]
+max_r: [Hello, Wor]
+max_l: [Hello, Wor]
+char[] =[..........Howdy!]
+char   =[...............A]
+int64  =[......-123456789]
+uint64 =[18446744073586094827]
+bool   =[............true]
+float  =[............3.14]
+float32=[............3.14]
+float64=[............3.14]
+int    =[...........+1337]
+float  =[+2.78...........]
+fixed  =[+99.440000......]
+SciNot =[+2.0260e+01.....]
+factor =[......+1234.5600]
+2 fmts =[123.....~~~~4.56]
