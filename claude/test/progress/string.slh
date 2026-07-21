@@ -80,14 +80,12 @@ String(...)
     op+(String^ sa, String^ sb);
 
     /* binary comparisons */
-    /* ==tsc==
     bool const op==(String^ s);
     bool const op!=(String^ s);
     bool const op<=(String^ s);
     bool const op>=(String^ s);
     bool const op<(String^ s);
     bool const op>(String^ s);
-    */
 
     /*
     overload index operation to fetch/set the indexed character.

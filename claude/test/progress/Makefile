@@ -11,9 +11,11 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
-# The runnable program (a work-in-progress sandbox).
+# The runnable programs (a work-in-progress sandbox). `demo` and `string_test` are
+# each a standalone program that `import string;` and link the library's `string.o`.
 SAMPLES = \
-	demo
+	demo \
+	string_test
 
 # Every translation unit linked into the demo binary: the program plus each
 # imported library's .sl. `import string;` is a textual include of string.slh
@@ -32,8 +34,13 @@ negatives:
 positives:
 
 demo: $(BIN_DIR)/demo
+string_test: $(BIN_DIR)/string_test
 
 $(BIN_DIR)/demo: $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(OBJS)))
+	$(CXX) $^ -o $@
+
+# string_test links its own object plus the library's string.o (its sibling definitions).
+$(BIN_DIR)/string_test: $(BUILD_DIR)/string_test.o $(BUILD_DIR)/string.o
 	$(CXX) $^ -o $@
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
