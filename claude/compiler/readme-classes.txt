@@ -440,6 +440,18 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
          two alternating buffers would need none of them.]
     RECORDED CONSEQUENCE: the seed does not consult the head operator symbol, so
     `Vec v = Vec - a - b` is `v.op=(a); v -= b` = `a - b`. Accepted (canon 6).
+  * OPERAND COERCION (v1 Phase-2), ONE level. A chain's RHS operand accepted by NO operator
+    directly, but op='able into the class (`op=(int64)` takes an int, a narrower int WIDENS
+    in), is coerced BEFORE the viability verdict: stampClassBinary::coerceRhsToClass wraps it
+    in a `(Class = rhs)` class-conversion — the SAME node lowerClassConversion lowers (default-
+    construct a temp, run its op=, yield it) — re-infers it to a Class VALUE, then RE-PROBES
+    `op<OP>` / `op<OP>=` against it. The coerced value IS a Class, so it never re-coerces:
+    exactly one level. Fires only when the direct probes fail, in the continuation and real-
+    operand roles — a collapsed head keeps its own op= seed. The coerced value is then an
+    ORDINARY rvalue operand of the ladder above: one countable temp, dead at the semicolon, ON
+    TOP of the accumulator rules (canon evaluate.sl block CO). Mirrors `String + "x=" + x`
+    (test/progress/string.slh): the int operand no String operator wanted becomes a String.
+    Canon operator.sl class Coerce.
   * EVERY operator a chain runs — seed, fuse, 2-arg head, AND the move — is emitted through
     ONE helper (desugar::makeOpCall, from the entry id classify resolved), so none of them
     can reach codegen as a bare transfer node. That matters: a transfer synthesized in DESUGAR

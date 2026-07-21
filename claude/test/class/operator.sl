@@ -553,6 +553,19 @@ Head(int v_) {
 }
 Head mkHead() { Head h(7); return h; }
 
+/* the String-coercion shape (canon "convert" row): a class with op=(int64) but NO
+   op+(Coerce, int) / op+=(int). When a binary's RHS operand is an int that no operator
+   accepts directly, it is COERCED ONE LEVEL via op=(int64) into a Coerce temp, and the
+   class-operators (op+(Coerce^,Coerce^) / op+=(Coerce^)) apply to the temp. Mirrors
+   `String + "x=" + x` from string.slh. op+=(char[]) marks a literal fuse (+1). */
+Coerce(int64 v_) {
+    _(){} ~(){}
+    op=(int64 a)              { v_ = a; }
+    op+=(Coerce^ a)           { v_ = v_ + a^.v_; }
+    op+=(char[] s)            { v_ = v_ + 1; }
+    op+(Coerce^ x, Coerce^ y) { v_ = x^.v_ + y^.v_; }
+}
+
 int32 main() {
 
     int a = 42;
@@ -923,6 +936,22 @@ int32 main() {
        rhs, a different road through the overload core than Head's class-to-class one. */
     Mixed mh = Mixed(8) + big;        // construction head, primitive rhs -> 8 + 100
     __println("mh = " + mh.v_);       // mh = 108
+
+    /* ---- v1 PHASE-2 OPERAND COERCION (one level): a bare int RHS operand that no operator
+       accepts is coerced via op=(int64) into a Coerce temp, then the class-operators apply.
+       Mirrors `String + "x=" + x`. ---- */
+    Coerce cz(10);
+    int cx = 5;
+    Coerce cr = cz + cx;              // real operand: cx coerced -> Coerce(5); op+ -> 15
+    __println("cr = " + cr.v_);       // cr = 15
+    Coerce ce(100);
+    int cn = 7;
+    Coerce cc2 = ce + "x=" + cn;      // "x=" fuses op+=(char[]) (+1)=101; cn coerced, op+= -> 108
+    __println("cc2 = " + cc2.v_);     // cc2 = 108
+    Coerce cw(20);
+    int8 c8 = 3;
+    Coerce cwr = cw + c8;             // int8 WIDENS via op=(int64) -> Coerce(3); op+ -> 23
+    __println("cwr = " + cwr.v_);     // cwr = 23
 
     return 0;
 }

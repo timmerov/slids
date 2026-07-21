@@ -162,6 +162,18 @@ U5 as a call arg, U7 over a sub-chain). The old path built a `_$optmp` in classi
 it into the destination -- an extra object at every site, a copy where the author's op<--
 belonged, and a temp that outlived its statement.
 
+case CO: OPERAND COERCION (v1 Phase-2), on the SAME road again. When a class binary's RHS
+operand is accepted by no operator directly but the class's op= DOES take it (an int into
+op=(int64), CO4 an int8 widening in), classify coerces it ONE level -- it wraps the operand
+in a `(Cvt = int)` class-conversion, which default-constructs a Cvt temp and runs op= into
+it -- and the operators then apply to that temp (op+ / op+=, never re-coercing, because the
+temp is already a Cvt). The coerced temp is the cost this block counts: one countable object,
+ON TOP of the accumulator rules, dead at the SEMICOLON. It composes rather than replacing:
+fresh storage is still the accumulator (CO1 decl / CO2 chain tail: the ONLY temp is the
+coerced operand), a LIVE target still takes its own moved-in temp (CO3: two temps -- the
+accumulator moved in through op<--, AND the coerced operand -- both dead at the semicolon).
+Mirrors `String + "x=" + x` (string.slh): the int operand no operator wanted becomes a String.
+
 NOT a defect -- SPEC (see nameless.sl): a bare `Class(5);` statement is FORM 1, an unnamed
 local VARIABLE. It is initialized at site, its ctor runs, and its dtor runs at the END OF
 SCOPE, exactly like a named local. Only the EXPRESSION form (form 2 -- a construction used
@@ -494,6 +506,21 @@ int take_neg(Neg^ n) { return n^.v_; }
 // variable is the accumulator and no temporary exists at all.
 Neg neg_ret(Neg^ x) {
     return -x^;
+}
+
+// Cvt: the OPERAND-COERCION counter (v1 Phase-2). A binary whose RHS is a bare int that no
+// operator takes directly is coerced ONE level -- `(Cvt = int)` default-constructs a Cvt and
+// runs its op=(int64) -- and the class operators apply to that temp. Cvt has op=(int64),
+// op+=(Cvt^) and op+(Cvt^,Cvt^) but NO op+(Cvt,int) / op+=(int), so the int MUST be coerced.
+// The coerced value is a countable object: it costs one ctor (the default, v_=0), then op=
+// writes it, then it is consumed and its dtor runs at the SEMICOLON. ctor/dtor PRINT.
+Cvt(int64 v_) {
+    _() { __println("Cvt:ctor: " + v_); }
+    ~() { __println("Cvt:dtor: " + v_); }
+    op=(int64 a)          { v_ = a; }
+    op<--(mutable Cvt^ r) { __println("Cvt:op<--: " + r^.v_); v_ = r^.v_; }
+    op+=(Cvt^ r)          { v_ += r^.v_; }
+    op+(Cvt^ x, Cvt^ y)   { v_ = x^.v_ + y^.v_; }
 }
 
 int32 main() {
@@ -1495,6 +1522,50 @@ int32 main() {
         __println("Z9: (Acc,Acc) nb = na + Acc(10);");
         (Acc, Acc) nb = na + Acc(10);
         __println("Z9 end nb=" + nb[0].v_ + " " + nb[1].v_);                        // 11 12
+    }
+
+    // ---- CO: OPERAND COERCION (v1 Phase-2) ----
+    //
+    // A binary whose RHS operand is a bare int that no operator accepts directly, but that the
+    // class's op=(int64) DOES, is coerced ONE level: the int is wrapped in `(Cvt = int)`, which
+    // default-constructs a Cvt temp and runs op= into it, and the class operators then apply to
+    // that temp. The coerced temp is the new cost this block pins: one countable object, dead at
+    // the SEMICOLON, ON TOP of the normal accumulator rules -- fresh storage is still the
+    // accumulator (zero chain temp), a live target still takes one moved-in temp.
+    __println("CO: operand coercion");
+    {
+        Cvt ca = Cvt(10);
+        Cvt cb = Cvt(3);
+
+        // CO1: a real-operand fresh decl. `5` is coerced to a Cvt temp; op+(ca, temp) builds
+        //      straight into cc (the accumulator). ONE temp -- the coerced operand -- dead at
+        //      the semicolon (its dtor prints BEFORE "CO1 end").
+        __println("CO1: fresh decl      Cvt cc = ca + 5");
+        Cvt cc = ca + 5;
+        __println("CO1 end cc=" + cc.v_);             // 15
+
+        // CO2: a CONTINUATION -- the tail int of a chain. `ca + cb` seeds the accumulator, then
+        //      `+ 7` coerces 7 to a Cvt temp and fuses it in with op+=. The coerced temp dies
+        //      at the semicolon; cd is the accumulator (no chain temp).
+        __println("CO2: chain tail       Cvt cd = ca + cb + 7");
+        Cvt cd = ca + cb + 7;
+        __println("CO2 end cd=" + cd.v_);             // 20
+
+        // CO3: a LIVE target -- the accumulator is a moved-in temp AND the coerced operand is a
+        //      second temp; BOTH die at the semicolon.
+        __println("CO3: live target      ce = ca + 5");
+        Cvt ce = Cvt(0);
+        ce = ca + 5;
+        __println("CO3 end ce=" + ce.v_);             // 15
+
+        // CO4: a WIDENING coercion -- an int8 operand widens through op=(int64) into the Cvt
+        //      temp, the same one-level path.
+        __println("CO4: widening         Cvt cg = ca + c8");
+        int8 c8 = 4;
+        Cvt cg = ca + c8;
+        __println("CO4 end cg=" + cg.v_);             // 14
+
+        __println("CO end (locals dtor next)");
     }
 
     return 0;

@@ -100,6 +100,19 @@ DECISION 2 — THE LADDER  (which operator each operand is applied with)
      object per un-fusable step; the accumulator the destination becomes is the LAST one.
      STILL DEFERRED — PING-PONG: two alternating buffers would need none of them.
 
+  ADDENDUM 2026-07-20 — OPERAND COERCION (v1 Phase-2), one level. Before the per-role viability
+  verdict, an RHS operand that no operator accepts directly but the class's op= DOES (an int
+  into op=(int64); a narrower int widens in) is coerced: stampClassBinary::coerceRhsToClass
+  wraps it in a `(Class = rhs)` class-conversion (REUSING lowerClassConversion — default-
+  construct a temp, run op=, yield it), re-infers it to a Class value, and re-probes op<OP> /
+  op<OP>= against it. The coerced value is a Class, so it never re-coerces — exactly one level.
+  It then flows through the ladder above as an ORDINARY operand (rule 4/5): one countable temp,
+  dead at the semicolon, ON TOP of the accumulator rules (canon evaluate.sl block CO). Fires
+  only in the continuation and real-operand roles; a collapsed head keeps its op= seed. No new
+  node field, no desugar change — the conversion node the wrap mints is one desugar already
+  lifts. This is v1's Phase-2 (`String + "x=" + x`, string.slh) reached through v2's class-
+  conversion path instead of v1's string-typed codegen match. Canon operator.sl class Coerce.
+
 
 ------------------------------------------------------------------------------
 DECISION 3 — WHICH STAGE  (classify STAMPS, desugar LOWERS)

@@ -1817,6 +1817,20 @@ CROSS-CUTTING — FOREIGN C IMPORTS + FUNCTION ALIASES (LANDED 2026-07-20)
   it closed todo ALIAS FUNCTION-RENAME. Detail: readme.txt "FOREIGN C IMPORTS" +
   "FUNCTION ALIASES"; canon test/import/math.sl (namespace + class + block + aliases, -lm).
 
+CROSS-CUTTING — CLASS-BINARY OPERAND COERCION (v1 Phase-2, LANDED 2026-07-20)
+  A class binary's RHS operand that no operator accepts directly, but that the class's op=
+  DOES (an int into op=(int64), a narrower int WIDENS in), is coerced ONE level:
+  stampClassBinary::coerceRhsToClass wraps it in a `(Class = rhs)` class-conversion (reusing
+  lowerClassConversion — default-construct a temp, run op=, yield it), re-infers it to a Class
+  value, and re-probes op<OP> / op<OP>= against it. The coerced value is a Class, so it never
+  re-coerces — exactly one level; it then flows through the chain ladder as an ordinary rvalue
+  operand (one countable temp, dead at the semicolon). Fires only when the direct probes fail,
+  in the continuation and real-operand roles (a collapsed head keeps its op= seed). No new node
+  field, no desugar change. This is v1's Phase-2 (`String + "x=" + x`, string.slh) reached
+  through v2's class-conversion path instead of v1's string-typed codegen match. Detail:
+  readme-classes.txt chain-lowering + plan-evaluate.txt ADDENDUM 2026-07-20; canon
+  operator.sl (class Coerce) + evaluate.sl block CO (class Cvt, the temp count).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

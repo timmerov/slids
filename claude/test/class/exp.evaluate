@@ -709,5 +709,38 @@ Acc:dtor: 12
 Acc:dtor: 11
 Acc:dtor: 2
 Acc:dtor: 1
+CO: operand coercion
+Cvt:ctor: 10
+Cvt:ctor: 3
+CO1: fresh decl      Cvt cc = ca + 5
+Cvt:ctor: 0
+Cvt:ctor: 0
+Cvt:dtor: 5
+CO1 end cc=15
+CO2: chain tail       Cvt cd = ca + cb + 7
+Cvt:ctor: 0
+Cvt:ctor: 0
+Cvt:dtor: 7
+CO2 end cd=20
+CO3: live target      ce = ca + 5
+Cvt:ctor: 0
+Cvt:ctor: 0
+Cvt:ctor: 0
+Cvt:dtor: 5
+Cvt:op<--: 15
+Cvt:dtor: 15
+CO3 end ce=15
+CO4: widening         Cvt cg = ca + c8
+Cvt:ctor: 0
+Cvt:ctor: 0
+Cvt:dtor: 4
+CO4 end cg=14
+CO end (locals dtor next)
+Cvt:dtor: 14
+Cvt:dtor: 15
+Cvt:dtor: 20
+Cvt:dtor: 15
+Cvt:dtor: 3
+Cvt:dtor: 10
 Class:dtor: 9
 Acc:dtor: 13

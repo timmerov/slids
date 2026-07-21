@@ -5048,6 +5048,40 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
     if (eq_rhs_id < 0) eq_rhs_id = -1;
     if (move_id   < 0) move_id   = -1;
 
+    // v1 PHASE-2 OPERAND COERCION (ONE level). When the RHS operand is accepted by no
+    // operator directly (aug_id/bin_id < 0) but IS op='able into C (eq_rhs_id >= 0 — e.g.
+    // an `int` into `op=(int64)` via widening), wrap it in a `(C = rhs)` conversion: the
+    // class-conversion path default-constructs a C temp, dispatches op= from the source,
+    // and yields the temp (desugar lifts it). The rhs is now a C VALUE, so the C-operators
+    // (op+=(C^) / op+(C^, C^)) apply — and it is a C, so it never re-coerces. Fires only in
+    // the continuation / real-operand roles below (a collapsed head SEEDS via op= instead).
+    auto coerceRhsToClass = [&]() -> bool {
+        if (eq_rhs_id < 0
+            || widen::deepStrip(e.children[1]->inferred_type) == widen::deepStrip(C))
+            return false;
+        auto conv = std::make_unique<parse::Node>();
+        conv->kind = parse::Kind::kConvertExpr;
+        conv->return_type = itc->second.type;
+        conv->file_id = e.children[1]->file_id;
+        conv->tok = e.children[1]->tok;
+        conv->children.push_back(std::move(e.children[1]));
+        inferExpr(tree, *conv, widen::kNoType, diag);
+        e.children[1] = std::move(conv);
+        parse::Node& nrhs = *e.children[1];
+        aug_id = findClassOperator(tree, C, nrhs, opname + "=", diag);
+        if (aug_id < 0) aug_id = -1;
+        bin_id = -1;
+        if (classHasOperatorArity(tree, C, opname, 2)) {
+            std::vector<int> cands2;
+            for (int id : declaredMemberOverloads(tree, C, opname))
+                if (tree.entries[id].param_types.size() == 3) cands2.push_back(id);
+            std::vector<parse::Node*> args2{&lhs, &nrhs};
+            OverloadRank r2 = rankOverload(tree, cands2, args2, 1);
+            if (r2.tied.size() <= 1) bin_id = r2.best;
+        }
+        return true;
+    };
+
     // Role, read straight off the lhs — bottom-up, operand-keyed, never target-keyed.
     bool continuation = lhs.class_op_chain
         && widen::deepStrip(lhs.inferred_type) == widen::deepStrip(C);
@@ -5057,6 +5091,8 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
     if (continuation) {
         // Fuse with op<OP>=, or (no op<OP>=) start a fresh buffer via the 2-arg op<OP>.
         viable = aug_id >= 0 || bin_id >= 0;
+        if (!viable && coerceRhsToClass())
+            viable = aug_id >= 0 || bin_id >= 0;
     } else if (collapsed_head) {
         // The construction IS the accumulator; the first operand applies to it. A head
         // built WITH args must use op<OP>= (op= would discard those args).
@@ -5077,6 +5113,8 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
     if (!continuation && !collapsed_head) {
         // A real operand pair: one 2-arg call, or seed-then-fuse.
         viable = bin_id >= 0 || (eq_lhs_id >= 0 && aug_id >= 0);
+        if (!viable && coerceRhsToClass())
+            viable = bin_id >= 0 || (eq_lhs_id >= 0 && aug_id >= 0);
     }
     if (!viable) return false;
 
