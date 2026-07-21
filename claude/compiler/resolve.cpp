@@ -5152,6 +5152,73 @@ bool isImportOpaque(widen::TypeRef s) {
         && widen::slidLinkage(s) == widen::Type::Linkage::kDeclare;
 }
 
+// A class DERIVING from an opaque class inherits its unknown layout. The base sub-object
+// still occupies slot 0 — every upcast stays a no-op — but its SIZE is a runtime fact, so
+// the derived class's OWN field offsets are not compile-time constants in an importer.
+// They come from the completer's exported `__$offsets` table (codegen).
+//
+// runtime_layout IMPLIES opaque, and that is the whole trick: an opaque class's size is
+// already a runtime call, its construction is already split into `__$ctor`/`__$pctor`
+// across the seam, and its by-value embedding is already rejected in an importer. A
+// derived class needs exactly those three things, so it joins that machinery rather than
+// growing a parallel copy.
+//
+// The flag rides only PERSISTENT header facts (the base's `...`), so the completer and
+// every importer compute it identically — the layout rule cannot disagree across the seam.
+// Two forms are REJECTED rather than laid out:
+//   - a `.sl`-LOCAL class over an opaque base: nothing outside the TU can name it, so no
+//     sibling exports its offsets, and it cannot fold them itself.
+//   - a VIRTUAL class over an opaque base: the vptr wants offset 0 and the base holds it.
+void propagateRuntimeLayout(parse::Tree& tree, std::vector<parse::Node*> const& classes,
+                            diagnostic::Sink& diag) {
+    // Fixpoint, so a chain `Opaque <- A <- B` marks B as well as A regardless of the
+    // order the classes were registered in.
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (parse::Node* c : classes) {
+            if (!c || c->resolved_entry_id < 0) continue;
+            widen::TypeRef self = widen::strip(c->return_type);
+            if (widen::form(self) != widen::Type::Form::kSlid) continue;
+            if (widen::slidRuntimeLayout(self)) continue;
+            auto it = tree.classes.find(self);
+            if (it == tree.classes.end()) continue;
+            widen::TypeRef base = parse::baseTypeOf(it->second);
+            if (base == widen::kNoType || !widen::slidOpaque(widen::strip(base))) continue;
+            widen::setSlidRuntimeLayout(self, true);
+            widen::setSlidOpaque(self, true);
+            changed = true;
+        }
+    }
+    for (parse::Node* c : classes) {
+        if (!c || c->resolved_entry_id < 0) continue;
+        widen::TypeRef self = widen::strip(c->return_type);
+        if (widen::form(self) != widen::Type::Form::kSlid) continue;
+        if (!widen::slidRuntimeLayout(self)) continue;
+        auto it = tree.classes.find(self);
+        if (it == tree.classes.end()) continue;
+        auto bit = tree.classes.find(widen::strip(parse::baseTypeOf(it->second)));
+        std::string bname = bit != tree.classes.end() ? bit->second.name : "?";
+        if (widen::slidLinkage(self) == widen::Type::Linkage::kInternal) {
+            diagnostic::report(diag, {c->file_id, c->name_tok,
+                "Class '" + c->name + "' derives from imported incomplete class '" + bname
+                + "', so its field offsets are only known to the module that completes '"
+                + bname + "'; declare '" + c->name + "' in a header so that module exports "
+                "them.", {}});
+            continue;
+        }
+        for (auto& m : c->children) {
+            if (m && m->is_virtual) {
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "Class '" + c->name + "' cannot be virtual: it derives from imported "
+                    "incomplete class '" + bname + "', whose sub-object occupies the slot "
+                    "the vtable pointer needs.", {}});
+                break;
+            }
+        }
+    }
+}
+
 // A class whose by-value field graph cycles back to itself has INFINITE size —
 // reject it (classify's recursive construction and codegen's struct lowering both
 // recurse forever otherwise: a SIGSEGV, not a diagnostic). A `^` / `[]` field
@@ -5168,7 +5235,30 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
     if (it == tree.classes.end()) return;
     std::set<widen::TypeRef> seen;
     std::vector<widen::TypeRef> stack;
-    for (widen::TypeRef ft : it->second.field_types) collectByValueClasses(ft, stack);
+    // The unnamed `_$base` slot of a RUNTIME-LAYOUT class is the one by-value embedding of
+    // an opaque class the model allows (propagateRuntimeLayout marked it; the offsets past
+    // it come from the completer's table). Skip that slot's own seeding so the rejection
+    // below doesn't fire on it, and descend into the base's fields by hand so the CYCLE
+    // check still covers everything reachable through the base. A named field of the same
+    // opaque type is untouched by this and stays rejected.
+    std::size_t first = 0;
+    if (widen::slidRuntimeLayout(self)) {
+        widen::TypeRef base = widen::strip(parse::baseTypeOf(it->second));
+        if (base == self) {
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "Class '" + node.name + "' contains itself by value (infinite "
+                "size); use a reference '^' field.", {}});
+            return;
+        }
+        first = 1;
+        seen.insert(base);
+        auto bit = tree.classes.find(base);
+        if (bit != tree.classes.end())
+            for (widen::TypeRef ft : bit->second.field_types)
+                collectByValueClasses(ft, stack);
+    }
+    for (std::size_t i = first; i < it->second.field_types.size(); i++)
+        collectByValueClasses(it->second.field_types[i], stack);
     while (!stack.empty()) {
         widen::TypeRef cur = stack.back();
         stack.pop_back();
@@ -6009,6 +6099,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         else if (ch && ch->kind == parse::Kind::kNamespaceDecl)
             resolveScopeTypes(tree, *ch, /*isClass=*/false, diag);
     }
+
+    // Pass 1a-layout — mark the classes deriving from an opaque base BEFORE the by-value
+    // walk below, which asks the flag to tell that legal embedding from an illegal one.
+    propagateRuntimeLayout(tree, all_classes, diag);
 
     // Pass 1a-cycle — reject infinite-size by-value cycles now that every field type
     // is resolved + slotted (the transitive needs-fixpoint runs below over tree.classes).

@@ -138,6 +138,16 @@ std::string llvmForRef(widen::TypeRef ref) {
             if (t.form == widen::Type::Form::kSlid && t.slots.empty()) {
                 return "{ i8 }";
             }
+            // A RUNTIME-LAYOUT class an importer only DECLARES: its slot list is honest
+            // (the base plus its own fields), but the base's size is unknown here, so a
+            // struct over those slots would compute the WRONG size and the WRONG offsets.
+            // Lower it to the same placeholder an opaque class gets — the size comes from
+            // @C__$sizeof() and every field offset from @C__$offsets, so nothing here may
+            // be structurally indexed.
+            if (t.form == widen::Type::Form::kSlid && t.runtime_layout
+                && t.linkage == widen::Type::Linkage::kDeclare) {
+                return "{ i8 }";
+            }
             std::string s = "{ ";
             for (std::size_t i = 0; i < t.slots.size(); i++) {
                 if (i) s += ", ";
@@ -903,8 +913,25 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
             assert(k >= 0 && k < static_cast<long>(slots.size())
                 && "emitElementAddr: tuple/field slot index out of range");
             std::string gep = newTmp("slot");
-            out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
-                << ", ptr " << addr << ", i32 0, i32 " << k << "\n";
+            if (widen::slidRuntimeLayout(cs)
+                && widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
+                // The class derives from an opaque base, and this TU is not the one that
+                // completes it: the field's offset is a link-time constant we can only
+                // READ. Load it from the completer's exported table and index by BYTES.
+                // Slot 0 (the base sub-object) rides the same path and loads a 0, so an
+                // upcast needs no special case.
+                std::string op = newTmp("offp");
+                std::string ov = newTmp("off");
+                std::string arr = "[" + std::to_string(slots.size()) + " x i64]";
+                out << "  " << op << " = getelementptr " << arr << ", ptr @"
+                    << widen::classSymbol(cs) << "__$offsets, i64 0, i64 " << k << "\n";
+                out << "  " << ov << " = load i64, ptr " << op << "\n";
+                out << "  " << gep << " = getelementptr i8, ptr " << addr
+                    << ", i64 " << ov << "\n";
+            } else {
+                out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
+                    << ", ptr " << addr << ", i32 0, i32 " << k << "\n";
+            }
             addr = gep;
             cur = slots[k];
         } else {
@@ -1433,8 +1460,18 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             // so `base.field` lowers here): emit the aggregate value, extract slot
             // k (classify guaranteed k is a constant in range).
             ast::Node const& ibase = *expr.children[0];
-            widen::Type::Form ibf = widen::form(widen::strip(ibase.inferred_type));
-            if (ibf == widen::Type::Form::kTuple || ibf == widen::Type::Form::kSlid) {
+            widen::TypeRef ibs = widen::strip(ibase.inferred_type);
+            widen::Type::Form ibf = widen::form(ibs);
+            // A field of a class whose layout is a LINK-TIME fact here cannot be reached
+            // by loading the whole object and extracting slot k — there is no whole object
+            // to load, only a runtime-sized blob. Fall through to the address path, which
+            // reads the offset from the completer's table. Same funnel the WRITE side uses,
+            // so a read and a write of one field cannot land on different bytes.
+            bool ib_runtime = ibf == widen::Type::Form::kSlid
+                && widen::slidRuntimeLayout(ibs)
+                && widen::slidLinkage(ibs) == widen::Type::Linkage::kDeclare;
+            if (!ib_runtime
+                && (ibf == widen::Type::Form::kTuple || ibf == widen::Type::Form::kSlid)) {
                 std::string agg = emitExpr(ibase, syms, pool, out, diag,
                                            ibase.inferred_type);
                 long idx = std::strtol(expr.children[1]->text.c_str(), nullptr, 10);
@@ -2189,6 +2226,19 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
                   SymTab const& syms, strings::Pool& pool, std::ostream& out,
                   diagnostic::Sink& diag) {
     widen::Type::Form dform = widen::form(widen::strip(type));
+    // An OPAQUE class an importer only DECLARES gets NO site fill. The construction split
+    // hands the whole default-fill to @C__$ctor (a placement-new in the completer, where
+    // the layout is known), so the tuple classify built here is the completer's business,
+    // not ours — and we could not place it anyway. Harmless-looking for a class with no
+    // visible fields (an empty `store undef`), but a class deriving from an opaque base
+    // HAS visible fields, and filling them meant building a whole-struct value against the
+    // `{ i8 }` placeholder. A whole-VALUE init (a copy from another instance) is not this
+    // case: it is not a tuple literal, and it dispatches through @C__$copy below.
+    if (dform == widen::Type::Form::kSlid && init.kind == ast::Kind::kTupleExpr
+        && widen::slidOpaque(widen::strip(type))
+        && widen::slidLinkage(widen::strip(type)) == widen::Type::Linkage::kDeclare) {
+        return;
+    }
     // An array filled from a tuple LITERAL flows through the array<->tuple bridge.
     if (dform == widen::Type::Form::kArray
         && init.kind == ast::Kind::kTupleExpr) {
@@ -3820,6 +3870,33 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         body << "  %s = ptrtoint ptr %g to i64\n";
         body << "  ret i64 %s\n";
         body << "}\n\n";
+    }
+    // Per-class FIELD-OFFSET table, for a class deriving from an opaque base. The base
+    // sub-object sits at slot 0 with a size only its completer knows, so nothing past it
+    // has a compile-time offset in an importer. The completer folds the whole table (LLVM
+    // computes each offset off its real struct, so the two halves cannot drift) and
+    // exports it; an importer declares it and LOADS the slot it needs. One symbol per
+    // class rather than one per field, and the completer's own layout is untouched — it
+    // still GEPs the struct directly, because there the offsets ARE constants.
+    for (widen::TypeRef ct : tree.classes) {
+        if (diagnostic::hasErrors(diag)) break;
+        widen::TypeRef cs = widen::strip(ct);
+        if (!widen::slidRuntimeLayout(cs)) continue;
+        std::size_t n = widen::get(cs).slots.size();
+        std::string name = widen::classSymbol(ct) + "__$offsets";
+        std::string arr = "[" + std::to_string(n) + " x i64]";
+        if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
+            body << "@" << name << " = external constant " << arr << "\n\n";
+            continue;
+        }
+        std::string llty = llvmForRef(ct);
+        body << "@" << name << " = constant " << arr << " [";
+        for (std::size_t i = 0; i < n; i++) {
+            if (i) body << ", ";
+            body << "i64 ptrtoint (ptr getelementptr (" << llty
+                 << ", ptr null, i32 0, i32 " << i << ") to i64)";
+        }
+        body << "]\n\n";
     }
 
     out << "target triple = \"x86_64-pc-linux-gnu\"\n\n";

@@ -39,11 +39,41 @@ consumer priv: 5
 goodbye 7
 mix a=11 b=0 s=4 r=000
 flat a=55 b=0
+Tagged:ctor: 3
+tagged mark=3 pad=! extra=0
+tagged wrote mark=40 extra=7
+tagged bumped=50
+tagged base: derived 7 7
+tagged upcast tag: 7
+Tagged:ctor: 3
+tagged new: 99
+Tagged:dtor: 99
+Tagged:ctor: 3
+Tagged:ctor: 3
+tagged copy: 21
+Tagged:ctor: 3
+Tagged:ctor: 3
+tagged move: 22
+Tagged:ctor: 3
+Tagged:ctor: 3
+tagged swap: 23
+Tagged:ctor: 3
+Tagged:ctor: 3
+tagged assign: 24
 copy tag: 7
 move tag: 7
 swap tag: 7
 assign tag: 7
 return tag: 7
+Tagged:dtor: 24
+Tagged:dtor: 24
+Tagged:dtor: 3
+Tagged:dtor: 23
+Tagged:dtor: 22
+Tagged:dtor: 22
+Tagged:dtor: 21
+Tagged:dtor: 21
+Tagged:dtor: 50
 Bird:dtor: 5 6
 Vegetable:dtor: 3 4
 Animal:dtor: 1 2

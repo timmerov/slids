@@ -42,6 +42,9 @@ the classes here cover the axes that matter, not just the happy path:
               restrictions, so every method syntax has to reach it.
   NoCtor      declares NO implicit member, so every source-side attempt to add one is
               a compile error. that is its only job; it is never instantiated.
+  Tagged      DERIVES from the incomplete String. its own fields are declared here and
+              visible to an importer, but they sit past a base whose size only the
+              sibling knows — so their offsets are a link-time fact, not a constant.
 */
 
 alias Integer = int;
@@ -167,6 +170,29 @@ Mix(...) {
     int s();       // a by-value class field, default-constructed recursively
     int r(int i);  // an array field element, zeroed
 }
+
+/* a class DERIVING from the incomplete String. The base sub-object still sits at slot 0,
+   so every upcast stays free — but its SIZE is known only to the completer, so nothing
+   past it has a compile-time offset in an importer. Tagged's OWN fields are declared right
+   here and ARE visible to one; reaching them is the whole point. An importer resolves them
+   through the completer's exported offset table, sizes an instance via @Tagged__$sizeof,
+   and default-constructs it via @Tagged__$ctor — the same three things an opaque class
+   already needed, which is why deriving reuses that machinery instead of a second copy.
+   mark_ has a default, extra_ has none (the complete ctor must zero it). */
+String : Tagged(
+    int mark_ = 3,
+    char pad_ = '!',
+    int extra_
+) {
+    _(); ~();
+    int mark();
+    void bump();
+    int basetag();     /* reaches a BASE field from a derived method */
+}
+
+/* takes the BASE by reference: calling it with a Tagged proves the upcast, which is a
+   no-op here precisely because the base kept slot 0. */
+int strtag(String^ s);
 
 /* a POD incomplete class — NO ctor/dtor hooks. An importer must STILL route construction
    (and destruction) through @Flat__$ctor / @Flat__$dtor to fill the fields it cannot see:

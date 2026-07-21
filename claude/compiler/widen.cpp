@@ -1028,6 +1028,14 @@ bool slidOpaque(TypeRef ref) {
     return get(ref).opaque;
 }
 
+void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout) {
+    arena().types[ref].runtime_layout = runtime_layout;
+}
+
+bool slidRuntimeLayout(TypeRef ref) {
+    return get(ref).runtime_layout;
+}
+
 void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here) {
     arena().types[ref].ctor_here = ctor_here;
     arena().types[ref].dtor_here = dtor_here;

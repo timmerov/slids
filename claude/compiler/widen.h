@@ -97,6 +97,12 @@ struct Type {
     // sees the layout. True in EVERY TU that sees the incomplete header (the completer AND
     // importers), even though the completer holds the full layout.
     bool opaque = false;
+    // kSlid: the class DERIVES from an opaque class. Its base sub-object sits at slot 0
+    // with an unknown size, so its OWN field offsets are not compile-time constants in an
+    // importer — they come from the completer's exported `__$offsets` table. Implies
+    // `opaque` (the size is a runtime call too). True in EVERY TU that sees the header,
+    // exactly like `opaque`, so both halves agree on the layout rule.
+    bool runtime_layout = false;
 };
 
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
@@ -160,6 +166,12 @@ Type::Linkage slidLinkage(TypeRef ref);
 // Type::opaque). Resolve sets it from a header's trailing `...`; codegen reads it.
 void setSlidOpaque(TypeRef ref, bool opaque);
 bool slidOpaque(TypeRef ref);
+
+// Set/read whether the class derives from an opaque base (see Type::runtime_layout).
+// Resolve propagates it down base chains once every class is registered; codegen reads
+// it to emit / consult the `__$offsets` table instead of a struct GEP.
+void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout);
+bool slidRuntimeLayout(TypeRef ref);
 
 // Set whether each hook's BODY is written in this TU (see Type::ctor_here). Resolve
 // decides it in registerClassBody, where every OPENING of the class is visible — the

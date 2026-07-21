@@ -187,6 +187,48 @@ int32 main() {
     // double-free on its shallow memberwise copy — a String-semantics matter, not an opaque
     // one), so these prove the external transfer symbols link and the runtime-sized instances
     // build, copy, and destroy without crashing. tag_ is the default 7 throughout.
+    // A class DERIVING from an opaque base. Its own fields are declared in the header and
+    // ARE reachable here — but they sit past a base whose size only the sibling knows, so
+    // each offset is read from that TU's exported @Tagged__$offsets rather than folded.
+    // The instance is sized by @Tagged__$sizeof and filled by @Tagged__$ctor: mark_=3 and
+    // pad_='!' from their defaults, extra_ has NO default so the ctor must zero it.
+    Tagged tg;
+    __println("tagged mark=" + tg.mark_ + " pad=" + tg.pad_ + " extra=" + tg.extra_);
+
+    // WRITE through those offsets, then read back through a METHOD the sibling compiled
+    // against the real struct. The two halves have to land on the same bytes: if the table
+    // and the struct ever disagreed, the write and the read would pass each other.
+    tg.mark_ = 40;
+    tg.extra_ = 7;
+    __println("tagged wrote mark=" + tg.mark() + " extra=" + tg.extra_);
+    tg.bump();
+    __println("tagged bumped=" + tg.mark());
+
+    // BASE methods called on a DERIVED receiver, and a base field read by a derived method
+    // over there. The base kept slot 0, so the receiver needs no adjustment at all.
+    tg.set("derived");
+    __println("tagged base: " + tg.get() + " " + tg.tag() + " " + tg.basetag());
+
+    // UPCAST across the seam: a Tagged passed where a String^ is wanted. Free for the same
+    // reason — slot 0 — which is why the layout keeps the base FIRST and pays for the
+    // derived fields instead.
+    __println("tagged upcast tag: " + strtag(^tg));
+
+    // A single `new` of a derived-from-opaque class: malloc'd at the runtime size, fields
+    // reached through the table exactly as the stack instance's are.
+    Tagged^ tp = new Tagged;
+    tp^.mark_ = 99;
+    __println("tagged new: " + tp^.mark());
+    delete tp;
+
+    // Cross-TU TRANSFER of a derived class — copy / move / swap / assign each route to the
+    // sibling's synthesized @Tagged__$*, which transfers the opaque base sub-object too.
+    // Left with a null base str_ (see the String note above), so only mark_ is read back.
+    Tagged tc; tc.mark_ = 21; Tagged tc2 = tc;         __println("tagged copy: " + tc2.mark_);
+    Tagged tm; tm.mark_ = 22; Tagged tm2 <-- tm;       __println("tagged move: " + tm2.mark_);
+    Tagged ts1; Tagged ts2; ts2.mark_ = 23; ts1 <--> ts2;  __println("tagged swap: " + ts1.mark_);
+    Tagged ta; ta.mark_ = 24; Tagged tb; tb = ta;      __println("tagged assign: " + tb.mark_);
+
     String cp; String cp2 = cp;        __println("copy tag: " + cp2.tag());
     String mv; String mv2 <-- mv;      __println("move tag: " + mv2.tag());
     String sw1; String sw2; sw1 <--> sw2;  __println("swap tag: " + sw1.tag());
@@ -256,3 +298,31 @@ and would NOT be one in library.sl, which completes the class and owns the layou
    stride this TU lacks. A single `new C` is fine (no stride), so only the array form is out. */
 //-EXPECT-ERROR: array of imported incomplete class
 //void neg_newarr() { String[] p = new String[3]; delete p; }
+
+/*
+Tagged DERIVES from String, so it inherits that unknown layout wholesale: this TU can name
+its fields and read and write them, but it cannot PLACE them. Default construction is the
+only form here — an initializer would have to be written at an offset past a base only the
+completer can measure, and dropping it silently would be worse than refusing it. Everything
+barred for the base is barred for the derived class, for the identical reason: by-value
+embedding in an aggregate, a bare global, and `new T[n]` all need a static size or stride.
+None of these is an error in library.sl, which completes String and owns both layouts.
+*/
+
+//-EXPECT-ERROR: can only be default-constructed here
+//void neg_derived_init() { Tagged t(1); t; }
+
+//-EXPECT-ERROR: embeds imported incomplete class 'Tagged'
+//WrapT(Tagged t_) { }
+
+//-EXPECT-ERROR: embeds imported incomplete class 'Tagged'
+//void neg_derived_array() { Tagged a[3]; a[0].mark(); }
+
+//-EXPECT-ERROR: embeds imported incomplete class 'Tagged'
+//void neg_derived_tuple() { (Tagged, int) t; t; }
+
+//-EXPECT-ERROR: a global needs static storage
+//global Tagged gtbad;
+
+//-EXPECT-ERROR: array of imported incomplete class
+//void neg_derived_newarr() { Tagged[] p = new Tagged[3]; delete p; }

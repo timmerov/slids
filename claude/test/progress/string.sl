@@ -445,7 +445,6 @@ void strfill(
 }
 
 /* formatted strings. */
-/* ==tsc==
 String : Format() {
     /* constructor/destructor */
     _() {
@@ -483,7 +482,7 @@ String : Format() {
         fill_count = width - rhs_size;
 
         /* right or left justify the string. */
-        if (justify_ == Format:kRightJustify) {
+        if (justify_ == Option:kRightJustify) {
             strfill(storage_, pad_, fill_count);
             strcpy(storage_ + fill_count, rhs^.storage_, rhs_size);
         } else {
@@ -544,15 +543,13 @@ String : Format() {
         }
         char style;
         switch (float_style_) {
-        case Format:kFixedPoint:
-            style = 'f';
-            break;
-        case Format:kScientificNotation:
-            style = 'e';
-            break;
-        default:
-            style = 'g';
-            break;
+            default: {
+                style = 'g';
+            } Option:kFixedPoint: {
+                style = 'f';
+            } Option:kScientificNotation: {
+                style = 'e';
+            }
         }
         /* build format c-string. */
         fmt = String + "%." + precision_ + style + '\0';
@@ -589,7 +586,6 @@ String : Format() {
     /* copy the format fields. */
     void copyFormatClear(Format^ fmt) {
         clear();
-        x = fmt^.justify_;
         justify_      = fmt^.justify_;
         float_style_  = fmt^.float_style_;
         pad_          = fmt^.pad_;
@@ -599,4 +595,3 @@ String : Format() {
         precision_    = fmt^.precision_;
     }
 }
-*/

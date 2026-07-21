@@ -166,10 +166,9 @@ int strcmp(char[] sa, char[] sb, int count);
 void strfill(mutable char[] s, char ch, intptr count);
 
 /* formatted strings. */
-/* ==tsc==
 String : Format(
-    Option justify_ = kAuto,
-    Option float_style_ = kAuto,
+    Option justify_ = Option:kAuto,
+    Option float_style_ = Option:kAuto,
     char pad_ = ' ',
     bool leading_plus_ = false,
     int min_width_ = 0,
@@ -232,4 +231,3 @@ String : Format(
     /* overload * to format a floating point number in place. */
     op*(Format^ fmt, float64 x);
 }
-*/

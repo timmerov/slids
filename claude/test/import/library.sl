@@ -212,6 +212,27 @@ String(char[] str_ = nullptr, int tag_ = 7) {
     int tag() { return tag_; }
 }
 
+/* define Tagged, the class deriving from the incomplete String (see the header). THIS TU
+   completes String, so here the layout is fully known: mark_ / pad_ / extra_ are ordinary
+   struct GEPs, and the base's fields are reachable by name. What this TU owes an importer
+   is the FOLDED offset table (@Tagged__$offsets) and the runtime size — both emitted off
+   the real struct, so the two halves cannot disagree about where a field landed. */
+String : Tagged() {
+    _() { __println("Tagged:ctor: " + mark_); }
+    ~() { __println("Tagged:dtor: " + mark_); }
+
+    int mark() { return mark_; }
+    void bump() { mark_ = mark_ + 10; }
+    /* a BASE field read from a DERIVED method — resolved through the base chain in the TU
+       that can see it. An importer gets the same answer by calling this. */
+    int basetag() { return tag_; }
+}
+
+/* the base by reference: consumer.sl calls this with a Tagged. */
+int strtag(String^ s) {
+    return s^.tag();
+}
+
 /* helper for Mix's by-value class field: p_ has a default, q_ does NOT — so a default Cell
    must come out {4, 0}, proving the recursive fill zeros a nested no-default field too. */
 Cell(int p_ = 4, int q_) { }

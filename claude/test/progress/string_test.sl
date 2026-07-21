@@ -95,15 +95,14 @@ int32 main() {
     println(String + "s8<World>=" + s8);
 
     /* exercise formatting strings. */
-    /* ==tsc==
     Format fmt;
-    fmt.justify_ = Format:kLeftJustify;
+    fmt.justify_ = Format:Option:kLeftJustify;
     fmt.pad_ = '.';
     fmt.min_width_ = 16;
     fmt = s2;
     println(String + "left : [" + fmt + "]");
     fmt.clear();
-    fmt.justify_ = Format:kRightJustify;
+    fmt.justify_ = Format:Option:kRightJustify;
     fmt = s2;
     println(String + "right: [" + fmt + "]");
     fmt.clear();
@@ -111,12 +110,12 @@ int32 main() {
     fmt = s2;
     println(String + "max_r: [" + fmt + "]");
     fmt.clear();
-    fmt.justify_ = Format:kLeftJustify;
+    fmt.justify_ = Format:Option:kLeftJustify;
     fmt = s2;
     println(String + "max_l: [" + fmt + "]");
     fmt.clear();
     fmt.max_width_ = -1;
-    fmt.justify_ = Format:kRightJustify;
+    fmt.justify_ = Format:Option:kRightJustify;
     fmt = "Howdy!";
     println(String + "char[] =[" + fmt + "]");
     fmt.clear();
@@ -145,33 +144,32 @@ int32 main() {
     fmt = 1337;
     println(String + "int    =[" + fmt + "]");
     fmt.clear();
-    fmt.justify_ = Format:kLeftJustify;
+    fmt.justify_ = Format:Option:kLeftJustify;
     fmt = 2.78;
     println(String + "float  =[" + fmt + "]");
     fmt.clear();
-    fmt.float_style_ = Format:kFixedPoint;
+    fmt.float_style_ = Format:Option:kFixedPoint;
     fmt = 99.44;
     println(String + "fixed  =[" + fmt + "]");
     fmt.clear();
-    fmt.float_style_ = Format:kScientificNotation;
+    fmt.float_style_ = Format:Option:kScientificNotation;
     fmt.precision_ = 4;
     fmt = 20.26;
     println(String + "SciNot =[" + fmt + "]");
 
-    fmt.float_style_ = Format:kFixedPoint;
-    fmt.justify_ = Format:kRightJustify;
+    fmt.float_style_ = Format:Option:kFixedPoint;
+    fmt.justify_ = Format:Option:kRightJustify;
     println(String + "factor =[" + fmt*1234.56 + "]");
 
     Format fmt1;
-    fmt1.justify_ = Format:kLeftJustify;
+    fmt1.justify_ = Format:Option:kLeftJustify;
     fmt1.pad_ = '.';
     fmt1.min_width_ = 8;
     Format fmt2;
-    fmt2.justify_ = Format:kRightJustify;
+    fmt2.justify_ = Format:Option:kRightJustify;
     fmt2.pad_ = '~';
     fmt2.min_width_ = 8;
     println(String + "2 fmts =[" + fmt1*123 + fmt2*4.56 + "]");
-    */
 
     return 0;
 }

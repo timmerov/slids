@@ -2994,6 +2994,21 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
     // regular field's abstractness is diagnosed at the class DEFINITION (classifyScope),
     // so skipping the check there avoids a duplicate report.
     if (!subobject) rejectAbstractInstantiation(tree, info.type, s.file_id, s.tok, diag);
+    // An OPAQUE class an importer only DECLARES is default-constructed by @C__$ctor in the
+    // completer — the site places nothing, so it has nowhere to put an initializer. A class
+    // with no visible fields already fails the arity check below (0 fields, N given); one
+    // deriving from an opaque base has visible fields and would otherwise accept the list
+    // and silently drop it, since codegen skips the site fill.
+    widen::TypeRef its = widen::strip(info.type);
+    if (!subobject && !s.children.empty() && s.children[0]
+        && widen::slidRuntimeLayout(its)
+        && widen::slidLinkage(its) == widen::Type::Linkage::kDeclare) {
+        diagnostic::report(diag, {s.children[0]->file_id, s.children[0]->tok,
+            "Class '" + info.name + "' derives from an imported incomplete class, so it "
+            "can only be default-constructed here; its fields are placed by the module "
+            "that completes the base.", {}});
+        return;
+    }
     std::size_t n = info.field_names.size();
     std::vector<std::unique_ptr<parse::Node>> provided;
     bool provided_built = false;
