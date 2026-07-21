@@ -2468,6 +2468,35 @@ struct Parser {
     // `_$recv` of type `recv_type` is spliced in when in_class). ctor/dtor are
     // method-shaped and class-only; the class body loop peels them off BEFORE
     // calling here, and parseNamespaceMember rejects them. Returns nullptr on error.
+    // `import { T f(params); … }` — a block whose every member is a foreign C
+    // function DECLARATION (no body, bare symbol). Transparent: the decls belong to
+    // the ENCLOSING scope (file / namespace / class / block), so they are appended to
+    // `out` directly rather than wrapped. A class-scope import is a namespace-style
+    // member, NOT a method — parseFunctionDef is called directly, so no receiver is
+    // injected. Positioned at the `import` token; consumes through the matching `}`.
+    bool parseImportBlock(std::vector<std::unique_ptr<parse::Node>>& out) {
+        advance();   // import
+        if (!expect(token::Kind::kLBrace, "{")) return false;
+        while (!fatal && peek().kind != token::Kind::kRBrace) {
+            if (peek().kind == token::Kind::kEndOfFile
+                || peek().kind == token::Kind::kEndOfInput) {
+                error("Expected '}' to close the 'import' block.");
+                return false;
+            }
+            auto fn = parseFunctionDef();
+            if (!fn) return false;
+            if (fn->kind != parse::Kind::kFunctionDecl) {
+                errorAt(fn->name_tok,
+                    "An 'import' block holds foreign function declarations only "
+                    "(no body).");
+                return false;
+            }
+            fn->is_foreign = true;
+            out.push_back(std::move(fn));
+        }
+        return expect(token::Kind::kRBrace, "}");
+    }
+
     std::unique_ptr<parse::Node> parseDefinitionMember(bool in_class,
                                                        std::string const& recv_type) {
         token::Token const& t = peek();
@@ -2483,7 +2512,9 @@ struct Parser {
         if (looksLikeQualifiedScopeDef()) return parseQualifiedScopeDef();
         if (looksLikeClassDef())           return parseClassDef();   // nested class
         if (t.kind == token::Kind::kIdentifier
-            && peekKind(1) == token::Kind::kLBrace) return parseNamespaceDecl();
+            && (peekKind(1) == token::Kind::kLBrace
+                || peekKind(1) == token::Kind::kImport))   // `Name import { }` shorthand
+            return parseNamespaceDecl();
         if (in_class) {
             // A class body: a method is a function-shaped member (receiver-injected).
             // looksLikeFunctionDef gates here — anything not function-shaped is a
@@ -2502,8 +2533,10 @@ struct Parser {
             // A QUALIFIED method (`int Sib:go()`) is an EXTERNAL def targeting ANOTHER
             // class — relocateOutOfLineMembers splices the receiver for its TARGET, so
             // this class's receiver must NOT be added here (else a doubled `_$recv`).
-            // Only a plain same-class method gets this class's receiver.
-            if (m->qualifier.empty()) {
+            // Only a plain same-class method gets this class's receiver. A FOREIGN
+            // import (`T f(...) = import;`) in a class body is a namespace-style member,
+            // NOT a method — a C function has no `self` — so it gets no receiver.
+            if (m->qualifier.empty() && !m->is_foreign) {
                 m->params.insert(m->params.begin(),
                     parse::makeReceiverParam(widen::internOrNone(recv_type),
                                              m->file_id, m->name_tok));
@@ -2547,15 +2580,25 @@ struct Parser {
         std::string name = peek().text;
         int name_tok = pos;
         advance();   // name
-        if (!expect(token::Kind::kLBrace, "{")) return nullptr;
         auto node = newNodeAt(parse::Kind::kNamespaceDecl, ns_file, ns_tok);
         node->name = std::move(name);
         node->name_tok = name_tok;
+        // `Name import { … }` shorthand == `Name { import { … } }` — the import block's
+        // own braces ARE the namespace body; its foreign decls are the members.
+        if (peek().kind == token::Kind::kImport) {
+            if (!parseImportBlock(node->children)) return nullptr;
+            return node;
+        }
+        if (!expect(token::Kind::kLBrace, "{")) return nullptr;
         while (!fatal && peek().kind != token::Kind::kRBrace) {
             if (peek().kind == token::Kind::kEndOfFile
                 || peek().kind == token::Kind::kEndOfInput) {
                 error("Expected '}'.");
                 return nullptr;
+            }
+            if (peek().kind == token::Kind::kImport) {
+                if (!parseImportBlock(node->children)) return nullptr;
+                continue;
             }
             auto m = parseNamespaceMember();
             if (!m) return nullptr;
@@ -2604,6 +2647,14 @@ struct Parser {
                 || peek().kind == token::Kind::kEndOfInput) {
                 error("Expected '}'.");
                 return false;
+            }
+            // A block-local `import { … }` foreign block — a block IS a definition
+            // context (nested fn / local class), so a foreign import parses here too.
+            // (A switch body does NOT come through parseStmtsThroughRBrace, so it stays
+            // excluded — a foreign import in a switch is unreachable.)
+            if (peek().kind == token::Kind::kImport) {
+                if (!parseImportBlock(out)) return false;
+                continue;
             }
             auto stmt = parseStmt();
             if (!stmt) return false;
@@ -3696,6 +3747,13 @@ struct Parser {
                 error("Expected '}'.");
                 return nullptr;
             }
+            // A class-scope `import { … }` foreign block — namespace-style members of
+            // the class (no receiver; parseImportBlock calls parseFunctionDef directly),
+            // callable `Class:cfn(…)` like a class-scoped alias / const, never a method.
+            if (peek().kind == token::Kind::kImport) {
+                if (!parseImportBlock(node->children)) return nullptr;
+                continue;
+            }
             // A leading `virtual` modifies the method or the destructor that follows.
             bool saw_virtual = false;
             int virt_tok = pos;
@@ -3968,8 +4026,16 @@ struct Parser {
         // records is_pure and leaves it bodyless like a forward decl.
         if (peek().kind == token::Kind::kEquals) {
             advance();   // =
+            // `= import;` — a foreign C function: no body, bare (unmangled) symbol.
+            if (peek().kind == token::Kind::kImport) {
+                advance();   // import
+                if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+                node->kind = parse::Kind::kFunctionDecl;
+                node->is_foreign = true;
+                return node;
+            }
             if (peek().kind != token::Kind::kDelete) {
-                error("Expected 'delete' after '=' in a pure virtual method.");
+                error("Expected 'delete' or 'import' after '='.");
                 return nullptr;
             }
             advance();   // delete
@@ -3999,6 +4065,12 @@ struct Parser {
         while (!fatal) {
             while (peek().kind == token::Kind::kEndOfFile) advance();
             if (peek().kind == token::Kind::kEndOfInput) break;
+            // A bare `import { … }` foreign block at file scope (the file-include
+            // `import name;` was consumed by the lexer, so `import` here is a block).
+            if (peek().kind == token::Kind::kImport) {
+                if (!parseImportBlock(prog->children)) return;
+                continue;
+            }
             // File scope IS the global namespace body — bounded by end-of-input
             // instead of braces, framed by the pre-existing kGlobalFrame instead of
             // an opened one. Its members are exactly namespace members, so the same

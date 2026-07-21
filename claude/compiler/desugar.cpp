@@ -383,6 +383,10 @@ std::vector<std::string> scopeSegments(parse::Tree const& tree, int frame) {
 // alone (the four method call sites derived their `defCls` identically from
 // classEntryForFrame(owner_ns_frame), so the entry already carries the defining class).
 std::string symbolFor(parse::Entry const& e, parse::Tree const& tree, int entry_id) {
+    // A FOREIGN C function (`= import`) links to its BARE C name — no Itanium mangling,
+    // no scope path, no entry-id suffix (even inside a namespace or a block: `math:sin`
+    // is the C symbol `sin`). Must precede the nested-fn arm, which would id-suffix it.
+    if (e.is_foreign) return e.name;
     // `main` — the C entry point — keeps its plain symbol (the same name-based
     // decision grammar/resolve make about the one function that opens `global;`).
     if (e.name == "main" && e.owner_ns_frame < 0 && e.parent_frame_id == 0)
@@ -681,9 +685,11 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     // set instead, else the declare lands beside the define and llc rejects the pair.
     node->external_decl = p.kind == parse::Kind::kFunctionDecl
         && p.resolved_entry_id >= 0
-        && tree.entries[p.resolved_entry_id].is_external
+        && (tree.entries[p.resolved_entry_id].is_external
+            || tree.entries[p.resolved_entry_id].is_foreign)   // a foreign C decl also `declare`s
         && !tree.entries[p.resolved_entry_id].defined
         && !signatureDefinedHere(tree, p.resolved_entry_id);
+    node->is_foreign = p.is_foreign;   // a foreign decl's `declare` is emitted once, deduped
     // LINKAGE of a DEFINITION. Everything a TU defines is PRIVATE — emitted `internal`
     // — unless it is DECLARED in a `.slh` header, the same rule a class follows (the
     // declaration site decides). A free / namespace function whose entry's declaration

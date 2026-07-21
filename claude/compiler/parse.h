@@ -311,6 +311,9 @@ struct Node {
     bool is_pure = false;        // kFunctionDecl: a pure virtual (`virtual T m() = delete;`)
                                  // — no body; a class with a pure method is abstract (not
                                  // instantiable). Always accompanies is_virtual.
+    bool is_foreign = false;     // kFunctionDecl: a foreign C function (`T f(...) = import;`
+                                 // or inside an `import { }` block) — no slids body, its
+                                 // symbol is the BARE C name (no mangling), bound at link.
     bool bypass_virtual = false; // kMethodCallStmt/kMethodCallExpr: a `Base:method()`
                                  // qualified call — resolve reframed the receiver to the
                                  // base subobject and this call STATICALLY targets that
@@ -421,6 +424,10 @@ struct Entry {
     bool is_pure = false;         // kFunction: a pure virtual (`= delete`) — no body,
                                   // never an orphan; a class with an un-overridden pure
                                   // method is abstract (not instantiable).
+    bool is_foreign = false;      // kFunction: a foreign C function (`= import` / an
+                                  // `import { }` block) — no slids body, defined by a C
+                                  // library (linked, e.g. `-lm`), so undefined here is NOT
+                                  // an orphan. symbolFor emits the BARE C name (no mangle).
     bool is_external = false;     // kFunction: DECLARED in an imported `.slh` header —
                                   // its definition legitimately lives in another
                                   // translation unit (linked in), so being undefined

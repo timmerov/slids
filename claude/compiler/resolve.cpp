@@ -2059,7 +2059,9 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
         // a local never reaches here and needs the explicit `self.method()` form.)
         if (callee.kind == parse::EntryKind::kFunction
             && callee.owner_ns_frame >= 0
-            && parse::classEntryForFrame(tree, callee.owner_ns_frame) >= 0) {
+            && parse::classEntryForFrame(tree, callee.owner_ns_frame) >= 0
+            && !callee.is_foreign) {   // a class-scoped FOREIGN import is a namespace-style
+                                       // member (no `self`), not a method — a plain call
             s.children.insert(s.children.begin(), buildRecvDeref(s.file_id, s.tok));
             s.kind = parse::Kind::kMethodCallStmt;
             s.resolved_entry_id = -1;   // classify re-binds via class-member lookup
@@ -4108,6 +4110,7 @@ void registerNestedFunctions(parse::Tree& tree,
         e.tok = ch->name_tok;
         e.defined = is_def;
         e.is_external = !is_def && fileIsImported(tree, ch->file_id);
+        e.is_foreign = ch->is_foreign;
         if (is_def) {
             e.def_file_id = ch->file_id;
             e.def_tok = ch->name_tok;
@@ -4607,6 +4610,7 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             e.is_external = !e.defined && fileIsImported(tree, m->file_id);
             e.is_virtual = m->is_virtual;
             e.is_pure = m->is_pure;
+            e.is_foreign = m->is_foreign;
             if (e.defined) { e.def_file_id = m->file_id; e.def_tok = m->name_tok; }
             e.owner_ns_frame = frame;
             m->resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -6073,6 +6077,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             e.tok = ch->name_tok;
             e.defined = is_def;
             e.is_external = !is_def && fileIsImported(tree, ch->file_id);
+            e.is_foreign = ch->is_foreign;
             if (is_def) {
                 e.def_file_id = ch->file_id;
                 e.def_tok = ch->name_tok;
@@ -6225,9 +6230,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (parse::Entry const& e : tree.entries) {
         // A PURE virtual (`= delete`) is intentionally bodyless — not an orphan.
         // An EXTERNAL declaration (from an imported `.slh`) is defined in another
-        // translation unit and linked in — also not an orphan here.
+        // translation unit and linked in — also not an orphan here. A FOREIGN import
+        // (`= import`) binds a C library symbol at link — likewise (stage 1 gates it to
+        // file / namespace scope at PARSE, so no block/class foreign entry reaches here).
         if (e.kind == parse::EntryKind::kFunction && !e.defined && !e.is_pure
-            && !e.is_external) {
+            && !e.is_external && !e.is_foreign) {
             // A forward declaration is SATISFIED by a same-signature DEFINITION in
             // the same scope. A free function merges its decl + def into ONE entry
             // (Pass 1a, matched by signature); a class METHOD's decl + def stay

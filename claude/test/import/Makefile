@@ -11,9 +11,12 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
-# The runnable program (has exp.consumer golden + any negatives).
+# The runnable programs (each has an exp.<name> golden). `consumer` is the cross-TU
+# import test; `math` is a standalone TU binding libm's C functions via `= import`
+# blocks — it links `-lm` and has no sibling `.sl`.
 SAMPLES = \
-	consumer
+	consumer \
+	math
 
 # Every translation unit linked into the consumer binary: the program plus
 # each imported library's .sl. `import library;` is a textual include of
@@ -51,6 +54,12 @@ consumer: $(BIN_DIR)/consumer
 
 $(BIN_DIR)/consumer: $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(OBJS)))
 	$(CXX) $^ -o $@
+
+# math is a single self-contained TU; its `= import` decls bind libm, so it links -lm.
+math: $(BIN_DIR)/math
+
+$(BIN_DIR)/math: $(BUILD_DIR)/math.o
+	$(CXX) $^ -lm -o $@
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@

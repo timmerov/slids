@@ -155,6 +155,10 @@ struct Node {
                                                  // in another TU) that is undefined here —
                                                  // codegen emits a `declare` for it so the
                                                  // call links against the other object.
+    bool is_foreign = false;                     // kFunctionDecl: a foreign C function
+                                                 // (`= import`) — bare symbol, its `declare`
+                                                 // is emitted ONCE (deduped) regardless of
+                                                 // the scope it was declared in.
     bool internal_def = false;                   // kFunctionDef: a member of a class this TU
                                                  // keeps PRIVATE (declared in a `.sl`, so
                                                  // nothing outside can name it) — codegen

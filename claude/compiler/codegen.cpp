@@ -3475,6 +3475,17 @@ void collectNestedFunctions(ast::Node const& s,
     }
 }
 
+// Every FOREIGN C declaration anywhere in the tree (file / namespace / block / class).
+// A foreign fn's `declare` must appear once at module scope no matter where it was
+// declared, so codegen collects them all (then dedups by symbol) rather than relying on
+// the top-level walk, which never descends into function bodies.
+void collectForeignDecls(ast::Node const& s,
+                         std::vector<ast::Node const*>& out) {
+    if (s.kind == ast::Kind::kFunctionDecl && s.is_foreign) out.push_back(&s);
+    for (auto const& ch : s.children)
+        if (ch) collectForeignDecls(*ch, out);
+}
+
 // Construct one global in place: store its initializer (an array filled from a tuple
 // literal needs the element walk; any other value stores whole) THEN run the lifecycle
 // ctor hooks. Mirrors the local class/aggregate decl path; shared by the lone-compound
@@ -3656,13 +3667,14 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         if (n->kind != ast::Kind::kProgram) continue;
         for (auto const& fn : n->children) {
             if (diagnostic::hasErrors(diag)) break;   // stop at the first error
-            if (fn->external_decl) {
+            if (fn->external_decl && !fn->is_foreign) {
                 // NOT written in this TU — either a header's DECLARATION (defined in
                 // another TU), or a SYNTHESIZED member of a class whose symbols another
                 // TU owns (desugar flags those; they arrive as real kFunctionDefs with a
                 // body resolve minted, and emitting it would collide with the owner's).
                 // Either way it is a `declare`, never a body. Checked before the kind
-                // dispatch precisely because the second case is a kFunctionDef.
+                // dispatch precisely because the second case is a kFunctionDef. A FOREIGN
+                // decl is skipped here — collected + deduped below (it may appear nested).
                 emitDeclare(*fn, body);
             } else if (fn->kind == ast::Kind::kFunctionDef) {
                 emitFunction(*fn, pool, body, diag);
@@ -3684,6 +3696,16 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     for (ast::Node const* fn : nested) {
         if (diagnostic::hasErrors(diag)) break;   // stop at the first error
         emitFunction(*fn, pool, body, diag);
+    }
+    // Foreign C `declare`s — collected from the whole tree (any scope) and deduped by
+    // symbol, so a fn imported in more than one place declares once.
+    {
+        std::vector<ast::Node const*> foreign;
+        for (auto const& n : tree.nodes)
+            if (n->kind == ast::Kind::kProgram) collectForeignDecls(*n, foreign);
+        std::set<std::string> seen;
+        for (ast::Node const* fn : foreign)
+            if (seen.insert(emitSymbol(*fn)).second) emitDeclare(*fn, body);
     }
     // Per-class COMPLETE constructor / destructor. `@<Name>__$ctor(obj)` builds each
     // hook-carrying field (base at slot 0 first), stamps the vtable, then runs the user
