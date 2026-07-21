@@ -1679,6 +1679,17 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             // the result. Leaves bottom out at convertExplicit.
             assert(expr.children.size() == 1 && "kConvertExpr needs 1 operand");
             ast::Node const& operand = *expr.children[0];
+            // A `Type(value)` primitive TEMPORARY: emit the operand against the TARGET so
+            // a literal is fit-checked against it (`int32(0x8000_0000)` rejects), and WIDEN
+            // a narrower source up — never the truncating conversion grid.
+            if (expr.is_temp_init) {
+                // emitExpr against the target both fit-checks a literal AND widens a
+                // narrower source up to the target, returning a value OF the target.
+                std::string tv = emitExpr(operand, syms, pool, out, diag,
+                                          expr.inferred_type);
+                return widen::convert(tv, expr.inferred_type, dest_type,
+                                      expr.file_id, expr.tok, out, diag);
+            }
             std::string v = emitExpr(operand, syms, pool, out, diag,
                                      operand.inferred_type);
             v = emitConvertWalk(v, operand.inferred_type, expr.inferred_type, out);

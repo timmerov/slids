@@ -1731,6 +1731,15 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (e.class_conversion) { e.inferred_type = e.return_type; return; }
             assert(e.children.size() == 1 && "kConvertExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
+            // `Type(value)` NAMELESS PRIMITIVE TEMPORARY: bound by the DECL-INIT rules —
+            // infer the operand WITH the target as context (a literal flexes / must FIT;
+            // a wider source is a narrowing ERROR), NOT the truncating conversion grid.
+            if (e.is_temp_init) {
+                inferExpr(tree, operand, e.return_type, diag);
+                checkValueAssign(tree, e.return_type, operand, diag);
+                e.inferred_type = e.return_type;
+                return;
+            }
             inferExpr(tree, operand, widen::kNoType, diag);
             // A CLASS target is an assignment-to-a-temp: default-construct a `_$cret`
             // of the class, dispatch its op= from the source, yield the temp (lowered

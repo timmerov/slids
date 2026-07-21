@@ -178,6 +178,17 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
   2+-element `(args)` on a scalar stays the tuple-vs-scalar mismatch. Without the
   collapse the tuple node reached codegen's scalar fill and segfaulted.
 
+  PRIMITIVE TEMPORARY `Type(value)` — the NAMELESS, EXPRESSION-position twin of that
+  named `int x(42)` decl (and the primitive analog of the nameless class `Class(args)`).
+  It binds `value` through THIS relation — a DECL-INIT, NOT the truncating `(Type=value)`
+  conversion — so `int32(0x8000_0000)` / `float64(5)` ERROR (don't-fit / cross-family) where
+  the conversion would truncate / is a distinct op. It is a kConvertExpr flagged is_temp_init
+  (grammar parsePrimTemp: a primitive keyword + `(` in EXPRESSION position, exactly one value;
+  bare type / statement position / zero-/multi-arg error). constfold SKIPS an is_temp_init node
+  (else it truncation-folds the literal past the fit-check); classify infers the operand WITH
+  the target as context + checkValueAssign; codegen emits the operand AGAINST the target (fit-
+  checking a literal vs it) then widens up. Canon test/expression/int.sl + nonint.sl.
+
   Construction (a class ctor at a decl / `new`) is a SEPARATE operation, not this
   matrix — class <- tuple as a ctor lives outside it. Swap (`<-->`) is also outside:
   it requires the EXACT same type both ways, since it cannot convert both directions.

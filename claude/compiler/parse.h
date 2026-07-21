@@ -247,6 +247,10 @@ struct Node {
                                  // NOT a function call. resolve sets it; classify
                                  // builds the per-field construction tuple; desugar
                                  // lowers it to a synthetic kVarDeclStmt.
+    bool is_temp_init = false;   // kConvertExpr: a `Type(value)` NAMELESS PRIMITIVE
+                                 // TEMPORARY — bound by the DECL-INIT rules (fit-check,
+                                 // no implicit narrow), NOT the truncating conversion
+                                 // grid. The primitive twin of `Class(args)`.
     bool ctor_no_args = false;   // kCallExpr[is_construction]: the source named NO ctor
                                  // arguments (`Class` / `Class()`), so the object is
                                  // DEFAULT-constructed. Read by the operator-chain lowering:

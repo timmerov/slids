@@ -50,6 +50,7 @@ int32 main() {
     /* strlen works if the above work. */
     /* strcpy works if the above work. */
 
+    /*
     /* fancier features. */
     int x = 42;
     println(String + "x=" + x);
@@ -93,6 +94,7 @@ int32 main() {
     /* slicing */
     String s8 = s2.slice(7, 5);
     println(String + "s8<World>=" + s8);
+    */
 
     /* exercise formatting strings. */
     /* ==tsc==

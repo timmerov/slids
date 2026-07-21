@@ -1157,6 +1157,10 @@ std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
 // const or size an array dimension.
 std::unique_ptr<parse::Node> tryFoldConvert(parse::Node& n, diagnostic::Sink& diag) {
     assert(n.children.size() == 1 && "kConvertExpr needs 1 operand");
+    // A `Type(value)` primitive TEMPORARY is a strict decl-init, NOT a truncating
+    // conversion — leave it for classify/codegen (which apply the fit-check), so
+    // `int32(0x8000_0000)` errors rather than folding to a truncated literal.
+    if (n.is_temp_init) return nullptr;
     parse::Node const& op = *n.children[0];
     widen::TypeKind tk;
     if (!widen::classify(n.return_type, tk)) return nullptr;  // non-value target -> classify errors

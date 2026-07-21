@@ -571,6 +571,18 @@ Phase 4 — types beyond primitives
     Aggregate slots reach the class path per-slot [lowerAggregateConversion above], so a
     class leaf at ANY depth / form / cross-form / same-class reshape / spilled source
     converts. See [[project_v2_type_conversions]], [[feedback_cast_vs_conversion]].)
+  * primitive temporaries (`int32(value)`)                         LANDED (2026-07-20)
+    A NAMELESS temporary of a primitive type — the primitive twin of the nameless class
+    `Class(args)`. NOT a conversion: it is a DECL-INIT (bound exactly as `int32 tmp = value`
+    — fit-check + widen, NO truncation, no implicit narrow / cross-family), so
+    `int32(0x8000_0000)` and `float64(5)` ERROR where the `(int32=…)` conversion would
+    truncate / are distinct ops. Represented as a kConvertExpr with Node/ast is_temp_init:
+    parsePrimTemp (a primitive keyword + `(` in EXPRESSION position; exactly one value —
+    bare type / statement position / zero-/multi-arg all error); constfold SKIPS it (else it
+    truncation-folds the literal past the fit-check); classify infers the operand WITH the
+    target as context + checkValueAssign; codegen emits the operand AGAINST the target (a
+    literal is fit-checked vs it) + widens a narrower source up. All primitives, expression
+    position only. Canon test/expression/int.sl (integers) + nonint.sl (float/bool/char).
   * sizeof (`sizeof(T)` / `sizeof(expr)`)                          LANDED
     (kSizeofExpr — a primary; grammar splits a TYPE operand [paren starts with a
     type keyword -> parseType onto return_type] from an EXPRESSION operand [resolve

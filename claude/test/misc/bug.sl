@@ -133,5 +133,7 @@ int32 main() {
     //__println(##line + ": "); { SuperCtor s(makeCtor(),4); s; }
     //__println(##line + ": "); { SuperCtor s = (makeCtor(),4); s; }
 */
+    //x = uint32(0x8000_000); x;
+    y = int(5); y;
     return 0;
 }

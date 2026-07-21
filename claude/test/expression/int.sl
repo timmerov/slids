@@ -229,5 +229,47 @@ int32 main() {
     bool loEq = false; loEq ||= 7;   __println("loEq= " + loEq);
     bool lxEq = true;  lxEq ^^= 7;   __println("lxEq= " + lxEq);
 
+    /* --- Type(value): a nameless temporary of a primitive type, bound by the DECL-INIT
+       rules (fit-check, widen a narrower source, no truncation) --- */
+    __println("ti8= "   + int8(-100));
+    __println("ti16= "  + int16(30000));
+    __println("ti32= "  + int32(5));
+    __println("ti64= "  + int64(9000000000));
+    __println("tu8= "   + uint8(255));
+    __println("tu16= "  + uint16(65535));
+    __println("tu32= "  + uint32(4000000000));
+    __println("tu64= "  + uint64(9000000000000000000));
+    __println("tint= "  + int(42));
+    __println("tuint= " + uint(4000000000));
+    __println("tiptr= " + intptr(-7));
+    int8 twv = 42;
+    __println("twiden= " + int64(twv));   // int8 source widens into int64
+
+    /* --- Type(value) negatives: one //-block uncommented per run --- */
+
+    //-EXPECT-ERROR: Integer literal does not fit in 'int32'.
+    // int32 tnf = int32(0x8000_0000);
+    // __println("tnf= " + tnf);
+
+    //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int32'
+    // int64 tnw = 5;
+    // int32 tn = int32(tnw);
+    // __println("tn= " + tn);
+
+    //-EXPECT-ERROR: A primitive temporary 'Type(value)' requires exactly one value.
+    // int32 tz = int32();
+    // __println("tz= " + tz);
+
+    //-EXPECT-ERROR: A primitive temporary 'Type(value)' takes exactly one value.
+    // int32 tm = int32(1, 2);
+    // __println("tm= " + tm);
+
+    //-EXPECT-ERROR: A type is not an expression; write 'Type(value)' for a temporary.
+    // int32 tb = int;
+    // __println("tb= " + tb);
+
+    //-EXPECT-ERROR: Expected variable name.
+    // int32(5);
+
     return 0;
 }

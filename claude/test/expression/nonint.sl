@@ -395,5 +395,29 @@ int32 main() {
     // float64 f64Xor = f64A ^ f64B;
     // __println("f64Xor= " + f64Xor);
 
+    /* --- Type(value): non-int primitive temporaries, bound by the DECL-INIT rules --- */
+    __println("tf32= "  + float32(1.5));
+    __println("tf64= "  + float64(2.5));
+    __println("tflt= "  + float(3.5));
+    __println("tbool= " + bool(true));
+    __println("tchar= " + char(65));
+    float32 twf = 1.25;
+    __println("twiden= " + float64(twf));   // float32 source widens into float64
+
+    /* --- Type(value) negatives: one //-block uncommented per run --- */
+
+    //-EXPECT-ERROR: Cannot implicitly convert 'int' to 'float64'
+    // float64 tcf = float64(5);
+    // __println("tcf= " + tcf);
+
+    //-EXPECT-ERROR: Cannot implicitly narrow 'float64' to 'float32'
+    // float64 twd = 1.5;
+    // float32 tnf = float32(twd);
+    // __println("tnf= " + tnf);
+
+    //-EXPECT-ERROR: A primitive temporary 'Type(value)' requires exactly one value.
+    // float64 tz = float64();
+    // __println("tz= " + tz);
+
     return 0;
 }

@@ -694,6 +694,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         && !tree.entries[p.resolved_entry_id].defined
         && !signatureDefinedHere(tree, p.resolved_entry_id);
     node->is_foreign = p.is_foreign;   // a foreign decl's `declare` is emitted once, deduped
+    node->is_temp_init = p.is_temp_init;   // `Type(value)` primitive temp (decl-init, not convert)
     // LINKAGE of a DEFINITION. Everything a TU defines is PRIVATE — emitted `internal`
     // — unless it is DECLARED in a `.slh` header, the same rule a class follows (the
     // declaration site decides). A free / namespace function whose entry's declaration

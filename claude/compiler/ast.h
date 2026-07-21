@@ -159,6 +159,10 @@ struct Node {
                                                  // (`= import`) — bare symbol, its `declare`
                                                  // is emitted ONCE (deduped) regardless of
                                                  // the scope it was declared in.
+    bool is_temp_init = false;                   // kConvertExpr: a `Type(value)` primitive
+                                                 // temporary — emit the operand against the
+                                                 // TARGET (decl-init fit-check), widen up;
+                                                 // NOT the truncating conversion grid.
     bool internal_def = false;                   // kFunctionDef: a member of a class this TU
                                                  // keeps PRIVATE (declared in a `.sl`, so
                                                  // nothing outside can name it) — codegen

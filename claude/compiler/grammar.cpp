@@ -892,8 +892,45 @@ struct Parser {
         return node;
     }
 
+    // `Type(value)` — a NAMELESS TEMPORARY of a primitive type, initialized from ONE
+    // value by the decl-init rules (the primitive twin of `Class(args)`). Positioned at
+    // the primitive-type keyword; the following `(` is confirmed by the caller.
+    std::unique_ptr<parse::Node> parsePrimTemp() {
+        int file = peek().file_id;
+        int op_tok = pos;
+        std::string target(peek().text);   // the primitive keyword spelling
+        advance();   // type keyword
+        advance();   // (
+        if (peek().kind == token::Kind::kRParen) {
+            error("A primitive temporary 'Type(value)' requires exactly one value.");
+            return nullptr;
+        }
+        auto arg = parseExpr();
+        if (!arg) return nullptr;
+        if (peek().kind == token::Kind::kComma) {
+            error("A primitive temporary 'Type(value)' takes exactly one value.");
+            return nullptr;
+        }
+        if (!expect(token::Kind::kRParen, ")")) return nullptr;
+        auto node = newNodeAt(parse::Kind::kConvertExpr, file, op_tok);
+        node->return_type = widen::internOrNone(target);
+        node->is_temp_init = true;
+        node->children.push_back(std::move(arg));
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parsePrimary() {
         token::Token const& t = peek();
+        // A primitive-type keyword in expression position: `int32(value)` is a nameless
+        // temporary; a bare type is not an expression (and the STATEMENT forms `int;` /
+        // `int();` never reach here — parseStmt routes a type-led statement to a decl).
+        if (isTypeStart(t.kind)) {
+            if (peekKind(1) != token::Kind::kLParen) {
+                error("A type is not an expression; write 'Type(value)' for a temporary.");
+                return nullptr;
+            }
+            return parsePrimTemp();
+        }
         if (t.kind == token::Kind::kStringLiteral) {
             auto node = newNodeHere(parse::Kind::kStringLiteral);
             node->text = t.text;
