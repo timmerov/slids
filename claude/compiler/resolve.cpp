@@ -233,6 +233,21 @@ std::string memberQualifiedName(parse::Tree const& tree, int entry_id) {
 // structural constructors, so an alias leaf survives inside a composite (the
 // spelling path can't do this). Child handles are copied BEFORE recursing (a
 // recursive intern may realloc the arena).
+// Resolve an alias template's TARGET into its PATTERN (marker leaves for the type
+// parameters) once, writing it to the entry. Defined below resolveTypeRef (mutual
+// recursion: an expansion may need a pattern not yet built).
+widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
+                                          std::set<std::string>& visiting,
+                                          bool& reported, diagnostic::Sink& diag);
+// The entry a template-alias use names — bare (scope-aware) or qualified
+// (`Deep:RT<int>`). -1 when absent (the caller reports).
+int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
+                             int file_id, int tok, diagnostic::Sink& diag,
+                             bool& reported);
+void registerAliasTemplate(parse::Tree& tree, parse::Node& node);
+void validateAliasTemplate(parse::Tree& tree, parse::Node& node,
+                           diagnostic::Sink& diag);
+
 widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                               std::set<std::string>& visiting, bool& reported,
                               int file_id, int tok, diagnostic::Sink& diag,
@@ -265,6 +280,59 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
             widen::TypeRef u = widen::get(t).underlying;
             return widen::internConst(
                 resolveTypeRef(tree, u, visiting, reported, file_id, tok, diag));
+        }
+        case F::kTmplUse: {
+            // A TEMPLATE-ALIAS USE `Name<args>`: resolve the arguments in THIS
+            // (the use's) scope — which is where an enclosing function template's
+            // T resolves — then substitute them into the alias's pattern. The
+            // expansion wraps in a transparent kAlias labeled with the use AS
+            // WRITTEN, so ##type reports `Ref<int>`.
+            std::string name = widen::get(t).name;
+            std::string label = widen::spell(t);
+            int id = lookupAliasTemplateEntry(tree, name, file_id, tok, diag,
+                                              reported);
+            if (id < 0) {
+                if (!reported) {
+                    reported = true;
+                    diagnostic::report(diag, {file_id, tok,
+                        "Unknown type '" + name + "'.", {}});
+                }
+                return t;
+            }
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind != parse::EntryKind::kAlias || !e.is_template) {
+                reported = true;
+                diagnostic::report(diag, {file_id, tok,
+                    "'" + name + "' is not a template alias.", {}});
+                return t;
+            }
+            auto ti = tree.templates.find(id);
+            if (ti == tree.templates.end()) return t;   // registration errored
+            std::vector<std::string> const& params = ti->second.def->type_params;
+            std::vector<widen::TypeRef> args = widen::get(t).slots;
+            if (args.size() != params.size()) {
+                reported = true;
+                diagnostic::report(diag, {file_id, tok,
+                    "Wrong number of template arguments for '" + name + "': "
+                    + std::to_string(params.size()) + " expected, got "
+                    + std::to_string(args.size()) + ".", {}});
+                return t;
+            }
+            if (visiting.count(name)) {
+                reported = true;
+                diagnostic::report(diag, {file_id, tok,
+                    "Type alias '" + name + "' is part of a cycle.", {}});
+                return t;
+            }
+            visiting.insert(name);
+            for (auto& a : args)
+                a = resolveTypeRef(tree, a, visiting, reported, file_id, tok, diag);
+            widen::TypeRef pat =
+                ensureAliasTemplatePattern(tree, id, visiting, reported, diag);
+            visiting.erase(name);
+            if (pat == widen::kNoType) return t;
+            return widen::internAlias(label,
+                widen::substituteTypeParams(pat, params, args));
         }
         case F::kSlid: {
             // A template TYPE-PARAMETER marker is terminal — it is not a scope name
@@ -299,6 +367,14 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 && tree.entries[id].kind == parse::EntryKind::kNamespace
                 && tree.entries[id].slids_type != widen::kNoType;
             if (!is_alias && !is_enum) return t;   // unknown name / real slid — leave
+            // A TEMPLATE alias used BARE — its entry would expand to the raw
+            // pattern (marker leaves). The use must supply arguments.
+            if (is_alias && tree.entries[id].is_template) {
+                reported = true;
+                diagnostic::report(diag, {file_id, tok,
+                    "Template alias '" + name + "' needs a type-argument list.", {}});
+                return t;
+            }
             if (visiting.count(name)) {
                 reported = true;
                 diagnostic::report(diag, {file_id, tok,
@@ -445,7 +521,9 @@ int registerDeclarator(parse::Tree& tree, DeclInfo const& d, BindMode mode,
     return id;
 }
 
-// Register `alias Name = Type;` as a kAlias entry in the current frame.
+// Register `alias Name = Type;` as a kAlias entry in the current frame. An alias
+// TEMPLATE (`alias Ref<T> = T^;`) additionally records its def in tree.templates;
+// its target stays raw until the pattern builds.
 void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     bool reused;
     DeclInfo d;
@@ -456,6 +534,7 @@ void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     d.kind = parse::EntryKind::kAlias;
     d.track_body_local = false;
     s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare, reused, diag);
+    if (!s.type_params.empty()) registerAliasTemplate(tree, s);
 }
 
 // Collect every name declared as a function anywhere in the tree (scope-blind).
@@ -769,6 +848,15 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
         && tree.entries[id].slids_type != widen::kNoType;
     bool is_member_alias = id >= 0
         && tree.entries[id].kind == parse::EntryKind::kAlias;
+    // A member TEMPLATE alias used BARE — its slids_type is the marker PATTERN,
+    // which must never leak through the plain-alias path. The use needs arguments
+    // (the argumented form routes through resolveTypeRef's kTmplUse arm instead).
+    if (is_member_alias && tree.entries[id].is_template) {
+        diagnostic::report(diag, {file_id, toks.back(),
+            "Template alias '" + base + "' needs a type-argument list.", {}});
+        reported = true;
+        return "";
+    }
     bool is_member_class = id >= 0
         && tree.entries[id].kind == parse::EntryKind::kClass;
     if (!is_enum_facet && !is_member_alias && !is_member_class) {
@@ -781,6 +869,96 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
     widen::TypeRef under = widen::deepStrip(tree.entries[id].slids_type);
     if (out_handle) *out_handle = under;
     return widen::spell(under);
+}
+
+int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
+                             int file_id, int tok, diagnostic::Sink& diag,
+                             bool& reported) {
+    if (name.find(':') == std::string::npos) return resolveName(tree, name);
+    std::vector<std::string> segs;
+    bool global = false;
+    std::size_t i = 0;
+    if (name.size() >= 2 && name[0] == ':' && name[1] == ':') { global = true; i = 2; }
+    std::string cur;
+    for (; i < name.size(); ++i) {
+        if (name[i] == ':') { segs.push_back(cur); cur.clear(); }
+        else cur.push_back(name[i]);
+    }
+    segs.push_back(cur);
+    std::vector<std::string> path(segs.begin(), segs.end() - 1);
+    std::vector<int> ptoks(path.size(), tok);
+    int frame = resolveNamespaceSegments(tree, path, ptoks, global, file_id, diag);
+    if (frame < 0) { reported = true; return -1; }
+    return findMemberLive(tree, frame, segs.back());
+}
+
+// Bind each template type parameter as an alias to its kTmplParamDefId marker
+// leaf in the CURRENT (caller-pushed) frame. Shared by function-template and
+// alias-template pattern building.
+void bindTypeParamMarkers(parse::Tree& tree, parse::Node const& node) {
+    for (std::size_t i = 0; i < node.type_params.size(); i++) {
+        parse::Entry a;
+        a.kind = parse::EntryKind::kAlias;
+        a.name = node.type_params[i];
+        a.slids_type = widen::internSlid(node.type_params[i], {},
+                                         widen::kTmplParamDefId);
+        a.file_id = node.file_id;
+        a.tok = i < node.type_param_toks.size() ? node.type_param_toks[i]
+                                                : node.name_tok;
+        parse::addEntry(tree, std::move(a));
+    }
+}
+
+widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
+                                          std::set<std::string>& visiting,
+                                          bool& reported, diagnostic::Sink& diag) {
+    auto it = tree.templates.find(entry_id);
+    if (it == tree.templates.end()) return widen::kNoType;
+    parse::TemplateInfo& ti = it->second;
+    if (ti.pattern_built) return tree.entries[entry_id].slids_type;
+    ti.pattern_built = true;   // set BEFORE resolving: a self-reference re-enters
+                               // and must not rebuild (the cycle check reports it)
+    parse::Node& node = *ti.def;
+    // NEVER hold an Entry& across this build — bindTypeParamMarkers and the
+    // recursive resolution addEntry, and tree.entries may REALLOCATE (the entry
+    // is re-indexed at each touch instead; this was a dangling-write bug).
+    std::string alias_name = tree.entries[entry_id].name;
+    // The alias's own name joins the cycle set for the build, so a self-
+    // referential target (`alias Cyc<T> = Cyc<T>^;`) reports the CYCLE, not an
+    // unknown-type fallout. (Erased only if inserted here — a use-site arm may
+    // already hold it.)
+    bool inserted = visiting.insert(alias_name).second;
+    parse::pushFrame(tree);
+    bindTypeParamMarkers(tree, node);
+    widen::TypeRef pat = resolveTypeRef(tree, node.return_type, visiting, reported,
+                                        node.file_id, node.name_tok, diag);
+    parse::popFrame(tree);
+    if (inserted) visiting.erase(alias_name);
+    if (!reported) requireKnownType(tree, pat, node.file_id, node.name_tok, diag);
+    tree.entries[entry_id].slids_type = pat;
+    return pat;
+}
+
+// Mark an alias decl carrying a template-list as an ALIAS TEMPLATE: flag its
+// entry, record the def node in tree.templates. The target stays raw on the
+// entry until ensureAliasTemplatePattern builds the pattern (lazily at the first
+// use, or at the scope's validate point — whichever comes first).
+void registerAliasTemplate(parse::Tree& tree, parse::Node& node) {
+    if (node.resolved_entry_id < 0) return;
+    tree.entries[node.resolved_entry_id].is_template = true;
+    parse::TemplateInfo ti;
+    ti.def = &node;
+    tree.templates[node.resolved_entry_id] = std::move(ti);
+}
+
+// The validate-point wrapper: build (and thereby check) the pattern now.
+void validateAliasTemplate(parse::Tree& tree, parse::Node& node,
+                           diagnostic::Sink& diag) {
+    if (node.resolved_entry_id < 0) return;
+    std::set<std::string> visiting;
+    bool reported = false;
+    ensureAliasTemplatePattern(tree, node.resolved_entry_id, visiting, reported,
+                               diag);
 }
 
 // ---- Namespace registration -------------------------------------------------
@@ -1035,6 +1213,11 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
         if (!m || m->kind != parse::Kind::kAliasDecl) continue;
         if (isQualified(*m) && m->return_type != widen::kNoType) continue;  // remote member
         if (m->resolved_entry_id < 0) continue;   // a duplicate — skipped at NAMES
+        // A member alias TEMPLATE builds its PATTERN (node target stays pristine).
+        if (!m->type_params.empty()) {
+            validateAliasTemplate(tree, *m, diag);
+            continue;
+        }
         resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
         tree.entries[m->resolved_entry_id].slids_type = m->return_type;
     }
@@ -3411,6 +3594,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // Function-scope value alias: register in the body frame, then
             // validate the target (forward refs within a body aren't pre-scanned).
             registerAlias(tree, s, diag);
+            // A body-scope alias TEMPLATE builds its PATTERN here (this is its
+            // natural scope point); the node's own target stays pristine.
+            if (!s.type_params.empty()) {
+                validateAliasTemplate(tree, s, diag);
+                return Completion::Normal;
+            }
             // A const-expression dim in the alias TARGET (`alias V = int[N]`) —
             // resolve in the body frame so constfold folds + bakes + refreshes it.
             for (auto& d : s.dim_exprs) {
@@ -4245,17 +4434,7 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
 void resolveTemplatePatterns(parse::Tree& tree, parse::Node& node, int entry_id,
                              diagnostic::Sink& diag) {
     parse::pushFrame(tree);
-    for (std::size_t i = 0; i < node.type_params.size(); i++) {
-        parse::Entry a;
-        a.kind = parse::EntryKind::kAlias;
-        a.name = node.type_params[i];
-        a.slids_type = widen::internSlid(node.type_params[i], {},
-                                         widen::kTmplParamDefId);
-        a.file_id = node.file_id;
-        a.tok = i < node.type_param_toks.size() ? node.type_param_toks[i]
-                                                : node.name_tok;
-        parse::addEntry(tree, std::move(a));
-    }
+    bindTypeParamMarkers(tree, node);
     std::vector<widen::TypeRef> ptypes;
     for (auto& p : node.params) {
         if (!p) continue;
@@ -4856,6 +5035,7 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
         e.tok = m->name_tok;
         e.owner_ns_frame = frame;
         m->resolved_entry_id = parse::addEntry(tree, std::move(e));
+        if (!m->type_params.empty()) registerAliasTemplate(tree, *m);
     }
     // Value members — const + function/method. Entries carry PROVISIONAL signature
     // types (resolveScopeTypes resolves them); a method's param_types includes the
@@ -5393,9 +5573,11 @@ void collectByValueClasses(widen::TypeRef ft, std::vector<widen::TypeRef>& out) 
             for (widen::TypeRef sl : widen::get(s).slots) collectByValueClasses(sl, out);
             break;
         // A pointer / iterator field breaks the size cycle; primitives carry none;
-        // alias was stripped; none/void/anyptr can't be a by-value class.
+        // alias was stripped; none/void/anyptr can't be a by-value class. An
+        // unresolved template-alias use never survives resolve to reach here.
         case F::kPointer: case F::kIterator: case F::kPrimitive:
         case F::kVoid: case F::kAnyptr: case F::kAlias: case F::kConst: case F::kNone:
+        case F::kTmplUse:
             break;   // kConst can't reach here — strip() peeled it above
     }
 }
@@ -6554,10 +6736,16 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (parse::Node* c : all_classes) checkClassByValueAcyclic(tree, *c, diag);
 
     // Pass 1a-alias-validate — now that enums, namespaces, and classes exist,
-    // validate each alias target (an alias may name any of them).
+    // validate each alias target (an alias may name any of them). An alias
+    // TEMPLATE builds (and thereby checks) its PATTERN instead — the node's
+    // own target stays pristine.
     for (auto& ch : program->children) {
         if (ch && ch->kind == parse::Kind::kAliasDecl
             && ch->return_type != widen::kNoType && !isFuncAlias(tree, *ch)) {
+            if (!ch->type_params.empty()) {
+                validateAliasTemplate(tree, *ch, diag);
+                continue;
+            }
             resolveDeclType(tree, ch->return_type, ch->file_id, ch->tok, diag);
         }
     }

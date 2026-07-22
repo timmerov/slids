@@ -160,6 +160,7 @@ std::string llvmForRef(widen::TypeRef ref) {
         case widen::Type::Form::kConst:
             return llvmForRef(t.underlying);   // const is erased at the IR level
         case widen::Type::Form::kNone:
+        case widen::Type::Form::kTmplUse:   // expanded at resolve; never lowers
             break;   // not lowerable (kNone = no type reached codegen)
     }
     assert(false && "llvmForRef: classify let through an unknown type");

@@ -344,6 +344,28 @@ struct Parser {
                 type += segs[i];
             }
             if (seg_toks) *seg_toks = std::move(toks);
+            // A TEMPLATE-ALIAS USE `Name<type-args>` — the args parsed by this
+            // very parser, appended canonically (", ") so the spelling round-trips
+            // through widen::intern. SINGLE LEVEL only: a nested use's `>>` is one
+            // unsplit right-shift token and errors at the expect below (deferred
+            // with the closer-splitting todo item).
+            if (peek().kind == token::Kind::kLt) {
+                advance();   // <
+                type += "<";
+                while (true) {
+                    std::string arg = parseType(nullptr, TopDim::Consume, nullptr);
+                    if (arg.empty()) return "";
+                    type += arg;
+                    if (peek().kind == token::Kind::kComma) {
+                        advance();   // ,
+                        type += ", ";
+                        continue;
+                    }
+                    break;
+                }
+                if (!expect(token::Kind::kGt, ">")) return "";
+                type += ">";
+            }
         } else {
             error("Expected type.");
             return "";
@@ -587,9 +609,10 @@ struct Parser {
             if (peekKind(o + 1) != token::Kind::kIdentifier) return false;
             o += 2;
         }
-        // The core type is the qualified name; a type-suffix run then the name
-        // decides decl-vs-statement (shared with the tuple-led gate below).
-        return typeSuffixesThenName(o);
+        // The core type is the qualified name, plus an optional template-alias
+        // arg group (`Ref<int> p`); a type-suffix run then the name decides
+        // decl-vs-statement (shared with the tuple-led gate below).
+        return typeSuffixesThenName(skipTypeArgGroup(o));
     }
 
     // From offset `o`, skip a MAXIMAL run of type-suffix tokens and return the offset
@@ -628,6 +651,38 @@ struct Parser {
     // `p^ = v` stay statements. Consumes nothing.
     bool typeSuffixesThenName(int o) const {
         return peekKind(skipTypeSuffixes(o)) == token::Kind::kIdentifier;
+    }
+
+    // From offset `o` at a `<`, skip a TEMPLATE-ALIAS USE's type-arg group — type-
+    // vocabulary tokens up to the matching depth-0 `>` — returning the offset just
+    // past it; returns `o` unchanged when the tokens don't form one (a comparison
+    // never reads as a type). Single level: a nested `<` is not a group (deferred
+    // with the `>>` closer split). Consumes nothing. The decl-recognition twin of
+    // looksLikeTemplateCallArgs.
+    int skipTypeArgGroup(int o) const {
+        if (peekKind(o) != token::Kind::kLt) return o;
+        int q = o + 1;
+        int depth = 0;      // ( ) and [ ] nesting inside an argument
+        bool any = false;
+        for (int guard = 64; guard > 0; guard--) {
+            token::Kind k = peekKind(q);
+            if (k == token::Kind::kGt && depth == 0) return any ? q + 1 : o;
+            if (k == token::Kind::kLParen || k == token::Kind::kLBracket) depth++;
+            else if (k == token::Kind::kRParen || k == token::Kind::kRBracket) {
+                if (--depth < 0) return o;
+            } else if (k == token::Kind::kIdentifier || isTypeStart(k)
+                       || k == token::Kind::kColon || k == token::Kind::kColonColon
+                       || k == token::Kind::kBitXor || k == token::Kind::kXorXor
+                       || k == token::Kind::kConst || k == token::Kind::kComma
+                       || (k == token::Kind::kIntLiteral && depth > 0)) {
+                // type vocabulary — keep scanning
+            } else {
+                return o;
+            }
+            any = true;
+            q++;
+        }
+        return o;
     }
 
     // Pure lookahead: does a leading `(...)` form a tuple-TYPE declaration —
@@ -1127,7 +1182,14 @@ struct Parser {
             advance();   // sizeof
             if (!expect(token::Kind::kLParen, "(")) return nullptr;
             auto node = newNodeAt(parse::Kind::kSizeofExpr, sz_file, sz_tok);
-            if (isTypeStart(peek().kind)) {
+            // A TYPE operand: a primitive keyword — or a template-alias USE
+            // (`sizeof(Ref<int>)`), whose identifier head would otherwise read as
+            // an expression (an identifier operand normally stays an expression;
+            // resolve decides `sizeof(Integer)` by what the name means).
+            bool use_shape = peek().kind == token::Kind::kIdentifier
+                && peekKind(1) == token::Kind::kLt
+                && skipTypeArgGroup(1) != 1;
+            if (isTypeStart(peek().kind) || use_shape) {
                 Declarator d;
                 if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
                                      /*allow_qualified=*/false, nullptr, d)) {
@@ -2471,6 +2533,34 @@ struct Parser {
         node->qualifier = std::move(segs);
         node->qualifier_toks = std::move(toks);
         node->global_qualified = global;
+        // A TEMPLATE-LIST — `alias Ref<T> = T^;`. Identifiers only, like a
+        // function template's.
+        if (peek().kind == token::Kind::kLt) {
+            advance();   // <
+            while (true) {
+                if (peek().kind != token::Kind::kIdentifier) {
+                    error("Expected a type-parameter name in the template list.");
+                    return nullptr;
+                }
+                for (std::size_t i = 0; i < node->type_params.size(); i++) {
+                    if (node->type_params[i] == peek().text) {
+                        error("Duplicate type-parameter name '" + peek().text + "'.");
+                        return nullptr;
+                    }
+                }
+                node->type_params.push_back(peek().text);
+                node->type_param_toks.push_back(pos);
+                advance();   // the name
+                if (peek().kind == token::Kind::kComma) { advance(); continue; }
+                break;
+            }
+            if (!expect(token::Kind::kGt, ">")) return nullptr;
+            if (peek().kind != token::Kind::kEquals) {
+                errorAt(node->name_tok, "A template alias needs a target type "
+                        "('alias Name<T> = type;').");
+                return nullptr;
+            }
+        }
         if (peek().kind == token::Kind::kEquals) {
             advance();   // =
             Declarator d;
@@ -3299,12 +3389,15 @@ struct Parser {
             // `<ident> <ident>` is a declaration with an identifier type
             // (alias / class / enum), e.g. `Integer x = 42;`.
             if (next == token::Kind::kIdentifier) return parseVarDeclStmt();
-            // A qualified (`Space:Dir x`) or pointer-suffixed (`Integer^ ref`,
-            // `Integer[] iter`) identifier-typed decl. looksLikeQualifiedTypedDecl
-            // accepts an optional `^` / `[]` suffix before the var name.
+            // A qualified (`Space:Dir x`), pointer-suffixed (`Integer^ ref`,
+            // `Integer[] iter`), or template-alias-use (`Ref<int> p`) identifier-
+            // typed decl. looksLikeQualifiedTypedDecl accepts an optional type-arg
+            // group and `^` / `[]` suffixes before the var name; a `<` that is a
+            // COMPARISON fails the gate and falls to the name-led statement.
             if ((next == token::Kind::kColon
                  || next == token::Kind::kBitXor
-                 || next == token::Kind::kLBracket)
+                 || next == token::Kind::kLBracket
+                 || next == token::Kind::kLt)
                 && looksLikeQualifiedTypedDecl()) return parseVarDeclStmt();
             // ident, `ident:...` (qualified) -> assign / aug-assign / call.
             return parseNameLedStmt();
@@ -3623,6 +3716,7 @@ struct Parser {
                 o++;
                 while (peekKind(o) == token::Kind::kColon
                        && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+                o = skipTypeArgGroup(o);   // a template-alias return type `Ref<int> f(`
             } else {
                 return false;
             }
@@ -3750,6 +3844,7 @@ struct Parser {
             o++;
             while (peekKind(o) == token::Kind::kColon
                    && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+            o = skipTypeArgGroup(o);   // a template-alias-typed global `Ref<int> p = …`
         } else {
             return false;
         }

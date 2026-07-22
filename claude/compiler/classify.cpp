@@ -2516,7 +2516,8 @@ bool patternHasTypeParam(widen::TypeRef t) {
         case F::kNone:
         case F::kPrimitive:
         case F::kVoid:
-        case F::kAnyptr:   return false;
+        case F::kAnyptr:
+        case F::kTmplUse:  return false;   // uses are expanded before patterns build
     }
     return false;
 }
@@ -2607,8 +2608,9 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
             case F::kVoid:
             case F::kAnyptr:
             case F::kSlid:
-            case F::kAlias:   // peeled above; unreachable
-            case F::kConst:   // peeled above; unreachable
+            case F::kAlias:    // peeled above; unreachable
+            case F::kConst:    // peeled above; unreachable
+            case F::kTmplUse:  // expanded before patterns build; unreachable
                 return widen::deepStrip(pat) == widen::deepStrip(arg);
         }
         return false;

@@ -1870,11 +1870,26 @@ Phase 9 — templates
     entry is never name-live (a recursive call must re-unify via the TEMPLATE,
     else a re-binding recursion pins T), and instances splice AFTER their def,
     never at list end (a statement after `return` breaks trailing-return
-    analysis). Full design: readme.txt FUNCTION TEMPLATES. Canon
+    analysis). Full design: readme.txt TEMPLATES. Canon
     test/template/tmpl_function.sl. Deferred out of this landing: overload
     participation, `>>` closer split, unchecked uninstantiated bodies (todo).
+  * template aliases                                LANDED (single-TU) 2026-07-21
+    The type-level twin, on the same marker machinery. A USE `Ref<int>` is a
+    structured widen form minted from the spelling (parseType owns `Name<args>`,
+    so every type position takes it; exact spell/intern round-trip); the TARGET
+    resolves once into a marker-leaf PATTERN (at the scope's validate point, or
+    lazily at an earlier first use); resolveTypeRef's use-arm resolves arguments
+    in the USE'S scope — where an enclosing function template's T lives, so
+    `dump<T>(DumpTuple<T>^)` composes for free — substitutes, and wraps the
+    expansion in a transparent kAlias labeled AS WRITTEN (##type says `Ref<int>`).
+    Nothing downstream of resolve changed beyond switch arms. HARD-WON:
+    tree.entries is a VECTOR — an Entry& held across addEntry dangles (the
+    pattern write hit freed memory; nondeterministic, then a segfault); re-index
+    at every touch. Full design: readme.txt TEMPLATES. Canon
+    test/template/tmpl_alias.sl. Deferred: NESTED TEMPLATE TYPES (todo umbrella:
+    `>>` split + gate angle-depth).
   * template classes (plain, derived, with nested members)
-  * template methods / template aliases (canon stubs tmpl_method.sl, tmpl_alias.sl)
+  * template methods (canon stub tmpl_method.sl)
   * post-compile-pre-link stage (`--instantiate` aggregation)
 
 

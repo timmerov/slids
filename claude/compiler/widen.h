@@ -47,6 +47,11 @@ struct Type {
         kTuple,       // (T0, T1, ...) — slots (lands with tuples)
         kAlias,       // a transparent named type — name + underlying; sees through
                       // to underlying for all structural queries, spells as name
+        kTmplUse,     // an UNRESOLVED template-alias use `Name<arg, ...>` — name +
+                      // args in `slots`. Minted by intern from the parse-side
+                      // spelling; resolve's resolveTypeRef expands it (substitute
+                      // the alias template's pattern) into a transparent kAlias,
+                      // so one never survives resolve. Unknown/sizeless until then.
         kConst,       // a const-qualified type — wraps `underlying`. Transparent for
                       // every structural query / matching (strip/deepStrip/classify
                       // see through it; no enforcement yet), but VISIBLE in spell()
@@ -204,6 +209,14 @@ TypeRef removeConst(TypeRef ref);
 // iterator BOTH the pointer itself and its pointee (deep: `const (const int)^`), a
 // primitive / class the leaf. So not-mutability survives index / slot / deref.
 TypeRef deepConst(TypeRef ref);
+
+// Replace every template TYPE-PARAMETER marker leaf (a kSlid with def_id ==
+// kTmplParamDefId) whose name appears in `names` with the corresponding handle
+// from `args`, rebuilding composite wrappers. An alias wrapper whose underlying
+// changes drops its (now-lying) label. The one substitution walk behind
+// alias-template expansion.
+TypeRef substituteTypeParams(TypeRef ref, std::vector<std::string> const& names,
+                             std::vector<TypeRef> const& args);
 
 // Peel any alias layers, returning the first non-alias handle (the underlying
 // structure). Predicates that switch on form() use this to see through aliases.

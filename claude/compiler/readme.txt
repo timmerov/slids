@@ -858,8 +858,9 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   one (as with functions). Cross-TU CLASS model precedent: readme-classes.txt.
 
 
-FUNCTION TEMPLATES (single-TU; the guiding principle: an instance is an ORDINARY
-function, and a template is a BOOKMARK into the machinery that would have made one)
+TEMPLATES — FUNCTIONS + ALIASES (single-TU; the guiding principle: an instance /
+expansion is ORDINARY output, and a template is a BOOKMARK into the machinery that
+would have made it)
 
   A template (`T add<T>(T a, T b) { ... }`) registers as an ordinary kFunction entry
   (Entry.is_template) in whatever frame declares it — file, namespace, or block — so
@@ -921,9 +922,42 @@ function, and a template is a BOOKMARK into the machinery that would have made o
   symbolFor's existing scheme (`_Z3addIiE...`); a block instance keeps the nested
   `name.<entry-id>` symbol. Inside an instance the parameter is a transparent
   kAlias (T -> the bound type): structural queries see through it, ##type says "T".
-  DEFERRED: method/class/alias templates, overload participation, `>>` closer
-  splitting (todo), cross-TU + `--instantiate` (plan Phase 9). Canon
-  test/template/tmpl_function.sl.
+
+  ALIAS TEMPLATES (`alias Ref<T> = T^;`) are the type-level twin, on the same marker
+  machinery. A USE `Name<args>` is a structured widen Form (kTmplUse: name + args in
+  slots), minted by intern from the spelling parseType builds (`Name<a1, a2>`, exact
+  spell/intern round-trip; internTupleSlots and the use-splitter track ANGLE depth so
+  a use inside a tuple type splits right). parseType owns the form, so every type
+  position takes it — var decl, param, return, tuple slot, field, alias target, cast,
+  new, global; sizeof needed its own gate (an identifier operand normally stays an
+  expression). The decl-recognition lookaheads (and the statement dispatcher's
+  trigger list) skip an optional `<...>` group between the identifier and the suffix
+  run — a `<` that is a comparison fails the group scan and stays a statement.
+  DEFINITION registers a kAlias entry (is_template, riding tree.templates — def +
+  pattern_built only; a type expansion needs no snapshot); the TARGET resolves ONCE
+  into a marker-leaf PATTERN — at each scope's validate point, or LAZILY at a first
+  use that precedes it (class fields resolve in the TYPES phase, before file-scope
+  alias-validate). A use expands in resolveTypeRef's kTmplUse arm: arguments resolve
+  in the USE'S scope — which is where an enclosing function template's T lives, so
+  `dump<T>(DumpTuple<T>^)` composes with zero cross-template code — then
+  widen::substituteTypeParams swaps the markers and the expansion wraps in a
+  transparent kAlias labeled with the use AS WRITTEN (##type says `Ref<int>`, or
+  `Ref<Integer>` through an alias argument; two labels, one underlying). A kTmplUse
+  never survives resolve. Diagnostics: bare use (unqualified kSlid arm AND
+  resolveQualifiedType — without the qualified guard the plain-alias path leaks the
+  marker pattern), wrong arity, args on a non-template, cycles via the alias
+  `visiting` set (ensure inserts its OWN name during the build; a mutually-recursive
+  pair is caught at the validate pass with no use needed).
+
+  HARD-WON: tree.entries is a VECTOR — an Entry& held across addEntry DANGLES
+  (bindTypeParamMarkers and recursive resolution both addEntry; the pattern write
+  went to freed memory: nondeterministic wrong types, then a segfault). Re-index
+  tree.entries at every touch; never hold an Entry& across resolution. The
+  entries-vector twin of the arena's retired capture-before-intern discipline.
+
+  DEFERRED: method/class templates, overload participation, NESTED TEMPLATE TYPES
+  (`>>` + gate angle-depth — one umbrella todo entry), cross-TU + `--instantiate`
+  (plan Phase 9). Canon test/template/tmpl_function.sl + tmpl_alias.sl.
 
 
 STAGE FILES (.h / .cpp pairs)

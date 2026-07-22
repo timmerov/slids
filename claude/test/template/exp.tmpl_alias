@@ -1,0 +1,23 @@
+tmpl_alias.sl:94: int64 x = 64
+tmpl_alias.sl:97: uint32 y = 99
+Ref<int> p type: Ref<int>
+ip type: IP deref = 10
+rp = 20
+pf = 3 2.5 (Pair2<int, float>)
+rt = 10 5
+h = 10 7
+dq = 20
+bq = 10
+lp = 20
+tmpl_alias.sl:135: uint32 y = 99
+ari type: Ref<Integer2> deref = 10
+cst = 10
+sz = 8 8
+ra = 10 20
+np = 10
+gref = 64
+kf = 9 (K<float>)
+pc = 10 hi
+sec = 8
+thru = 41
+look = 15

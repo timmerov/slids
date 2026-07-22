@@ -552,6 +552,11 @@ struct TemplateInfo {
     bool nested = false;               // defined in a body scope: instances are nested
                                        // functions (captures, lifted symbol)
     bool snapshot_taken = false;
+    // ALIAS templates (`alias Ref<T> = T^;`) ride this same table (keyed by their
+    // kAlias entry): only `def` and this flag are used — a type expansion needs no
+    // snapshot or instance list. True once the TARGET has been resolved into the
+    // entry's PATTERN (lazily at first use, or at the validate pass).
+    bool pattern_built = false;
     std::vector<int> frame_id_stack;
     std::vector<std::size_t> frame_entries_start_stack;
     std::vector<int> live_entry_ids;

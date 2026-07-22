@@ -1385,6 +1385,7 @@ widen::TypeRef refreshAliasType(widen::TypeRef t, std::vector<AliasRefresh> cons
             return widen::internConst(refreshAliasType(widen::get(t).underlying, rs));
         case F::kPrimitive: case F::kVoid: case F::kAnyptr:
         case F::kSlid: case F::kNone:
+        case F::kTmplUse:   // an unresolved use lives only in a pristine template body
             return t;
     }
     return t;
@@ -1457,6 +1458,7 @@ widen::TypeRef bakeDimsWalk(widen::TypeRef t,
                 bakeDimsWalk(widen::get(t).underlying, des, idx, failed, diag));
         case F::kPrimitive: case F::kVoid: case F::kAnyptr:
         case F::kSlid: case F::kNone:
+        case F::kTmplUse:
             return t;   // no dims here
     }
     return t;

@@ -280,7 +280,9 @@ std::string tupleSlotToken(widen::TypeRef ref) {
         case widen::Type::Form::kVoid:
         case widen::Type::Form::kAnyptr:
         case widen::Type::Form::kAlias:
-        case widen::Type::Form::kConst: return symbolSafe(widen::spell(ref));
+        case widen::Type::Form::kConst:
+        case widen::Type::Form::kTmplUse:   // expanded at resolve; never reaches desugar
+            return symbolSafe(widen::spell(ref));
     }
     return symbolSafe(widen::spell(ref));   // unreachable; every Form is handled above
 }
@@ -321,10 +323,12 @@ std::string mangleType(widen::TypeRef ref) {
         }
         // A LEAF — primitive or alias: `u<len><spelling>`, a vendor source-name that is
         // injective (int vs int32, int32 vs an Integer alias) and demangler-readable.
-        // (kConst is handled above; it never reaches here.)
+        // (kConst is handled above; it never reaches here. A kTmplUse is expanded at
+        // resolve and never reaches desugar; the vendor spelling is its safe fallback.)
         case widen::Type::Form::kNone:
         case widen::Type::Form::kPrimitive:
-        case widen::Type::Form::kAlias: break;
+        case widen::Type::Form::kAlias:
+        case widen::Type::Form::kTmplUse: break;
     }
     std::string s = symbolSafe(widen::spell(ref));
     return "u" + std::to_string(s.size()) + s;

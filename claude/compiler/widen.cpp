@@ -647,6 +647,7 @@ bool isKnownType(TypeRef ref) {
             return true;
         }
         case Type::Form::kNone:      return false;   // no type
+        case Type::Form::kTmplUse:   return false;   // unresolved use
     }
     return false;
 }
@@ -668,6 +669,7 @@ bool hasInPlaceClass(TypeRef ref) {
         case Type::Form::kPointer:                 // a reference leaf may be null
         case Type::Form::kIterator:
         case Type::Form::kNone:
+        case Type::Form::kTmplUse:                 // unresolved use
             return false;
     }
     return false;
@@ -710,6 +712,7 @@ static long long typeByteAlign(TypeRef ref) {
         case Type::Form::kVoid:
         case Type::Form::kSlid:
         case Type::Form::kNone:
+        case Type::Form::kTmplUse:
             return -1;
     }
     return -1;
@@ -753,6 +756,7 @@ long long typeByteSize(TypeRef ref) {
         case Type::Form::kVoid:
         case Type::Form::kSlid:
         case Type::Form::kNone:
+        case Type::Form::kTmplUse:
             return -1;
     }
     return -1;
@@ -807,6 +811,11 @@ std::string structKey(Type const& t) {
                                    : t.def_id < 0 ? ""
                                    : "#" + std::to_string(t.def_id));
         case F::kAlias:     return "L" + t.name + "=" + std::to_string(t.underlying);
+        case F::kTmplUse: {
+            std::string k = "U" + t.name + "<";
+            for (TypeRef s : t.slots) k += std::to_string(s) + ",";
+            return k + ">";
+        }
         case F::kConst:     return "C" + std::to_string(t.underlying);
         case F::kPointer:   return "p" + std::to_string(t.pointee);
         case F::kIterator:  return "i" + std::to_string(t.pointee);
@@ -860,7 +869,9 @@ bool splitArraySuffix(std::string const& s, std::string& base, std::vector<int>&
 
 // Split the interior of a tuple spelling on top-level (paren-depth-0) commas,
 // interning each slot. spell() emits ", " between slots, so a leading space is
-// trimmed. Nested tuples raise the depth so their inner commas don't split.
+// trimmed. Nested tuples raise the depth so their inner commas don't split, and
+// a template-alias use's angle group (`Pair2<int, float>`) likewise shields its
+// commas ('<'/'>' appear in a type spelling only as that group).
 std::vector<TypeRef> internTupleSlots(std::string const& inner) {
     std::vector<TypeRef> slots;
     if (inner.empty()) return slots;
@@ -872,12 +883,36 @@ std::vector<TypeRef> internTupleSlots(std::string const& inner) {
     std::size_t start = 0;
     for (std::size_t i = 0; i < inner.size(); i++) {
         char c = inner[i];
-        if (c == '(') depth++;
-        else if (c == ')') depth--;
+        if (c == '(' || c == '<') depth++;
+        else if (c == ')' || c == '>') depth--;
         else if (c == ',' && depth == 0) { push(start, i); start = i + 1; }
     }
     push(start, inner.size());
     return slots;
+}
+
+// A template-alias USE spelling: `Name<args>` (possibly qualified `Ns:Name<...>`)
+// with the trailing `>` closing a depth-0 `<`. Suffixed forms (`Ref<int>^`) were
+// already peeled by intern's right-to-left decomposition, so a candidate ENDS
+// with the closer. Sets name + the arg spellings' interior on success.
+bool splitTmplUse(std::string const& s, std::string& name, std::string& inner) {
+    if (s.empty() || s.back() != '>') return false;
+    int depth = 0;
+    for (std::size_t i = s.size(); i-- > 0; ) {
+        char c = s[i];
+        if (c == '>' || c == ')') depth++;
+        else if (c == '(') depth--;
+        else if (c == '<') {
+            depth--;
+            if (depth == 0) {
+                if (i == 0) return false;                 // no name
+                name = s.substr(0, i);
+                inner = s.substr(i + 1, s.size() - i - 2);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -930,11 +965,18 @@ TypeRef intern(std::string const& s) {
         t.form = Type::Form::kAnyptr;
     } else {
         TypeKind k;
+        std::string use_name, use_inner;
         if (classify(s, k)) {
             t.form = Type::Form::kPrimitive;
             t.cat = k.cat;
             t.bits = k.bits;
             t.name = s;
+        } else if (splitTmplUse(s, use_name, use_inner)) {
+            // A template-alias USE `Name<args>` — args intern like tuple slots
+            // (top-level commas; parens/angles shield). resolve expands it.
+            t.form = Type::Form::kTmplUse;
+            t.name = use_name;
+            t.slots = internTupleSlots(use_inner);
         } else {
             t.form = Type::Form::kSlid;   // a named slid/class type
             t.name = s;
@@ -1086,6 +1128,7 @@ TypeRef removeConst(TypeRef ref) {
         case Type::Form::kAnyptr:
         case Type::Form::kSlid:
         case Type::Form::kNone:
+        case Type::Form::kTmplUse:
             return ref;
     }
     return ref;
@@ -1124,6 +1167,7 @@ TypeRef deepConst(TypeRef ref) {
         case Type::Form::kVoid:
         case Type::Form::kAnyptr:
         case Type::Form::kNone:
+        case Type::Form::kTmplUse:
             return ref;
     }
     return ref;
@@ -1157,6 +1201,7 @@ TypeRef deepStrip(TypeRef ref) {
         case Type::Form::kAnyptr:
         case Type::Form::kSlid:
         case Type::Form::kNone:
+        case Type::Form::kTmplUse:   // unresolved use — structure unknown; leave
             return ref;
     }
     return ref;
@@ -1196,8 +1241,76 @@ std::string spell(TypeRef ref) {
             }
             return s + ")";
         }
+        case Type::Form::kTmplUse: {
+            std::string s = t.name + "<";
+            for (std::size_t i = 0; i < t.slots.size(); i++) {
+                if (i) s += ", ";
+                s += spell(t.slots[i]);
+            }
+            return s + ">";
+        }
     }
     return "";
+}
+
+TypeRef substituteTypeParams(TypeRef ref, std::vector<std::string> const& names,
+                             std::vector<TypeRef> const& args) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kSlid: {
+            if (t.def_id != kTmplParamDefId) return ref;
+            for (std::size_t i = 0; i < names.size() && i < args.size(); i++) {
+                if (names[i] == t.name) return args[i];
+            }
+            return ref;
+        }
+        case Type::Form::kPointer: {
+            TypeRef p = t.pointee;
+            return internPointer(substituteTypeParams(p, names, args));
+        }
+        case Type::Form::kIterator: {
+            TypeRef p = t.pointee;
+            return internIterator(substituteTypeParams(p, names, args));
+        }
+        case Type::Form::kArray: {
+            TypeRef e = t.elem;
+            std::vector<int> d = t.dims;
+            return internArray(substituteTypeParams(e, names, args), d);
+        }
+        case Type::Form::kTuple: {
+            std::vector<TypeRef> s = t.slots;
+            for (TypeRef& x : s) x = substituteTypeParams(x, names, args);
+            return internTuple(s);
+        }
+        case Type::Form::kConst: {
+            TypeRef u = t.underlying;
+            return internConst(substituteTypeParams(u, names, args));
+        }
+        case Type::Form::kAlias: {
+            // An alias whose underlying changes would carry a lying label — drop it.
+            std::string nm = t.name;
+            TypeRef u = t.underlying;
+            TypeRef su = substituteTypeParams(u, names, args);
+            return su == u ? ref : su;
+            (void)nm;
+        }
+        case Type::Form::kTmplUse: {
+            std::vector<TypeRef> s = t.slots;
+            std::string nm = t.name;
+            for (TypeRef& x : s) x = substituteTypeParams(x, names, args);
+            Type n;
+            n.form = Type::Form::kTmplUse;
+            n.name = nm;
+            n.slots = std::move(s);
+            return internStruct(std::move(n));
+        }
+        case Type::Form::kNone:
+        case Type::Form::kPrimitive:
+        case Type::Form::kVoid:
+        case Type::Form::kAnyptr:
+            return ref;
+    }
+    return ref;
 }
 
 Type const& get(TypeRef ref) {
@@ -1248,6 +1361,10 @@ bool typeSelfTest(std::ostream& out) {
         // const array, const tuple, const element.
         "const int", "const char[]", "const int^", "(const int)^",
         "(const char)[]", "const int[3]", "const (int, bool)", "(const int)[3]",
+        // template-alias uses (single level): bare, suffixed, qualified, as a
+        // tuple slot, multi-arg (the angle group shields its comma).
+        "Ref<int>", "Ref<int>^", "Deep:RT<int>", "Pair2<int, float>",
+        "(Pair2<int, float>, int)", "Ref<int[3]>",
     };
     bool ok = true;
     int n = 0;
