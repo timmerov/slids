@@ -15,7 +15,7 @@ usage:
     function-name < type-list > ( argument-list )
     function-name ( argument-list )
 
-the type-list may be inferred from context.
+the type-list may be inferred from the argument-list.
 */
 
 /*
@@ -39,8 +39,8 @@ a template owns its name: colliding with any same-name function or template in
 the same scope is a compile error (overload participation deferred). templates
 declare anywhere a function does — file scope, namespaces, blocks.
 
-deferred: >> closer splitting (needs class templates), overloads, methods,
-classes, aliases, cross-tu.
+deferred: nested template types (the >> closer split), overloads, methods,
+classes, cross-tu. alias templates landed: see tmpl_alias.sl.
 */
 
 T add<T>(T a, T b) {
@@ -112,6 +112,19 @@ Pair(int x_ = 0, int y_ = 0) {
 }
 T addc<T>(T^ a, T^ b) {
     return a^ + b^;
+}
+
+/* a template declared inside a METHOD body: its instances are nested functions
+   in the method's scope, so the body may even read the enclosing object's
+   FIELD through the ordinary field machinery. (In the class BODY itself a
+   template is a template METHOD — rejected at parse, tmpl_method's item.) */
+Tally(int c_ = 0) {
+    int bump(int by) {
+        T scale<T>(T v) { return v * 2; }
+        T plus_c<T>(T v) { return v + c_; }
+        c_ = plus_c(scale(by));
+        return c_;
+    }
 }
 
 /* self-recursion: the instance is memoized BEFORE its body resolves, so the
@@ -237,6 +250,11 @@ int32 main() {
     Pair p2(10, 20);
     Pair p3 = addc(^p1, ^p2);
     __println("p3 = " + p3.x_ + " " + p3.y_);
+
+    /* templates inside a method body: memoized across calls, field readable. */
+    Tally ty(10);
+    __println("ty1 = " + ty.bump(3));
+    __println("ty2 = " + ty.bump(4));
 
     /* self-recursion within one instance. */
     int fa = fact(5); __println("fa = " + fa);

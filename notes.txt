@@ -1,6 +1,11 @@
 
 agenda:
-imports
+template classes.
+imported templates.
+
+claude wants to do this when import templates land.
+  3. Out-of-line definition (T Class:m<T>(...)) — deferred; the current parse rejection stays but its message gets scoped to the out-of-line form.
+
 
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.

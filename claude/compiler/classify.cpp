@@ -2636,69 +2636,17 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
     return false;
 }
 
-// A call whose resolved callee is a TEMPLATE: bind the type-list — explicit
-// (resolved at resolve, arity-checked there) or unified from the context-free
-// argument types — then instantiate on demand and retarget the call at the
-// instance entry. A NEW instance runs the remaining stages here (constfold +
-// signature + body classification); a memo hit retargets and returns. True =
-// retargeted (the caller falls through to the ordinary call path); false = an
-// error was reported.
-bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
-    int tid = s.resolved_entry_id;
-    auto it = tree.templates.find(tid);
-    if (it == tree.templates.end()) return false;
-    std::vector<std::string> const& names = it->second.def->type_params;
-    std::vector<widen::TypeRef> bound(names.size(), widen::kNoType);
-    if (!s.tmpl_args.empty()) {
-        if (s.tmpl_args.size() != names.size()) return false;   // reported at resolve
-        // Canonicalize (drop alias/const layers) so an explicit `add<Integer>` and an
-        // inferred call binding the same underlying type share ONE instance.
-        for (std::size_t i = 0; i < names.size(); i++)
-            bound[i] = widen::removeConst(widen::deepStrip(s.tmpl_args[i]));
-    } else {
-        // Infer from the arguments: classify them context-free (a literal binds the
-        // type a typeless declaration would give it), then unify per parameter.
-        for (auto& ch : s.children) {
-            if (ch) inferExpr(tree, *ch, widen::kNoType, diag);
-        }
-        parse::Entry const& te = tree.entries[tid];
-        std::string conflict;
-        for (std::size_t i = 0; i < s.children.size(); i++) {
-            if (!s.children[i]) continue;
-            if (i >= te.param_types.size()) break;   // arity reported at resolve
-            widen::TypeRef at = s.children[i]->inferred_type;
-            if (at == widen::kNoType) return false;   // the argument itself errored
-            if (!unifyTypePattern(te.param_types[i], at, names, bound, conflict)) {
-                if (!conflict.empty()) {
-                    diagnostic::report(diag, {s.file_id, s.tok,
-                        "Conflicting bindings for template parameter '" + conflict
-                        + "' in the call to '" + s.name
-                        + "'; write the type list explicitly.", {}});
-                } else {
-                    diagnostic::report(diag, {s.file_id, s.tok,
-                        "Argument " + std::to_string(i + 1) + " of '" + s.name
-                        + "' (type '" + widen::spellOrEmpty(at)
-                        + "') does not match the template pattern '"
-                        + widen::spellOrEmpty(te.param_types[i]) + "'.", {}});
-                }
-                return false;
-            }
-        }
-        for (std::size_t i = 0; i < bound.size(); i++) {
-            if (bound[i] == widen::kNoType) {
-                diagnostic::report(diag, {s.file_id, s.tok,
-                    "Cannot infer template parameter '" + names[i]
-                    + "' in the call to '" + s.name
-                    + "'; write the type list explicitly.", {}});
-                return false;
-            }
-        }
-    }
+// Depth-guard + instantiate + run the late stages over a NEW instance (a memo hit
+// just returns the existing entry). Shared by the free-function and method template
+// call paths. Returns the instance entry id, or -1 (error reported).
+int instantiateAndClassify(parse::Tree& tree, int tid,
+                           std::vector<widen::TypeRef> const& bound,
+                           parse::Node& s, diagnostic::Sink& diag) {
     if (tree.tmpl_instantiation_depth >= 64) {
         diagnostic::report(diag, {s.file_id, s.tok,
             "Template instantiation depth limit exceeded (a runaway recursive "
             "instantiation?).", {}});
-        return false;
+        return -1;
     }
     bool created = false;
     parse::Node* inst = nullptr;
@@ -2706,8 +2654,8 @@ bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& d
     int iid = resolve::instantiateTemplate(tree, tid, bound, s.file_id, s.tok,
                                            diag, created, inst);
     if (iid >= 0 && created && inst && !diagnostic::hasErrors(diag)) {
-        // The instance is an ordinary resolved function now — run the stages its
-        // late birth skipped, in pipeline order.
+        // The instance is an ordinary resolved function/method now — run the
+        // stages its late birth skipped, in pipeline order.
         constfold::runOn(tree, *inst, diag);
         if (!diagnostic::hasErrors(diag)) {
             classifyFunctionSignature(tree, *inst, diag);
@@ -2719,13 +2667,87 @@ bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& d
         }
     }
     tree.tmpl_instantiation_depth--;
-    if (iid < 0) {
-        if (!diagnostic::hasErrors(diag)) {
-            diagnostic::report(diag, {s.file_id, s.tok,
-                "Cannot instantiate template '" + s.name + "'.", {}});
-        }
-        return false;
+    if (iid < 0 && !diagnostic::hasErrors(diag)) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "Cannot instantiate template '" + s.name + "'.", {}});
     }
+    return iid;
+}
+
+// Bind a template call's type-list into `bound`: the EXPLICIT list (canonicalized —
+// alias/const layers dropped — so `add<Integer>` and an inferred `add(1, 2)` share
+// one instance), or UNIFICATION of the argument types (classified context-free — a
+// literal binds the type a typeless declaration would give) against the pattern
+// params, `recv_offset` skipping a method's receiver slot. The ONE binder behind
+// the free-function and method template call paths (and an operator's, when those
+// land — an operator is a method). `err_tok` attributes the diagnostics. False =
+// reported (explicit-arity mismatches are the caller's to report — a free
+// function's was already checked at resolve).
+bool bindTemplateTypeList(parse::Tree& tree, parse::Node& s, int tid,
+                          std::vector<parse::Node*> const& args, int recv_offset,
+                          int err_tok, diagnostic::Sink& diag,
+                          std::vector<widen::TypeRef>& bound) {
+    auto it = tree.templates.find(tid);
+    if (it == tree.templates.end()) return false;
+    std::vector<std::string> const& names = it->second.def->type_params;
+    bound.assign(names.size(), widen::kNoType);
+    if (!s.tmpl_args.empty()) {
+        if (s.tmpl_args.size() != names.size()) return false;   // caller reports
+        for (std::size_t i = 0; i < names.size(); i++)
+            bound[i] = widen::removeConst(widen::deepStrip(s.tmpl_args[i]));
+        return true;
+    }
+    for (auto* a : args) if (a) inferExpr(tree, *a, widen::kNoType, diag);
+    // A COPY of the patterns — never hold entry internals across resolution.
+    std::vector<widen::TypeRef> pats = tree.entries[tid].param_types;
+    std::string conflict;
+    for (std::size_t i = 0; i < args.size(); i++) {
+        if (!args[i]) continue;
+        std::size_t p = i + (std::size_t)recv_offset;
+        if (p >= pats.size()) break;   // arity reported by the ordinary path
+        widen::TypeRef at = args[i]->inferred_type;
+        if (at == widen::kNoType) return false;   // the argument itself errored
+        if (!unifyTypePattern(pats[p], at, names, bound, conflict)) {
+            if (!conflict.empty()) {
+                diagnostic::report(diag, {s.file_id, err_tok,
+                    "Conflicting bindings for template parameter '" + conflict
+                    + "' in the call to '" + s.name
+                    + "'; write the type list explicitly.", {}});
+            } else {
+                diagnostic::report(diag, {s.file_id, err_tok,
+                    "Argument " + std::to_string(i + 1) + " of '" + s.name
+                    + "' (type '" + widen::spellOrEmpty(at)
+                    + "') does not match the template pattern '"
+                    + widen::spellOrEmpty(pats[p]) + "'.", {}});
+            }
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < bound.size(); i++) {
+        if (bound[i] == widen::kNoType) {
+            diagnostic::report(diag, {s.file_id, err_tok,
+                "Cannot infer template parameter '" + names[i]
+                + "' in the call to '" + s.name
+                + "'; write the type list explicitly.", {}});
+            return false;
+        }
+    }
+    return true;
+}
+
+// A call whose resolved callee is a TEMPLATE: bind the type-list, instantiate on
+// demand, retarget the call at the instance entry. True = retargeted (the caller
+// falls through to the ordinary call path); false = an error was reported.
+bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    int tid = s.resolved_entry_id;
+    std::vector<parse::Node*> args;
+    for (auto& ch : s.children) args.push_back(ch.get());
+    std::vector<widen::TypeRef> bound;
+    if (!bindTemplateTypeList(tree, s, tid, args, /*recv_offset=*/0, s.tok, diag,
+                              bound))
+        return false;   // explicit-arity mismatch was reported at resolve
+    int iid = instantiateAndClassify(tree, tid, bound, s, diag);
+    if (iid < 0) return false;
     s.resolved_entry_id = iid;
     return true;
 }
@@ -4946,8 +4968,9 @@ std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
             parse::Entry const& e = tree.entries[id];
             if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == fr
-                && e.name == name && (e.defined || e.is_pure || e.is_external))
-                frame.push_back((int)id);
+                && e.name == name && (e.defined || e.is_pure || e.is_external)
+                && e.tmpl_args.empty())   // an INSTANCE shares its template's name —
+                frame.push_back((int)id); //   never a candidate (the template is)
         }
         if (frame.empty()) continue;   // name absent here — fall through to a base frame
         // Collapse a decl+def PAIR: in the defining TU a header declaration and its local
@@ -4973,6 +4996,33 @@ std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
         break;   // most-derived frame with the name shadows its bases
     }
     return cands;
+}
+
+// A method call whose sole same-name member is a TEMPLATE: bind the type-list
+// through the shared binder (receiver slot skipped) and instantiate. Returns the
+// instance entry id (-1 = reported); the caller proceeds exactly as with a plain
+// single method (defaults, conversions, the coercion retry — all the existing
+// member machinery).
+int classifyTemplateMethodCall(parse::Tree& tree, parse::Node& s, int tid,
+                               std::vector<parse::Node*> const& uargs,
+                               diagnostic::Sink& diag) {
+    std::vector<widen::TypeRef> bound;
+    if (!bindTemplateTypeList(tree, s, tid, uargs, /*recv_offset=*/1, s.name_tok,
+                              diag, bound)) {
+        // A method's explicit-arity mismatch has no resolve-side check (the callee
+        // binds off the receiver's class, only known here) — report it now.
+        auto it = tree.templates.find(tid);
+        if (it != tree.templates.end() && !s.tmpl_args.empty()
+            && s.tmpl_args.size() != it->second.def->type_params.size()
+            && !diagnostic::hasErrors(diag)) {
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "Wrong number of template arguments for '" + s.name + "': "
+                + std::to_string(it->second.def->type_params.size())
+                + " expected, got " + std::to_string(s.tmpl_args.size()) + ".", {}});
+        }
+        return -1;
+    }
+    return instantiateAndClassify(tree, tid, bound, s, diag);
 }
 
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
@@ -5009,8 +5059,23 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     std::vector<parse::Node*> uargs;
     for (std::size_t i = 1; i < s.children.size(); i++) uargs.push_back(s.children[i].get());
 
+    // Explicit type arguments only make sense on a template method.
+    if (!s.tmpl_args.empty()
+        && !(cands.size() == 1 && tree.entries[cands[0]].is_template)) {
+        diagnostic::report(diag, {s.file_id, s.name_tok,
+            "'" + s.name + "' is not a template method.", {}});
+        return;
+    }
+
     int methodId;
-    if (cands.size() == 1) {
+    if (cands.size() == 1 && tree.entries[cands[0]].is_template) {
+        // A TEMPLATE method (its collision rule makes it the sole member of its
+        // name): bind the type-list — explicit, or unified from the USER args
+        // against the patterns behind the receiver slot — instantiate, and
+        // proceed exactly as with a plain single method.
+        methodId = classifyTemplateMethodCall(tree, s, cands[0], uargs, diag);
+        if (methodId < 0) return;
+    } else if (cands.size() == 1) {
         // Single method: keep the detailed arity error (a RANGE now — defaults make
         // trailing user params optional). Args are type-checked below with context.
         parse::Entry const& m = tree.entries[cands[0]];
@@ -7194,10 +7259,13 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
     // method overload-set registration allows the same name, so detect it here.
     // Reported on the later one (lower id = earlier). Both must be DEFINITIONS: a
     // forward decl + a definition is a redeclaration, not a duplicate.
-    if (is_method && e.defined) {
+    if (is_method && e.defined && !e.is_template && e.tmpl_args.empty()) {
         for (int id = 0; id < (int)tree.entries.size(); id++) {
             if (id >= fn.resolved_entry_id) break;
             parse::Entry const& q = tree.entries[id];
+            // A template and its instances share the name (and, for a T-free
+            // parameter list, the very signature) BY DESIGN — never a duplicate.
+            if (q.is_template || !q.tmpl_args.empty()) continue;
             if (q.kind == parse::EntryKind::kFunction && q.defined
                 && q.owner_ns_frame == e.owner_ns_frame
                 && q.name == e.name && q.param_types == e.param_types) {

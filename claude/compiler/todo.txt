@@ -9,6 +9,9 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
+  * external namespace template defintion fails.
+    Space { } T Space:template<T>(T x) { return x; }
+
   * SWAP WITH AN INC/DEC OPERAND — `x++ <--> y++` (and `--`) now parses, but the swap
     rejects it with "a swap operand must be an lvalue": the operand is the incremented
     form, not a plain one. Store / assignment targets already handle this — the bump lifts

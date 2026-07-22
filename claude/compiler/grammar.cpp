@@ -1397,35 +1397,24 @@ struct Parser {
                 continue;
             }
             // A call `(args)` on a bare name — a function call OR a `Class(args)`
-            // construction. INSIDE the loop so the chain continues after it:
+            // construction — or its TEMPLATE twin `name<type-list>(args)`, behind
+            // the lookahead gate that decides `<` between a type-list and a
+            // comparison (the comparison reading of `a<b>(c)` requires
+            // parentheses). INSIDE the loop so the chain continues after it:
             // `Class(a).field`, `fn(x)[i]`, `Class(a).method()` (the `.method`
             // becomes a kFieldExpr whose `(` is handled by the FieldExpr arm below).
-            if (peek().kind == token::Kind::kLParen
-                && base->kind == parse::Kind::kIdentExpr) {
+            if (base->kind == parse::Kind::kIdentExpr
+                && (peek().kind == token::Kind::kLParen
+                    || (peek().kind == token::Kind::kLt
+                        && looksLikeTemplateCallArgs(0)))) {
                 auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
                 node->name = std::move(base->name);
                 node->name_tok = base->name_tok;
                 node->qualifier = std::move(base->qualifier);
                 node->qualifier_toks = std::move(base->qualifier_toks);
                 node->global_qualified = base->global_qualified;
-                advance();   // (
-                if (!parseCallArgs(*node)) return nullptr;
-                base = std::move(node);
-                continue;
-            }
-            // A TEMPLATE CALL `name<type-list>(args)` — the explicit-type-arg form. The
-            // lookahead gate decides `<` between a type-list and a comparison (the
-            // comparison reading of `a<b>(c)` requires parentheses).
-            if (peek().kind == token::Kind::kLt
-                && base->kind == parse::Kind::kIdentExpr
-                && looksLikeTemplateCallArgs(0)) {
-                auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
-                node->name = std::move(base->name);
-                node->name_tok = base->name_tok;
-                node->qualifier = std::move(base->qualifier);
-                node->qualifier_toks = std::move(base->qualifier_toks);
-                node->global_qualified = base->global_qualified;
-                if (!parseTemplateCallArgs(*node)) return nullptr;
+                if (peek().kind == token::Kind::kLt
+                    && !parseTemplateCallArgs(*node)) return nullptr;
                 advance();   // (
                 if (!parseCallArgs(*node)) return nullptr;
                 base = std::move(node);
@@ -1436,13 +1425,20 @@ struct Parser {
             // kMethodCallStmt (receiver = the field base, name = the method);
             // classify binds it against the receiver's class and desugar lowers it
             // to the lifted-symbol call exactly like the statement form.
-            if (peek().kind == token::Kind::kLParen
-                && base->kind == parse::Kind::kFieldExpr) {
+            if (base->kind == parse::Kind::kFieldExpr
+                && (peek().kind == token::Kind::kLParen
+                    || (peek().kind == token::Kind::kLt
+                        && looksLikeTemplateCallArgs(0)))) {
+                // `recv.method(args)` — or the TEMPLATE METHOD twin
+                // `recv.m<type-list>(args)`, behind the same lookahead gate as the
+                // free-function form.
                 auto call = newNodeAt(parse::Kind::kMethodCallStmt,
                                       base->file_id, base->tok);
                 call->name = std::move(base->name);
                 call->name_tok = base->name_tok;
                 call->children.push_back(std::move(base->children[0]));   // receiver
+                if (peek().kind == token::Kind::kLt
+                    && !parseTemplateCallArgs(*call)) return nullptr;
                 advance();   // (
                 if (!parseCallArgs(*call)) return nullptr;                // args -> [1..]
                 base = std::move(call);
@@ -2102,17 +2098,25 @@ struct Parser {
                    || peek().kind == token::Kind::kPlusPlus
                    || peek().kind == token::Kind::kMinusMinus
                    || (peek().kind == token::Kind::kLParen
-                       && lhs->kind == parse::Kind::kFieldExpr)) {
-                if (peek().kind == token::Kind::kLParen) {
-                    // `recv.method(args)` — a method call. INSIDE the loop so the
-                    // by-value call RESULT keeps chaining (`d.next().get();`): the
-                    // method name is the field step, its base is the receiver.
-                    advance();   // (
+                       && lhs->kind == parse::Kind::kFieldExpr)
+                   || (peek().kind == token::Kind::kLt
+                       && lhs->kind == parse::Kind::kFieldExpr
+                       && looksLikeTemplateCallArgs(0))) {
+                if (peek().kind == token::Kind::kLParen
+                    || peek().kind == token::Kind::kLt) {
+                    // `recv.method(args)` — a method call — or its template twin
+                    // `recv.m<type-list>(args)` (the gate in the loop head decided
+                    // the `<` is a type-list, not a comparison). INSIDE the loop so
+                    // the by-value call RESULT keeps chaining (`d.next().get();`):
+                    // the method name is the field step, its base is the receiver.
                     auto call = newNodeAt(parse::Kind::kMethodCallStmt,
                                           stmt_file, stmt_tok);
                     call->name = lhs->name;
                     call->name_tok = lhs->name_tok;
                     call->children.push_back(std::move(lhs->children[0]));  // recv
+                    if (peek().kind == token::Kind::kLt
+                        && !parseTemplateCallArgs(*call)) return nullptr;
+                    advance();   // (
                     if (!parseCallArgs(*call)) return nullptr;     // args -> [1..]
                     lhs = std::move(call);
                     continue;
@@ -2751,10 +2755,6 @@ struct Parser {
             }
             auto m = parseFunctionDef();
             if (!m) return nullptr;
-            if (!m->type_params.empty()) {
-                errorAt(m->name_tok, "A template method is not supported yet.");
-                return nullptr;
-            }
             // A QUALIFIED method (`int Sib:go()`) is an EXTERNAL def targeting ANOTHER
             // class — relocateOutOfLineMembers splices the receiver for its TARGET, so
             // this class's receiver must NOT be added here (else a doubled `_$recv`).
@@ -4021,6 +4021,12 @@ struct Parser {
                                           "destructor.");
                         return nullptr;
                     }
+                    // A TEMPLATE method dispatches statically — its instances are
+                    // unbounded, and vtable slots are not.
+                    if (!m->type_params.empty()) {
+                        errorAt(m->name_tok, "A template method may not be virtual.");
+                        return nullptr;
+                    }
                     m->is_virtual = true;
                 }
                 // A pure method (`= delete`) only exists as a virtual — it is the empty
@@ -4248,8 +4254,11 @@ struct Parser {
                 break;
             }
             if (!expect(token::Kind::kGt, ">")) return nullptr;
+            // The out-of-line form (`T Class:m<T>(...)`, `T Space:f<T>(...)`) is
+            // deferred — a template's body must sit at its declaration.
             if (!qualifier.empty()) {
-                errorAt(name_tok, "A template method is not supported yet.");
+                errorAt(name_tok,
+                        "An out-of-line template definition is not supported yet.");
                 return nullptr;
             }
         }

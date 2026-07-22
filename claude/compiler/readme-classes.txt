@@ -9,14 +9,18 @@ representation, assignment relation, tuples/arrays, stage/product files); cross-
 to those name "readme.txt <SECTION>".
 
 TEMPLATES × CLASSES, current state (readme.txt TEMPLATES owns the design):
-a function template's T may bind a class — through REFERENCE parameters (`T^`), since
-an instance obeys the normal "a class parameter must be a reference" rule (a by-value
-`T` binding a class errors like any class value parameter); the instance's body
-dispatches class operators and returns class values through the ordinary machinery.
-A class BODY may declare an ALIAS template (used qualified `Box:BR<int>` or bare by
-the class's own members), and a class field may be typed by a template-alias use.
-A TEMPLATE METHOD is rejected at parse ("A template method is not supported yet"),
-and class templates don't exist yet — both are plan.txt Phase 9 remainder.
+a class body may declare a TEMPLATE METHOD (`T scaled<T>(T v) { ... }`) — it owns its
+name within the class (no overload set), shadows and is shadowed across the base
+chain like any method (the `Base:m(v)` bypass spelling pins a base's template through
+a shadow), may not be `virtual`, and its instances leave a virtual class's vtable
+undisturbed. A templated HOOK is unspellable (`_`/`~` take no template-list). A
+function template's T may bind a class — through REFERENCE parameters (`T^`), the
+normal "a class parameter must be a reference" rule; instance bodies dispatch class
+operators and return class values through the ordinary machinery, methods included.
+A class BODY may also declare an ALIAS template (used qualified `Box:BR<int>` or
+bare by the class's own members), and a class field may be typed by a template-alias
+use. CLASS templates themselves don't exist yet — plan.txt Phase 9 remainder; the
+out-of-line template-definition form is deferred with the cross-TU bundle.
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)

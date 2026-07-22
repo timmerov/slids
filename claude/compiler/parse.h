@@ -552,6 +552,11 @@ struct TemplateInfo {
     bool nested = false;               // defined in a body scope: instances are nested
                                        // functions (captures, lifted symbol)
     bool snapshot_taken = false;
+    // A METHOD template's body resolves under the class-member context strings
+    // resolveScopeBodies sets around members (base-qualified refs read them);
+    // captured with the scope snapshot, installed at instantiation.
+    std::string current_class_name;
+    std::string current_base_name;
     // ALIAS templates (`alias Ref<T> = T^;`) ride this same table (keyed by their
     // kAlias entry): only `def` and this flag are used — a type expansion needs no
     // snapshot or instance list. True once the TARGET has been resolved into the

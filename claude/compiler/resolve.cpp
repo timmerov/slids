@@ -432,6 +432,32 @@ void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
     if (!reported) requireKnownType(tree, type_ref, file_id, tok, diag);
 }
 
+// Resolve a call node's explicit template type-list in the current scope. Shared
+// by the free-function call path and both method-call arms (a method's callee —
+// and its arity — bind later, at classify, off the receiver's class).
+void resolveTmplArgs(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    for (std::size_t i = 0; i < s.tmpl_args.size(); i++) {
+        int t_tok = i < s.tmpl_arg_toks.size() ? s.tmpl_arg_toks[i] : s.tok;
+        resolveDeclType(tree, s.tmpl_args[i], s.file_id, t_tok, diag);
+    }
+}
+
+// Any same-scope TEMPLATE function entry of this name — a member scope when
+// `owner` >= 0, else file scope. The collision rule's search, shared by the
+// file-scope function pass and the scope-member registration.
+int findSameScopeTemplate(parse::Tree const& tree, std::string const& name,
+                          int owner) {
+    for (std::size_t idx = 0; idx < tree.entries.size(); idx++) {
+        parse::Entry const& pe = tree.entries[idx];
+        if (pe.kind != parse::EntryKind::kFunction || !pe.is_template
+            || pe.name != name) continue;
+        if (owner >= 0 ? pe.owner_ns_frame == owner
+                       : (pe.owner_ns_frame < 0 && pe.parent_frame_id == 0))
+            return (int)idx;
+    }
+    return -1;
+}
+
 // The ONE place an entry's KIND is named for a diagnostic ("Cannot assign to <noun>
 // 'x'"). A named enum is a kNamespace whose slids_type carries the underlying type; a
 // plain namespace's is kNoType — so an enum reads "enum", not "namespace". Shared by
@@ -1969,7 +1995,9 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kMethodCallStmt:
             // A method-call EXPRESSION (`x = obj.method(args)`). Resolve the
             // receiver (children[0]) and args (children[1..]); classify binds the
-            // method against the receiver's class and stamps the return type.
+            // method against the receiver's class and stamps the return type. An
+            // explicit template type-list resolves here, in the call's scope.
+            resolveTmplArgs(tree, e, diag);
             for (auto& ch : e.children)
                 if (ch) resolveExpr(tree, *ch, diag, unevaluated);
             return;
@@ -2348,10 +2376,7 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
                     + " expected, got " + std::to_string(s.tmpl_args.size()) + ".", {}});
                 return;
             }
-            for (std::size_t i = 0; i < s.tmpl_args.size(); i++) {
-                int t_tok = i < s.tmpl_arg_toks.size() ? s.tmpl_arg_toks[i] : s.tok;
-                resolveDeclType(tree, s.tmpl_args[i], s.file_id, t_tok, diag);
-            }
+            resolveTmplArgs(tree, s, diag);
         }
         // A bare call that resolved to a sibling class METHOD (its owner frame is
         // a class). Author-speak: an implicit `self.method(args)`. Compiler-speak:
@@ -3574,7 +3599,9 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             if (tryResolveBaseQualifier(tree, s, diag, /*unevaluated=*/false))
                 return Completion::Normal;
             // Resolve the receiver (children[0]) and the args (children[1..]); the
-            // method name binds in classify against the receiver's class type.
+            // method name binds in classify against the receiver's class type. An
+            // explicit template type-list resolves here, in the call's scope.
+            resolveTmplArgs(tree, s, diag);
             for (auto& ch : s.children)
                 if (ch) resolveExpr(tree, *ch, diag);
             return Completion::Normal;
@@ -4471,6 +4498,8 @@ void snapshotTemplate(parse::Tree& tree, parse::Node& node) {
     ti.open_ns_frames = tree.open_ns_frames;
     ti.initialized_locals = tree.initialized_locals;
     ti.assigned_arrays = tree.assigned_arrays;
+    ti.current_class_name = tree.current_class_name;   // a METHOD template's body
+    ti.current_base_name = tree.current_base_name;     //   resolves as a member's
     ti.snapshot_taken = true;
     // A BLOCK template's body may CAPTURE host locals — but it resolves only at
     // instantiation, after the host's unused-local sweep. Mark every host local
@@ -5053,12 +5082,20 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
         } else if (m->kind == parse::Kind::kFunctionDef
                 || m->kind == parse::Kind::kFunctionDecl) {
             if (m->name == "_$ctor" || m->name == "_$dtor") continue;
-            // A NAMESPACE-member TEMPLATE (a class-body template was rejected at
-            // parse): register with this frame as owner; the scope-bodies pass
-            // takes its snapshot.
+            // A MEMBER template — namespace function or class METHOD (the parse
+            // spliced `_$recv` into a method's params like any method): register
+            // with this frame as owner; patterns resolve in the TYPES phase, the
+            // scope-bodies pass takes the snapshot.
             if (!m->type_params.empty()) {
                 registerTemplateFunction(tree, *m, &node.children,
                                          /*nested=*/false, frame, diag);
+                continue;
+            }
+            // A TEMPLATE member owns its name — a plain same-name method is a
+            // collision, not an overload (the reverse direction is checked by
+            // registerTemplateFunction itself).
+            if (int tmpl = findSameScopeTemplate(tree, m->name, frame); tmpl >= 0) {
+                reportTemplateNameClash(diag, *m, tree.entries[tmpl]);
                 continue;
             }
             // A same-name CLASS METHOD is an OVERLOAD — register it as a separate
@@ -6549,12 +6586,16 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     auto sv_init   = std::move(tree.initialized_locals);
     auto sv_arrays = std::move(tree.assigned_arrays);
     auto sv_checks = std::move(tree.nested_call_checks);
+    auto sv_class  = std::move(tree.current_class_name);
+    auto sv_base   = std::move(tree.current_base_name);
     tree.frame_id_stack = ti.frame_id_stack;
     tree.frame_entries_start_stack = ti.frame_entries_start_stack;
     tree.live_entry_ids = ti.live_entry_ids;
     tree.open_ns_frames = ti.open_ns_frames;
     tree.initialized_locals = ti.initialized_locals;
     tree.assigned_arrays = ti.assigned_arrays;
+    tree.current_class_name = ti.current_class_name;
+    tree.current_base_name = ti.current_base_name;
     tree.nested_call_checks.clear();
 
     // A frame binding each type parameter as a transparent alias to its bound type —
@@ -6627,6 +6668,8 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     tree.initialized_locals = std::move(sv_init);
     tree.assigned_arrays = std::move(sv_arrays);
     tree.nested_call_checks = std::move(sv_checks);
+    tree.current_class_name = std::move(sv_class);
+    tree.current_base_name = std::move(sv_base);
 
     // Park the instance for the end-of-classify splice into its host list; hand the
     // caller the node for the remaining stages (constfold + classify).
@@ -6867,18 +6910,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             }
             // A TEMPLATE with this name owns it — a plain function is a collision,
             // not an overload.
-            {
-                int tmpl = -1;
-                for (std::size_t idx = 0; idx < tree.entries.size(); idx++) {
-                    parse::Entry const& pe = tree.entries[idx];
-                    if (pe.kind == parse::EntryKind::kFunction && pe.is_template
-                        && pe.owner_ns_frame < 0 && pe.parent_frame_id == 0
-                        && pe.name == ch->name) { tmpl = (int)idx; break; }
-                }
-                if (tmpl >= 0) {
-                    reportTemplateNameClash(diag, *ch, tree.entries[tmpl]);
-                    continue;
-                }
+            if (int tmpl = findSameScopeTemplate(tree, ch->name, /*owner=*/-1);
+                tmpl >= 0) {
+                reportTemplateNameClash(diag, *ch, tree.entries[tmpl]);
+                continue;
             }
             // No matching-signature function. A same-name NON-function entry (a
             // class / alias / enum / namespace / const) is a collision, not an

@@ -1328,6 +1328,8 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
                 if (!f) continue;
                 if (f->kind != parse::Kind::kFunctionDef
                     && f->kind != parse::Kind::kFunctionDecl) continue;
+                if (!f->type_params.empty()) continue;   // a TEMPLATE method emits no
+                                                         // code; its instances do
                 bool hook = (f->name == "_$ctor" || f->name == "_$dtor");
                 // A hook DECLARATION mints no symbol here. A hook is not a frame ENTRY at
                 // all (resolve's member loop skips `_$ctor`/`_$dtor`) — its presence lives

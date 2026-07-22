@@ -1888,8 +1888,26 @@ Phase 9 — templates
     at every touch. Full design: readme.txt TEMPLATES. Canon
     test/template/tmpl_alias.sl. Deferred: NESTED TEMPLATE TYPES (todo umbrella:
     `>>` split + gate angle-depth).
+  * template methods                                LANDED (single-TU) 2026-07-21
+    Rode the function-template machinery WHOLE — the landing was diverts plus a
+    consolidation, not new mechanisms. Registration is the same member divert
+    namespaces use (`_$recv`, spliced by the class-body parse, is a concrete slot
+    in the pattern); the scope snapshot gained the two member-context strings;
+    instances splice into the class children and lift through methodSymbol's
+    existing `I..E` mangling. ONE type-list binder (bindTemplateTypeList, with a
+    receiver offset) now backs the free-function AND method call paths — a future
+    operator template is a method call with the same binder. Rules: a template
+    method owns its name within its class; base-chain shadowing stays normal, and
+    the `Base:m<int>()` bypass pins a base's template through a shadow with zero
+    template-specific code (the receiver reframe + member walk); `virtual` is
+    rejected; templated hooks are unspellable; a virtual class's vtable is
+    undisturbed. Two funnel guards: instances never join an overload set
+    (declaredMemberOverloads) and never trip the method dup-definition check (a
+    T-free instance shares the template's exact signature by design). Full
+    design: readme.txt TEMPLATES. Canon test/template/tmpl_method.sl. Deferred:
+    out-of-line definitions (namespace flavor = agreed side quest off the
+    relocation seam; class flavor bundles with cross-TU), operator templates.
   * template classes (plain, derived, with nested members)
-  * template methods (canon stub tmpl_method.sl)
   * post-compile-pre-link stage (`--instantiate` aggregation)
 
 

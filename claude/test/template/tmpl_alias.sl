@@ -1,9 +1,17 @@
 /*
 test alias templates.
 
-    alias name < template-list > = type ;
+definition:
+
+    alias alias-name < template-list > = type ;
 
 template aliases may be declared anywhere an alias may be declared.
+
+usage:
+
+    alias-name < type-list > variable-name ;
+
+type-list is required.
 */
 
 /*

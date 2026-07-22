@@ -858,9 +858,9 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   one (as with functions). Cross-TU CLASS model precedent: readme-classes.txt.
 
 
-TEMPLATES — FUNCTIONS + ALIASES (single-TU; the guiding principle: an instance /
-expansion is ORDINARY output, and a template is a BOOKMARK into the machinery that
-would have made it)
+TEMPLATES — FUNCTIONS + ALIASES + METHODS (single-TU; the guiding principle: an
+instance / expansion is ORDINARY output, and a template is a BOOKMARK into the
+machinery that would have made it)
 
   A template (`T add<T>(T a, T b) { ... }`) registers as an ordinary kFunction entry
   (Entry.is_template) in whatever frame declares it — file, namespace, or block — so
@@ -949,15 +949,50 @@ would have made it)
   `visiting` set (ensure inserts its OWN name during the build; a mutually-recursive
   pair is caught at the validate pass with no use needed).
 
+  TEMPLATE METHODS ride the function-template machinery WHOLE — the landing was
+  diverts, not mechanisms. Registration is the same member divert namespaces use
+  (the class-body parse splices `_$recv` before it, so the receiver is just a
+  concrete slot in the pattern); patterns resolve in the TYPES phase, the snapshot
+  is taken by the scope-bodies divert and carries TWO extra strings (the
+  current_class_name / current_base_name member context); instances splice into the
+  class node's children and lift through methodSymbol -> symbolFor's `I..E`. Call
+  sites: the `(` and gated-`<` forms are ONE parse arm each (ident and field), and
+  classify has ONE type-list binder — bindTemplateTypeList(recv_offset) — behind
+  classifyTemplateCall (offset 0) and classifyTemplateMethodCall (offset 1, the
+  receiver slot never binds T); a future operator template is a method call with
+  the same binder. The retargeted call rides inferMethodCall's ordinary
+  single-method path. Two funnel guards keep instances invisible where they must
+  be: declaredMemberOverloads (the member funnel operators also read) drops
+  entries with tmpl_args, and classifyFunctionSignature's method dup-DEFINITION
+  check exempts template-ish entries — a T-free parameter list (`T fresh<T>()`)
+  gives an instance the template's exact signature BY DESIGN.
+  RULES: a template method OWNS its name within its class (no overload set, both
+  directions, checked at registration); base-chain shadowing stays normal — a
+  derived template shadows a base plain method and vice versa, and the
+  static-bypass spelling (`Base:m(v)` / `Base:m<int>(v)`) pins the BASE's template
+  through a shadow with NO template-specific code (the reframe makes the receiver
+  the base subobject; the member walk does the rest). `virtual T m<T>` is rejected
+  at the is_virtual STAMPING site in the class-body loop (parseDefinitionMember
+  returns before virtual is stamped — a check inside it never fires). A templated
+  HOOK is unspellable (`_`/`~` have no name position for a template-list — "Expected
+  '('"); a template method beside VIRTUALS leaves the vtable undisturbed. A
+  template method MAY share a FIELD's name (fields aren't frame members, so no
+  collision fires; probed correct, pinned nowhere — user's call).
+
   HARD-WON: tree.entries is a VECTOR — an Entry& held across addEntry DANGLES
   (bindTypeParamMarkers and recursive resolution both addEntry; the pattern write
   went to freed memory: nondeterministic wrong types, then a segfault). Re-index
   tree.entries at every touch; never hold an Entry& across resolution. The
   entries-vector twin of the arena's retired capture-before-intern discipline.
 
-  DEFERRED: method/class templates, overload participation, NESTED TEMPLATE TYPES
-  (`>>` + gate angle-depth — one umbrella todo entry), cross-TU + `--instantiate`
-  (plan Phase 9). Canon test/template/tmpl_function.sl + tmpl_alias.sl.
+  DEFERRED: class templates, overload participation, NESTED TEMPLATE TYPES (`>>` +
+  gate angle-depth — one umbrella todo entry), OUT-OF-LINE template definitions
+  ("An out-of-line template definition is not supported yet" — the namespace
+  flavor `T Space:f<T>` is an agreed small side quest off the relocation seam;
+  the class flavor bundles with cross-TU, where the header decl / sibling-body
+  split and `--instantiate` motivate its semantics), static-bypass beyond what
+  falls out free, cross-TU + `--instantiate` (plan Phase 9). Canon
+  test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl.
 
 
 STAGE FILES (.h / .cpp pairs)
