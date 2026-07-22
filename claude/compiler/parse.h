@@ -593,6 +593,47 @@ struct Tree {
     std::vector<PendingInstance> pending_tmpl_instances;
     int tmpl_instantiation_depth = 0;   // runaway `f<T>` -> `f<T^>` recursion guard
 
+    // CLASS-template instances. The instance's NAME/TYPES/needs phases run at the
+    // triggering use (the type must exist there), but its BODY defers: during resolve
+    // to the end-of-resolve drain (where file-scope visibility is complete), so each
+    // entry carries what the drain needs to re-enter — the template (snapshot), the
+    // bound args (the T re-bind), and the instance entry (the self-name re-bind).
+    // An instance minted AFTER resolve (a class template used inside a function
+    // template's body, instantiated at classify) resolves its body synchronously
+    // (body_resolved = true); classify runs the late stages over it. Either way the
+    // node splices into host_list after `after`, exactly like a function instance.
+    struct PendingClassInstance {
+        std::vector<std::unique_ptr<Node>>* host_list = nullptr;
+        Node* after = nullptr;              // the template definition node
+        std::unique_ptr<Node> node;
+        int tmpl_entry_id = -1;
+        int instance_entry_id = -1;
+        std::vector<widen::TypeRef> args;
+        // The instance's MEMBER entries (methods, consts, enum members, nested
+        // classes) registered at instantiation. The drain installs the
+        // template's snapshot — whose live set predates the instance — so these
+        // are re-appended there for the body's bare member references.
+        std::vector<int> member_entries;
+        bool body_resolved = false;
+    };
+    std::vector<PendingClassInstance> pending_class_instances;
+    int class_instance_total = 0;   // lifetime count across all class templates. A
+                                 // runaway that recurses through METHOD BODIES
+                                 // (`Way<T>` declaring a `Way<T^>`) reaches the
+                                 // drain FLAT — every instantiation at depth 1 —
+                                 // so the nesting guard never fires; this cap does.
+    bool resolve_done = false;   // flips at the end of resolve::run — a later class
+                                 // instantiation (from classify) resolves its body
+                                 // synchronously instead of queueing for the drain
+    // While a CLASS-template instance's phases run, the template's bare name
+    // means THE INSTANCE — the receiver (`Vec^`), a self-typed member, a
+    // self-construction. Needed as a stack (an instance body may demand another
+    // instance) and as an explicit map: a NAMESPACE-member template's name
+    // resolves through the open-ns chain to the TEMPLATE entry, over any
+    // transient frame alias.
+    struct TmplSelf { int tmpl_entry; int instance_entry; };
+    std::vector<TmplSelf> tmpl_self_stack;
+
     // Indexed by file_id (token::List file order): true if that file was pulled
     // in via `import` (a `.slh` header — token::File::imported_by != -1). Filled
     // by grammar from the token list. Consumed by resolve to mark a declaration

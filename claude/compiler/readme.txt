@@ -858,9 +858,9 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   one (as with functions). Cross-TU CLASS model precedent: readme-classes.txt.
 
 
-TEMPLATES — FUNCTIONS + ALIASES + METHODS (single-TU; the guiding principle: an
-instance / expansion is ORDINARY output, and a template is a BOOKMARK into the
-machinery that would have made it)
+TEMPLATES — FUNCTIONS + ALIASES + METHODS + CLASSES (single-TU; the guiding
+principle: an instance / expansion is ORDINARY output, and a template is a
+BOOKMARK into the machinery that would have made it)
 
   A template (`T add<T>(T a, T b) { ... }`) registers as an ordinary kFunction entry
   (Entry.is_template) in whatever frame declares it — file, namespace, or block — so
@@ -986,19 +986,93 @@ machinery that would have made it)
   template method MAY share a FIELD's name (fields aren't frame members, so no
   collision fires; probed correct, pinned nowhere — user's call).
 
+  CLASS TEMPLATES (`Vec<T>(T x_ = 0) { ... }`) keep the bookmark shape but move
+  instantiation to RESOLVE — a type must exist at the use, with layout, sizeof,
+  and synthesized hooks in hand. The DEFINITION parses via looksLikeClassDef /
+  parseClassDef accepting a `<...>` group after the leading name (the group is
+  the class's template-list when `(` follows, or an instance BASE's type-args
+  when `:` follows — `Vec<int> : Der`; base args re-parse through parseType so
+  the spelling round-trips). Registration mints a PATTERN entry: kClass +
+  is_template with NO slids_type, NO ns_frame, NO ClassInfo — nothing downstream
+  can mistake it for a real class — and the body stays pristine (every stage's
+  kClassDef walks skip non-empty type_params, mirroring the function guards). A
+  template OWNS its name: no redefinition, no re-open; incomplete (`...`),
+  template methods inside, and external members reject at registration.
+
+  A USE instantiates in resolveTypeRef's kTmplUse arm — the same arm that
+  expands alias templates, now branching on the entry's kind — plus the
+  construction spelling (`Vec<int>(args)`, resolveUserCall's construction
+  branch retargets at the instance) and sizeof's identifier gate. Arguments
+  canonicalize (removeConst∘deepStrip) for the memo, so `Vec<Integer>` IS
+  `Vec<int>`; the result wraps in a kAlias labeled AS WRITTEN for ##type.
+  Instantiation runs the registerLocalClasses FOUR-PHASE shape over a clone
+  renamed to the canonical spelling ("Vec<int>" — the def_id from the transient
+  frame disambiguates same-spelled instances of same-named templates in
+  different scopes; widen::classSymbol $-escapes `<`/`>`/`,`/space at the ONE
+  place class symbols mint): registerClassName + registerScopeNames +
+  resolveScopeTypes + checkClassCyclesAndNeeds happen AT the trigger; the BODY
+  defers to an end-of-resolve drain (after Pass 2-scope, where every snapshot
+  is taken and every file-scope body has resolved; drained bodies may enqueue
+  more instances — the loop runs to empty — then every instance node splices
+  after its template's def). A trigger AFTER resolve (a `Vec<T>` inside a
+  function-template body, instantiated at classify) resolves its body
+  synchronously and classify runs the late stages over the parked node
+  (takeResolvedClassInstances -> constfold::runOn + the class classify passes,
+  ordered BEFORE the demanding function's body so constructions read folded
+  field defaults). An early trigger (another class's field, Pass 1a-types,
+  before the snapshot mini-pass) runs on the CURRENT state — file scope
+  mid-registration, the right visibility for the type phases.
+
+  Three load-bearing mechanics, each bought with a bug:
+  - tmpl_self_stack: inside its own instantiation the template's bare name
+    means THE INSTANCE (the receiver `Vec^`, a self-typed member, a
+    self-construction) via an explicit stack consulted by the kSlid arm,
+    resolveCallTarget, and the bare-name value arm. NOT a frame alias: an
+    alias shadows the template entry, so a recursive `Node<T>` field never
+    reaches the kTmplUse machinery — and an open-ns member template outranks
+    any frame alias anyway (resolveNameDetail's namespace-first order).
+  - member liveness: the instantiation frame pops, but the instance's member
+    entries (owner_ns_frame >= 0; the T aliases rightly die) re-publish past
+    the pop/restore — findMemberLive filters on liveness — and the list rides
+    the pending instance so the DRAIN re-installs it (the template snapshot's
+    live set predates the instance; member consts and synthesized operators
+    would otherwise vanish there).
+  - the total-instantiation cap (class_instance_total, 512) behind the 64-deep
+    nesting guard: a field chain (`Bad<T>` embedding `Bad<T^>^`) nests and the
+    depth guard fires, but a METHOD-BODY chain (`Way<T>` declaring a `Way<T^>`)
+    reaches the drain FLAT — every hop at depth 1 — and without the cap the
+    queue grows forever: a compile-time hang, not an error.
+
+  By splice time an instance IS an ordinary class: every init form, the
+  transfer invariant, hooks, user + synthesized operators, virtuals (a root
+  template gets `_$vptr` from the parse; validateVirtualClass is type-driven),
+  inheritance BOTH directions, for-class, arrays, `new`, globals, and tuple
+  slots all ride existing machinery. The one derived-side fix: pushBaseChain
+  reads the `_$base` param's RESOLVED type when the base spelling ("Vec<int>")
+  is no entry name — kNoType until the TYPES phase, which is fine: only the
+  BODY phase needs the base chain open. The type-list is REQUIRED (no
+  inference from construction arguments) — enforced at the kSlid arm, the
+  construction branch, the bare-value arm, and sizeof.
+
   HARD-WON: tree.entries is a VECTOR — an Entry& held across addEntry DANGLES
   (bindTypeParamMarkers and recursive resolution both addEntry; the pattern write
   went to freed memory: nondeterministic wrong types, then a segfault). Re-index
   tree.entries at every touch; never hold an Entry& across resolution. The
   entries-vector twin of the arena's retired capture-before-intern discipline.
 
-  DEFERRED: class templates, overload participation, NESTED TEMPLATE TYPES (`>>` +
-  gate angle-depth — one umbrella todo entry), OUT-OF-LINE template METHODS (the
+  DEFERRED: overload participation, NESTED TEMPLATE TYPES (`>>` + gate
+  angle-depth — one umbrella todo entry; an ALIAS argument smuggles an instance
+  into a type-list today, `Pair<VI, int8>`), OUT-OF-LINE template METHODS (the
   class flavor bundles with cross-TU, where the header decl / sibling-body split
   and `--instantiate` motivate its semantics; the namespace flavor is LANDED,
-  above), static-bypass beyond what falls out free, cross-TU + `--instantiate`
-  (plan Phase 9). Canon test/template/tmpl_function.sl + tmpl_alias.sl +
-  tmpl_method.sl.
+  above), class-template re-open / incomplete / external members / member
+  template methods (rejected today), QUALIFIED naming of a class-template
+  instance's members from outside (`Kit<int>:Sub` has no spelling — a qualifier
+  segment is an identifier; inside the body they resolve bare) and the `Base:`
+  bypass naming an instance base (same spelling limit), static-bypass beyond
+  what falls out free, cross-TU + `--instantiate` (plan Phase 9). Canon
+  test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl +
+  tmpl_class.sl.
 
 
 STAGE FILES (.h / .cpp pairs)

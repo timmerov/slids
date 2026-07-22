@@ -15,6 +15,15 @@ BUGS
     to the phrase edge and the residual lvalue is what's written — so the fix is to give
     both swap operands that same target lowering. Small, parallels the landed store path.
 
+  * CLASS-TYPED FIELD DEFAULT WITH CONSTRUCTION ARGS ASSERTS IN CODEGEN — a field
+    whose default is a construction with arguments (`Hold(Plain f_ = Plain(7)) { }`)
+    dies at emitCall's arity assert when the default is used; plain and template
+    classes alike. The suite never writes this spelling (construct.sl blesses an
+    in-place construction only as a field ARGUMENT), so it was never caught. Either
+    lower the default like the argument form, or reject it like the other field
+    spellings — today it neither works nor errors. Found while probing class
+    templates; tmpl_class.sl avoids it (required field, constructed in place).
+
 
 UNBLOCKED FEATURES
 

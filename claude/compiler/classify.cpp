@@ -858,6 +858,10 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
             classifyStmt(tree, *m, widen::kNoType, diag, nullptr);
         } else if (m->kind == parse::Kind::kNamespaceDecl
                 || m->kind == parse::Kind::kClassDef) {
+            // A CLASS TEMPLATE is a pattern in pristine parse state — instances
+            // are typed at instantiation and spliced in resolved.
+            if (m->kind == parse::Kind::kClassDef && !m->type_params.empty())
+                continue;
             classifyScope(tree, *m, diag);
         }
     }
@@ -2636,6 +2640,28 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
     return false;
 }
 
+void classifyClassSignature(parse::Tree& tree, widen::TypeRef classType,
+                            diagnostic::Sink& diag);
+void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
+                             diagnostic::Sink& diag);
+
+// CLASS-template instances minted while a template instance's body re-entered
+// resolution (`Vec<T> w` inside a function template): resolve hands them over
+// fully body-resolved; run the late stages each skipped — in pipeline order,
+// BEFORE the demanding function's own body is typed (a construction there reads
+// the class's folded field defaults) — and park them for the final splice.
+void classifyFreshClassInstances(parse::Tree& tree, diagnostic::Sink& diag) {
+    std::vector<parse::Node*> fresh = resolve::takeResolvedClassInstances(tree);
+    for (parse::Node* c : fresh) {
+        if (!c || diagnostic::hasErrors(diag)) break;
+        constfold::runOn(tree, *c, diag);
+        if (diagnostic::hasErrors(diag)) break;
+        classifyClassSignature(tree, c->return_type, diag);
+        classifyScopeSignatures(tree, *c, diag);
+        classifyScope(tree, *c, diag);
+    }
+}
+
 // Depth-guard + instantiate + run the late stages over a NEW instance (a memo hit
 // just returns the existing entry). Shared by the free-function and method template
 // call paths. Returns the instance entry id, or -1 (error reported).
@@ -2654,6 +2680,9 @@ int instantiateAndClassify(parse::Tree& tree, int tid,
     int iid = resolve::instantiateTemplate(tree, tid, bound, s.file_id, s.tok,
                                            diag, created, inst);
     if (iid >= 0 && created && inst && !diagnostic::hasErrors(diag)) {
+        // Any class-template instances the body's resolution minted come first —
+        // the body below may construct them.
+        classifyFreshClassInstances(tree, diag);
         // The instance is an ordinary resolved function/method now — run the
         // stages its late birth skipped, in pipeline order.
         constfold::runOn(tree, *inst, diag);
@@ -7065,6 +7094,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // A nested forward declaration carries no body to type-check.
             return;
         case parse::Kind::kClassDef:
+            // A block-scope CLASS TEMPLATE is a pristine pattern — skip it.
+            if (!s.type_params.empty()) return;
             // A local class is a scope like any other: type its member bodies
             // (self-bound; field refs are already kFieldExpr from resolve), nested
             // scopes recursing through the same routine. Construction lowers at use.
@@ -7477,6 +7508,10 @@ void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
             classifyFunctionSignature(tree, *m, diag);
         } else if (m->kind == parse::Kind::kNamespaceDecl
                 || m->kind == parse::Kind::kClassDef) {
+            // A CLASS TEMPLATE is a pristine pattern — no signature to classify;
+            // its instances run these per-instance at instantiation.
+            if (m->kind == parse::Kind::kClassDef && !m->type_params.empty())
+                continue;
             // Infer this class's typeless field types BEFORE any body / construction
             // is typed (this pre-pass runs ahead of classifyScope).
             if (m->kind == parse::Kind::kClassDef)
@@ -7537,6 +7572,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // member bodies — top-level function bodies, const inits, and every nested
     // namespace/class — through the one uniform routine.
     classifyScope(tree, *program, diag);
+
+    // Any straggler class-template instances (a resolution re-entry outside the
+    // instantiateAndClassify path) get their late stages before the splice.
+    classifyFreshClassInstances(tree, diag);
 
     // Splice the template instances minted during the walk into their host lists,
     // each right AFTER its template's definition node. Deferred to here because a

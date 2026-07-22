@@ -14,6 +14,7 @@ BUILD_DIR = ../../build/test/$(DIR)
 SAMPLES = \
 	tmpl_alias \
 	tmpl_class \
+	tmpl_complete \
 	tmpl_function \
 	tmpl_method
 

@@ -25,4 +25,12 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
                         int file_id, int tok, diagnostic::Sink& diag,
                         bool& created, parse::Node*& instance_node);
 
+// CLASS-template instances minted AFTER resolve (a use inside a function
+// template's body — instantiated on demand from classify) arrive fully resolved
+// but have not seen the late stages. This hands their nodes to the caller
+// (classify runs constfold + the class classify passes over each) and parks
+// them in tree.pending_tmpl_instances for the end-of-classify splice. Empty —
+// and free — when no class instantiation happened.
+std::vector<parse::Node*> takeResolvedClassInstances(parse::Tree& tree);
+
 }  // namespace resolve

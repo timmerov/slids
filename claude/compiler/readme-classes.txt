@@ -19,9 +19,32 @@ normal "a class parameter must be a reference" rule; instance bodies dispatch cl
 operators and return class values through the ordinary machinery, methods included.
 A class BODY may also declare an ALIAS template (used qualified `Box:BR<int>` or
 bare by the class's own members), and a class field may be typed by a template-alias
-use. CLASS templates themselves don't exist yet — plan.txt Phase 9 remainder; the
-out-of-line template METHOD form (`T Class:m<T>`) is deferred with the cross-TU
-bundle (the NAMESPACE flavor is landed — readme.txt TEMPLATES).
+use.
+
+CLASS TEMPLATES are LANDED (single-TU): `Vec<T>(T x_ = 0, T y_ = 0) { body }`,
+used `Vec<int> v(3, 4)` — the type-list is REQUIRED. An INSTANCE is an ordinary
+class to this whole file's machinery: every init form (args, copy, default,
+empty slot, nameless temp, `new`, arrays, globals, tuple slots), the declarator
+funnel, the transfer invariant (user AND synthesized op=/op<--/op<-->), the
+ctor/dtor hooks with full destructor balance, user operators, for-class (both
+flavors), and inheritance BOTH directions — a class may derive from an instance
+(`Vec<int> : Der`, base members bare-visible, upcast free) and a template may
+carry a base (`Base0 : TDer<T>`); a ROOT virtual template gets `_$vptr`, and a
+plain class deriving a virtual instance dispatches through it. The instance's
+member vocabulary is a class's: consts, aliases, enums (members qualified
+`E:eOne`, the language-wide enum rule), nested (hoisted) classes, methods
+calling free templates. Bound as a type ARGUMENT, a class (or another instance,
+via an alias — `alias VI = Vec<int>; Pair<VI, int8>`) propagates its
+needs/hooks through the instance's fields transitively. Instantiation timing,
+the self-name stack, member liveness, and the runaway caps: readme.txt
+TEMPLATES. Canon test/template/tmpl_class.sl.
+RESTRICTIONS: a class template owns its name (no re-open, no redefinition); no
+incomplete (`...`), no external members, no template methods inside a template
+class (all rejected); an instance's members have NO qualified spelling from
+outside (`Kit<int>:Sub` — a qualifier segment is an identifier), and the
+`Base:` bypass cannot name an instance base for the same reason. The
+out-of-line template METHOD form (`T Class:m<T>`) stays deferred with the
+cross-TU bundle (the NAMESPACE flavor is landed — readme.txt TEMPLATES).
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)

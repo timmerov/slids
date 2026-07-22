@@ -3499,16 +3499,20 @@ struct Parser {
     // nothing.
     bool looksLikeClassDef() const {
         if (peekKind(0) != token::Kind::kIdentifier) return false;
+        // A `<...>` group after the leading name is either this class's own
+        // TEMPLATE-LIST (`Vec<T>(fields){}`) or the type-args of an instance BASE
+        // (`Vec<int> : Der(fields){}`) — skip it; the tail shape decides.
+        int start = skipTypeArgGroup(1);
         // A derived class: `Base : Derived(field-list) { body }` — the field list
-        // starts after `Base : Derived` (offset 3). A non-derived class starts at 1.
+        // starts after `Base : Derived`. A non-derived class starts after the name.
         // The derived-name slot is NOT a hook: `C:_() { }` is a qualified CTOR, not an
         // empty-field class named `_` derived from C — token-identical shapes, and the
-        // hook wins, as it does everywhere a member may be named.
-        int start = 1;
-        if (peekKind(1) == token::Kind::kColon
-            && peekKind(2) == token::Kind::kIdentifier
-            && !isHookHead(2)) {
-            start = 3;
+        // hook wins, as it does everywhere a member may be named. The derived head may
+        // carry its own template list (`Base : TDer<T>(fields){}`).
+        if (peekKind(start) == token::Kind::kColon
+            && peekKind(start + 1) == token::Kind::kIdentifier
+            && !isHookHead(start + 1)) {
+            start = skipTypeArgGroup(start + 2);
         }
         if (peekKind(start) != token::Kind::kLParen) return false;
         int depth = 0;
@@ -3933,12 +3937,66 @@ struct Parser {
     // (no author params; they must appear together). Each is parsed as a
     // kFunctionDef carrying an implicit `self` (`Name^`) param, stored in
     // node->children; resolve binds bare field names to self.
+    // A class's TEMPLATE-LIST — `Vec<T, U>(fields)`. The same shape (and the same
+    // messages) as a function template's list.
+    bool parseClassTemplateList(std::vector<std::string>& type_params,
+                                std::vector<int>& type_param_toks) {
+        advance();   // <
+        while (true) {
+            if (peek().kind != token::Kind::kIdentifier) {
+                error("Expected a type-parameter name in the template list.");
+                return false;
+            }
+            for (std::size_t i = 0; i < type_params.size(); i++) {
+                if (type_params[i] == peek().text) {
+                    error("Duplicate type-parameter name '" + peek().text + "'.");
+                    return false;
+                }
+            }
+            type_params.push_back(peek().text);
+            type_param_toks.push_back(pos);
+            advance();   // the name
+            if (peek().kind == token::Kind::kComma) { advance(); continue; }
+            break;
+        }
+        return expect(token::Kind::kGt, ">");
+    }
+
     std::unique_ptr<parse::Node> parseClassDef() {
         int cls_file = peek().file_id;
         int cls_tok = pos;
         std::string name = peek().text;
         int name_tok = pos;
         advance();   // class (or base) name
+        // A `<` after the leading name: the type-args of an instance BASE
+        // (`Vec<int> : Der(...)` — the group is followed by `:`), or this class's
+        // own TEMPLATE-LIST (`Vec<T>(...)`). A base's args re-parse through
+        // parseType and append canonically (", ") so the spelling round-trips
+        // through widen::intern — the same discipline as a use site.
+        std::vector<std::string> type_params;
+        std::vector<int> type_param_toks;
+        if (peek().kind == token::Kind::kLt) {
+            int after = skipTypeArgGroup(0);
+            if (after > 0 && peekKind(after) == token::Kind::kColon) {
+                advance();   // <
+                name += "<";
+                while (true) {
+                    std::string arg = parseType(nullptr, TopDim::Consume, nullptr);
+                    if (arg.empty()) return nullptr;
+                    name += arg;
+                    if (peek().kind == token::Kind::kComma) {
+                        advance();   // ,
+                        name += ", ";
+                        continue;
+                    }
+                    break;
+                }
+                if (!expect(token::Kind::kGt, ">")) return nullptr;
+                name += ">";
+            } else if (!parseClassTemplateList(type_params, type_param_toks)) {
+                return nullptr;
+            }
+        }
         // `Base : Derived(...)` — the leading name was the BASE; the real class name
         // follows the `:`. Store the base name on the node (text); resolve prepends
         // it as the unnamed first field.
@@ -3953,6 +4011,11 @@ struct Parser {
             name = peek().text;
             name_tok = pos;
             advance();   // derived class name
+            // The derived head's own template list (`Base : TDer<T>(...)`).
+            if (peek().kind == token::Kind::kLt
+                && !parseClassTemplateList(type_params, type_param_toks)) {
+                return nullptr;
+            }
         }
         if (!expect(token::Kind::kLParen, "(")) return nullptr;
 
@@ -3960,6 +4023,8 @@ struct Parser {
         node->name = name;
         node->name_tok = name_tok;
         node->text = base_name;          // "" if not derived
+        node->type_params = std::move(type_params);
+        node->type_param_toks = std::move(type_param_toks);
 
         if (!parseParamList(node.get(), /*allow_mutable=*/false,
                             /*allow_incomplete=*/true)) return nullptr;

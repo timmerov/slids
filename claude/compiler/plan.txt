@@ -1912,7 +1912,40 @@ Phase 9 — templates
     member and the member-template divert does the rest (zero template-specific
     relocation code); a class target rejects there, deferred as above. Canon
     tmpl_function.sl (external thrice + the member-collision negative).
-  * template classes (plain, derived, with nested members)
+  * template classes                                LANDED (single-TU) 2026-07-22
+    THE SHAPE: the pattern is the fn-template bookmark (pristine body + scope
+    snapshot, kClass entry with is_template and NO type/frame/ClassInfo), but
+    the instance is minted at RESOLVE — a type must exist where it is named —
+    in resolveTypeRef's kTmplUse arm, the same arm that expands alias templates
+    (plus the construction spelling `Vec<int>(args)` and a sizeof gate).
+    Instantiation = the registerLocalClasses four-phase shape over a clone
+    renamed to its canonical spelling ("Vec<int>", classSymbol $-escapes it at
+    the one symbol mint): NAME + member NAME + TYPES + cycle/needs/virtual run
+    AT the trigger, memoized on the canonicalized type-list; the BODY defers to
+    an end-of-resolve drain (file-scope visibility is complete there) — or runs
+    synchronously when classify demands the instance from a function-template
+    body, which then runs the late stages over it. By splice time an instance
+    IS an ordinary class: every init form, the transfer invariant, hooks,
+    operators, virtuals, inheritance BOTH directions (pushBaseChain reads the
+    `_$base` param's resolved type when the base spelling — "Vec<int>" — is no
+    entry name), for-class, arrays, `new`, globals, tuples all ride existing
+    machinery. Three hard-won invariants: the template's bare name inside its
+    own instantiation means THE INSTANCE via an explicit tmpl_self_stack, NOT a
+    frame alias (an alias shadows the template and breaks a recursive
+    `Node<T>` field; an open-ns member template outranks any frame alias
+    anyway); the instance's MEMBER entries must be re-published past the
+    transient frame's pop AND re-installed at the drain (the snapshot's live
+    set predates the instance); and a runaway that recurses through METHOD
+    BODIES reaches the drain FLAT (every hop depth 1), so a total-instantiation
+    cap (512) backstops the 64-deep nesting guard — without it, a compile-time
+    HANG. Type-list REQUIRED (no inference from construction args); a template
+    owns its name (no re-open / redefinition). Full design: readme.txt
+    TEMPLATES. Canon test/template/tmpl_class.sl (74 golden lines; 17
+    negatives). Deferred: incomplete (`...`), external members, template
+    methods inside a class template, nested uses (`Pair<Vec<int>>`, the `>>`
+    umbrella — an alias argument smuggles an instance in today), qualified
+    naming of instance members from outside (`Kit<int>:Sub` has no spelling),
+    the `Base:` bypass naming an instance base (same spelling limit).
   * post-compile-pre-link stage (`--instantiate` aggregation)
 
 

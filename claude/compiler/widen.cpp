@@ -1099,7 +1099,19 @@ std::string classSymbol(TypeRef ref) {
     Type const& t = get(ref);
     assert(t.form == Type::Form::kSlid
            && "classSymbol: not a class handle (caller must strip to the kSlid)");
-    return t.def_id < 0 ? t.name : t.name + "." + std::to_string(t.def_id);
+    std::string base = t.def_id < 0 ? t.name : t.name + "." + std::to_string(t.def_id);
+    // A template INSTANCE is named by its use spelling (`Vec<int>`), whose
+    // `<` `>` `,` and space are not legal in an unquoted LLVM identifier —
+    // $-escape them (injective, so distinct instances stay distinct symbols).
+    // An ordinary class name is an identifier and passes through unchanged.
+    std::string out;
+    for (unsigned char c : base) {
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+               || (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '.';
+        if (ok) out += static_cast<char>(c);
+        else { out += '$'; out += std::to_string(static_cast<int>(c)); }
+    }
+    return out;
 }
 
 TypeRef removeConst(TypeRef ref) {

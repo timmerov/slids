@@ -1,0 +1,78 @@
+e1 = 7
+e2 = 13
+e3 = 17
+e4 = 17
+e5 = 18
+e7 = 5
+e8 = 35
+e9 = 17
+szd = 0
+t1: Vec<int>
+t2: Vec<Integer>
+e10 = 400
+e11 = 5
+e12 = 0
+e13 = 9
+nt = 21
+e14 = 3
+e15 = 11
+ctor 5
+in block
+dtor 5
+e16 = 6
+e17 = 3
+e18 = 15
+e19 = 107
+e20 = 9
+e21 = 42
+e22 = 42
+acc = 18
+e23 = 17
+e24 = 10
+e25 = 12
+e26 = 5
+e27 = 18
+g1 = 0
+g2 = 5
+mv = 70 70
+sw = 2 15
+u1 = 5 6
+u2 = 105 0
+c1 = 3
+c2 = 21
+c3 = 35
+data ctor 0
+pd = 0 0
+data dtor 0
+k2 = 5
+k3 = 7
+ctor 1
+ctor 0
+copied 1
+dtor 1
+dtor 1
+ctor 0
+ctor 0
+array
+dtor 0
+dtor 0
+ctor 7
+held
+dtor 7
+ctor 9
+dtor 9
+tg = 9
+c5 = 43
+c6 = 7
+c7 = 42
+cf = 7
+acc2 = 6
+c9 = 42
+c10 = 20
+c11 = 20
+c12 = 1
+c13 = 25
+fa = 6
+fb = 7
+c14 = 22
+c15 = 22
