@@ -32,6 +32,20 @@ UNBLOCKED FEATURES
     requires a class type". Swap-init default-constructs the target and then re-dispatches
     as an ordinary swap statement, and only the construct half is class-only.
 
+  * TEMPLATE `>>` CLOSER SPLITTING. A nested template type argument like
+    `Vec<Vec<int>>` ends in `>>`, which the lexer reads as one right-shift token,
+    so the type-list never sees its two closers. Can't arise today — function
+    templates alone can't nest a template inside a type argument — but becomes
+    real the moment class templates land. The fix is splitting the token when a
+    type-list is open (or splitting in the lookahead gate).
+
+  * UNINSTANTIATED TEMPLATE BODIES ARE UNCHECKED. A template's body is held in
+    parse state until a call binds its type-list, so a template nobody calls can
+    contain any nonsense that parses — undefined names, type errors — and the
+    file still compiles. Catching that would mean checking the body once against
+    the type-parameter patterns themselves (the C++-style two-phase split). The
+    current behavior is pinned by the nonsense template in tmpl_function.sl.
+
 
 BLOCKED FEATURES
 

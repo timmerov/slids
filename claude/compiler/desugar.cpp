@@ -416,10 +416,18 @@ std::string symbolFor(parse::Entry const& e, parse::Tree const& tree, int entry_
                         : e.name == "op<--" ? "__$move" : "__$swap");
         }
     }
-    // Otherwise: Itanium `_Z` <name> <bare-function-type>.
+    // Otherwise: Itanium `_Z` <name> <bare-function-type>. A template INSTANCE
+    // appends the `I..E` type-argument encoding to the name so two instances with
+    // identical parameter lists (`zero<int8>()` / `zero<int64>()`) stay distinct —
+    // and so the symbol is stable for the cross-TU `--instantiate` stage later.
     std::string out = "_Z";
     std::vector<std::string> segs = scopeSegments(tree, e.owner_ns_frame);
     std::string uq = unqualifiedName(e.name);
+    if (!e.tmpl_args.empty()) {
+        uq += "I";
+        for (widen::TypeRef t : e.tmpl_args) uq += mangleType(t);
+        uq += "E";
+    }
     if (segs.empty()) {
         out += uq;
     } else {
@@ -756,6 +764,8 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
         if (c->kind == parse::Kind::kClassDef) continue;       // resolve-recorded
         if (c->kind == parse::Kind::kEnumDecl) continue;       // resolve-lowered
+        if (!c->type_params.empty()) continue;   // a TEMPLATE definition emits no
+                          // code — its instances are ordinary spliced functions
         if (c->kind == parse::Kind::kVarDeclStmt && c->is_global) continue;  // a
                           // GLOBAL is static storage (out.globals), not a statement
         node->children.push_back(copyNode(*c, tree, next_id));
@@ -1297,11 +1307,14 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
     };
     for (auto const& m : node.children) {
         if (!m) continue;
+        if (!m->type_params.empty()) continue;   // a template definition (pristine
+                                                 // body) — nothing to lift or enter
         if (m->kind == parse::Kind::kNamespaceDecl) {
             for (auto const& f : m->children) {
                 if (!f) continue;
                 if (f->kind != parse::Kind::kFunctionDef
                     && f->kind != parse::Kind::kFunctionDecl) continue;
+                if (!f->type_params.empty()) continue;   // a member template
                 prog->children.push_back(liftMember(*f, {}, widen::kNoType));
             }
         } else if (m->kind == parse::Kind::kClassDef) {
@@ -3488,6 +3501,8 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
                     std::map<int, ast::GlobalGroup>& named, diagnostic::Sink& diag) {
     for (auto const& n : nodes) {
         if (!n) continue;
+        if (!n->type_params.empty()) continue;   // a template's pristine body never
+                                                 // contributes a global
         // A dissolved LAZY anonymous group's ctor/dtor — a receiver-less free function
         // stamped with the group id. Fills the shared group's ctor/dtor symbol; the
         // sentinel/touch symbols derive from the id (distinct `__ganon_` prefix so they

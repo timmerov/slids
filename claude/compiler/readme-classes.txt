@@ -8,6 +8,14 @@ form. Other clusters stay in readme.txt (pipeline, design principles, type
 representation, assignment relation, tuples/arrays, stage/product files); cross-refs
 to those name "readme.txt <SECTION>".
 
+TEMPLATES × CLASSES, current state (readme.txt FUNCTION TEMPLATES owns the design):
+a function template's T may bind a class — through REFERENCE parameters (`T^`), since
+an instance obeys the normal "a class parameter must be a reference" rule (a by-value
+`T` binding a class errors like any class value parameter); the instance's body
+dispatches class operators and returns class values through the ordinary machinery.
+A TEMPLATE METHOD is rejected at parse ("A template method is not supported yet"),
+and class templates don't exist yet — both are plan.txt Phase 9 remainder.
+
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)
 

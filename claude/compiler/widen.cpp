@@ -800,8 +800,12 @@ std::string structKey(Type const& t) {
         // A class is identified by name AND def_id (scope disambiguator). def_id
         // < 0 (file-scope) adds nothing, so file-scope keys stay "S"+name exactly
         // as before; a LOCAL class's defining-frame id splits same-named classes.
+        // The template TYPE-PARAMETER marker (kTmplParamDefId) must stay distinct
+        // from a plain same-named kSlid or the marker mint would return that handle.
         case F::kSlid:      return "S" + t.name
-                                + (t.def_id < 0 ? "" : "#" + std::to_string(t.def_id));
+                                + (t.def_id == kTmplParamDefId ? "#tp"
+                                   : t.def_id < 0 ? ""
+                                   : "#" + std::to_string(t.def_id));
         case F::kAlias:     return "L" + t.name + "=" + std::to_string(t.underlying);
         case F::kConst:     return "C" + std::to_string(t.underlying);
         case F::kPointer:   return "p" + std::to_string(t.pointee);

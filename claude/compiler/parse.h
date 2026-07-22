@@ -354,6 +354,15 @@ struct Node {
     bool global_qualified = false;
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
+    // Function TEMPLATES. On a kFunctionDef, a non-empty type_params marks a TEMPLATE
+    // definition (`T add<T>(T a, T b)`): its body stays in pristine parse state — every
+    // stage skips it — until a call site binds the type-list and classify clones +
+    // instantiates it. On a kCallStmt/kCallExpr, tmpl_args carries the EXPLICIT
+    // `<type-list>` arguments (parse-interned spellings; resolve resolves them in scope).
+    std::vector<std::string> type_params;
+    std::vector<int> type_param_toks;            // token per template-list name (carets)
+    std::vector<widen::TypeRef> tmpl_args;
+    std::vector<int> tmpl_arg_toks;
     std::vector<widen::TypeRef> param_types;     // kCallStmt/kCallExpr: classify-cached resolved fn's param types
     // A NESTED function (kFunctionDef in a body) and each call to it carry the
     // entry ids of the enclosing-function locals/params it captures — passed
@@ -432,6 +441,18 @@ struct Entry {
                                   // `import { }` block) — no slids body, defined by a C
                                   // library (linked, e.g. `-lm`), so undefined here is NOT
                                   // an orphan. symbolFor emits the BARE C name (no mangle).
+    bool is_template = false;     // kFunction: a function TEMPLATE — param_types hold
+                                  // PATTERNS (type-param leaves, def_id ==
+                                  // widen::kTmplParamDefId), the body is unresolved, and
+                                  // no call targets it directly: classify instantiates on
+                                  // demand. A template owns its name — any same-scope
+                                  // same-name function (or template) is a compile error.
+    std::vector<widen::TypeRef> tmpl_args;  // kFunction: an INSTANCE's bound type args in
+                                  // template-list order. Non-empty marks an instance:
+                                  // excluded from overload-candidate gathering (it shares
+                                  // the template's name), and symbolFor appends the
+                                  // Itanium `I..E` encoding so instances get distinct
+                                  // symbols even with identical parameter lists.
     int alias_of = -1;            // kFunction: a FUNCTION ALIAS (`alias sin = sinf;`) — a
                                   // duplicate of the target overload registered under the
                                   // alias name so it joins the overload set; it emits the
@@ -516,12 +537,51 @@ struct ClassInfo {
     }
 };
 
+// A registered function TEMPLATE: the pristine definition node plus the resolve-state
+// snapshot needed to re-enter resolution at the definition point when classify demands
+// an instance. Resolve's scope state (frames, live entries, open namespaces,
+// definite-assignment) is transient to its run, so it is captured at the point the
+// template's body WOULD have resolved — which gives the body the same visibility an
+// ordinary function body has (all forward refs included).
+struct TemplateInfo {
+    Node* def = nullptr;               // the kFunctionDef, body in pristine parse state
+    std::vector<std::unique_ptr<Node>>* host_list = nullptr;  // the statement/member list
+                                       // holding `def`; instances splice in here (at the
+                                       // END of classify — a mid-walk splice would
+                                       // invalidate the walker's iterators)
+    bool nested = false;               // defined in a body scope: instances are nested
+                                       // functions (captures, lifted symbol)
+    bool snapshot_taken = false;
+    std::vector<int> frame_id_stack;
+    std::vector<std::size_t> frame_entries_start_stack;
+    std::vector<int> live_entry_ids;
+    std::vector<int> open_ns_frames;
+    std::set<int> initialized_locals;
+    std::set<int> assigned_arrays;
+    std::map<std::vector<widen::TypeRef>, int> instances;  // bound types -> instance entry
+};
+
 struct Tree {
     std::vector<std::unique_ptr<Node>> nodes;
 
     // Symbol table — populated by classify, consumed by later stages.
     std::vector<Entry> entries;
     int next_frame_id = 0;
+
+    // Function templates, keyed by the template's entry id. Filled at resolve
+    // (registration + snapshot); consumed by classify's on-demand instantiation.
+    std::map<int, TemplateInfo> templates;
+    // Instance kFunctionDef nodes minted during classify's walk, each waiting to be
+    // spliced into its host list once the walk is over. Spliced right AFTER the
+    // template's own definition node (`after`) — never at the list's end, where a
+    // statement after a `return` would break trailing-return analysis.
+    struct PendingInstance {
+        std::vector<std::unique_ptr<Node>>* host_list = nullptr;
+        Node* after = nullptr;              // the template definition node
+        std::unique_ptr<Node> node;
+    };
+    std::vector<PendingInstance> pending_tmpl_instances;
+    int tmpl_instantiation_depth = 0;   // runaway `f<T>` -> `f<T^>` recursion guard
 
     // Indexed by file_id (token::List file order): true if that file was pulled
     // in via `import` (a `.slh` header — token::File::imported_by != -1). Filled

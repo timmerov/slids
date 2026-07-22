@@ -27,6 +27,12 @@ struct TypeKind {
 using TypeRef = int;
 constexpr TypeRef kNoType = -1;
 
+// def_id sentinel marking a kSlid as a TEMPLATE TYPE PARAMETER pattern leaf (`T` in
+// `T add<T>(T a, T b)` — name = the parameter, no such class exists). Only ever found
+// in a template entry's pattern param/return types; unification binds it, and nothing
+// downstream of classify ever sees one (instances carry concrete types).
+constexpr int kTmplParamDefId = -2;
+
 struct Type {
     enum class Form {
         kNone,        // the kNoType sentinel — "no type" (distinct from void); a

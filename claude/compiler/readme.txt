@@ -858,6 +858,74 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   one (as with functions). Cross-TU CLASS model precedent: readme-classes.txt.
 
 
+FUNCTION TEMPLATES (single-TU; the guiding principle: an instance is an ORDINARY
+function, and a template is a BOOKMARK into the machinery that would have made one)
+
+  A template (`T add<T>(T a, T b) { ... }`) registers as an ordinary kFunction entry
+  (Entry.is_template) in whatever frame declares it — file, namespace, or block — so
+  scoping, shadowing, and duplicate detection are the normal ones. A template OWNS its
+  name: any same-scope same-name function or template is a compile error, both
+  directions (overload participation deferred). Its BODY stays in pristine parse state
+  — every stage skips a kFunctionDef with non-empty type_params (constfold's walk,
+  classify's walks, desugar's copyNode/flattenScope/collectGlobals, resolve's munge) —
+  until a call binds the type-list. An uninstantiated body is therefore UNCHECKED
+  beyond parse (pinned by tmpl_function.sl's nonsense template; todo).
+
+  REGISTRATION (resolve) builds the entry's PATTERN signature: copies of the declared
+  types resolved in a pushed frame where each type parameter aliases a marker leaf — a
+  kSlid with def_id == widen::kTmplParamDefId (structKey has a "#tp" arm so the marker
+  never collides with a real same-named class; resolveTypeRef treats it as terminal).
+  The NODE's own types stay pristine for cloning. File/block templates resolve
+  patterns at registration; a namespace member defers to the TYPES phase (forward
+  refs), like every member signature. Because resolve's scope state is TRANSIENT,
+  each template SNAPSHOTS it (frames, live entries, open namespaces, definite-
+  assignment) at the point its body WOULD have resolved — same forward-ref visibility
+  a real body gets — into tree.templates[entry] (TemplateInfo: def node, host list,
+  nested flag, snapshot, instance memo). snapshotTemplate also name-scans the body
+  and marks matching live host locals READ: a local used only inside a block
+  template's body would otherwise trip the unused sweep, which runs before any
+  instantiation exists.
+
+  INSTANTIATION is demand-driven at classifyCall: a call whose resolved callee is a
+  template diverts to classifyTemplateCall. Binding: an explicit type-list (resolved
+  + arity-checked at resolve, canonicalized removeConst∘deepStrip so add<Integer> IS
+  add<int>) or unification. Unification's ONE job is finding T: a marker leaf binds
+  its argument's type EXACTLY (conflicts error — widening never reconciles; a
+  BY-VALUE T meeting an array argument binds the DECAYED elem[], what a by-value
+  position does), the NOT-template parts of a pattern impose no constraint (the
+  instantiated call validates them through the normal machinery), and the shape
+  conversions a normal call performs — array decay into a `T[]`/`T^` pattern, rvalue
+  materialization into a `(...)^` pattern — apply only to REACH the T positions
+  (so `dump(#answer)` infers through a tuple-ref parameter). resolve::
+  instantiateTemplate then memoizes by bound-type vector (memo inserted BEFORE the
+  body resolves, so same-binding recursion lands on the instance being built), saves
+  the caller's transient state, installs the snapshot, aliases each parameter to its
+  bound type in a pushed frame, clones the pristine def, and runs the clone through
+  the normal machinery: entry registration, resolveFunctionBody (nested= the
+  template's flag, so block instances compute captures), mungeParamTypes; classify
+  then runs constfold::runOn + classifyFunctionSignature + classifyFunctionBody on
+  it. Two load-bearing invariants: the instance entry is NEVER name-live
+  (live_entry_ids.pop right after addEntry — a recursive call must resolve the
+  TEMPLATE and re-unify, or a re-binding recursion like `deeper(^p)` pins T to the
+  outer binding), and the instance node SPLICES right AFTER its template's def node,
+  at END of classify's walk (pending_tmpl_instances — mid-walk invalidates the
+  walker's iterators; list-END would put a statement after `return` and break
+  trailing-return analysis). A runaway re-binding chain is stopped by
+  tmpl_instantiation_depth (cap 64).
+
+  After the call retargets resolved_entry_id at the instance, it rides classifyCall's
+  ordinary single-candidate path — defaults, widening, the coercion retry, nested-fn
+  captures all come from existing code (candidate gathering excludes is_template
+  entries and instances, which share the template's name). Downstream stages see
+  nothing new: a file/namespace instance mangles the Itanium `I..E` type-args into
+  symbolFor's existing scheme (`_Z3addIiE...`); a block instance keeps the nested
+  `name.<entry-id>` symbol. Inside an instance the parameter is a transparent
+  kAlias (T -> the bound type): structural queries see through it, ##type says "T".
+  DEFERRED: method/class/alias templates, overload participation, `>>` closer
+  splitting (todo), cross-TU + `--instantiate` (plan Phase 9). Canon
+  test/template/tmpl_function.sl.
+
+
 STAGE FILES (.h / .cpp pairs)
 
   lex       text -> tokens. Wraps the scanner in an ImportWrapper that

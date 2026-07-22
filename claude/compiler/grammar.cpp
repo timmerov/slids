@@ -1351,6 +1351,24 @@ struct Parser {
                 base = std::move(node);
                 continue;
             }
+            // A TEMPLATE CALL `name<type-list>(args)` — the explicit-type-arg form. The
+            // lookahead gate decides `<` between a type-list and a comparison (the
+            // comparison reading of `a<b>(c)` requires parentheses).
+            if (peek().kind == token::Kind::kLt
+                && base->kind == parse::Kind::kIdentExpr
+                && looksLikeTemplateCallArgs(0)) {
+                auto node = newNodeAt(parse::Kind::kCallExpr, base->file_id, base->tok);
+                node->name = std::move(base->name);
+                node->name_tok = base->name_tok;
+                node->qualifier = std::move(base->qualifier);
+                node->qualifier_toks = std::move(base->qualifier_toks);
+                node->global_qualified = base->global_qualified;
+                if (!parseTemplateCallArgs(*node)) return nullptr;
+                advance();   // (
+                if (!parseCallArgs(*node)) return nullptr;
+                base = std::move(node);
+                continue;
+            }
             // A call on a `recv.method` field access — a method-call EXPRESSION
             // used as a value (`x = obj.method()`, `f(obj.m())`). Build a
             // kMethodCallStmt (receiver = the field base, name = the method);
@@ -2187,6 +2205,23 @@ struct Parser {
             if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
             return call;
         }
+        if (next == token::Kind::kLt && looksLikeTemplateCallArgs(0)) {
+            // A TEMPLATE CALL statement `name<type-list>(args);` — the explicit-type-arg
+            // twin of the kLParen arm above, with the same postfix-continuation rule.
+            auto call = newNodeAt(parse::Kind::kCallExpr, stmt_file, stmt_tok);
+            stamp(*call);
+            if (!parseTemplateCallArgs(*call)) return nullptr;
+            advance();   // (
+            if (!parseCallArgs(*call)) return nullptr;
+            token::Kind after = peek().kind;
+            if (after == token::Kind::kDot || after == token::Kind::kLBracket
+                || after == token::Kind::kBitXor || after == token::Kind::kXorXor) {
+                return finishLvalueChain(std::move(call), /*allow_bare_expr=*/true);
+            }
+            call->kind = parse::Kind::kCallStmt;
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            return call;
+        }
         if (next == token::Kind::kArrowLeft || next == token::Kind::kArrowBoth) {
             // `name <-- rhs;` / `name <--> rhs;` — move / swap with a bare-name
             // lhs. The lhs is an lvalue EXPRESSION (a kIdentExpr), uniform with
@@ -2291,6 +2326,65 @@ struct Parser {
             }
         }
         return expect(token::Kind::kRParen, ")");
+    }
+
+    // Pure lookahead from a `<` at offset `o`: do the tokens form a TYPE-LIST closed
+    // by `>` immediately followed by `(` — the template-call shape `name<types>(args)`?
+    // The scan admits exactly the type vocabulary (identifiers, primitive keywords,
+    // `:`/`::` qualifiers, `^`/`^^`/`[]` suffixes, tuple parens, `const`) plus commas,
+    // so a comparison chain (`a < b + 1`, `a < b, c > d`... anything else) falls out at
+    // the first non-type token or at the missing `>(`. THE language rule: a pattern
+    // matching this shape IS a template call — the comparison reading `(a<b) > (c)`
+    // requires parentheses. Consumes nothing.
+    bool looksLikeTemplateCallArgs(int o) const {
+        o++;   // past the `<`
+        int depth = 0;      // ( ) and [ ] nesting inside a type
+        bool any = false;
+        for (int guard = 64; guard > 0; guard--) {
+            token::Kind k = peekKind(o);
+            if (k == token::Kind::kGt && depth == 0) {
+                return any && peekKind(o + 1) == token::Kind::kLParen;
+            }
+            if (k == token::Kind::kLParen || k == token::Kind::kLBracket) depth++;
+            else if (k == token::Kind::kRParen || k == token::Kind::kRBracket) {
+                if (--depth < 0) return false;
+            } else if (k == token::Kind::kIdentifier || isTypeStart(k)
+                       || k == token::Kind::kColon || k == token::Kind::kColonColon
+                       || k == token::Kind::kBitXor || k == token::Kind::kXorXor
+                       || k == token::Kind::kConst
+                       || (k == token::Kind::kComma && depth == 0)
+                       || (k == token::Kind::kIntLiteral && depth > 0)) {   // a sized
+                       // dim `int[3]` — but a BARE literal (`a < 3 > x`) stays a comparison
+                // part of a type (or a top-level separator) — keep scanning
+            } else if (k == token::Kind::kComma) {
+                // a comma inside a tuple type's parens — keep scanning
+            } else {
+                return false;
+            }
+            any = true;
+            o++;
+        }
+        return false;
+    }
+
+    // Parse the explicit `<type-list>` of a template call into node.tmpl_args (the
+    // `<` at the current position). Each entry is a full type spelling parsed by the
+    // real type parser; resolve later resolves them in scope.
+    bool parseTemplateCallArgs(parse::Node& node) {
+        advance();   // <
+        while (true) {
+            int t_tok = pos;
+            Declarator d;
+            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                 /*allow_qualified=*/false, nullptr, d)) {
+                return false;
+            }
+            node.tmpl_args.push_back(widen::internOrNone(d.type));
+            node.tmpl_arg_toks.push_back(t_tok);
+            if (peek().kind == token::Kind::kComma) { advance(); continue; }
+            break;
+        }
+        return expect(token::Kind::kGt, ">");
     }
 
     std::unique_ptr<parse::Node> parseDeleteStmt() {
@@ -2567,6 +2661,10 @@ struct Parser {
             }
             auto m = parseFunctionDef();
             if (!m) return nullptr;
+            if (!m->type_params.empty()) {
+                errorAt(m->name_tok, "A template method is not supported yet.");
+                return nullptr;
+            }
             // A QUALIFIED method (`int Sib:go()`) is an EXTERNAL def targeting ANOTHER
             // class — relocateOutOfLineMembers splices the receiver for its TARGET, so
             // this class's receiver must NOT be added here (else a doubled `_$recv`).
@@ -3556,6 +3654,17 @@ struct Parser {
             // qualifier itself).
             while (peekKind(o) == token::Kind::kColon
                    && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+            // A TEMPLATE-LIST after the name — `T add<T, U>(`. Identifiers and commas
+            // only, so the skip is bounded; anything else after the `<` is a
+            // comparison, not a function shape.
+            if (peekKind(o) == token::Kind::kLt
+                && peekKind(o + 1) == token::Kind::kIdentifier) {
+                int q = o + 1;
+                while (peekKind(q) == token::Kind::kIdentifier
+                       && peekKind(q + 1) == token::Kind::kComma
+                       && peekKind(q + 2) == token::Kind::kIdentifier) q += 2;
+                if (peekKind(q + 1) == token::Kind::kGt) o = q + 2;
+            }
         }
         if (peekKind(o) != token::Kind::kLParen) return false;
         // `Type name (` is shared with a variable CONSTRUCTION `Type name(args);`.
@@ -4019,6 +4128,36 @@ struct Parser {
                 return nullptr;
             }
         }
+        // A TEMPLATE-LIST — `T add<T, U>(params)`. Plain named functions only for now:
+        // an operator / hook never has one (its `<` would be the operator symbol), and a
+        // qualified (out-of-line member) template is rejected below with the method form.
+        std::vector<std::string> type_params;
+        std::vector<int> type_param_toks;
+        if (!is_op && !is_hook && peek().kind == token::Kind::kLt) {
+            advance();   // <
+            while (true) {
+                if (peek().kind != token::Kind::kIdentifier) {
+                    error("Expected a type-parameter name in the template list.");
+                    return nullptr;
+                }
+                for (std::size_t i = 0; i < type_params.size(); i++) {
+                    if (type_params[i] == peek().text) {
+                        error("Duplicate type-parameter name '" + peek().text + "'.");
+                        return nullptr;
+                    }
+                }
+                type_params.push_back(peek().text);
+                type_param_toks.push_back(pos);
+                advance();   // the name
+                if (peek().kind == token::Kind::kComma) { advance(); continue; }
+                break;
+            }
+            if (!expect(token::Kind::kGt, ">")) return nullptr;
+            if (!qualifier.empty()) {
+                errorAt(name_tok, "A template method is not supported yet.");
+                return nullptr;
+            }
+        }
         // An operator that "produces self" writes no return type; it mutates the receiver
         // and returns nothing at the ABI level, so it lowers as `void`. (A value-yielding
         // operator — comparison, unary arity-0, index/deref — spells its return type, so
@@ -4048,6 +4187,8 @@ struct Parser {
         node->const_method = const_method;
         node->qualifier = std::move(qualifier);
         node->qualifier_toks = std::move(qualifier_toks);
+        node->type_params = std::move(type_params);
+        node->type_param_toks = std::move(type_param_toks);
         node->return_type = widen::internOrNone(ret_type);
         // A const-expr dim in the RETURN type (`(int[N],int) f()`): a function's
         // entry slids_type IS its return type, so bakeNodeDims bakes node->dim_exprs
@@ -4057,6 +4198,15 @@ struct Parser {
         if (!parseParamList(node.get())) return nullptr;
 
         if (is_op && !validateOperatorSignature(*node, name_tok)) return nullptr;
+
+        // A template's body IS the template — there is nothing to forward-declare,
+        // import, or delete without one.
+        if (!node->type_params.empty()
+            && (peek().kind == token::Kind::kEquals
+                || peek().kind == token::Kind::kSemicolon)) {
+            errorAt(node->name_tok, "A template function must have a body.");
+            return nullptr;
+        }
 
         // A PURE virtual: `virtual T m(...) = delete;` — no body. Only valid on a virtual
         // method (resolve enforces that + rejects it on a free function); parse just

@@ -1848,8 +1848,33 @@ Phase 8 — namespaces + cross-TU
     global stays file-local) — deferred with the rest of .slh propagation.
 
 Phase 9 — templates
-  * template functions
+  * template functions                              LANDED (single-TU) 2026-07-21
+    THE SHAPE: a template rides the existing machinery — it registers as an
+    ordinary kFunction entry (is_template) in whatever frame declares it (file /
+    namespace / block), so scoping, shadowing, and collisions are the normal
+    ones, and its BODY stays in pristine parse state (every stage skips it)
+    until a call binds the type-list. Resolve's scope state is transient, so
+    registration SNAPSHOTS it at the body-resolution point; classify's
+    on-demand instantiation re-installs the snapshot, binds each type parameter
+    as a transparent kAlias to its bound type, and runs the CLONE through the
+    normal per-function machinery (resolveFunctionBody + munge + constfold +
+    classify) — so an instance IS an ordinary function to every later stage
+    (spliced after its def node; desugar/codegen changes are just skips + the
+    Itanium `I..E` type-args in symbolFor). INFERENCE finds T and nothing else:
+    T binds exactly (a by-value T + array argument binds the decayed elem[];
+    conflicts error), the not-template parts match by the NORMAL parameter
+    rules (no constraint at inference; decay / rvalue-materialization aligners
+    apply only to REACH a T — `dump(#answer)` infers through a tuple-ref). NO
+    overloading: a template owns its name; the call retargets at the instance
+    and rides the single-candidate path. Two hard-won invariants: an instance
+    entry is never name-live (a recursive call must re-unify via the TEMPLATE,
+    else a re-binding recursion pins T), and instances splice AFTER their def,
+    never at list end (a statement after `return` breaks trailing-return
+    analysis). Full design: readme.txt FUNCTION TEMPLATES. Canon
+    test/template/tmpl_function.sl. Deferred out of this landing: overload
+    participation, `>>` closer split, unchecked uninstantiated bodies (todo).
   * template classes (plain, derived, with nested members)
+  * template methods / template aliases (canon stubs tmpl_method.sl, tmpl_alias.sl)
   * post-compile-pre-link stage (`--instantiate` aggregation)
 
 

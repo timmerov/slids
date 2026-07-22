@@ -9,8 +9,10 @@
 #include <string>
 #include <vector>
 
+#include "constfold.h"
 #include "diagnostic.h"
 #include "parse.h"
+#include "resolve.h"
 #include "widen.h"
 
 namespace classify {
@@ -626,6 +628,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                widen::TypeRef context, diagnostic::Sink& diag);
 void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
                           diagnostic::Sink& diag);
+void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
+                               diagnostic::Sink& diag);
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude);
@@ -824,6 +828,9 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
     for (auto& m : node.children) {
         if (!m) continue;
         if (m->kind == parse::Kind::kFunctionDef) {
+            // A TEMPLATE's body stays pristine — instances are typed at
+            // instantiation (classifyTemplateCall) and spliced in after the walk.
+            if (!m->type_params.empty()) continue;
             if (isOperatorName(m->name)) {
                 // No naked operators: an operator is a class method. Inside a class,
                 // validate its type-dependent signature; anywhere else, reject it.
@@ -2487,7 +2494,249 @@ int pickOverload(parse::Tree& tree, std::vector<int> const& cands,
     return r.best;
 }
 
+// ---- Function-template calls -------------------------------------------------
+
+// Does this pattern subtree mention a template type parameter anywhere?
+bool patternHasTypeParam(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    widen::Type const& ty = widen::get(t);
+    switch (ty.form) {
+        case F::kAlias:
+        case F::kConst:    return patternHasTypeParam(ty.underlying);
+        case F::kPointer:
+        case F::kIterator: return patternHasTypeParam(ty.pointee);
+        case F::kArray:    return patternHasTypeParam(ty.elem);
+        case F::kTuple: {
+            std::vector<widen::TypeRef> slots = ty.slots;
+            for (widen::TypeRef s : slots)
+                if (patternHasTypeParam(s)) return true;
+            return false;
+        }
+        case F::kSlid:     return ty.def_id == widen::kTmplParamDefId;
+        case F::kNone:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:   return false;
+    }
+    return false;
+}
+
+// Unification of a template PATTERN type against a concrete argument type. Its ONE
+// job is finding the T bindings: a kTmplParamDefId marker leaf binds its parameter
+// EXACTLY (consistently across arguments — no widening reconciles a conflict), and
+// everything else defers to normal parameter matching. Concretely:
+//   - A T-FREE subtree imposes NO constraint here — the instantiated call validates
+//     it through the ordinary machinery (widen / decay / coercion, the whole spec).
+//   - On the way TO a T position, the SHAPE conversions a normal call performs are
+//     applied: array decay (into an iterator or element-pointer parameter) and
+//     materialization into a reference (`(...)^` taking an rvalue). The conversion
+//     itself is still validated post-binding by the normal call path.
+// On a consistency failure `conflict_name` names the parameter; on a structural
+// failure it stays empty.
+bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
+                      std::vector<std::string> const& names,
+                      std::vector<widen::TypeRef>& bound,
+                      std::string& conflict_name) {
+    using F = widen::Type::Form;
+    for (;;) {
+        widen::Type const& t = widen::get(pat);
+        if (t.form == F::kAlias || t.form == F::kConst) pat = t.underlying;
+        else break;
+    }
+    for (;;) {
+        widen::Type const& t = widen::get(arg);
+        if (t.form == F::kAlias || t.form == F::kConst) arg = t.underlying;
+        else break;
+    }
+    // The not-template parts match by the NORMAL rules — which run after binding,
+    // so here they simply do not constrain.
+    if (!patternHasTypeParam(pat)) return true;
+    // Copy the pattern node's fields — the recursion interns (arena pushes), and
+    // while the deque never moves nodes, holding values keeps this obviously safe.
+    widen::Type::Form pform = widen::form(pat);
+    if (pform == F::kSlid && widen::get(pat).def_id == widen::kTmplParamDefId) {
+        std::string pname = widen::get(pat).name;
+        for (std::size_t i = 0; i < names.size(); i++) {
+            if (names[i] != pname) continue;
+            widen::TypeRef canon = widen::removeConst(widen::deepStrip(arg));
+            // A by-VALUE T meeting an ARRAY argument binds the DECAYED iterator
+            // type (`"za = "` — const char[6] — binds T = char[]), the same decay
+            // a by-value parameter position performs on the argument. A reference
+            // or iterator PATTERN (`T^` / `T[]`) reaches its element through the
+            // shape aligners below instead, so this fires only for a bare T.
+            if (widen::form(canon) == F::kArray) {
+                widen::Type const& at = widen::get(canon);
+                widen::TypeRef elem = at.dims.size() <= 1
+                    ? at.elem
+                    : widen::internArray(at.elem,
+                          std::vector<int>(at.dims.begin() + 1, at.dims.end()));
+                canon = widen::internIterator(widen::removeConst(elem));
+            }
+            if (bound[i] == widen::kNoType) { bound[i] = canon; return true; }
+            if (widen::deepStrip(bound[i]) == canon) return true;
+            conflict_name = pname;
+            return false;
+        }
+        return false;
+    }
+    widen::Type::Form aform = widen::form(arg);
+    if (pform == aform) {
+        switch (pform) {
+            case F::kPointer:
+            case F::kIterator:
+                return unifyTypePattern(widen::get(pat).pointee,
+                                        widen::get(arg).pointee,
+                                        names, bound, conflict_name);
+            case F::kArray: {
+                if (widen::get(pat).dims != widen::get(arg).dims) return false;
+                return unifyTypePattern(widen::get(pat).elem, widen::get(arg).elem,
+                                        names, bound, conflict_name);
+            }
+            case F::kTuple: {
+                std::vector<widen::TypeRef> ps = widen::get(pat).slots;
+                std::vector<widen::TypeRef> as = widen::get(arg).slots;
+                if (ps.size() != as.size()) return false;
+                for (std::size_t i = 0; i < ps.size(); i++) {
+                    if (!unifyTypePattern(ps[i], as[i], names, bound, conflict_name))
+                        return false;
+                }
+                return true;
+            }
+            case F::kNone:
+            case F::kPrimitive:
+            case F::kVoid:
+            case F::kAnyptr:
+            case F::kSlid:
+            case F::kAlias:   // peeled above; unreachable
+            case F::kConst:   // peeled above; unreachable
+                return widen::deepStrip(pat) == widen::deepStrip(arg);
+        }
+        return false;
+    }
+    // SHAPE ALIGNERS — a normal call's conversions, applied to reach T.
+    // Array decay into an iterator / element-pointer parameter (first dim drops;
+    // a multi-dim array decays to a pointer at its remaining-dims element).
+    if ((pform == F::kIterator || pform == F::kPointer) && aform == F::kArray) {
+        widen::TypeRef elem = widen::get(arg).elem;
+        std::vector<int> dims = widen::get(arg).dims;
+        widen::TypeRef decayed = dims.size() <= 1
+            ? elem
+            : widen::internArray(elem, std::vector<int>(dims.begin() + 1, dims.end()));
+        return unifyTypePattern(widen::get(pat).pointee, decayed,
+                                names, bound, conflict_name);
+    }
+    // Materialization / auto-ref into a reference parameter: `(...)^` fed the
+    // pointee's shape directly (an rvalue tuple, a class value).
+    if (pform == F::kPointer) {
+        return unifyTypePattern(widen::get(pat).pointee, arg,
+                                names, bound, conflict_name);
+    }
+    return false;
+}
+
+// A call whose resolved callee is a TEMPLATE: bind the type-list — explicit
+// (resolved at resolve, arity-checked there) or unified from the context-free
+// argument types — then instantiate on demand and retarget the call at the
+// instance entry. A NEW instance runs the remaining stages here (constfold +
+// signature + body classification); a memo hit retargets and returns. True =
+// retargeted (the caller falls through to the ordinary call path); false = an
+// error was reported.
+bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    int tid = s.resolved_entry_id;
+    auto it = tree.templates.find(tid);
+    if (it == tree.templates.end()) return false;
+    std::vector<std::string> const& names = it->second.def->type_params;
+    std::vector<widen::TypeRef> bound(names.size(), widen::kNoType);
+    if (!s.tmpl_args.empty()) {
+        if (s.tmpl_args.size() != names.size()) return false;   // reported at resolve
+        // Canonicalize (drop alias/const layers) so an explicit `add<Integer>` and an
+        // inferred call binding the same underlying type share ONE instance.
+        for (std::size_t i = 0; i < names.size(); i++)
+            bound[i] = widen::removeConst(widen::deepStrip(s.tmpl_args[i]));
+    } else {
+        // Infer from the arguments: classify them context-free (a literal binds the
+        // type a typeless declaration would give it), then unify per parameter.
+        for (auto& ch : s.children) {
+            if (ch) inferExpr(tree, *ch, widen::kNoType, diag);
+        }
+        parse::Entry const& te = tree.entries[tid];
+        std::string conflict;
+        for (std::size_t i = 0; i < s.children.size(); i++) {
+            if (!s.children[i]) continue;
+            if (i >= te.param_types.size()) break;   // arity reported at resolve
+            widen::TypeRef at = s.children[i]->inferred_type;
+            if (at == widen::kNoType) return false;   // the argument itself errored
+            if (!unifyTypePattern(te.param_types[i], at, names, bound, conflict)) {
+                if (!conflict.empty()) {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "Conflicting bindings for template parameter '" + conflict
+                        + "' in the call to '" + s.name
+                        + "'; write the type list explicitly.", {}});
+                } else {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "Argument " + std::to_string(i + 1) + " of '" + s.name
+                        + "' (type '" + widen::spellOrEmpty(at)
+                        + "') does not match the template pattern '"
+                        + widen::spellOrEmpty(te.param_types[i]) + "'.", {}});
+                }
+                return false;
+            }
+        }
+        for (std::size_t i = 0; i < bound.size(); i++) {
+            if (bound[i] == widen::kNoType) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Cannot infer template parameter '" + names[i]
+                    + "' in the call to '" + s.name
+                    + "'; write the type list explicitly.", {}});
+                return false;
+            }
+        }
+    }
+    if (tree.tmpl_instantiation_depth >= 64) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "Template instantiation depth limit exceeded (a runaway recursive "
+            "instantiation?).", {}});
+        return false;
+    }
+    bool created = false;
+    parse::Node* inst = nullptr;
+    tree.tmpl_instantiation_depth++;
+    int iid = resolve::instantiateTemplate(tree, tid, bound, s.file_id, s.tok,
+                                           diag, created, inst);
+    if (iid >= 0 && created && inst && !diagnostic::hasErrors(diag)) {
+        // The instance is an ordinary resolved function now — run the stages its
+        // late birth skipped, in pipeline order.
+        constfold::runOn(tree, *inst, diag);
+        if (!diagnostic::hasErrors(diag)) {
+            classifyFunctionSignature(tree, *inst, diag);
+            classifyFunctionBody(tree, *inst, diag);
+            inst->capture_types.clear();
+            for (int cid : inst->captures) {
+                inst->capture_types.push_back(parse::entryType(tree, cid));
+            }
+        }
+    }
+    tree.tmpl_instantiation_depth--;
+    if (iid < 0) {
+        if (!diagnostic::hasErrors(diag)) {
+            diagnostic::report(diag, {s.file_id, s.tok,
+                "Cannot instantiate template '" + s.name + "'.", {}});
+        }
+        return false;
+    }
+    s.resolved_entry_id = iid;
+    return true;
+}
+
 void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    // A TEMPLATE callee: bind the type-list, instantiate on demand, retarget the
+    // call at the instance — which then rides the ordinary single-candidate path
+    // below (defaults, conversions, the coercion retry, nested-fn captures).
+    if (s.resolved_entry_id >= 0
+        && tree.entries[s.resolved_entry_id].kind == parse::EntryKind::kFunction
+        && tree.entries[s.resolved_entry_id].is_template) {
+        if (!classifyTemplateCall(tree, s, diag)) return;
+    }
     // Gather same-name free-function candidates (an unqualified call). A
     // qualified call was resolved to a single namespace member upstream; a single
     // free function keeps resolve's resolution.
@@ -2505,8 +2754,9 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
             parse::Entry const& e = tree.entries[id];
             if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == fr
-                && e.name == s.name)
-                cands.push_back((int)id);
+                && e.name == s.name
+                && !e.is_template && e.tmpl_args.empty())   // a template owns its
+                cands.push_back((int)id);                   // name; instances share it
         }
     } else if (!qualified) {
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
@@ -2516,8 +2766,9 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             // already resolved singly by resolve and must not collide with a
             // same-named nested function in another host.
             if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame < 0
-                && e.parent_frame_id == 0 && e.name == s.name) {
-                cands.push_back((int)id);
+                && e.parent_frame_id == 0 && e.name == s.name
+                && !e.is_template && e.tmpl_args.empty()) {   // never rank a template
+                cands.push_back((int)id);                     // pattern or an instance
             }
         }
     }
@@ -6733,6 +6984,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             assert(false && "classifyStmt: kForEnumStmt survived resolve");
             return;
         case parse::Kind::kFunctionDef:
+            // A block-scope TEMPLATE stays pristine — instantiation types its clones.
+            if (!s.type_params.empty()) return;
             // A nested function: type-check its body + return-correctness, then
             // record each capture's (now-finalized) type for codegen lifting.
             classifyFunctionBody(tree, s, diag);
@@ -7110,9 +7363,11 @@ void checkOverloadDefaultCollisions(parse::Tree& tree, diagnostic::Sink& diag) {
     for (std::size_t j = 0; j < tree.entries.size(); j++) {
         parse::Entry const& later = tree.entries[j];
         if (later.kind != parse::EntryKind::kFunction) continue;
-        for (std::size_t i = 0; i < j; i++) {
+        if (later.is_template || !later.tmpl_args.empty()) continue;   // patterns /
+        for (std::size_t i = 0; i < j; i++) {                          // instances
             parse::Entry const& first = tree.entries[i];
             if (first.kind != parse::EntryKind::kFunction) continue;
+            if (first.is_template || !first.tmpl_args.empty()) continue;
             if (first.name != later.name) continue;
             if (first.owner_ns_frame != later.owner_ns_frame) continue;
             if (first.parent_frame_id != later.parent_frame_id) continue;
@@ -7146,6 +7401,9 @@ void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
         if (!m) continue;
         if (m->kind == parse::Kind::kFunctionDef
          || m->kind == parse::Kind::kFunctionDecl) {
+            // A TEMPLATE's signature is a pattern (resolved at registration); its
+            // instances run this per-instance at instantiation.
+            if (!m->type_params.empty()) continue;
             classifyFunctionSignature(tree, *m, diag);
         } else if (m->kind == parse::Kind::kNamespaceDecl
                 || m->kind == parse::Kind::kClassDef) {
@@ -7166,7 +7424,8 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
     // default capture), so a call to it — even before its definition —
     // type-checks against the full signature.
     for (auto& ch : fn.children) {
-        if (ch && ch->kind == parse::Kind::kFunctionDef) {
+        if (ch && ch->kind == parse::Kind::kFunctionDef
+            && ch->type_params.empty()) {   // a template's signature is a pattern
             classifyFunctionSignature(tree, *ch, diag);
         }
     }
@@ -7208,6 +7467,23 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // member bodies — top-level function bodies, const inits, and every nested
     // namespace/class — through the one uniform routine.
     classifyScope(tree, *program, diag);
+
+    // Splice the template instances minted during the walk into their host lists,
+    // each right AFTER its template's definition node. Deferred to here because a
+    // mid-walk splice would invalidate the walker's iterators; placed at the def
+    // (not the list end) so an instance never lands after a `return`, which would
+    // break trailing-return analysis downstream.
+    for (auto& pending : tree.pending_tmpl_instances) {
+        if (!pending.host_list || !pending.node) continue;
+        auto& list = *pending.host_list;
+        std::size_t at = 0;   // def-not-found fallback: the FRONT (never the end —
+                              // a statement after a `return` breaks analysis)
+        for (std::size_t i = 0; i < list.size(); i++) {
+            if (list[i].get() == pending.after) { at = i + 1; break; }
+        }
+        list.insert(list.begin() + at, std::move(pending.node));
+    }
+    tree.pending_tmpl_instances.clear();
 }
 
 }  // namespace classify

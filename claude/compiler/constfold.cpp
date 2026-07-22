@@ -1265,6 +1265,10 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
           bool& changed, diagnostic::Sink& diag,
           std::vector<AliasRefresh>& refreshes, bool no_substitute = false) {
     if (!slot) return;
+    // A function TEMPLATE's subtree stays in pristine parse state until classify
+    // instantiates it — its body is unresolved (never fold or bake inside it).
+    // Instances get their own fold via runOn.
+    if (!slot->type_params.empty()) return;
     // Re-point this node's type at any baked alias underlying BEFORE folding it —
     // so a sizeof of an alias-use (type operand in return_type) measures the real
     // size. The alias decl is always walked before its uses, so a refresh recorded
@@ -1502,6 +1506,7 @@ void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
 // Post-fixpoint sweep: bake any remaining dims (final — an unfolded dim errors).
 void finalizeArrayDims(parse::Node& n, parse::Tree& tree, diagnostic::Sink& diag,
                        std::vector<AliasRefresh>& refreshes) {
+    if (!n.type_params.empty()) return;   // a template subtree stays pristine
     for (auto& c : n.children) if (c) finalizeArrayDims(*c, tree, diag, refreshes);
     for (auto& p : n.params)   if (p) finalizeArrayDims(*p, tree, diag, refreshes);
     bool dummy = false;
@@ -1580,6 +1585,24 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             {}});
         return;
     }
+}
+
+// Fold ONE function subtree — a template INSTANCE, resolved after the program-wide
+// run (classify instantiates on demand). The same fixpoint + dim bake as run(),
+// scoped to the one function; alias dims were already baked program-wide, so the
+// refresh list starts (and usually stays) empty.
+void runOn(parse::Tree& tree, parse::Node& fn, diagnostic::Sink& diag) {
+    std::vector<AliasRefresh> refreshes;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& c : fn.children) walk(c, tree, changed, diag, refreshes);
+        for (auto& p : fn.params)   walk(p, tree, changed, diag, refreshes);
+        for (auto& d : fn.dim_exprs) walk(d, tree, changed, diag, refreshes);
+        if (diagnostic::hasErrors(diag)) return;
+    }
+    finalizeArrayDims(fn, tree, diag, refreshes);
+    if (!refreshes.empty()) refreshNodeTypes(fn, refreshes);
 }
 
 }  // namespace constfold
