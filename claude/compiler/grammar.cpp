@@ -4254,13 +4254,10 @@ struct Parser {
                 break;
             }
             if (!expect(token::Kind::kGt, ">")) return nullptr;
-            // The out-of-line form (`T Class:m<T>(...)`, `T Space:f<T>(...)`) is
-            // deferred — a template's body must sit at its declaration.
-            if (!qualifier.empty()) {
-                errorAt(name_tok,
-                        "An out-of-line template definition is not supported yet.");
-                return nullptr;
-            }
+            // A QUALIFIED template head (`T Space:f<T>(...)`, `T Class:m<T>(...)`)
+            // parses; the TARGET decides its fate at relocation — a namespace
+            // relocates like any external member, a class is deferred (resolve
+            // rejects it there, where the target's kind is known).
         }
         // An operator that "produces self" writes no return type; it mutates the receiver
         // and returns nothing at the ABI level, so it lowers as `void`. (A value-yielding

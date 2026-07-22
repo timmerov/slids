@@ -15,9 +15,11 @@ s = 36
 e = 49
 za =  62
 11 3
-tmpl_function.sl:242: int64 answer = 42
+tmpl_function.sl:250: int64 answer = 42
 nt = 42
 ne = 4
+nx = 12
+ny = 15
 p3 = 13 24
 ty1 = 16
 ty2 = 24

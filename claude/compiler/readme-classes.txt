@@ -20,7 +20,8 @@ operators and return class values through the ordinary machinery, methods includ
 A class BODY may also declare an ALIAS template (used qualified `Box:BR<int>` or
 bare by the class's own members), and a class field may be typed by a template-alias
 use. CLASS templates themselves don't exist yet — plan.txt Phase 9 remainder; the
-out-of-line template-definition form is deferred with the cross-TU bundle.
+out-of-line template METHOD form (`T Class:m<T>`) is deferred with the cross-TU
+bundle (the NAMESPACE flavor is landed — readme.txt TEMPLATES).
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)

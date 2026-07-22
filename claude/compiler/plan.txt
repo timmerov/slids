@@ -1905,8 +1905,13 @@ Phase 9 — templates
     (declaredMemberOverloads) and never trip the method dup-definition check (a
     T-free instance shares the template's exact signature by design). Full
     design: readme.txt TEMPLATES. Canon test/template/tmpl_method.sl. Deferred:
-    out-of-line definitions (namespace flavor = agreed side quest off the
-    relocation seam; class flavor bundles with cross-TU), operator templates.
+    out-of-line template METHODS (bundled with cross-TU), operator templates.
+    THEN — EXTERNAL NAMESPACE TEMPLATES (same day): `T Space:f<T>(v) { }` — the
+    qualified template head always parses; the TARGET decides at relocation,
+    where its kind is known. A namespace target relocates like any external
+    member and the member-template divert does the rest (zero template-specific
+    relocation code); a class target rejects there, deferred as above. Canon
+    tmpl_function.sl (external thrice + the member-collision negative).
   * template classes (plain, derived, with nested members)
   * post-compile-pre-link stage (`--instantiate` aggregation)
 

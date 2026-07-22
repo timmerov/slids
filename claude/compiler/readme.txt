@@ -966,6 +966,13 @@ machinery that would have made it)
   entries with tmpl_args, and classifyFunctionSignature's method dup-DEFINITION
   check exempts template-ish entries — a T-free parameter list (`T fresh<T>()`)
   gives an instance the template's exact signature BY DESIGN.
+  An EXTERNAL NAMESPACE template (`T Space:f<T>(v) { }`) is just an external member
+  that happens to be a template: relocateOutOfLineMembers splices it into the
+  namespace before any registration runs, and the member-template divert takes it
+  from there — no template-specific relocation code. The qualified template head
+  always PARSES; the target decides at relocation, where its kind is known: a CLASS
+  target (an external template method) rejects there ("An out-of-line template
+  definition is not supported yet") — deferred with the cross-TU bundle.
   RULES: a template method OWNS its name within its class (no overload set, both
   directions, checked at registration); base-chain shadowing stays normal — a
   derived template shadows a base plain method and vice versa, and the
@@ -986,13 +993,12 @@ machinery that would have made it)
   entries-vector twin of the arena's retired capture-before-intern discipline.
 
   DEFERRED: class templates, overload participation, NESTED TEMPLATE TYPES (`>>` +
-  gate angle-depth — one umbrella todo entry), OUT-OF-LINE template definitions
-  ("An out-of-line template definition is not supported yet" — the namespace
-  flavor `T Space:f<T>` is an agreed small side quest off the relocation seam;
-  the class flavor bundles with cross-TU, where the header decl / sibling-body
-  split and `--instantiate` motivate its semantics), static-bypass beyond what
-  falls out free, cross-TU + `--instantiate` (plan Phase 9). Canon
-  test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl.
+  gate angle-depth — one umbrella todo entry), OUT-OF-LINE template METHODS (the
+  class flavor bundles with cross-TU, where the header decl / sibling-body split
+  and `--instantiate` motivate its semantics; the namespace flavor is LANDED,
+  above), static-bypass beyond what falls out free, cross-TU + `--instantiate`
+  (plan Phase 9). Canon test/template/tmpl_function.sl + tmpl_alias.sl +
+  tmpl_method.sl.
 
 
 STAGE FILES (.h / .cpp pairs)

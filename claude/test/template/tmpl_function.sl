@@ -104,6 +104,14 @@ Space {
     T twice<T>(T v) { return v + v; }
 }
 
+/* the EXTERNAL (out-of-line) namespace template definition: relocates into the
+   namespace like any external member, then rides the member-template machinery. */
+T Space:thrice<T>(T v) { return v + v + v; }
+
+/* an external template may not collide with a declared member. */
+//-EXPECT-ERROR: may not share its name
+//T Space:twice<T>(T v) { return v; }
+
 /* T bound to a CLASS through reference parameters: the body dispatches the
    class operator and the result returns by value. (Binding a class through a
    BY-VALUE `T` errors like any class value parameter — negative below.) */
@@ -244,6 +252,10 @@ int32 main() {
     /* namespace-scope template, inferred and explicit. */
     int nt = Space:twice(21); __println("nt = " + nt);
     int ne = Space:twice<int>(2); __println("ne = " + ne);
+
+    /* the externally-defined namespace template, inferred and explicit. */
+    int nx = Space:thrice(4); __println("nx = " + nx);
+    int ny = Space:thrice<int>(5); __println("ny = " + ny);
 
     /* T bound to a class; the instance runs the class operator. */
     Pair p1(3, 4);

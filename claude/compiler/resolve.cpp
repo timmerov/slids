@@ -6148,6 +6148,20 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             }
         }
         parse::Node* target = level.front();
+        // An out-of-line TEMPLATE definition: the NAMESPACE flavor relocates like
+        // any external member — registration's member-template divert takes it
+        // from there, so `T Space:f<T>(v) { }` is just an external namespace
+        // function that happens to be a template. The CLASS flavor (an external
+        // template METHOD) is deferred with the cross-TU bundle, where the header
+        // decl / sibling-body split motivates its semantics.
+        if (is_fn && !ch->type_params.empty()
+            && target->kind == parse::Kind::kClassDef) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "An out-of-line template definition is not supported yet.", {}});
+            ch.reset();
+            moved = true;
+            continue;
+        }
         // A ctor/dtor is CLASS-only. The bare form is rejected in the parser ("A
         // constructor or destructor may only appear in a class body"); the QUALIFIED
         // spelling must not be a way around that restriction — a namespace has no
