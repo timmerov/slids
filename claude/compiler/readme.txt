@@ -996,8 +996,27 @@ BOOKMARK into the machinery that would have made it)
   is_template with NO slids_type, NO ns_frame, NO ClassInfo — nothing downstream
   can mistake it for a real class — and the body stays pristine (every stage's
   kClassDef walks skip non-empty type_params, mirroring the function guards). A
-  template OWNS its name: no redefinition, no re-open; incomplete (`...`),
-  template methods inside, and external members reject at registration.
+  template OWNS its name against a LISTLESS opening or a plain class; template
+  methods inside reject at registration.
+
+  A template may be INCOMPLETE, RE-OPENED, and COMPLETED, like a plain class.
+  Every opening repeats the template list (it must MATCH the primary's, names
+  and order — one T-binding then serves every opening's clone); the openings
+  are recorded pristine in TemplateInfo (def + reopens), and the `...` state
+  machine runs at the PATTERN level in registerClassTemplate — open + fields
+  appends, closed + fields / closed + `...` reject — so those errors fire at
+  the declaration whether or not anyone instantiates. A NEVER-COMPLETED
+  incomplete template is an error (at a use, or the end-of-resolve sweep;
+  open_reported dedupes): a plain class left open completes in another TU via
+  its header, but cross-TU templates have not landed, so the dangling `...`
+  gets a focused diagnostic instead of a silent half-class. EXTERNAL members
+  (`T Ext:gete() { }`, `const int Ext:kk = 40;`, external alias / enum)
+  relocate into the pattern's children BEFORE registration reads them, so they
+  ride every instance with no template-specific relocation code (the member-
+  TEMPLATE flavor still rejects). One edge falls out of the relocation
+  disambiguator: `Ext:Zub() { }` with no member `Zub` reinterprets as
+  inheritance from the bare template name and errors "requires a
+  type-argument list".
 
   A USE instantiates in resolveTypeRef's kTmplUse arm — the same arm that
   expands alias templates, now branching on the entry's kind — plus the
@@ -1005,25 +1024,39 @@ BOOKMARK into the machinery that would have made it)
   branch retargets at the instance) and sizeof's identifier gate. Arguments
   canonicalize (removeConst∘deepStrip) for the memo, so `Vec<Integer>` IS
   `Vec<int>`; the result wraps in a kAlias labeled AS WRITTEN for ##type.
-  Instantiation runs the registerLocalClasses FOUR-PHASE shape over a clone
-  renamed to the canonical spelling ("Vec<int>" — the def_id from the transient
-  frame disambiguates same-spelled instances of same-named templates in
-  different scopes; widen::classSymbol $-escapes `<`/`>`/`,`/space at the ONE
-  place class symbols mint): registerClassName + registerScopeNames +
-  resolveScopeTypes + checkClassCyclesAndNeeds happen AT the trigger; the BODY
-  defers to an end-of-resolve drain (after Pass 2-scope, where every snapshot
-  is taken and every file-scope body has resolved; drained bodies may enqueue
-  more instances — the loop runs to empty — then every instance node splices
-  after its template's def). A trigger AFTER resolve (a `Vec<T>` inside a
-  function-template body, instantiated at classify) resolves its body
-  synchronously and classify runs the late stages over the parked node
-  (takeResolvedClassInstances -> constfold::runOn + the class classify passes,
-  ordered BEFORE the demanding function's body so constructions read folded
-  field defaults). An early trigger (another class's field, Pass 1a-types,
-  before the snapshot mini-pass) runs on the CURRENT state — file scope
-  mid-registration, the right visibility for the type phases.
+  Instantiation runs the registerLocalClasses FOUR-PHASE shape over a clone of
+  EVERY OPENING — primary, then each re-open, source order — all renamed to
+  the canonical spelling ("Vec<int>" — the def_id from the transient frame
+  disambiguates same-spelled instances of same-named templates in different
+  scopes; widen::classSymbol $-escapes `<`/`>`/`,`/space at the ONE place
+  class symbols mint): the primary clone registers, each re-open clone then
+  hits registerClassName's ordinary plain-class MERGE arm under the instance
+  name (is_reopen, pending_fields, pending_hooks), so appended fields,
+  hooks contributed by different openings (a ctor declared in one, defined in
+  another), member sets, overloads spanning openings, and the virtual re-open
+  rules (validateVirtualClass runs on the re-open clones) all land per
+  instance with NO new merge logic. registerScopeNames + resolveScopeTypes run
+  per clone; the BODIES defer to an end-of-resolve drain (after Pass 2-scope,
+  where every snapshot is taken and every file-scope body has resolved;
+  drained bodies may enqueue more instances — the loop runs to empty — then
+  every clone splices after its template's def). A trigger AFTER resolve (a
+  `Vec<T>` inside a function-template body, instantiated at classify) resolves
+  its bodies synchronously and classify runs the late stages over the parked
+  nodes (takeResolvedClassInstances -> constfold::runOn + the class classify
+  passes, ordered BEFORE the demanding function's body so constructions read
+  folded field defaults). An early trigger (another class's field, Pass
+  1a-types, before the snapshot mini-pass) runs on the CURRENT state — file
+  scope mid-registration, the right visibility for the type phases.
 
-  Three load-bearing mechanics, each bought with a bug:
+  Four load-bearing mechanics, each bought with a bug:
+  - owner stamped LATE: the instance entry's owner_ns_frame (the symbol's
+    scope path — it makes a namespace template's instance mangle under the
+    namespace) is written only AFTER every opening clone has registered.
+    findInFrame skips owner-bearing entries (a namespace member is not a
+    lexical occupant of its frame), so an early stamp hid the primary clone
+    from a NAMESPACE-member re-open's merge lookup — the re-open re-registered
+    a SECOND class and its synthesized transfer ops defined twice: invalid IR
+    at llc, file/block scope unaffected (no owner frame).
   - tmpl_self_stack: inside its own instantiation the template's bare name
     means THE INSTANCE (the receiver `Vec^`, a self-typed member, a
     self-construction) via an explicit stack consulted by the kSlid arm,
@@ -1065,14 +1098,14 @@ BOOKMARK into the machinery that would have made it)
   into a type-list today, `Pair<VI, int8>`), OUT-OF-LINE template METHODS (the
   class flavor bundles with cross-TU, where the header decl / sibling-body split
   and `--instantiate` motivate its semantics; the namespace flavor is LANDED,
-  above), class-template re-open / incomplete / external members / member
-  template methods (rejected today), QUALIFIED naming of a class-template
-  instance's members from outside (`Kit<int>:Sub` has no spelling — a qualifier
-  segment is an identifier; inside the body they resolve bare) and the `Base:`
-  bypass naming an instance base (same spelling limit), static-bypass beyond
-  what falls out free, cross-TU + `--instantiate` (plan Phase 9). Canon
-  test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl +
-  tmpl_class.sl.
+  above), member template methods inside a class template (rejected today),
+  QUALIFIED naming of a class-template instance's members from outside
+  (`Kit<int>:Sub` has no spelling — a qualifier segment is an identifier;
+  inside the body they resolve bare) and the `Base:` bypass naming an instance
+  base (same spelling limit), static-bypass beyond what falls out free,
+  cross-TU + `--instantiate` incl. header-declared incomplete templates (plan
+  Phase 9). Canon test/template/tmpl_function.sl + tmpl_alias.sl +
+  tmpl_method.sl + tmpl_class.sl + tmpl_complete.sl.
 
 
 STAGE FILES (.h / .cpp pairs)

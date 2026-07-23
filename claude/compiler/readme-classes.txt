@@ -38,13 +38,26 @@ via an alias — `alias VI = Vec<int>; Pair<VI, int8>`) propagates its
 needs/hooks through the instance's fields transitively. Instantiation timing,
 the self-name stack, member liveness, and the runaway caps: readme.txt
 TEMPLATES. Canon test/template/tmpl_class.sl.
-RESTRICTIONS: a class template owns its name (no re-open, no redefinition); no
-incomplete (`...`), no external members, no template methods inside a template
-class (all rejected); an instance's members have NO qualified spelling from
-outside (`Kit<int>:Sub` — a qualifier segment is an identifier), and the
-`Base:` bypass cannot name an instance base for the same reason. The
-out-of-line template METHOD form (`T Class:m<T>`) stays deferred with the
-cross-TU bundle (the NAMESPACE flavor is landed — readme.txt TEMPLATES).
+
+A class template may be INCOMPLETE, RE-OPENED, and COMPLETED, like a plain
+class: every opening repeats the (matching) template list, the `...` rules
+fire at the declaration, and instantiation clones EVERY opening — the clones
+re-run the plain-class merge, so appended fields (class-typed included, with
+needs propagation), hooks split across openings (declare in one, define in
+another), overload sets spanning openings, the virtual re-open rules, and
+user transfer operators contributed by a re-open all behave exactly as a
+plain class's openings do. EXTERNAL members (`T Ext:gete()`, `const int
+Ext:kk`, alias, enum) relocate into the pattern and ride every instance. A
+NEVER-COMPLETED incomplete template errors (a plain class completes cross-TU
+via its header; cross-TU templates haven't landed). Canon
+test/template/tmpl_complete.sl.
+RESTRICTIONS: a class template owns its name against a LISTLESS opening or a
+plain class; no template methods inside a template class (rejected); an
+instance's members have NO qualified spelling from outside (`Kit<int>:Sub` —
+a qualifier segment is an identifier), and the `Base:` bypass cannot name an
+instance base for the same reason. The out-of-line template METHOD form
+(`T Class:m<T>`) stays deferred with the cross-TU bundle (the NAMESPACE
+flavor is landed — readme.txt TEMPLATES).
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)

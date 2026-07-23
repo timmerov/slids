@@ -217,20 +217,11 @@ void fnB() {
 //-EXPECT-ERROR: owns its name
 //Vec(int dup_ = 0) { }
 
-/* a class template may not be declared incomplete. */
-//-EXPECT-ERROR: may not be declared incomplete
-//Inc<T>(T a_ = 0, ...) {
-//}
-
 /* a template method inside a class template is deferred. */
 //-EXPECT-ERROR: may not contain a template method
 //TM<T>(T a_ = 0) {
 //    U m<U>(U v) { return v; }
 //}
-
-/* an external member of a class template is deferred. */
-//-EXPECT-ERROR: not supported
-//int Vec:late() { return 1; }
 
 int32 main() {
 

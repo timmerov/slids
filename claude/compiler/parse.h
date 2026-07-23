@@ -562,6 +562,17 @@ struct TemplateInfo {
     // snapshot or instance list. True once the TARGET has been resolved into the
     // entry's PATTERN (lazily at first use, or at the validate pass).
     bool pattern_built = false;
+    // CLASS templates: the template's further OPENINGS (re-opens, each repeating
+    // the primary's template list), recorded pristine like `def`; instantiation
+    // clones every opening in source order and the clones re-run the plain-class
+    // merge (appended fields, contributed hooks, member sets) per instance.
+    // cls_open mirrors ClassInfo.is_open at the PATTERN level — true while the
+    // latest opening carried a trailing `...` — so the re-open field rules fire
+    // at the declaration. open_reported dedupes the never-completed diagnostic
+    // (a use site and the end-of-resolve sweep can both see it).
+    std::vector<Node*> reopens;
+    bool cls_open = false;
+    bool open_reported = false;
     std::vector<int> frame_id_stack;
     std::vector<std::size_t> frame_entries_start_stack;
     std::vector<int> live_entry_ids;

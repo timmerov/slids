@@ -1946,6 +1946,29 @@ Phase 9 — templates
     umbrella — an alias argument smuggles an instance in today), qualified
     naming of instance members from outside (`Kit<int>:Sub` has no spelling),
     the `Base:` bypass naming an instance base (same spelling limit).
+    THEN — TEMPLATE CLASS COMPLETION (same day): incomplete, re-open, and
+    external members un-deferred. THE SHAPE: openings stay PATTERNS — the
+    primary plus each re-open (repeating the primary's template list, exactly)
+    record pristine in TemplateInfo, the `...` state machine runs at the
+    pattern so "cannot add fields" / "already complete" fire at the
+    declaration — and instantiation clones EVERY opening in source order: the
+    re-open clones hit registerClassName's ordinary plain-class MERGE arm
+    under the instance name, so appended fields (class-typed included, needs
+    propagating), hooks split across openings (declared in one, defined in
+    another), overload sets spanning openings, re-open-contributed transfer
+    operators, and the virtual re-open rules all land with ZERO new merge
+    logic and zero grammar work. External members relocate into the pattern
+    before registration and ride every clone. A NEVER-COMPLETED incomplete
+    template errors (use site or end-of-resolve sweep, deduped): a plain
+    class completes cross-TU via its header; cross-TU templates haven't
+    landed. HARD-WON: the instance's owner_ns_frame stamps only after EVERY
+    opening clone registers — findInFrame skips owner-bearing entries, so an
+    early stamp hid the primary from a NAMESPACE-member re-open's merge
+    lookup, which re-registered a second class and defined the synthesized
+    transfer ops twice (invalid IR at llc; file/block scope unaffected).
+    Canon test/template/tmpl_complete.sl (40 golden lines; 10 negatives).
+    Still deferred: header-declared incomplete templates (cross-TU), member
+    template methods, listless re-opens (a collision by design).
   * post-compile-pre-link stage (`--instantiate` aggregation)
 
 

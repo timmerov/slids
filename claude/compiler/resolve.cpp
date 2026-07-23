@@ -5164,12 +5164,8 @@ int tryMergeGlobalDecl(parse::Tree& tree, int prev, parse::Node const& d) {
 void registerClassTemplate(parse::Tree& tree, parse::Node& node,
                            std::vector<std::unique_ptr<parse::Node>>* host_list,
                            int owner, diagnostic::Sink& diag) {
-    // The deferred forms, rejected up front (they'd otherwise ride the clone).
-    if (node.is_incomplete) {
-        diagnostic::report(diag, {node.file_id, node.name_tok,
-            "A class template may not be declared incomplete ('...').", {}});
-        return;
-    }
+    // The deferred form, rejected up front (it would otherwise ride the clone).
+    // Applies to EVERY opening — the scan runs before the re-open divert below.
     for (auto& m : node.children) {
         if (m && (m->kind == parse::Kind::kFunctionDef
                   || m->kind == parse::Kind::kFunctionDecl)
@@ -5183,6 +5179,49 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
         ? findMemberDeclared(tree, owner, node.name)
         : parse::findInFrame(tree, parse::currentFrameId(tree), node.name);
     if (prev >= 0) {
+        // A same-scope same-name CLASS TEMPLATE: this opening is a RE-OPEN.
+        // Record it pristine; instantiation clones every opening and the
+        // clones re-run the plain-class merge. The `...` state machine runs
+        // HERE, at the pattern, so the field rules fire at the declaration
+        // whether or not anyone instantiates.
+        if (tree.entries[prev].kind == parse::EntryKind::kClass
+            && tree.entries[prev].is_template) {
+            auto it = tree.templates.find(prev);
+            if (it == tree.templates.end()) return;   // registration errored
+            parse::TemplateInfo& ti = it->second;
+            if (node.type_params != ti.def->type_params) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "A re-open's template list must match class template '"
+                    + node.name + "'s.",
+                    {{ti.def->file_id, ti.def->name_tok, "first declared here"}}});
+                return;
+            }
+            bool has_fields = false;
+            for (auto& p : node.params)
+                if (p && p->name != "_$vptr" && p->name != "_$base") {
+                    has_fields = true;
+                    break;
+                }
+            if (ti.cls_open) {
+                ti.cls_open = node.is_incomplete;   // no trailing `...` -> closed
+            } else if (has_fields) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "Duplicate definition of class template '" + node.name
+                    + "'; a re-open cannot add fields (use '" + node.name
+                    + "<...>()' to add members).",
+                    {{ti.def->file_id, ti.def->name_tok, "first defined here"}}});
+                return;
+            } else if (node.is_incomplete) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "Class template '" + node.name + "' is already complete; it "
+                    "cannot be re-opened as incomplete.",
+                    {{ti.def->file_id, ti.def->name_tok, "first defined here"}}});
+                return;
+            }
+            node.resolved_entry_id = prev;
+            ti.reopens.push_back(&node);
+            return;
+        }
         parse::Entry const& pe = tree.entries[prev];
         reportNameCollision(diag, "Duplicate declaration of '" + node.name + "'.",
                             pe.file_id, pe.tok, node.file_id, node.name_tok);
@@ -5201,6 +5240,7 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
     parse::TemplateInfo ti;
     ti.def = &node;
     ti.host_list = host_list;
+    ti.cls_open = node.is_incomplete;   // trailing `...` — re-opens may append
     tree.templates[node.resolved_entry_id] = std::move(ti);
 }
 
@@ -5405,12 +5445,13 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
         // recursion registers into the shared frame; the class BODY passes
         // (registerClassBody / cycle / needs) skip a reopen node.
         if (prev.kind == parse::EntryKind::kClass) {
-            // A class TEMPLATE owns its name: no plain-class redefinition, no
-            // re-open (it has no ClassInfo to merge into).
+            // A class TEMPLATE owns its name: a LISTLESS opening is no re-open
+            // (every opening spells the template list — the divert above takes
+            // those), and a plain class cannot share the name.
             if (prev.is_template) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
-                    "A class template owns its name; '" + node.name
-                    + "' cannot be redefined or re-opened.",
+                    "A class template owns its name; a re-open of '" + node.name
+                    + "' must repeat its template list.",
                     {{prev.file_id, prev.tok, "template declared here"}}});
                 return;
             }
@@ -6026,10 +6067,16 @@ void registerLocalClasses(parse::Tree& tree,
             continue;
         // A block-scope CLASS TEMPLATE: register the pattern and snapshot right
         // here — the current state IS its definition-point visibility (the same
-        // move a block-scope function template makes).
+        // move a block-scope function template makes). A RE-OPEN opening also
+        // lands here (registerClassTemplate records it); only the PRIMARY
+        // snapshots — the template has ONE definition-point state.
         if (!s->type_params.empty()) {
             registerClassTemplate(tree, *s, &stmts, /*owner=*/-1, diag);
-            if (s->resolved_entry_id >= 0) snapshotTemplate(tree, *s);
+            if (s->resolved_entry_id >= 0) {
+                auto it = tree.templates.find(s->resolved_entry_id);
+                if (it != tree.templates.end() && it->second.def == s.get())
+                    snapshotTemplate(tree, *s);
+            }
             continue;
         }
         fresh.push_back(s.get());
@@ -6377,16 +6424,10 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             }
         }
         parse::Node* target = level.front();
-        // An external member of a CLASS TEMPLATE (`int Vec:late() { }`) is
-        // deferred: the pattern's member set is fixed at its definition.
-        if (target->kind == parse::Kind::kClassDef
-            && !target->type_params.empty()) {
-            diagnostic::report(diag, {ch->file_id, ch->name_tok,
-                "An external member of a class template is not supported yet.", {}});
-            ch.reset();
-            moved = true;
-            continue;
-        }
+        // An external member of a CLASS TEMPLATE (`int Vec:late() { }`,
+        // `const int Vec:kk = 40;`) relocates into the PATTERN's children —
+        // before registration reads them — and so rides every instance clone.
+        // (A member TEMPLATE targeting a class still rejects, below.)
         // An out-of-line TEMPLATE definition: the NAMESPACE flavor relocates like
         // any external member — registration's member-template divert takes it
         // from there, so `T Space:f<T>(v) { }` is just an external namespace
@@ -7020,6 +7061,22 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         auto memo = it->second.instances.find(args);
         if (memo != it->second.instances.end()) return memo->second;
     }
+    // A never-completed INCOMPLETE template has no layout to instantiate. A
+    // plain class left open completes in another translation unit via its
+    // header; cross-TU templates have not landed, so this is an error, not a
+    // half-class. (The end-of-resolve sweep catches the never-USED case;
+    // open_reported keeps the two sites to one diagnostic.)
+    if (it->second.cls_open) {
+        if (!it->second.open_reported) {
+            it->second.open_reported = true;
+            diagnostic::report(diag, {file_id, tok,
+                "Class template '" + tree.entries[tmpl_entry_id].name
+                + "' is declared incomplete ('...') and never completed; "
+                "cross-TU completion of a template is not supported yet — "
+                "close it with a re-open that omits the '...'.", {}});
+        }
+        return -1;
+    }
     if (tree.tmpl_instantiation_depth >= 64
         || tree.class_instance_total >= 512) {
         diagnostic::report(diag, {file_id, tok,
@@ -7044,23 +7101,39 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     std::size_t live_mark = tree.live_entry_ids.size();
     bindInstanceAliases(tree, tmpl_entry_id, args);
 
-    // Clone the pristine definition; name it by the canonical use spelling.
+    // Clone EVERY opening — the primary, then each re-open, in source order —
+    // named by the canonical use spelling. The re-open clones hit the ordinary
+    // plain-class merge at registration (is_reopen, pending_fields,
+    // pending_hooks), so appended fields, contributed hooks, and member sets
+    // land per instance exactly as a plain class's openings do.
     parse::Node* def = tree.templates.at(tmpl_entry_id).def;
-    auto clone = cloneDeep(*def);
-    clone->type_params.clear();
-    clone->type_param_toks.clear();
     std::string iname = def->name + "<";
     for (std::size_t i = 0; i < args.size(); i++) {
         if (i) iname += ", ";
         iname += widen::spell(args[i]);
     }
     iname += ">";
-    clone->name = iname;
+    std::vector<std::unique_ptr<parse::Node>> clones;
+    {
+        std::vector<parse::Node*> openings;
+        openings.push_back(def);
+        for (parse::Node* r : tree.templates.at(tmpl_entry_id).reopens)
+            openings.push_back(r);
+        for (parse::Node* o : openings) {
+            auto c = cloneDeep(*o);
+            c->type_params.clear();
+            c->type_param_toks.clear();
+            c->name = iname;
+            c->resolved_entry_id = -1;   // a re-open pattern points at the
+                                         // template entry; the clone re-binds
+            clones.push_back(std::move(c));
+        }
+    }
 
     // The NAME phase: entry + frame + placeholder ClassInfo (unique: the name
     // carries the args, the def_id carries this transient frame).
-    registerClassName(tree, *clone, diag);
-    int iid = clone->resolved_entry_id;
+    registerClassName(tree, *clones[0], diag);
+    int iid = clones[0]->resolved_entry_id;
     if (iid < 0) {
         parse::popFrame(tree);
         if (installed) restoreResolveState(tree, saved);
@@ -7072,24 +7145,44 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     tree.tmpl_self_stack.push_back({tmpl_entry_id, iid});
     // Memo BEFORE the member phases, so a recursive `Vec<T>^` field lands here.
     tree.templates.at(tmpl_entry_id).instances[args] = iid;
-    // The instance LIVES where its template does (the symbol's scope path).
-    tree.entries[iid].owner_ns_frame = tree.entries[tmpl_entry_id].owner_ns_frame;
     tree.entries[iid].tmpl_args = args;
 
-    // NAME (members) -> TYPES (fields + signatures) -> cycle + needs + virtual.
+    // NAME (members, opening by opening — a re-open clone finds the primary
+    // clone in this frame and merges) -> TYPES per opening (registerClassBody
+    // runs once, on the primary; a re-open's members still type) -> cycle +
+    // needs + the virtual rules (the re-open flavor runs on the re-open
+    // clones, as the file-scope passes do on re-open nodes).
     std::vector<parse::Node*> classes;
-    classes.push_back(clone.get());
-    registerScopeNames(tree, *clone, tree.entries[iid].ns_frame_id, classes, diag);
-    resolveScopeTypes(tree, *clone, /*isClass=*/true, diag);
+    classes.push_back(clones[0].get());
+    registerScopeNames(tree, *clones[0], tree.entries[iid].ns_frame_id, classes,
+                       diag);
+    for (std::size_t i = 1; i < clones.size(); i++) {
+        registerClassName(tree, *clones[i], diag);
+        if (clones[i]->resolved_entry_id >= 0)
+            registerScopeNames(tree, *clones[i], tree.entries[iid].ns_frame_id,
+                               classes, diag);
+    }
+    // The instance LIVES where its template does (the symbol's scope path).
+    // Stamped only NOW: findInFrame skips owner-bearing entries (a namespace
+    // member is not a lexical occupant), so setting this before the re-open
+    // clones registered would hide the primary from their merge lookup — a
+    // namespace-member template's re-open then re-registered as a SECOND class
+    // and its synthesized transfer ops emitted twice (invalid IR at llc).
+    tree.entries[iid].owner_ns_frame = tree.entries[tmpl_entry_id].owner_ns_frame;
+    for (auto& c : clones) resolveScopeTypes(tree, *c, /*isClass=*/true, diag);
     checkClassCyclesAndNeeds(tree, classes, diag);
+    for (std::size_t i = 1; i < clones.size(); i++)
+        validateVirtualClass(tree, *clones[i], diag);
 
     bool late = tree.resolve_done;
     if (late) {
         // Post-resolve (classify demanded this instance): everything is
-        // registered, so the body resolves right here, under this frame's T
-        // bindings; classify runs the late stages over the parked node.
-        resolveScopeBodies(tree, *clone, /*isClass=*/true, diag);
-        mungeParamTypes(tree, *clone, diag);
+        // registered, so the bodies resolve right here, under this frame's T
+        // bindings; classify runs the late stages over the parked nodes.
+        for (auto& c : clones) {
+            resolveScopeBodies(tree, *c, /*isClass=*/true, diag);
+            mungeParamTypes(tree, *c, diag);
+        }
     }
 
     tree.tmpl_self_stack.pop_back();
@@ -7098,17 +7191,19 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // a member const, a synthesized operator). Collect every member entry the
     // phases registered (owner_ns_frame >= 0 — the T aliases are lexical and
     // rightly die) and re-publish them past the pop/restore. The list also
-    // rides the pending entry: the drain installs the template's snapshot,
+    // rides the pending entries: the drain installs the template's snapshot,
     // whose live set predates this instance.
     std::vector<int> keep;
     for (std::size_t k = live_mark; k < tree.live_entry_ids.size(); k++) {
         int eid = tree.live_entry_ids[k];
         if (tree.entries[eid].owner_ns_frame >= 0) keep.push_back(eid);
     }
-    parse::TemplateInfo& ti = tree.templates.at(tmpl_entry_id);
-    tree.pending_class_instances.push_back(
-        {ti.host_list, ti.def, std::move(clone), tmpl_entry_id, iid, args,
-         keep, /*body_resolved=*/late});
+    for (auto& c : clones) {
+        parse::TemplateInfo& ti = tree.templates.at(tmpl_entry_id);
+        tree.pending_class_instances.push_back(
+            {ti.host_list, ti.def, std::move(c), tmpl_entry_id, iid, args,
+             keep, /*body_resolved=*/late});
+    }
     parse::popFrame(tree);
     if (installed) restoreResolveState(tree, saved);
     tree.live_entry_ids.insert(tree.live_entry_ids.end(), keep.begin(), keep.end());
@@ -7647,6 +7742,22 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // after its template, where the remaining passes (munge below, then
     // constfold/classify/desugar/codegen) walk it like any class.
     drainClassTemplateBodies(tree, diag);
+
+    // A class template whose `...` was never closed — used or not — errors: a
+    // plain class left open completes in another TU via its header, but
+    // cross-TU templates have not landed. (A USED open template reported at
+    // its use; open_reported keeps this to one diagnostic.)
+    for (auto& [tid, ti] : tree.templates) {
+        if (!ti.def || ti.def->kind != parse::Kind::kClassDef) continue;
+        if (ti.cls_open && !ti.open_reported) {
+            ti.open_reported = true;
+            diagnostic::report(diag, {ti.def->file_id, ti.def->name_tok,
+                "Class template '" + ti.def->name + "' is declared incomplete "
+                "('...') and never completed; cross-TU completion of a template "
+                "is not supported yet — close it with a re-open that omits the "
+                "'...'.", {}});
+        }
+    }
     tree.resolve_done = true;
 
     // Pass 3 — orphan declarations. A function declared but never defined
