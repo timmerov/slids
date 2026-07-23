@@ -59,6 +59,9 @@ UNBLOCKED FEATURES
     the type-parameter patterns themselves (the C++-style two-phase split). The
     current behavior is pinned by the nonsense template in tmpl_function.sl.
 
+  * need to review diagnostic messages. some are littered with incomprehensible
+    jargon. use opus not fable.
+
 
 BLOCKED FEATURES
 

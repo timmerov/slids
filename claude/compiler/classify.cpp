@@ -87,6 +87,15 @@ std::string preferredSpelling(std::string const& t) {
     return t;
 }
 
+// Spell a type for a diagnostic. An ALIAS spells as label AND target —
+// 'T=int', 'Integer=int' — so a message like "No common type for 'T' and 'X'"
+// says what the labels are actually bound to.
+std::string spellForMessage(widen::TypeRef t) {
+    if (t != widen::kNoType && widen::form(t) == widen::Type::Form::kAlias)
+        return widen::spellOrEmpty(t) + "=" + widen::spellOrEmpty(widen::strip(t));
+    return widen::spellOrEmpty(t);
+}
+
 // These predicates read the STRUCTURE off the handle (form / cat / bits) — no
 // spelling is produced. Callers pass a type field (a TypeRef) directly; the
 // structure is the single source of truth (spellings live only at human edges).
@@ -2291,8 +2300,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
 
             flexBinaryOperands(lhs, rhs);
-            std::string lt = widen::spellOrEmpty(lhs.inferred_type);   // for the message
-            std::string rt = widen::spellOrEmpty(rhs.inferred_type);   // (keeps alias name)
+            std::string lt = spellForMessage(lhs.inferred_type);   // for the message (an
+            std::string rt = spellForMessage(rhs.inferred_type);   // alias spells 'T=int')
 
             widen::TypeRef optyRef;
             if (!widen::commonType(lhs.inferred_type, rhs.inferred_type, optyRef)) {
@@ -6405,8 +6414,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             widen::TypeRef optyRef;
             if (!widen::commonType(s.return_type, rhs.inferred_type, optyRef)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
-                    "No common type for '" + lvalue_type + "' and '"
-                    + widen::spellOrEmpty(rhs.inferred_type)
+                    "No common type for '" + spellForMessage(s.return_type) + "' and '"
+                    + spellForMessage(rhs.inferred_type)
                     + "'; use an explicit type conversion.", {}});
                 return;
             }

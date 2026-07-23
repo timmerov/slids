@@ -543,6 +543,10 @@ struct ClassInfo {
     }
 };
 
+// One live "the template's bare name means THE INSTANCE" redirect — the
+// element of Tree::tmpl_self_stack (hoisted so TemplateInfo can snapshot it).
+struct TmplSelf { int tmpl_entry; int instance_entry; };
+
 // A registered function TEMPLATE: the pristine definition node plus the resolve-state
 // snapshot needed to re-enter resolution at the definition point when classify demands
 // an instance. Resolve's scope state (frames, live entries, open namespaces,
@@ -585,6 +589,11 @@ struct TemplateInfo {
     std::vector<int> open_ns_frames;
     std::set<int> initialized_locals;
     std::set<int> assigned_arrays;
+    // The self-redirects live at the definition point — nonempty only for a
+    // pattern registered INSIDE a class-template instantiation (a template
+    // method of a class template): its bare receiver/self spellings must
+    // rebind to that flavor when classify re-enters here.
+    std::vector<TmplSelf> tmpl_self_stack;
     std::map<std::vector<widen::TypeRef>, int> instances;  // bound types -> instance entry
 };
 
@@ -656,7 +665,6 @@ struct Tree {
     // instance) and as an explicit map: a NAMESPACE-member template's name
     // resolves through the open-ns chain to the TEMPLATE entry, over any
     // transient frame alias.
-    struct TmplSelf { int tmpl_entry; int instance_entry; };
     std::vector<TmplSelf> tmpl_self_stack;
     // TEMPLATE-SOURCE strip records: the top-level names dropped from a loaded
     // template source (private to the template's own TU). When an INLINE-LOCAL

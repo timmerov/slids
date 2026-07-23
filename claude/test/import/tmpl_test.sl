@@ -95,9 +95,9 @@ int32 main() {
     /* the identifier flavor of the same chain: the body READS a private
        const — the note says "references 'kBias'". */
     //-EXPECT-ERROR: references 'kBias'
-    Loc ra(1);
-    Loc^ rb = tbias(^ra);
-    __println("rb = " + rb^.lv());
+    //Loc ra(1);
+    //Loc^ rb = tbias(^ra);
+    //__println("rb = " + rb^.lv());
 
     /* THE CARVE-OUT: a local-type instance of an imported class's template
        method emits `define internal` HERE — the one sanctioned exception to

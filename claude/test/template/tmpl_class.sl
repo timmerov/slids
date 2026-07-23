@@ -37,10 +37,10 @@ virtuals, inheritance (both directions), for-class, arrays, and `new` ride
 existing machinery; ##type reports the use as written.
 
 the type-list is required (no inference from construction arguments). a
-template owns its name (no overloads, no re-open); incomplete (`...`),
-external members (`T Vec:m()`), and template methods inside a template
-class are rejected this landing; nested uses (`Pair<Vec<int>>`) stay with
-the `>>` umbrella todo.
+template owns its name (no overloads, no re-open); incomplete (`...`) and
+external members (`T Vec:m()`) are rejected this landing; template methods
+inside a template class landed later (tmpl_nested.sl); nested uses
+(`Pair<Vec<int>>`) stay with the `>>` umbrella todo.
 */
 
 /* the workhorse: fields and methods on T, a user binary operator. */
@@ -216,12 +216,6 @@ void fnB() {
 /* a template owns its name: no plain-class duplicate, no re-open. */
 //-EXPECT-ERROR: owns its name
 //Vec(int dup_ = 0) { }
-
-/* a template method inside a class template is deferred. */
-//-EXPECT-ERROR: may not contain a template method
-//TM<T>(T a_ = 0) {
-//    U m<U>(U v) { return v; }
-//}
 
 int32 main() {
 

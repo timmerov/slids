@@ -425,6 +425,19 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 }
                 return tree.entries[id].slids_type;
             }
+            // A SUB-PATTERN's own bare name inside its instantiation (the
+            // receiver `Inner^`, a self-typed member): its entry is registered
+            // under the QUALIFIED spelling, so resolveName misses it — match
+            // the redirect by the pattern's spelled name instead.
+            if (id < 0) {
+                for (auto it = tree.tmpl_self_stack.rbegin();
+                     it != tree.tmpl_self_stack.rend(); ++it) {
+                    auto sti = tree.templates.find(it->tmpl_entry);
+                    if (sti != tree.templates.end() && sti->second.def
+                        && sti->second.def->name == name)
+                        return tree.entries[it->instance_entry].slids_type;
+                }
+            }
             bool is_alias = id >= 0 && tree.entries[id].kind == parse::EntryKind::kAlias;
             bool is_enum  = id >= 0
                 && tree.entries[id].kind == parse::EntryKind::kNamespace
@@ -799,8 +812,8 @@ bool reportPrivateNameInInline(parse::Tree& tree, std::string const& name,
     }
     diagnostic::report(diag, {ctx.use_file, ctx.use_tok,
         "Cannot instantiate '" + tname + "' with the local type '" + lname
-        + "': the template's body uses a name private to its source; emitting "
-        "this instance in this translation unit would fail at link.",
+        + "': the template uses a name private to its source; "
+        "this would fail at link.",
         {{lfile, ltok, "local class '" + lname + "' declared here"},
          {tree.entries[ctx.tmpl_entry].file_id, tree.entries[ctx.tmpl_entry].tok,
           "'" + tname + "' declared here"},
@@ -1011,6 +1024,15 @@ int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
                              int file_id, int tok, diagnostic::Sink& diag,
                              bool& reported) {
     if (name.find(':') == std::string::npos) return resolveName(tree, name);
+    // A nested class template's SUB-PATTERN is registered under the qualified
+    // spelling itself ("Outer:Inner") — the whole name is the entry name, so
+    // try it before the namespace walk (which would reject the outer template:
+    // a pattern owns no frame).
+    if (int sub = resolveName(tree, name);
+        sub >= 0 && tree.entries[sub].kind == parse::EntryKind::kClass
+        && tree.entries[sub].is_template) {
+        return sub;
+    }
     std::vector<std::string> segs;
     bool global = false;
     std::size_t i = 0;
@@ -4523,7 +4545,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // pre-pass before this statement is reached. The no-op here RELIES on
             // that, so assert it — a kClassDef arriving unregistered means a body
             // path bypassed the pre-pass (the Finding-1 silent-drop), not a case
-            // to swallow quietly.
+            // to swallow quietly. EXCEPTION: the pre-pass ran but registration
+            // itself rejected the class (every error return leaves the node
+            // unregistered by design) — the diagnostic is already recorded, so
+            // return and let it render instead of aborting on the assert.
+            if (s.resolved_entry_id < 0 && diagnostic::hasErrors(diag))
+                return Completion::Normal;
             assert(s.resolved_entry_id >= 0
                    && "kClassDef reached resolveStmt unregistered — a body path "
                       "skipped resolveStmtList's local-class pre-pass");
@@ -4771,7 +4798,24 @@ void snapshotTemplate(parse::Tree& tree, parse::Node& node) {
     ti.assigned_arrays = tree.assigned_arrays;
     ti.current_class_name = tree.current_class_name;   // a METHOD template's body
     ti.current_base_name = tree.current_base_name;     //   resolves as a member's
+    ti.tmpl_self_stack = tree.tmpl_self_stack;   // a pattern inside a class-template
+                                                 //   instantiation keeps its flavor's
+                                                 //   bare-name redirect
     ti.snapshot_taken = true;
+    // A kClassDef pattern's NESTED CLASS TEMPLATES (sub-patterns, registered
+    // beside it under "Outer:Inner") share its definition-point visibility —
+    // capture theirs with the same state. (The file-scope snapshot pass also
+    // reaches them through tree.templates; snapshot_taken keeps it single.)
+    if (node.kind == parse::Kind::kClassDef) {
+        for (auto& m : node.children) {
+            if (m && m->kind == parse::Kind::kClassDef && !m->type_params.empty()
+                && m->resolved_entry_id >= 0) {
+                auto sit = tree.templates.find(m->resolved_entry_id);
+                if (sit != tree.templates.end() && !sit->second.snapshot_taken)
+                    snapshotTemplate(tree, *m);
+            }
+        }
+    }
     // A BLOCK template's body may CAPTURE host locals — but it resolves only at
     // instantiation, after the host's unused-local sweep. Mark every host local
     // the body names as READ now, so a local used only inside the template
@@ -5285,23 +5329,26 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
                            int owner, diagnostic::Sink& diag) {
     // The deferred forms, rejected up front (they would otherwise ride the
     // clone). Both scans run before the re-open divert below, so they cover
-    // EVERY opening. A nested class is rejected only for a HEADER-owned
-    // template (a header is declarations-only and a re-open cannot reach
-    // into a nested class, so its bodies have no delivery channel; a
-    // TU-local template keeps its nested classes — tmpl_class.sl Kit:Sub).
-    // fileIsImported covers the header's openings AND a loaded template
-    // source's re-opens alike.
+    // EVERY opening, and both fire only for a HEADER-owned template — a
+    // TU-local template keeps its nested classes (tmpl_class.sl Kit:Sub) AND
+    // its template methods (tmpl_nested.sl): the flavor clone re-registers
+    // them per instance through the ordinary member diverts. A header's
+    // flavors are declaration-only with bodies aggregated by --instantiate,
+    // and an inner pattern's instances aren't knowable there — no delivery
+    // channel, so both forms stay rejected cross-TU. fileIsImported covers
+    // the header's openings AND a loaded template source's re-opens alike.
     for (auto& m : node.children) {
         if (!m) continue;
+        if (!fileIsImported(tree, node.file_id)) break;
         if ((m->kind == parse::Kind::kFunctionDef
              || m->kind == parse::Kind::kFunctionDecl)
             && !m->type_params.empty()) {
             diagnostic::report(diag, {m->file_id, m->name_tok,
-                "A class template may not contain a template method.", {}});
+                "A class template declared in a header may not contain a "
+                "template method (not supported yet).", {}});
             return;
         }
-        if (m->kind == parse::Kind::kClassDef
-            && fileIsImported(tree, node.file_id)) {
+        if (m->kind == parse::Kind::kClassDef) {
             diagnostic::report(diag, {m->file_id, m->name_tok,
                 "A class template declared in a header may not contain a "
                 "nested class (not supported yet).", {}});
@@ -5391,6 +5438,35 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
     ti.host_list = host_list;
     ti.cls_open = node.is_incomplete;   // trailing `...` — re-opens may append
     tree.templates[node.resolved_entry_id] = std::move(ti);
+
+    // A NESTED CLASS TEMPLATE (tmpl_nested.sl): register a SUB-PATTERN under
+    // the qualified spelling ("Outer:Inner"), the only spelling that reaches
+    // it — lookupAliasTemplateEntry's full-name divert. Its template list is
+    // SELF-CONTAINED: it names every parameter it uses (including any of the
+    // outer's — `UClass<U, T>` re-lists T); the outer contributes only the
+    // name qualifier, so no outer flavor is implied or required. The entry
+    // name carries the ':', so the bare inner name resolves nowhere outside.
+    // Instances splice into the OUTER's host list, ordinary classes there.
+    // (A plain listless nested class stays as-is — it rides the flavor clone,
+    // tmpl_class.sl Kit:Sub. A flavor clone's copy of this nested template
+    // re-registers per instance through the member divert, for inside use.)
+    for (auto& m : node.children) {
+        if (!m || m->kind != parse::Kind::kClassDef || m->type_params.empty())
+            continue;
+        parse::Entry se;
+        se.kind = parse::EntryKind::kClass;
+        se.name = node.name + ":" + m->name;
+        se.is_template = true;
+        se.defined = true;
+        se.file_id = m->file_id;
+        se.tok = m->name_tok;
+        m->resolved_entry_id = parse::addEntry(tree, std::move(se));
+        parse::TemplateInfo sti;
+        sti.def = m.get();
+        sti.host_list = host_list;
+        sti.cls_open = m->is_incomplete;
+        tree.templates[m->resolved_entry_id] = std::move(sti);
+    }
 }
 
 void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
@@ -7052,6 +7128,7 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     auto sv_checks = std::move(tree.nested_call_checks);
     auto sv_class  = std::move(tree.current_class_name);
     auto sv_base   = std::move(tree.current_base_name);
+    auto sv_self   = std::move(tree.tmpl_self_stack);
     tree.frame_id_stack = ti.frame_id_stack;
     tree.frame_entries_start_stack = ti.frame_entries_start_stack;
     tree.live_entry_ids = ti.live_entry_ids;
@@ -7060,6 +7137,9 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     tree.assigned_arrays = ti.assigned_arrays;
     tree.current_class_name = ti.current_class_name;
     tree.current_base_name = ti.current_base_name;
+    tree.tmpl_self_stack = ti.tmpl_self_stack;   // a class-template flavor's member
+                                                 //   pattern re-enters with its bare-
+                                                 //   name redirect live (recv, self)
     tree.nested_call_checks.clear();
 
     // A frame binding each type parameter as a transparent alias to its bound type —
@@ -7169,6 +7249,7 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     tree.nested_call_checks = std::move(sv_checks);
     tree.current_class_name = std::move(sv_class);
     tree.current_base_name = std::move(sv_base);
+    tree.tmpl_self_stack = std::move(sv_self);
 
     // Park the instance for the end-of-classify splice into its host list; hand the
     // caller the node for the remaining stages (constfold + classify).
