@@ -6,5 +6,79 @@ this is the template header file.
 /*
 claude says:
 
-tbd
+the header is the INTERFACE: bodyless template declarations (legal only in
+an imported file), class templates whose members — methods, hooks, even a
+user op= — are declarations, and whole alias templates. a consumer compiles
+against these alone: full layout (sizeof folds), declaration-only members,
+kDeclare linkage, and a .sli demand per flavor. the definitions live in the
+SAME-NAMED source, tmpl_lib.sl, whose own compile (--instantiate) emits
+every demanded flavor once.
 */
+
+/* the workhorse: fields + bodyless method declarations; the bodies live in
+   tmpl_lib.sl as a RE-OPEN of this primary opening. */
+Vector<T>(T data_ = 0, T extra_ = 0) {
+    void push(T v);
+    T sum();
+}
+
+/* lifecycle hooks declared here, defined across the seam. */
+Traced<T>(T t_ = 0) {
+    _();
+    ~();
+    T get();
+}
+
+/* a pointer field carries ANY argument type — including one declared in a
+   different header. */
+Box<T>(T^ p_ = nullptr) {
+    int has();
+}
+
+/* a function template, declared; its definition merges in tmpl_lib.sl. */
+T tsum<T>(T a, T b);
+
+/* pointer-friendly twins: `tpick`'s body is self-contained (a local-type
+   instance can inline it); `tpock`'s body leans on a tmpl_lib-PRIVATE helper,
+   so only tmpl_lib's own TU can emit its flavors. */
+T tpick<T>(T a, T b);
+T tpock<T>(T a, T b);
+
+/* an alias template is whole in the header — nothing to defer. */
+alias TRef<T> = T^;
+
+/* a USER transfer operator declared here: it is the flavor's canonical copy,
+   defined across the seam by the source's re-open. */
+Acc<T>(T v_ = 0) {
+    op=(Acc^ s);
+    T get();
+}
+
+/* a virtual template class: the slot declared here, implemented by the source. */
+VShape<T>(T s_ = 1) {
+    virtual T vid();
+}
+
+/* two type parameters (a comma in the demand spelling). */
+TPair<K, V>(K k_ = 0, V v_ = 0) {
+    K kk();
+    V vv();
+}
+
+/* a namespace-member template. */
+Spc2 {
+    T nsq<T>(T v);
+}
+
+/* plain functions the SOURCE implements using templates: its own use of an
+   aggregated flavor, and its use of ANOTHER library's template (tmpl_lib2) —
+   the mixed-role proofs, observable from any consumer. */
+int viaW2();
+int viaOwn();
+
+/* a plain header class with a TEMPLATE METHOD declaration; the body lands in
+   the source via the out-of-line form. */
+Gauge(int g_ = 0) {
+    T scaled<T>(T v);
+    int base();
+}

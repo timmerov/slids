@@ -858,9 +858,10 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   one (as with functions). Cross-TU CLASS model precedent: readme-classes.txt.
 
 
-TEMPLATES — FUNCTIONS + ALIASES + METHODS + CLASSES (single-TU; the guiding
-principle: an instance / expansion is ORDINARY output, and a template is a
-BOOKMARK into the machinery that would have made it)
+TEMPLATES — FUNCTIONS + ALIASES + METHODS + CLASSES, single-TU AND cross-TU
+(the guiding principle: an instance / expansion is ORDINARY output, and a
+template is a BOOKMARK into the machinery that would have made it; cross-TU,
+each flavor is compiled ONCE per project, by the template's own source TU)
 
   A template (`T add<T>(T a, T b) { ... }`) registers as an ordinary kFunction entry
   (Entry.is_template) in whatever frame declares it — file, namespace, or block — so
@@ -1087,6 +1088,73 @@ BOOKMARK into the machinery that would have made it)
   inference from construction arguments) — enforced at the kSlid arm, the
   construction branch, the bare-value arm, and sizeof.
 
+  CROSS-TU TEMPLATES (functions, classes, methods, aliases; each flavor
+  compiled ONCE per project). The MODEL: the header is the INTERFACE — a
+  bodyless template declaration (`T tsum<T>(T a, T b);`, legal only in an
+  imported file) or a class template whose members are declarations — and the
+  header's SAME-NAMED source supplies every definition: a function template's
+  decl/def MERGE (the def node becomes the pattern), a class template's
+  RE-OPEN openings (the completion machinery, verbatim), and out-of-line
+  member templates (`T Gauge:scaled<T>(T v) { }`). ONLY the module defines:
+  a consumer's same-name definition or re-open of a header template rejects
+  ("defined by its module's source") — both holes were found as silent-merge /
+  per-TU-divergence bugs, and the check keys on the ENTRY's header origin,
+  not the pattern node's kind (a loaded source merges a body onto the pattern
+  before a consumer's definition is seen).
+
+  Instantiation has THREE MODES, keyed on (entry file imported, this TU its
+  sibling, any argument local — anyArgLocal peels pointers/iterators to the
+  class leaf and asks whether its declaring file is imported):
+  - AGGREGATED (header template, all args header-visible): a declaration-only
+    instance — stable file-scope symbols (no def_id suffix; the canonical
+    spelling identifies the flavor in every TU), kDeclare linkage riding
+    registerClassBody off the clone's header file_id, function clones turned
+    kFunctionDecl + is_external. A RE-OPEN clone sheds its function members
+    ENTIRELY (a stripped twin beside the header's declaration is an ambiguous
+    duplicate — found as "Ambiguous call to 'push'"); the header is the
+    interface, so a source-only member (`priv2`) exists in the sibling's
+    flavors and is "no method" in a consumer's. The flavor is recorded in the
+    .sli demand pool.
+  - INLINE-LOCAL (an argument class is local to this TU): nobody else can
+    emit the flavor, so it clones FULL bodies and emits internal, def_id-
+    suffixed, excluded from the .sli. The bodies come from the TEMPLATE
+    SOURCE, which lex loads implicitly: importing `<m>.slh` also lexes the
+    `<m>.sl` beside it (skipped when the ROOT's own stem is `<m>` — the
+    sibling compiling itself, and the negative harness's relocated variants),
+    marked template_source; grammar's declarations-only header check exempts
+    it, and resolve STRIPS its non-template content before relocation — so a
+    body referencing a TU-private name fails with the natural unresolved
+    error when inlined (only its own TU can emit such a body; the aggregated
+    flavor of the same template works). A function instance re-homes its
+    entry to the root file so the linkage decision emits `define internal`.
+    Rejected with focused messages: the source missing entirely, and a
+    local-type instance of an imported class's template METHOD (its body
+    would emit against a declare-only owner).
+  - SIBLING: the template source's own compile — full bodies, external
+    defines (the entry/clone file_ids are the header's, so the existing
+    declared-in-header linkage rules emit them visible).
+
+  THE .SLI POOL (human-readable, slids-shaped — the block statements are the
+  reference's explicit-instantiation spelling, so the format can graduate
+  into the language unchanged). Each consumer compile writes `<out>.sli`
+  beside its .ll: per target module, `import <target>;`, an `import <P>;`
+  per PROVENANCE header (the declaring header of each class-type argument —
+  what lets a cross-header argument like `Box<Bird>` aggregate), then
+  `import <target> { Vector<int>; Gauge:scaled<int>; tsum<int8>; }` in
+  canonical spellings (aliases erased, so `Vector<Integer>` and `Vector<int>`
+  are one line and one flavor). `slidsc <m>.sl --instantiate <dir> -o ...`
+  is an ordinary compile plus: a driver-side parser reads every .sli, keeps
+  blocks addressed to `<m>`, injects the provenance imports at lex
+  (imported_once dedups), and feeds each demand through the SAME memoized
+  instantiation path a local use takes — classes at resolve (before the body
+  drain), functions and methods at classify (classifyInstantiationDemands;
+  `Owner:member<...>` reaches one qualifier level). N demands for one flavor
+  emit one body set; the sibling's own uses memo against them. The BUILD
+  shape: consumers compile first, each template source compiles after its
+  consumers with --instantiate, then link — a make dependency, not a new
+  tool; a MIXED-ROLE TU (a template source consuming another library) dumps
+  its own .sli and chains (tmpl_lib before tmpl_lib2).
+
   HARD-WON: tree.entries is a VECTOR — an Entry& held across addEntry DANGLES
   (bindTypeParamMarkers and recursive resolution both addEntry; the pattern write
   went to freed memory: nondeterministic wrong types, then a segfault). Re-index
@@ -1095,17 +1163,24 @@ BOOKMARK into the machinery that would have made it)
 
   DEFERRED: overload participation, NESTED TEMPLATE TYPES (`>>` + gate
   angle-depth — one umbrella todo entry; an ALIAS argument smuggles an instance
-  into a type-list today, `Pair<VI, int8>`), OUT-OF-LINE template METHODS (the
-  class flavor bundles with cross-TU, where the header decl / sibling-body split
-  and `--instantiate` motivate its semantics; the namespace flavor is LANDED,
-  above), member template methods inside a class template (rejected today),
+  into a type-list today, `Pair<VI, int8>`; the .sli spellings inherit the same
+  limit), header-declared INCOMPLETE templates (cross-TU completion — the
+  never-completed `...` error stands in), source REDIRECTION (`@impl`-style;
+  the source must share the header's base name), member template methods
+  inside a class template (rejected today), local-type instances of an
+  imported class's template METHOD and of a template whose source is absent
+  (both reject with focused messages), a sharper up-front header-visible-names
+  rule for template bodies (today: the natural unresolved-name error at the
+  inline instantiation), explicit instantiation as COMPILABLE source (the
+  .sli block spelling, ungrammared), the .sli demand DIAGNOSTICS unpinned
+  (the negative harness cannot plant a crafted .sli + --instantiate),
   QUALIFIED naming of a class-template instance's members from outside
   (`Kit<int>:Sub` has no spelling — a qualifier segment is an identifier;
   inside the body they resolve bare) and the `Base:` bypass naming an instance
-  base (same spelling limit), static-bypass beyond what falls out free,
-  cross-TU + `--instantiate` incl. header-declared incomplete templates (plan
-  Phase 9). Canon test/template/tmpl_function.sl + tmpl_alias.sl +
-  tmpl_method.sl + tmpl_class.sl + tmpl_complete.sl.
+  base (same spelling limit), static-bypass beyond what falls out free. Canon
+  test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl +
+  tmpl_class.sl + tmpl_complete.sl; cross-TU canon test/import/tmpl_test.sl +
+  tmpl_test2.sl + tmpl_lib.slh/.sl + tmpl_lib2.slh/.sl.
 
 
 STAGE FILES (.h / .cpp pairs)
@@ -1118,6 +1193,11 @@ STAGE FILES (.h / .cpp pairs)
             and a tool that wants a substitute header (test/run_negatives.sh)
             must place the importing source beside it. Each path is imported
             ONCE per compile (imported_once, keyed by resolved path).
+            Importing `X.slh` ALSO lexes a TEMPLATE SOURCE `X.sl` beside it
+            (marked template_source; skipped when the root's own stem is X),
+            and run() takes driver-injected extra imports (--instantiate's
+            provenance headers), appended after the root's tokens — see
+            TEMPLATES, cross-TU.
             Tracks bracket-kind balance ( { [ only.
             Emits kEndOfFile per file, kEndOfInput once at the outermost
             return. Numeric literals: strips underscores, emits source-form

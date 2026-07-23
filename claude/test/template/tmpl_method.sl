@@ -32,7 +32,9 @@ normally.
 
 a template method owns its name within its class (no overload set, either
 direction); virtual is rejected (instances are unbounded, vtable slots are
-not); the out-of-line form (`T Class:m<T>`) is deferred.
+not); the out-of-line form (`T Class:m<T>`) landed with cross-TU templates —
+it relocates into the class like any external member, adding (or, given a
+header declaration, defining) a member template.
 */
 
 /* the workhorse: explicit + inferred calls, field read/write, memoization. */
@@ -62,6 +64,9 @@ Jar(int n_ = 0) {
 }
 
 T free_id<T>(T v) { return v; }
+
+/* the out-of-line member-template form: adds `extra` to Jar. */
+T Jar:extra<T>(T v) { return v + v; }
 
 alias Rf<T> = T^;
 
@@ -140,10 +145,6 @@ Counter : Kid(int k_ = 0) {
 //    virtual T m<T>(T v) { return v; }
 //}
 
-/* the out-of-line definition form is deferred. */
-//-EXPECT-ERROR: out-of-line template
-//T Jar:extra<T>(T v) { return v; }
-
 /* a constructor cannot be a template — `_` has no name position for a
    template-list, so the hook parse demands its parens. */
 //-EXPECT-ERROR: Expected '('
@@ -220,6 +221,9 @@ int32 main() {
 
     /* method self-recursion. */
     int fc = j.fact(5); __println("fc = " + fc);
+
+    /* the out-of-line member template. */
+    int ol = j.extra(4); __println("ol = " + ol);
 
     /* derived TEMPLATE shadows base PLAIN; derived PLAIN shadows base TEMPLATE;
        the base's own versions stay reachable on a base object. */

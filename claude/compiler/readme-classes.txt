@@ -48,9 +48,25 @@ another), overload sets spanning openings, the virtual re-open rules, and
 user transfer operators contributed by a re-open all behave exactly as a
 plain class's openings do. EXTERNAL members (`T Ext:gete()`, `const int
 Ext:kk`, alias, enum) relocate into the pattern and ride every instance. A
-NEVER-COMPLETED incomplete template errors (a plain class completes cross-TU
-via its header; cross-TU templates haven't landed). Canon
-test/template/tmpl_complete.sl.
+NEVER-COMPLETED incomplete template errors (an incomplete class completes
+cross-TU via its header; header-declared INCOMPLETE templates stay deferred).
+Canon test/template/tmpl_complete.sl.
+
+CROSS-TU class templates are LANDED (readme.txt TEMPLATES owns the design):
+the header declares the template — full field list, member DECLARATIONS,
+hooks and even a user op= as bodyless decls — and its same-named source
+supplies the bodies through the RE-OPEN machinery above; consumers get the
+complete layout (sizeof folds, fields construct with defaults) but
+declaration-only members, kDeclare linkage, and every flavor is emitted ONCE
+by the source's --instantiate compile: the synthesized AND user transfer
+operators, the hooks, the vtable of a virtual flavor all cross the seam as
+external symbols (a consumer may derive a local class from an aggregated
+instance base and dispatch through it). A flavor with a LOCAL type argument
+instead clones the loaded source's bodies and emits INTERNAL in the consumer
+— the only TU that can. A source-side member not declared in the header
+exists only in the module's own flavors; a consumer may neither define nor
+re-open a header template ("defined by its module's source"). Canon
+test/import/tmpl_test.sl + tmpl_test2.sl + tmpl_lib.slh/.sl.
 RESTRICTIONS: a class template owns its name against a LISTLESS opening or a
 plain class; no template methods inside a template class (rejected); an
 instance's members have NO qualified spelling from outside (`Kit<int>:Sub` —

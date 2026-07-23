@@ -93,6 +93,11 @@ struct File {
     std::string source;
     std::vector<int> line_starts;
     int imported_by;
+    // A TEMPLATE SOURCE loaded beside its imported header (`vector.sl` next to
+    // `vector.slh`): only its template content participates in this TU — the
+    // bodies a LOCAL-type instance needs. Everything else is stripped by
+    // resolve before registration.
+    bool template_source = false;
 };
 
 struct List {

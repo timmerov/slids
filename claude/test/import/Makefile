@@ -13,10 +13,14 @@ BUILD_DIR = ../../build/test/$(DIR)
 
 # The runnable programs (each has an exp.<name> golden). `consumer` is the cross-TU
 # import test; `math` is a standalone TU binding libm's C functions via `= import`
-# blocks — it links `-lm` and has no sibling `.sl`.
+# blocks — it links `-lm` and has no sibling `.sl`. `tmpl_test` is the cross-TU
+# TEMPLATE test: tmpl_test.sl consumes templates declared in tmpl_lib.slh and
+# defined in its same-named source tmpl_lib.sl.
 SAMPLES = \
 	consumer \
-	math
+	math \
+	tmpl_test \
+	tmpl_test2
 
 # Every translation unit linked into the consumer binary: the program plus
 # each imported library's .sl. `import library;` is a textual include of
@@ -38,7 +42,11 @@ OBJS = \
 NEGATIVES = \
 	consumer.sl \
 	library.sl \
-	library.slh
+	library.slh \
+	tmpl_test.sl \
+	tmpl_test2.sl \
+	tmpl_lib.sl \
+	tmpl_lib.slh
 
 .PHONY: all clean negatives positives $(SAMPLES)
 
@@ -60,6 +68,43 @@ math: $(BIN_DIR)/math
 
 $(BIN_DIR)/math: $(BUILD_DIR)/math.o
 	$(CXX) $^ -lm -o $@
+
+# The cross-TU template programs: each consumer links the template sources,
+# plus library's TUs (Box<Bird> / tpick<Bird^> pull in Bird's hooks).
+# tmpl_lib2 is consumed by tmpl_lib.sl itself (the mixed-role TU), so both
+# binaries carry it.
+TMPL_LIBS = \
+	tmpl_lib \
+	tmpl_lib2 \
+	library \
+	bird
+
+tmpl_test: $(BIN_DIR)/tmpl_test
+
+$(BIN_DIR)/tmpl_test: $(BUILD_DIR)/tmpl_test.o \
+		$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(TMPL_LIBS)))
+	$(CXX) $^ -o $@
+
+tmpl_test2: $(BIN_DIR)/tmpl_test2
+
+$(BIN_DIR)/tmpl_test2: $(BUILD_DIR)/tmpl_test2.o \
+		$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(TMPL_LIBS)))
+	$(CXX) $^ -o $@
+
+# THE POST-COMPILE PRE-LINK STAGE: a template source compiles AFTER its
+# consumers, reading the demand pool (.sli files) they dumped beside their
+# .ll. Each demanded flavor instantiates ONCE (the union across every .sli,
+# memoized against the source's own uses) and is emitted external. tmpl_lib
+# is ALSO a consumer (of tmpl_lib2), so its compile dumps tmpl_lib.sli and
+# tmpl_lib2 compiles last of all.
+$(BUILD_DIR)/tmpl_lib.ll: tmpl_lib.sl $(BUILD_DIR)/tmpl_test.ll \
+		$(BUILD_DIR)/tmpl_test2.ll $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/tmpl_lib.d --instantiate $(BUILD_DIR)
+
+$(BUILD_DIR)/tmpl_lib2.ll: tmpl_lib2.sl $(BUILD_DIR)/tmpl_lib.ll $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/tmpl_lib2.d --instantiate $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@

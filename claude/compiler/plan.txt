@@ -1969,7 +1969,54 @@ Phase 9 — templates
     Canon test/template/tmpl_complete.sl (40 golden lines; 10 negatives).
     Still deferred: header-declared incomplete templates (cross-TU), member
     template methods, listless re-opens (a collision by design).
-  * post-compile-pre-link stage (`--instantiate` aggregation)
+  * cross-TU templates + `--instantiate`                LANDED 2026-07-22
+    Each flavor compiles ONCE per project. THE SHAPE (an improvement over
+    v1's pipeline, which coagulated .sli files into a generated source that
+    re-imported the impl): the template source's OWN COMPILE is the
+    aggregation stage. A consumer compiles against the header's declarations
+    (bodyless fn templates — legal only in headers; class templates whose
+    members are decls), emits declaration-only instances with STABLE
+    file-scope symbols riding the existing header-class linkage (the clones
+    carry the header's file_id, so kDeclare/kDefine and the fn
+    declared-in-header rule all fall out), and dumps its demands to
+    `<out>.sli` — human-readable, slids-shaped (`import vector; import
+    library; import vector { Vector<int>; tsum<int8>; Gauge:scaled<int>; }`),
+    canonical spellings, PROVENANCE imports per class-typed argument (what
+    lets `Box<Bird>` aggregate across headers). `slidsc vector.sl
+    --instantiate <dir>` then reads the pool, injects the provenance headers
+    at lex, and feeds each demand through the SAME memoized instantiation
+    path a local use takes (classes at resolve, fns/methods at classify) —
+    one external body set per flavor, memoized against the source's own
+    uses, private helpers linking because the bodies live in their own TU.
+    The build is a make dependency: consumers -> source(--instantiate) ->
+    link; a MIXED-ROLE TU chains (tmpl_lib consumes tmpl_lib2).
+    LOCAL-TYPE arguments (landed same day, "land 2"): importing `m.slh` also
+    lexes the `m.sl` beside it (template_source; skipped when the root IS m —
+    which keeps the negative harness's variants honest); resolve STRIPS its
+    non-template content, so the templates' bodies — and nothing else — exist
+    in every consumer, and a flavor with a local argument clones them and
+    emits INTERNAL, def_id-suffixed, excluded from the .sli. A body that
+    references a TU-private name errors naturally at the inline
+    instantiation (the aggregated flavor of the same template still works —
+    pinned asymmetrically by tpock/tick).
+    BUGS FOUND BY THE COVERAGE ROUND, both consumer-corruption holes: a
+    consumer's same-name DEFINITION silently merged into a header template's
+    pattern (then was ignored — declare-only mode); a consumer could RE-OPEN
+    an imported class template (per-TU flavor divergence). Both reject
+    ("defined by its module's source"), keyed on the ENTRY's header origin —
+    the loaded source merges a body onto the pattern before a consumer's
+    definition is seen. Also: a stripped re-open twin beside the header's
+    declaration read as an ambiguous overload — declare-only flavors DROP a
+    re-open clone's function members (the header IS the interface; a
+    source-only member is sibling-private, pinned both ways by priv2).
+    Canon test/import/tmpl_test.sl + tmpl_test2.sl (union dedup across two
+    consumers, transfers + user-op= + hooks + vtables across the seam,
+    pointer/multi-arg/namespace demand spellings, global/new/array/tuple
+    forms) + tmpl_lib.slh/.sl + tmpl_lib2.slh/.sl. Deferred: header-declared
+    incomplete templates, `@impl` source redirection, local-type instances
+    of an imported class's template METHOD, .sli demand diagnostics
+    (unpinnable without negative-harness support for planting a crafted
+    .sli), explicit instantiation as compilable source.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

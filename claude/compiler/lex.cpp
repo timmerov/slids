@@ -518,9 +518,22 @@ struct ImportWrapper {
     diagnostic::Sink& diag;
     std::vector<std::string> const& import_paths;
     std::set<std::string>& imported_once;
+    std::string root_stem;   // the primary source's module name
     bool fatal = false;
 
     void processFile(int file_id, std::string const& source_dir);
+    // Import `module`.slh as if an `import module;` appeared in `from_file` —
+    // the driver-injected form (--instantiate provenance headers). Errors
+    // attribute bare ({-1,-1}: no source token exists for an injected import).
+    void importModule(std::string const& module, std::string const& source_dir,
+                      int from_file);
+    // After importing `module`.slh: load the TEMPLATE SOURCE `module`.sl
+    // sitting beside it, if any — a LOCAL-type instance of the header's
+    // templates needs bodies to clone, and only that file has them. Skipped
+    // when the root IS this module's source (the sibling compiling itself —
+    // which also keeps the negative harness's relocated variants honest).
+    // Marked template_source: resolve strips everything but template content.
+    void loadTemplateSource(std::string const& header_path, int header_file_id);
 };
 
 void reportAt(diagnostic::Sink& diag, int file_id, int tok_index, std::string const& msg) {
@@ -674,6 +687,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                         std::filesystem::path(found_path).parent_path().string();
 
                     processFile(new_file_id, new_source_dir);
+                    if (!fatal) loadTemplateSource(found_path, new_file_id);
                     return !fatal;
                 }
                 // pushback
@@ -692,13 +706,70 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
     }
 }
 
+void ImportWrapper::importModule(std::string const& module,
+                                 std::string const& source_dir, int from_file) {
+    std::string header = module + ".slh";
+    std::vector<std::string> search;
+    search.push_back(source_dir.empty() ? std::string(".") : source_dir);
+    for (auto& p : import_paths) search.push_back(p);
+    std::string found_path;
+    for (auto& dir : search) {
+        std::filesystem::path candidate = std::filesystem::path(dir) / header;
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec)) {
+            found_path = candidate.string();
+            break;
+        }
+    }
+    if (found_path.empty()) {
+        diagnostic::report(diag, {-1, -1,
+            "Cannot find '" + header + "' on the import path.", {}});
+        fatal = true;
+        return;
+    }
+    if (!imported_once.insert(found_path).second) return;   // already imported
+    std::ifstream f(found_path);
+    if (!f.is_open()) {
+        diagnostic::report(diag, {-1, -1, "Cannot open '" + found_path + "'.", {}});
+        fatal = true;
+        return;
+    }
+    std::stringstream buf;
+    buf << f.rdbuf();
+    int new_file_id = token::openFile(out, found_path, buf.str(), from_file);
+    std::string new_source_dir =
+        std::filesystem::path(found_path).parent_path().string();
+    processFile(new_file_id, new_source_dir);
+    if (!fatal) loadTemplateSource(found_path, new_file_id);
+}
+
+void ImportWrapper::loadTemplateSource(std::string const& header_path,
+                                       int header_file_id) {
+    std::filesystem::path hp(header_path);
+    std::string module = hp.stem().string();
+    if (module == root_stem) return;   // the root IS this module's source
+    std::filesystem::path sp = hp.parent_path() / (module + ".sl");
+    std::error_code ec;
+    if (!std::filesystem::exists(sp, ec)) return;   // aggregation-only module
+    std::string spath = sp.string();
+    if (!imported_once.insert(spath).second) return;
+    std::ifstream f(spath);
+    if (!f.is_open()) return;
+    std::stringstream buf;
+    buf << f.rdbuf();
+    int fid = token::openFile(out, spath, buf.str(), header_file_id);
+    out.files[fid].template_source = true;
+    processFile(fid, sp.parent_path().string());
+}
+
 }  // namespace
 
 // ---------------- top-level entry ----------------
 
 void run(std::string const& root_path,
          std::vector<std::string> const& import_paths,
-         token::List& out, diagnostic::Sink& diag) {
+         token::List& out, diagnostic::Sink& diag,
+         std::vector<std::string> const& extra_imports) {
     std::ifstream f(root_path);
     if (!f.is_open()) {
         // {-1, -1} attribution: fires before any source is read, so no token
@@ -716,8 +787,17 @@ void run(std::string const& root_path,
         std::filesystem::path(root_path).parent_path().string();
 
     std::set<std::string> imported_once;
-    ImportWrapper wrap{out, diag, import_paths, imported_once};
+    ImportWrapper wrap{out, diag, import_paths, imported_once,
+                       std::filesystem::path(root_path).stem().string()};
     wrap.processFile(root_file_id, source_dir);
+
+    // Driver-injected imports (the --instantiate demand files' provenance
+    // headers), appended after the root's tokens — file-scope declaration
+    // order is free, and imported_once dedups any the root already pulled.
+    for (auto const& m : extra_imports) {
+        if (wrap.fatal) break;
+        wrap.importModule(m, source_dir, root_file_id);
+    }
 
     if (!wrap.fatal) {
         token::Token eoi{token::Kind::kEndOfInput, "", -1, 0, 0, 0};

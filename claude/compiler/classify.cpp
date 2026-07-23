@@ -2684,14 +2684,18 @@ int instantiateAndClassify(parse::Tree& tree, int tid,
         // the body below may construct them.
         classifyFreshClassInstances(tree, diag);
         // The instance is an ordinary resolved function/method now — run the
-        // stages its late birth skipped, in pipeline order.
+        // stages its late birth skipped, in pipeline order. A DECLARATION-ONLY
+        // instance (from a header's bodyless pattern) has no body to type —
+        // signature only; its definition lives in the template source's TU.
         constfold::runOn(tree, *inst, diag);
         if (!diagnostic::hasErrors(diag)) {
             classifyFunctionSignature(tree, *inst, diag);
-            classifyFunctionBody(tree, *inst, diag);
-            inst->capture_types.clear();
-            for (int cid : inst->captures) {
-                inst->capture_types.push_back(parse::entryType(tree, cid));
+            if (inst->kind == parse::Kind::kFunctionDef) {
+                classifyFunctionBody(tree, *inst, diag);
+                inst->capture_types.clear();
+                for (int cid : inst->captures) {
+                    inst->capture_types.push_back(parse::entryType(tree, cid));
+                }
             }
         }
     }
@@ -7549,6 +7553,78 @@ void classifyFunctionBody(parse::Tree& tree, parse::Node& fn,
 
 }  // namespace
 
+// --instantiate demands left by resolve: the FUNCTION / METHOD template
+// flavors, minted here where those instances are born. A bare `f<...>` is a
+// file-scope template; `Owner:member<...>` reaches one level into a class or
+// namespace. Args arrive canonical (the writer canonicalized them), so they
+// bind by direct spelling-intern.
+void classifyInstantiationDemands(parse::Tree& tree, diagnostic::Sink& diag) {
+    for (auto& d : tree.inst_demands) {
+        if (d.consumed) continue;
+        d.consumed = true;
+        widen::TypeRef t = widen::intern(d.spelling);
+        if (widen::form(t) != widen::Type::Form::kTmplUse) continue;  // reported
+        std::string name = widen::get(t).name;
+        int tid = -1;
+        auto colon = name.find(':');
+        if (colon == std::string::npos) {
+            for (std::size_t i = 0; i < tree.entries.size(); i++) {
+                parse::Entry const& e = tree.entries[i];
+                if (e.kind == parse::EntryKind::kFunction && e.is_template
+                    && e.owner_ns_frame < 0 && e.name == name) {
+                    tid = (int)i;
+                    break;
+                }
+            }
+        } else {
+            std::string owner = name.substr(0, colon);
+            std::string member = name.substr(colon + 1);
+            int frame = -1;
+            for (std::size_t i = 0; i < tree.entries.size(); i++) {
+                parse::Entry const& e = tree.entries[i];
+                if ((e.kind == parse::EntryKind::kClass
+                     || e.kind == parse::EntryKind::kNamespace)
+                    && e.owner_ns_frame < 0 && e.name == owner
+                    && e.ns_frame_id >= 0) {
+                    frame = e.ns_frame_id;
+                    break;
+                }
+            }
+            for (std::size_t i = 0; frame >= 0 && i < tree.entries.size(); i++) {
+                parse::Entry const& e = tree.entries[i];
+                if (e.kind == parse::EntryKind::kFunction && e.is_template
+                    && e.owner_ns_frame == frame && e.name == member) {
+                    tid = (int)i;
+                    break;
+                }
+            }
+        }
+        auto ti = tid >= 0 ? tree.templates.find(tid) : tree.templates.end();
+        if (ti == tree.templates.end()) {
+            diagnostic::report(diag, {-1, -1,
+                "Unknown template in instantiation demand '" + d.spelling
+                + "'.", {}});
+            continue;
+        }
+        std::vector<widen::TypeRef> slots = widen::get(t).slots;
+        if (slots.size() != ti->second.def->type_params.size()) {
+            diagnostic::report(diag, {-1, -1,
+                "Wrong number of template arguments in instantiation demand '"
+                + d.spelling + "'.", {}});
+            continue;
+        }
+        std::vector<widen::TypeRef> bound;
+        for (widen::TypeRef s : slots)
+            bound.push_back(widen::removeConst(widen::deepStrip(s)));
+        parse::Node stub;
+        stub.kind = parse::Kind::kCallExpr;
+        stub.name = d.spelling;
+        stub.file_id = -1;
+        stub.tok = -1;
+        instantiateAndClassify(tree, tid, bound, stub, diag);
+    }
+}
+
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
     parse::Node* program = nullptr;
     for (auto& n : tree.nodes) {
@@ -7572,6 +7648,10 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // member bodies — top-level function bodies, const inits, and every nested
     // namespace/class — through the one uniform routine.
     classifyScope(tree, *program, diag);
+
+    // --instantiate demands whose flavor mints at classify (functions and
+    // methods) — before the final drains, so anything they mint joins them.
+    classifyInstantiationDemands(tree, diag);
 
     // Any straggler class-template instances (a resolution re-entry outside the
     // instantiateAndClassify path) get their late stages before the splice.

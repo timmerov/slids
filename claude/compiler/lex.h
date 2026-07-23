@@ -27,8 +27,13 @@ struct Stream {
 Stream open(int file_id, std::string const& source);
 token::Token next(Stream& s);   // returns kEndOfFile at end; kError on fatal (msg in s.fatal_msg)
 
+// `extra_imports`: module names imported AS IF the root source ended with
+// `import <name>;` for each — appended after the root's own tokens (file-scope
+// declaration order is free), deduped against the root's own imports. The
+// --instantiate driver injects a demand file's provenance headers this way.
 void run(std::string const& root_path,
          std::vector<std::string> const& import_paths,
-         token::List& out, diagnostic::Sink& diag);
+         token::List& out, diagnostic::Sink& diag,
+         std::vector<std::string> const& extra_imports = {});
 
 }  // namespace lex

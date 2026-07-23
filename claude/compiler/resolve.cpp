@@ -473,6 +473,14 @@ bool fileIsImported(parse::Tree const& tree, int file_id) {
         && tree.file_imported[file_id];
 }
 
+// True if `file_id` is a TEMPLATE SOURCE loaded beside its imported header —
+// only its template content participates in this TU (run() strips the rest);
+// the template decl/def merge accepts a definition from it.
+bool fileIsTemplateSource(parse::Tree const& tree, int file_id) {
+    return file_id >= 0 && file_id < (int)tree.file_template_source.size()
+        && tree.file_template_source[file_id];
+}
+
 // True if `file_id` names THIS TU's sibling header — an imported `.slh` whose base name
 // matches the primary source's (`library.slh` <-> `library.sl`; grammar filled
 // file_sibling). This TU is that header's implementation, so it is the ONE TU that emits
@@ -1277,6 +1285,11 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             // A member TEMPLATE's body stays pristine — snapshot the scope instead.
             if (!m->type_params.empty()) { snapshotTemplate(tree, *m); continue; }
             resolveFunctionBody(tree, *m, diag, /*nested=*/false);
+        } else if (m->kind == parse::Kind::kFunctionDecl
+                   && !m->type_params.empty()) {
+            // A header class's bodyless member-template DECLARATION: snapshot,
+            // so a consumer can mint declaration-only instances from it.
+            snapshotTemplate(tree, *m);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             for (auto& init : m->children) {
@@ -4543,10 +4556,69 @@ void reportTemplateNameClash(diagnostic::Sink& diag, parse::Node const& node,
 void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
                               std::vector<std::unique_ptr<parse::Node>>* host_list,
                               bool nested, int owner, diagnostic::Sink& diag) {
-    // Collision, both directions: a template owns its name in its scope.
+    // A BODYLESS template declaration (`T add<T>(T a, T b);`) is the
+    // header-side spelling of a cross-TU template — its definition lives in
+    // the header's same-named source. In a NON-imported file it declares
+    // nothing anyone can define.
+    if (node.kind == parse::Kind::kFunctionDecl
+        && !fileIsImported(tree, node.file_id)) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "A template function must have a body.", {}});
+        return;
+    }
+    // Collision, both directions: a template owns its name in its scope —
+    // EXCEPT the cross-TU decl/def pair: a header's bodyless template
+    // declaration MERGES with the same-signature definition in this file
+    // (the header's sibling), exactly as a plain function's decl + def merge.
     int prev = findSameScopeFunction(tree, node.name, owner,
                                      parse::currentFrameId(tree));
     if (prev >= 0) {
+        auto pit = tree.templates.find(prev);
+        // A HEADER-owned template (its entry registered from the header's
+        // declaration — true whether or not a loaded source already merged a
+        // body onto the pattern).
+        bool prev_header_tmpl = pit != tree.templates.end() && pit->second.def
+            && fileIsImported(tree, tree.entries[prev].file_id);
+        bool prev_is_header_decl = prev_header_tmpl
+            && pit->second.def->kind == parse::Kind::kFunctionDecl;
+        // Only the header's OWN MODULE supplies the definition: a loaded
+        // template source, or the sibling TU compiling itself. A CONSUMER's
+        // same-name definition must not merge — it would be silently ignored
+        // (the consumer's flavors are declare-only) while shadowing the real
+        // one — nor collide as an overload: reject it by name.
+        bool def_here = node.kind == parse::Kind::kFunctionDef
+            && (fileIsTemplateSource(tree, node.file_id)
+                || (!fileIsImported(tree, node.file_id)
+                    && fileIsSibling(tree, tree.entries[prev].file_id)));
+        if (prev_is_header_decl && def_here) {
+            if (node.type_params != pit->second.def->type_params
+                || node.params.size() != pit->second.def->params.size()) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "The template definition does not match the header's "
+                    "declaration of '" + node.name + "'.",
+                    {{pit->second.def->file_id, pit->second.def->name_tok,
+                      "declared here"}}});
+                return;
+            }
+            // Adopt the DEFINITION as the pattern (it has the body to clone);
+            // the entry — and its resolved pattern signature — stays.
+            pit->second.def = &node;
+            pit->second.host_list = host_list;
+            node.resolved_entry_id = prev;
+            tree.entries[prev].def_file_id = node.file_id;
+            tree.entries[prev].def_tok = node.name_tok;
+            return;
+        }
+        if (prev_header_tmpl && node.kind == parse::Kind::kFunctionDef
+            && !fileIsImported(tree, node.file_id)
+            && !fileIsTemplateSource(tree, node.file_id)) {
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "A template declared in a header is defined by its module's "
+                "source file; '" + node.name + "' cannot be defined here.",
+                {{tree.entries[prev].file_id, tree.entries[prev].tok,
+                  "declared here"}}});
+            return;
+        }
         reportTemplateNameClash(diag, node, tree.entries[prev]);
         return;
     }
@@ -5102,7 +5174,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
 }
 
 void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,
-                       int member_of);
+                       int member_of = -1, bool file_scope_def_id = false);
 void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag);
 void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
                               diagnostic::Sink& diag);
@@ -5189,6 +5261,22 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
             auto it = tree.templates.find(prev);
             if (it == tree.templates.end()) return;   // registration errored
             parse::TemplateInfo& ti = it->second;
+            // A HEADER template's openings belong to its module: further
+            // header openings and the loaded/compiling source's. A CONSUMER
+            // re-open would grow the flavors in THIS TU only — silently
+            // diverging from every other TU's (and from the aggregated
+            // definitions).
+            if (fileIsImported(tree, ti.def->file_id)
+                && !fileIsImported(tree, node.file_id)
+                && !fileIsTemplateSource(tree, node.file_id)
+                && !fileIsSibling(tree, ti.def->file_id)) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "A template declared in a header is defined by its "
+                    "module's source file; '" + node.name
+                    + "' cannot be re-opened here.",
+                    {{ti.def->file_id, ti.def->name_tok, "declared here"}}});
+                return;
+            }
             if (node.type_params != ti.def->type_params) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
                     "A re-open's template list must match class template '"
@@ -5429,9 +5517,14 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
 // (owner_ns_frame = member_of, def_id = member_of so `Host:Inner` is distinct,
 // dup-checked among the host's members); reached only via `Host:Inner`, not bare.
 void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,
-                       int member_of = -1) {
+                       int member_of, bool file_scope_def_id) {
     int decl_frame = parse::currentFrameId(tree);
-    int def_id = member_of >= 0 ? member_of
+    // file_scope_def_id: a cross-TU template INSTANCE registers in a transient
+    // frame but its symbol must be STABLE across every TU that names the
+    // flavor — the canonical spelling alone identifies it, so it takes the
+    // file-scope def_id (no `.frame` suffix) regardless of the current frame.
+    int def_id = file_scope_def_id ? -1
+               : member_of >= 0 ? member_of
                : (decl_frame == kGlobalFrame) ? -1 : decl_frame;
     int prev_id = member_of >= 0
         ? findMemberDeclared(tree, member_of, node.name)
@@ -6428,20 +6521,13 @@ void relocateOutOfLineMembers(parse::Tree& tree,
         // `const int Vec:kk = 40;`) relocates into the PATTERN's children —
         // before registration reads them — and so rides every instance clone.
         // (A member TEMPLATE targeting a class still rejects, below.)
-        // An out-of-line TEMPLATE definition: the NAMESPACE flavor relocates like
-        // any external member — registration's member-template divert takes it
-        // from there, so `T Space:f<T>(v) { }` is just an external namespace
-        // function that happens to be a template. The CLASS flavor (an external
-        // template METHOD) is deferred with the cross-TU bundle, where the header
-        // decl / sibling-body split motivates its semantics.
-        if (is_fn && !ch->type_params.empty()
-            && target->kind == parse::Kind::kClassDef) {
-            diagnostic::report(diag, {ch->file_id, ch->name_tok,
-                "An out-of-line template definition is not supported yet.", {}});
-            ch.reset();
-            moved = true;
-            continue;
-        }
+        // An out-of-line TEMPLATE definition relocates like any external member
+        // — registration's member-template divert takes it from there. The
+        // NAMESPACE flavor (`T Space:f<T>(v) { }`) is an external namespace
+        // function that happens to be a template; the CLASS flavor
+        // (`T Gauge:scaled<T>(T v) { }`) is the sibling-side BODY of a header
+        // class's member-template declaration — the decl/def merge in
+        // registerTemplateFunction pairs them.
         // A ctor/dtor is CLASS-only. The bare form is rejected in the parser ("A
         // constructor or destructor may only appear in a class body"); the QUALIFIED
         // spelling must not be a way around that restriction — a namespace has no
@@ -6857,11 +6943,13 @@ static std::unique_ptr<parse::Node> cloneDeep(parse::Node const& n) {
     return c;
 }
 
+static bool anyArgLocal(parse::Tree& tree,
+                        std::vector<widen::TypeRef> const& args);
+
 int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
                         std::vector<widen::TypeRef> const& args,
                         int file_id, int tok, diagnostic::Sink& diag,
                         bool& created, parse::Node*& instance_node) {
-    (void)file_id; (void)tok;
     created = false;
     instance_node = nullptr;
     auto it = tree.templates.find(tmpl_entry_id);
@@ -6870,6 +6958,37 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     auto memo = ti.instances.find(args);
     if (memo != ti.instances.end()) return memo->second;
     if (!ti.snapshot_taken) return -1;   // registration errored upstream
+
+    // MODE (the class twin's rule): a HEADER-declared template's flavor is
+    // AGGREGATED (all args header-visible: a declaration-only instance here,
+    // defined by the source's --instantiate pass) or INLINE (a LOCAL arg: the
+    // body clones from the loaded template source, emitted internal — nobody
+    // else can). The sibling — and a TU-local template — defines as before.
+    bool header_tmpl =
+        fileIsImported(tree, tree.entries[tmpl_entry_id].file_id);
+    bool here_sibling =
+        fileIsSibling(tree, tree.entries[tmpl_entry_id].file_id);
+    bool inline_local = header_tmpl && !here_sibling && anyArgLocal(tree, args);
+    bool declare_only = header_tmpl && !here_sibling && !inline_local;
+    if (inline_local && ti.def->kind != parse::Kind::kFunctionDef) {
+        diagnostic::report(diag, {file_id, tok,
+            "Instantiating '" + tree.entries[tmpl_entry_id].name
+            + "' with a local type needs its template source (the .sl beside "
+            "its header), which was not found.", {}});
+        return -1;
+    }
+    if (inline_local && tree.entries[tmpl_entry_id].owner_ns_frame >= 0) {
+        int cid = parse::classEntryForFrame(
+            tree, tree.entries[tmpl_entry_id].owner_ns_frame);
+        if (cid >= 0
+            && widen::slidLinkage(widen::strip(tree.entries[cid].slids_type))
+                   == widen::Type::Linkage::kDeclare) {
+            diagnostic::report(diag, {file_id, tok,
+                "A local-type instance of an imported class's template method "
+                "is not supported yet.", {}});
+            return -1;
+        }
+    }
 
     // Save the caller's transient scope state (empty at classify time; mid-pipeline
     // values during a chained instantiation), install the definition-point snapshot.
@@ -6909,6 +7028,12 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     auto clone = cloneDeep(*ti.def);
     clone->type_params.clear();
     clone->type_param_toks.clear();
+    // An AGGREGATED flavor keeps the signature, sheds the body (the loaded
+    // template source supplied one): declaration-only here.
+    if (declare_only && clone->kind == parse::Kind::kFunctionDef) {
+        clone->kind = parse::Kind::kFunctionDecl;
+        clone->children.clear();
+    }
 
     // Register the instance entry — the clone's signature types resolve through the
     // type-parameter alias frame.
@@ -6951,8 +7076,24 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     // Memo BEFORE the body resolves, so a self-recursive call inside lands here.
     ti.instances[args] = iid;
 
-    resolveFunctionBody(tree, *clone, diag, /*nested=*/ti.nested);
-    mungeParamTypes(tree, *clone, diag);
+    if (clone->kind == parse::Kind::kFunctionDef) {
+        resolveFunctionBody(tree, *clone, diag, /*nested=*/ti.nested);
+        mungeParamTypes(tree, *clone, diag);
+        // An INLINE-local flavor is this TU's own function: re-home the entry
+        // to the root file so the linkage decision (declared-in-header ->
+        // external) reads it as file-local — emitted `define internal`.
+        if (inline_local) tree.entries[iid].file_id = 0;
+    } else {
+        // A DECLARATION-ONLY instance: the pattern is a header's bodyless
+        // template declaration and this TU is a consumer — the body is
+        // emitted by the template source's --instantiate pass. The entry
+        // becomes an external declaration (munged, so the extern signature
+        // matches the definition's); the node splices as a plain kFunctionDecl
+        // and codegen `declare`s it on use.
+        mungeParamTypes(tree, *clone, diag);
+        tree.entries[iid].defined = false;
+        tree.entries[iid].is_external = true;
+    }
 
     parse::popFrame(tree);
     tree.frame_id_stack = std::move(sv_frames);
@@ -7052,6 +7193,24 @@ static void restoreResolveState(parse::Tree& tree, SavedResolveState& s) {
     tree.current_base_name = std::move(s.base);
 }
 
+// Any type argument whose class is declared in THIS TU's own source (not an
+// imported header)? Such a flavor cannot aggregate — its spelling means nothing
+// to the template source's compile — so it instantiates INLINE, internal.
+static bool anyArgLocal(parse::Tree& tree,
+                        std::vector<widen::TypeRef> const& args) {
+    for (widen::TypeRef a : args) {
+        widen::TypeRef s = widen::strip(a);
+        while (widen::form(s) == widen::Type::Form::kPointer
+               || widen::form(s) == widen::Type::Form::kIterator)
+            s = widen::strip(widen::get(s).pointee);
+        if (widen::form(s) != widen::Type::Form::kSlid) continue;
+        auto ci = tree.classes.find(s);
+        if (ci != tree.classes.end()
+            && !fileIsImported(tree, ci->second.def_file_id)) return true;
+    }
+    return false;
+}
+
 int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                              std::vector<widen::TypeRef> const& args,
                              int file_id, int tok, diagnostic::Sink& diag) {
@@ -7076,6 +7235,37 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                 "close it with a re-open that omits the '...'.", {}});
         }
         return -1;
+    }
+    // MODE. A HEADER-declared template's flavor is either AGGREGATED — every
+    // argument header-visible: declaration-only here (method bodies stripped
+    // from the clones), stable file-scope symbols, kDeclare linkage, defined
+    // once by the source's --instantiate pass — or INLINE: an argument is
+    // LOCAL to this TU, so nobody else can emit the flavor; the bodies clone
+    // from the loaded template source and the instance is internal, def_id-
+    // suffixed. The header's SIBLING defines externally, as before.
+    bool header_tmpl = fileIsImported(tree, tree.entries[tmpl_entry_id].file_id);
+    bool here_sibling = fileIsSibling(tree, tree.entries[tmpl_entry_id].file_id);
+    bool inline_local = header_tmpl && !here_sibling && anyArgLocal(tree, args);
+    bool declare_only = header_tmpl && !here_sibling && !inline_local;
+    if (inline_local) {
+        // The bodies must exist HERE — the template source beside the header.
+        bool has_bodies = false, has_decls = false;
+        auto scan = [&](parse::Node* o) {
+            for (auto& m : o->children) {
+                if (!m) continue;
+                if (m->kind == parse::Kind::kFunctionDef) has_bodies = true;
+                if (m->kind == parse::Kind::kFunctionDecl) has_decls = true;
+            }
+        };
+        scan(it->second.def);
+        for (parse::Node* r : it->second.reopens) scan(r);
+        if (has_decls && !has_bodies) {
+            diagnostic::report(diag, {file_id, tok,
+                "Instantiating '" + tree.entries[tmpl_entry_id].name
+                + "' with a local type needs its template source (the .sl "
+                "beside its header), which was not found.", {}});
+            return -1;
+        }
     }
     if (tree.tmpl_instantiation_depth >= 64
         || tree.class_instance_total >= 512) {
@@ -7126,13 +7316,43 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             c->name = iname;
             c->resolved_entry_id = -1;   // a re-open pattern points at the
                                          // template entry; the clone re-binds
+            // A DECLARE-ONLY flavor is the HEADER's interface alone. The
+            // primary's members are declarations already; a RE-OPEN clone
+            // (the loaded template source's bodies) sheds its function
+            // members entirely — a stripped twin would sit beside the
+            // header's declaration as an ambiguous duplicate, and the bodies
+            // are defined once, externally, by the --instantiate pass.
+            if (declare_only) {
+                if (o == def) {
+                    for (auto& m : c->children) {
+                        if (m && m->kind == parse::Kind::kFunctionDef) {
+                            m->kind = parse::Kind::kFunctionDecl;
+                            m->children.clear();
+                        }
+                    }
+                } else {
+                    for (auto& m : c->children) {
+                        if (m && (m->kind == parse::Kind::kFunctionDef
+                                  || m->kind == parse::Kind::kFunctionDecl))
+                            m.reset();
+                    }
+                    c->children.erase(
+                        std::remove(c->children.begin(), c->children.end(),
+                                    nullptr),
+                        c->children.end());
+                }
+            }
             clones.push_back(std::move(c));
         }
     }
 
     // The NAME phase: entry + frame + placeholder ClassInfo (unique: the name
-    // carries the args, the def_id carries this transient frame).
-    registerClassName(tree, *clones[0], diag);
+    // carries the args, and the def_id carries this transient frame — except a
+    // cross-TU AGGREGATED flavor, whose symbol must be the same in every TU:
+    // file-scope def_id, the canonical spelling alone. An INLINE-local flavor
+    // keeps the frame def_id — it is this TU's private class.)
+    registerClassName(tree, *clones[0], diag, /*member_of=*/-1,
+                      /*file_scope_def_id=*/header_tmpl && !inline_local);
     int iid = clones[0]->resolved_entry_id;
     if (iid < 0) {
         parse::popFrame(tree);
@@ -7170,6 +7390,12 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // and its synthesized transfer ops emitted twice (invalid IR at llc).
     tree.entries[iid].owner_ns_frame = tree.entries[tmpl_entry_id].owner_ns_frame;
     for (auto& c : clones) resolveScopeTypes(tree, *c, /*isClass=*/true, diag);
+    // registerClassBody stamped linkage off the clone's HEADER file_id
+    // (kDeclare here, a pure consumer) — an INLINE-local flavor is this TU's
+    // own class: internal, bodies emitted here, nobody else names it.
+    if (inline_local)
+        widen::setSlidLinkage(widen::strip(clones[0]->return_type),
+                              widen::Type::Linkage::kInternal);
     checkClassCyclesAndNeeds(tree, classes, diag);
     for (std::size_t i = 1; i < clones.size(); i++)
         validateVirtualClass(tree, *clones[i], diag);
@@ -7293,6 +7519,34 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     if (!program) return;
 
     parse::pushFrame(tree);   // program frame
+
+    // TEMPLATE-SOURCE files (a `vector.sl` loaded beside its imported header so
+    // LOCAL-type instances have bodies to clone): only their TEMPLATE content
+    // participates in this TU — template function definitions (including the
+    // qualified out-of-line member form), class-template openings, and alias
+    // templates. Everything else — private helpers, plain classes and their
+    // out-of-line bodies, consts, globals — is the template source's own TU's
+    // business and is DROPPED here, before relocation or registration can see
+    // it. (Consequence: a template body that references a TU-private name
+    // fails with the natural unresolved-name error when instantiated with a
+    // local type — such a body is only emittable by its own TU.)
+    {
+        bool dropped = false;
+        for (auto& ch : program->children) {
+            if (!ch || !fileIsTemplateSource(tree, ch->file_id)) continue;
+            bool keep = !ch->type_params.empty()
+                && (ch->kind == parse::Kind::kFunctionDef
+                    || ch->kind == parse::Kind::kClassDef
+                    || ch->kind == parse::Kind::kAliasDecl);
+            if (!keep) { ch.reset(); dropped = true; }
+        }
+        if (dropped) {
+            program->children.erase(
+                std::remove(program->children.begin(), program->children.end(),
+                            nullptr),
+                program->children.end());
+        }
+    }
 
     // Out-of-line member defs — every external re-open form (`Ret Class:method(){…}`,
     // `Class:Ns{}`, `Class:R(){}`, `const int Class:k=…;`, `alias Class:A=…;`,
@@ -7698,7 +7952,16 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // this is where its scope snapshot is taken (every file-scope entry is registered
     // by now, so the snapshot has the same forward-ref visibility a real body would).
     for (auto& ch : program->children) {
-        if (!ch || ch->kind != parse::Kind::kFunctionDef) continue;
+        if (!ch) continue;
+        // A header's BODYLESS template declaration still snapshots (a consumer
+        // instantiates a declaration-only instance from it — the signature
+        // resolution needs the same visibility).
+        if (ch->kind == parse::Kind::kFunctionDecl && !ch->type_params.empty()) {
+            if (tree.templates.count(ch->resolved_entry_id))
+                snapshotTemplate(tree, *ch);
+            continue;
+        }
+        if (ch->kind != parse::Kind::kFunctionDef) continue;
         if (!ch->type_params.empty()) { snapshotTemplate(tree, *ch); continue; }
         resolveFunctionBody(tree, *ch, diag);
     }
@@ -7732,6 +7995,32 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         } else if (ch && ch->kind == parse::Kind::kNamespaceDecl) {
             resolveScopeBodies(tree, *ch, /*isClass=*/false, diag);
         }
+    }
+
+    // --instantiate demands (this TU is the template source): the CLASS
+    // flavors instantiate here — a demanded spelling rides resolveDeclType
+    // exactly like a local use, memoized against any use this file already
+    // made. Function / method flavors wait for classify, where those
+    // instances mint. Runs BEFORE the drain so demanded bodies drain with
+    // everything else.
+    for (auto& d : tree.inst_demands) {
+        widen::TypeRef t = widen::intern(d.spelling);
+        if (widen::form(t) != widen::Type::Form::kTmplUse) {
+            diagnostic::report(diag, {-1, -1,
+                "Bad instantiation demand '" + d.spelling + "'.", {}});
+            d.consumed = true;
+            continue;
+        }
+        std::string name = widen::get(t).name;
+        bool reported = false;
+        int id = lookupAliasTemplateEntry(tree, name, -1, -1, diag, reported);
+        if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kClass
+            && tree.entries[id].is_template) {
+            resolveDeclType(tree, t, -1, -1, diag);
+            d.consumed = true;
+        }
+        // else: a function / method template spelling — classify's turn — or
+        // an unknown name, reported as a leftover there.
     }
 
     // Pass 2-tmpl-class — the deferred BODY phase for every class-template

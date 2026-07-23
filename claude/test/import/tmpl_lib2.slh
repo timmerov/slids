@@ -1,0 +1,9 @@
+/*
+test imported templates defined in another source file.
+this is the SECOND-LEVEL template header: its consumer is tmpl_lib.sl — a
+template source that is itself a consumer (the mixed-role case).
+*/
+
+Wrap2<T>(T w_ = 0) {
+    T dub();
+}

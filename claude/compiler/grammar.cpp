@@ -117,6 +117,9 @@ struct Parser {
     bool rejectBodyInHeader(int file_id, int tok) {
         if (file_id < 0 || file_id >= static_cast<int>(tokens.files.size())) return false;
         if (tokens.files[file_id].imported_by == -1) return false;
+        // A TEMPLATE SOURCE loaded beside its header is a definitions file by
+        // nature — resolve strips its non-template content; bodies are fine.
+        if (tokens.files[file_id].template_source) return false;
         errorAt(tok, "A header file holds declarations only.");
         return true;
     }
@@ -4365,11 +4368,13 @@ struct Parser {
 
         if (is_op && !validateOperatorSignature(*node, name_tok)) return nullptr;
 
-        // A template's body IS the template — there is nothing to forward-declare,
-        // import, or delete without one.
-        if (!node->type_params.empty()
-            && (peek().kind == token::Kind::kEquals
-                || peek().kind == token::Kind::kSemicolon)) {
+        // A template cannot be imported (`= import`) or deleted (`= delete`) —
+        // its instances are minted from a body. A BODYLESS declaration (`;`)
+        // parses: it is the header-side spelling of a cross-TU template (the
+        // definition lives in the header's same-named source); resolve rejects
+        // it in a non-imported file ("must have a body"), where it declares
+        // nothing anyone else can define.
+        if (!node->type_params.empty() && peek().kind == token::Kind::kEquals) {
             errorAt(node->name_tok, "A template function must have a body.");
             return nullptr;
         }
@@ -4457,11 +4462,13 @@ void run(token::List const& in, parse::Tree& out, diagnostic::Sink& diag) {
     // classes this TU owns the synthesized symbols for. files[0] is the primary source.
     out.file_imported.resize(in.files.size());
     out.file_sibling.resize(in.files.size());
+    out.file_template_source.resize(in.files.size());
     std::string self = in.files.empty() ? std::string() : baseNameOf(in.files[0].path);
     for (size_t i = 0; i < in.files.size(); i++) {
         out.file_imported[i] = in.files[i].imported_by != -1;
         out.file_sibling[i] =
             out.file_imported[i] && baseNameOf(in.files[i].path) == self;
+        out.file_template_source[i] = in.files[i].template_source;
     }
     Parser p{in, out, diag};
     p.parseProgram();

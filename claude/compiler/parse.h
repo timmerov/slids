@@ -636,6 +636,12 @@ struct Tree {
     bool resolve_done = false;   // flips at the end of resolve::run — a later class
                                  // instantiation (from classify) resolves its body
                                  // synchronously instead of queueing for the drain
+    // --instantiate: demand spellings read from the .sli pool, addressed to
+    // THIS TU (it is the demanded template's source). CLASS flavors are
+    // consumed by resolve (a type exists at resolve); FUNCTION / METHOD
+    // flavors by classify (where those instances mint). A leftover errors.
+    struct InstDemand { std::string spelling; bool consumed = false; };
+    std::vector<InstDemand> inst_demands;
     // While a CLASS-template instance's phases run, the template's bare name
     // means THE INSTANCE — the receiver (`Vec^`), a self-typed member, a
     // self-construction. Needed as a stack (an instance body may demand another
@@ -661,6 +667,13 @@ struct Tree {
     // (A member the author WROTE is not this: it may be defined in ANY .sl, so one header
     // can declare several classes that each have their own source file.)
     std::vector<bool> file_sibling;
+
+    // Indexed by file_id: true if that file is a TEMPLATE SOURCE loaded beside
+    // its imported header (`vector.sl` next to `vector.slh`) — pulled in so a
+    // LOCAL-type instance has bodies to clone. Resolve STRIPS everything but
+    // its template content before registration; the template decl/def merge
+    // accepts a definition from such a file.
+    std::vector<bool> file_template_source;
 
     // Class layouts keyed by the class's interned kSlid handle (which is unique
     // per definition via def_id — see ClassInfo). Populated by resolve's class
