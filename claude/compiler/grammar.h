@@ -6,6 +6,9 @@ namespace diagnostic { struct Sink; }
 
 namespace grammar {
 
-void run(token::List const& in, parse::Tree& out, diagnostic::Sink& diag);
+// `in` is mutable for ONE reason: the `>>` closer split — a nested template
+// type use (`Vec<Vec<int>>`) rewrites the right-shift token into two `>`s
+// in place (parse is a single forward pass, so recorded indices stay valid).
+void run(token::List& in, parse::Tree& out, diagnostic::Sink& diag);
 
 }  // namespace grammar

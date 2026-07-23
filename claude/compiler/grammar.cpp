@@ -47,7 +47,7 @@ char const* primitiveNameFor(token::Kind k) {
 }
 
 struct Parser {
-    token::List const& tokens;
+    token::List& tokens;   // mutable for exactly one edit: the `>>` closer split
     parse::Tree& out;
     diagnostic::Sink& diag;
     int pos = 0;
@@ -126,6 +126,23 @@ struct Parser {
 
     void advance() {
         if (pos + 1 < static_cast<int>(tokens.tokens.size())) pos++;
+    }
+
+    // The `>>` CLOSER SPLIT. A nested template type use ends in two closers
+    // the lexer max-munched into one right-shift token (`Vec<Vec<int>>`).
+    // Called at a type-list closer with the cursor ON the `>>`: rewrite it to
+    // `>` and insert the second `>` right after (same source spot, col+1, so
+    // a caret still lands on the closer). Parse is a single forward pass —
+    // every tok index recorded so far is behind pos — so the insertion
+    // invalidates nothing.
+    void splitRShift() {
+        token::Token& t = tokens.tokens[pos];
+        t.kind = token::Kind::kGt;
+        t.text = ">";
+        t.length = 1;
+        token::Token second = t;
+        second.col += 1;
+        tokens.tokens.insert(tokens.tokens.begin() + pos + 1, second);
     }
 
     void error(std::string const& msg) {
@@ -349,9 +366,9 @@ struct Parser {
             if (seg_toks) *seg_toks = std::move(toks);
             // A TEMPLATE-ALIAS USE `Name<type-args>` — the args parsed by this
             // very parser, appended canonically (", ") so the spelling round-trips
-            // through widen::intern. SINGLE LEVEL only: a nested use's `>>` is one
-            // unsplit right-shift token and errors at the expect below (deferred
-            // with the closer-splitting todo item).
+            // through widen::intern (whose splitter is depth-counting, so a
+            // NESTED use `Vec<Vec<int>>` round-trips too). A nested use's `>>`
+            // is one max-munched right-shift token — split it at the closer.
             if (peek().kind == token::Kind::kLt) {
                 advance();   // <
                 type += "<";
@@ -366,6 +383,7 @@ struct Parser {
                     }
                     break;
                 }
+                if (peek().kind == token::Kind::kRShift) splitRShift();
                 if (!expect(token::Kind::kGt, ">")) return "";
                 type += ">";
             }
@@ -659,19 +677,30 @@ struct Parser {
     // From offset `o` at a `<`, skip a TEMPLATE-ALIAS USE's type-arg group — type-
     // vocabulary tokens up to the matching depth-0 `>` — returning the offset just
     // past it; returns `o` unchanged when the tokens don't form one (a comparison
-    // never reads as a type). Single level: a nested `<` is not a group (deferred
-    // with the `>>` closer split). Consumes nothing. The decl-recognition twin of
-    // looksLikeTemplateCallArgs.
+    // never reads as a type). A NESTED use's `<` raises the angle depth; its
+    // closers are `>` (one level) or the max-munched `>>` (two — the second half
+    // may be the group's own closer). A `>>` with no nested group open never
+    // reads as a type, so `a < b >> c` stays an expression. Consumes nothing.
+    // The decl-recognition twin of looksLikeTemplateCallArgs.
     int skipTypeArgGroup(int o) const {
         if (peekKind(o) != token::Kind::kLt) return o;
         int q = o + 1;
         int depth = 0;      // ( ) and [ ] nesting inside an argument
+        int angle = 0;      // NESTED `<...>` groups inside an argument
         bool any = false;
         for (int guard = 64; guard > 0; guard--) {
             token::Kind k = peekKind(q);
-            if (k == token::Kind::kGt && depth == 0) return any ? q + 1 : o;
-            if (k == token::Kind::kLParen || k == token::Kind::kLBracket) depth++;
-            else if (k == token::Kind::kRParen || k == token::Kind::kRBracket) {
+            if (k == token::Kind::kGt && depth == 0) {
+                if (angle == 0) return any ? q + 1 : o;
+                angle--;
+            } else if (k == token::Kind::kRShift && depth == 0 && angle > 0) {
+                if (angle == 1) return any ? q + 1 : o;   // inner + the group itself
+                angle -= 2;
+            } else if (k == token::Kind::kLt) {
+                angle++;
+            } else if (k == token::Kind::kLParen || k == token::Kind::kLBracket) {
+                depth++;
+            } else if (k == token::Kind::kRParen || k == token::Kind::kRBracket) {
                 if (--depth < 0) return o;
             } else if (k == token::Kind::kIdentifier || isTypeStart(k)
                        || k == token::Kind::kColon || k == token::Kind::kColonColon
@@ -2408,14 +2437,22 @@ struct Parser {
     bool looksLikeTemplateCallArgs(int o) const {
         o++;   // past the `<`
         int depth = 0;      // ( ) and [ ] nesting inside a type
+        int angle = 0;      // NESTED `<...>` groups inside an argument
         bool any = false;
         for (int guard = 64; guard > 0; guard--) {
             token::Kind k = peekKind(o);
             if (k == token::Kind::kGt && depth == 0) {
-                return any && peekKind(o + 1) == token::Kind::kLParen;
-            }
-            if (k == token::Kind::kLParen || k == token::Kind::kLBracket) depth++;
-            else if (k == token::Kind::kRParen || k == token::Kind::kRBracket) {
+                if (angle == 0) return any && peekKind(o + 1) == token::Kind::kLParen;
+                angle--;
+            } else if (k == token::Kind::kRShift && depth == 0 && angle > 0) {
+                // the max-munched `>>`: inner closer + possibly the list's own
+                if (angle == 1) return any && peekKind(o + 1) == token::Kind::kLParen;
+                angle -= 2;
+            } else if (k == token::Kind::kLt) {
+                angle++;
+            } else if (k == token::Kind::kLParen || k == token::Kind::kLBracket) {
+                depth++;
+            } else if (k == token::Kind::kRParen || k == token::Kind::kRBracket) {
                 if (--depth < 0) return false;
             } else if (k == token::Kind::kIdentifier || isTypeStart(k)
                        || k == token::Kind::kColon || k == token::Kind::kColonColon
@@ -2453,6 +2490,7 @@ struct Parser {
             if (peek().kind == token::Kind::kComma) { advance(); continue; }
             break;
         }
+        if (peek().kind == token::Kind::kRShift) splitRShift();   // nested use's `>>`
         return expect(token::Kind::kGt, ">");
     }
 
@@ -4455,7 +4493,7 @@ std::string baseNameOf(std::string const& path) {
     return (dot == std::string::npos) ? file : file.substr(0, dot);
 }
 
-void run(token::List const& in, parse::Tree& out, diagnostic::Sink& diag) {
+void run(token::List& in, parse::Tree& out, diagnostic::Sink& diag) {
     // Record which files were imported (`.slh` headers, imported_by != -1) so
     // resolve can tell a header-origin declaration from a primary-source one, and
     // which of those is THIS TU's sibling (same base name) — the one header whose

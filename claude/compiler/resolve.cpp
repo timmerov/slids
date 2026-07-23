@@ -372,9 +372,14 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                     "Type alias '" + name + "' is part of a cycle.", {}});
                 return t;
             }
-            visiting.insert(name);
+            // Resolve the ARGUMENTS before joining the cycle set: an argument
+            // is the use's business, not the alias's own expansion, so a
+            // self-NESTED use (`Ref<Ref<T>>`) is composition, not a cycle.
+            // (A true cycle — the alias's TARGET reaching its own name — is
+            // still caught inside ensureAliasTemplatePattern below.)
             for (auto& a : args)
                 a = resolveTypeRef(tree, a, visiting, reported, file_id, tok, diag);
+            visiting.insert(name);
             widen::TypeRef pat =
                 ensureAliasTemplatePattern(tree, id, visiting, reported, diag);
             visiting.erase(name);
@@ -928,6 +933,20 @@ int resolveNamespaceSegments(parse::Tree const& tree,
 // member looked up within it.
 int resolveQualifiedRef(parse::Tree& tree, parse::Node& node,
                         diagnostic::Sink& diag) {
+    // A nested class template's SUB-PATTERN is registered under the qualified
+    // spelling itself ("Outer:Inner") — try the composed name before the
+    // namespace walk (the outer template owns no frame), so the construction
+    // EXPRESSION `Outer:Inner<args>(args)` reaches it like the decl form does.
+    if (!node.global_qualified && !node.qualifier.empty()) {
+        std::string composed;
+        for (auto const& q : node.qualifier) composed += q + ":";
+        composed += node.name;
+        if (int sub = resolveName(tree, composed);
+            sub >= 0 && tree.entries[sub].kind == parse::EntryKind::kClass
+            && tree.entries[sub].is_template) {
+            return sub;
+        }
+    }
     int frame = resolveNamespaceSegments(tree, node.qualifier, node.qualifier_toks,
                                          node.global_qualified, node.file_id, diag);
     if (frame < 0) return -1;
@@ -1024,13 +1043,14 @@ int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
                              int file_id, int tok, diagnostic::Sink& diag,
                              bool& reported) {
     if (name.find(':') == std::string::npos) return resolveName(tree, name);
-    // A nested class template's SUB-PATTERN is registered under the qualified
-    // spelling itself ("Outer:Inner") — the whole name is the entry name, so
-    // try it before the namespace walk (which would reject the outer template:
-    // a pattern owns no frame).
+    // A nested CLASS or ALIAS template's SUB-PATTERN is registered under the
+    // qualified spelling itself ("Outer:Inner") — the whole name is the entry
+    // name, so try it before the namespace walk (which would reject the outer
+    // template: a pattern owns no frame).
     if (int sub = resolveName(tree, name);
-        sub >= 0 && tree.entries[sub].kind == parse::EntryKind::kClass
-        && tree.entries[sub].is_template) {
+        sub >= 0 && tree.entries[sub].is_template
+        && (tree.entries[sub].kind == parse::EntryKind::kClass
+            || tree.entries[sub].kind == parse::EntryKind::kAlias)) {
         return sub;
     }
     std::vector<std::string> segs;
@@ -5451,8 +5471,25 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
     // tmpl_class.sl Kit:Sub. A flavor clone's copy of this nested template
     // re-registers per instance through the member divert, for inside use.)
     for (auto& m : node.children) {
-        if (!m || m->kind != parse::Kind::kClassDef || m->type_params.empty())
+        if (!m || m->type_params.empty()) continue;
+        // A nested ALIAS TEMPLATE hoists the same way — a kAlias sub-pattern
+        // under "Outer:Inner"; the pattern builds lazily at the first use
+        // (ensureAliasTemplatePattern), markers from its OWN list, so the
+        // self-contained rule holds: an unlisted outer param in the target
+        // is an unknown type. (The flavor clone's copy still registers the
+        // bare name per instance, for inside use, via the member divert.)
+        if (m->kind == parse::Kind::kAliasDecl) {
+            parse::Entry ae;
+            ae.kind = parse::EntryKind::kAlias;
+            ae.name = node.name + ":" + m->name;
+            ae.slids_type = m->return_type;   // provisional
+            ae.file_id = m->file_id;
+            ae.tok = m->name_tok;
+            m->resolved_entry_id = parse::addEntry(tree, std::move(ae));
+            registerAliasTemplate(tree, *m);
             continue;
+        }
+        if (m->kind != parse::Kind::kClassDef) continue;
         parse::Entry se;
         se.kind = parse::EntryKind::kClass;
         se.name = node.name + ":" + m->name;

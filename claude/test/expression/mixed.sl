@@ -136,6 +136,15 @@ int32 main() {
     //-EXPECT-ERROR: No common type for 'float32' and 'int'; use an explicit type conversion.
     // float32 bad_f32_intlit = bf32 + 3;
     // __println("bad_f32_intlit= " + bad_f32_intlit);
+
+    // -- negative: ALIAS operands spell label=target, so the bound types show --
+    //-EXPECT-ERROR: No common type for 'Integer=int' and 'Flt=float'; use an explicit type conversion.
+    // alias Integer = int;
+    // alias Flt = float;
+    // Integer bad_al_a = 1;
+    // Flt bad_al_b = 1.5;
+    // int bad_al = bad_al_a + bad_al_b;
+    // __println("bad_al= " + bad_al);
     //-EXPECT-ERROR: Cannot implicitly convert 'float' to 'int8'; use an explicit type conversion.
     // int8 bad_fltlit_int = 3.0;
     // __println("bad_fltlit_int= " + bad_fltlit_int);

@@ -1176,13 +1176,69 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   tree.entries at every touch; never hold an Entry& across resolution. The
   entries-vector twin of the arena's retired capture-before-intern discipline.
 
-  DEFERRED: overload participation, NESTED TEMPLATE TYPES (`>>` + gate
-  angle-depth — one umbrella todo entry; an ALIAS argument smuggles an instance
-  into a type-list today, `Pair<VI, int8>`; the .sli spellings inherit the same
-  limit), header-declared INCOMPLETE templates (cross-TU completion — the
+  NESTED TEMPLATES (canon test/template/tmpl_nested.sl). Three TU-local
+  forms; the landing was diverts on existing machinery plus ONE mechanism:
+  - a TEMPLATE METHOD inside a CLASS TEMPLATE: the flavor clone re-runs
+    plain-class registration, whose member divert mints the method pattern
+    PER FLAVOR (owned by the instance's frame); the scope-bodies divert then
+    snapshots it under the flavor's installed state, so the outer T is bound
+    INSIDE the snapshot by construction. The mechanism: TemplateInfo
+    captures tmpl_self_stack and instantiateTemplate saves/installs/restores
+    it — without it the pattern's bare receiver (`TClass`) re-enters at
+    classify with no self-redirect and dies on "requires a type-argument
+    list". Per-flavor patterns + memos, the name-ownership collision rule,
+    re-open contributions, block scope, and mangling all rode as-is.
+  - a HOISTED CLASS TEMPLATE inside a class template: registration mints a
+    SUB-PATTERN entry NAMED the qualified spelling itself ("TClass:SClass")
+    — the outer pattern owns no frame, and the ':' in the entry name keeps
+    the bare inner name unspellable outside. The inner's template list is
+    SELF-CONTAINED: it re-lists any outer param it uses (`UClass<U, T>`; an
+    unlisted outer param is simply unknown in its bodies), so an instance
+    keys on ONE arg list, implies no outer flavor, and splices into the
+    outer's host list as an ordinary class. Reached by two diverts trying
+    the composed spelling before the namespace walk — lookupAliasTemplateEntry
+    (the type use) and resolveQualifiedRef (the construction EXPRESSION) —
+    plus a kSlid fallback matching tmpl_self by the pattern's spelled NAME
+    (the receiver `SClass^` misses by entry id; the entry name carries the
+    ':'). Sub-patterns snapshot with their outer — same definition-point
+    state; the file-scope snapshot pass reaches them through tree.templates.
+    A nested ALIAS template hoists the same way — a kAlias sub-pattern
+    ("TClass:Ref"), registerAliasTemplate, pattern built lazily from its
+    OWN markers at first use, so the self-contained rule holds free (an
+    unlisted outer param in the target is an unknown type); the composed-
+    name divert accepts kClass OR kAlias.
+  - NESTED TEMPLATE TYPES (`Vec<Vec<int>>`): grammar-only. The two lookahead
+    gates (skipTypeArgGroup / looksLikeTemplateCallArgs) count ANGLE depth —
+    `>>` at angle >= 1 closes two levels; at angle 0 it never reads as a
+    type, so `a < b >> c` stays an expression — and the two real closers
+    (parseType's group, parseTemplateCallArgs) SPLIT the max-munched `>>` in
+    place: grammar takes token::List& for exactly this; parse is a single
+    forward pass, so rewriting `>>` to `>` and inserting the second `>`
+    invalidates no recorded index. widen's spelling splitters were already
+    depth-counting (intern/spell/##type round-trip unchanged) and resolve's
+    kTmplUse arm already recursed into slots. Fallout fix: a self-NESTED
+    alias use (`Ref<Ref<T>>`) is composition, not a cycle — a use's
+    ARGUMENTS resolve BEFORE the alias name joins the visiting set.
+  The BODY placements needed NOTHING: a class template, a local function
+  template, or an alias template declared inside a TEMPLATE FUNCTION's or
+  TEMPLATE METHOD's body rides the pristine-body + block-scope registration
+  machinery as-is (the instance's body resolves, the block pre-passes
+  register the nested pattern, it instantiates on the enclosing binding) —
+  pinned in tmpl_nested.sl, zero compiler changes. Every form of the canon
+  nesting list (alias/method/type/class/function × class/function/method
+  hosts) is landed TU-local.
+  Cross-TU: the nested DECLARATION forms stay rejected in a HEADER-owned
+  template — an aggregated flavor is declaration-only and an inner pattern's
+  instances aren't knowable to --instantiate, no delivery channel — with
+  focused messages; nested template TYPES cross the seam for free (the .sli
+  spellings ride the same splitters). Diagnostic: a commonType failure
+  spells an ALIAS operand as label=target ('T=float', 'Integer=int') — the
+  bound types were unreadable through bare template-param labels.
+
+  DEFERRED: overload participation,
+  header-declared INCOMPLETE templates (cross-TU completion — the
   never-completed `...` error stands in), source REDIRECTION (`@impl`-style;
-  the source must share the header's base name), member template methods
-  inside a class template (rejected today), a NESTED CLASS inside a
+  the source must share the header's base name), a NESTED CLASS inside a
   header-owned class template (rejected — a header is declarations-only and
   a re-open cannot reach into a nested class, so its bodies have no delivery
   channel; note the asymmetry: a source re-open's nested class compiles in
@@ -1198,10 +1254,15 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   .sli + --instantiate),
   QUALIFIED naming of a class-template instance's members from outside
   (`Kit<int>:Sub` has no spelling — a qualifier segment is an identifier;
-  inside the body they resolve bare) and the `Base:` bypass naming an instance
-  base (same spelling limit), static-bypass beyond what falls out free. Canon
+  inside the body they resolve bare; the HOISTED form `Kit:Sub<...>` is the
+  supported spelling for a nested TEMPLATE) and the `Base:` bypass naming an
+  instance base (same spelling limit), the out-of-line template METHOD form
+  targeting a CLASS TEMPLATE owner, static-bypass beyond what falls out
+  free, deeper qualifier chains to a sub-pattern (`Spc:Outer:Inner` — the
+  composed-name divert reaches one level). Canon
   test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl +
-  tmpl_class.sl + tmpl_complete.sl; cross-TU canon test/import/tmpl_test.sl +
+  tmpl_class.sl + tmpl_complete.sl + tmpl_nested.sl; cross-TU canon
+  test/import/tmpl_test.sl +
   tmpl_test2.sl + tmpl_lib.slh/.sl + tmpl_lib2.slh/.sl.
 
 

@@ -5,9 +5,10 @@ not all template nesting is supported for practical reasons.
 
 examples (includes reach and aspirational):
     template alias inside template class, function, method.
+    template method inside a template class.
+    template type inside a template type list.
     template class inside a template class, function, method
     local template function inside template function, method.
-    template method inside a template class.
 
 template inside template list.
 the lex/parse challenge here is >> is right shift.
@@ -85,6 +86,48 @@ TClass<T>(T t_) {
     }
     SClass<S>(S s_) { }
     UClass<U, T>(U u_, T t_) { }
+    /* hoisted ALIAS templates ride the same sub-pattern rules: own list,
+       bare-host qualifier, re-list an outer param to use it. */
+    alias Ref<S> = S^;
+    alias Wide<S, T> = T;
+}
+
+/* an alias template inside a template FUNCTION body, and inside a template
+   METHOD body — block-scope registration when the instance's body resolves. */
+X viaAlias<X>(X v) {
+    alias Rp<S> = S^;
+    Rp<X> r = ^v;
+    return r^;
+}
+Meth<M>(M m_ = 0) {
+    X pick<X>(X x) {
+        alias Same<S> = S;
+        Same<X> t = x;
+        return t;
+    }
+}
+
+/* a CLASS template and a LOCAL FUNCTION template inside a template
+   FUNCTION's body — block-scope registration when the instance resolves,
+   instantiated on the enclosing binding. */
+X viaLocal<X>(X v) {
+    Loc2<L>(L l_ = 0) { L get() { return l_; } }
+    Loc2<X> lo(v);
+    return lo.get();
+}
+Y viaFn<Y>(Y v) {
+    L dub<L>(L l) { return l + l; }
+    return dub(v);
+}
+
+/* ...and both inside a template METHOD's body, composed. */
+Meth2<M>(M m_ = 0) {
+    Y meth<Y>(Y y) {
+        Lm<L>(L l_ = 0) { L get() { return l_; } }
+        L tri<L>(L l) { return l + l + l; }
+        Lm<Y> lo(y);
+        return tri(lo.get());
+    }
 }
 
 /* a hoisted template with METHODS: its own bare name is the receiver type,
@@ -95,6 +138,36 @@ Host<T>(T h_ = 0) {
         P dbl() { return p_ + p_; }
     }
 }
+
+/* the inner list RE-USES the outer's param name: innermost binding wins —
+   the method's own T is the call's T, not the flavor's. */
+Sh<T>(T t_ = 0) {
+    T same<T>(T v) { return v; }
+}
+
+/* lifecycle hooks in a hoisted template; a hoisted instance as a plain
+   class's FIELD, filled by the qualified construction EXPRESSION. */
+Ho<T>(T unused_ = 0) {
+    Sub<S, T>(S s_ = 0, T t_ = 0) {
+        _() { __println("sub ctor " + s_); }
+        ~() { __println("sub dtor " + s_); }
+        S sum() { return s_ + t_; }
+    }
+}
+Wrap(Ho:Sub<int, int8> f_) { }
+
+/* a template method self-recursing inside a flavor (memo seeded first). */
+Rec<T>(T r_ = 0) {
+    S fact<S>(S n) { if (n <= 1) { return 1; } return n * fact(n - 1); }
+}
+
+/* the canon tier-3 workhorse: templates inside template LISTS — the spaced
+   forms and the max-munched `>>` closer, split at the parse. */
+Vector<T>(T v_ = 0) {
+    T get() { return v_; }
+}
+alias Rf<T> = T^;
+int idOf<X>(X^ p, int v) { p; return v; }
 
 /* the binding surface, each direction: outer-T-only, own-list-only,
    explicit-only, and a template method composing plain + template siblings. */
@@ -135,6 +208,31 @@ Gauge<T>() {
 /* the qualifier is the bare host name — never the host with a type-list. */
 //-EXPECT-ERROR: Expected
 //int badq() { TClass<int>:SClass<float> s; s; return 0; }
+
+/* a hoisted template's list is SELF-CONTAINED: an outer param it does not
+   re-list is simply not in scope. */
+//-EXPECT-ERROR: Unknown type
+//Outc<T>(T t_ = 0) {
+//    BadU<S>(S s_ = 0, T oops_ = 0) { }
+//}
+//int badu() { Outc:BadU<int> b; b; return 0; }
+
+/* a nested template method checks its explicit arity like any template. */
+//-EXPECT-ERROR: Wrong number of template arguments
+//int bada() { TClass<int> t(1); return t.smethod<int, int>(5); }
+
+/* a cross-family mix inside a flavor's method instance: the message spells
+   each ALIAS as label=target, so the bound types are visible through T/X. */
+//-EXPECT-ERROR: No common type for 'T=float' and 'X=int'
+//float badm() { Box<float> bb(0.5); return bb.viaT(2); }
+
+/* an alias target may not use an UNLISTED outer param — the hoisted list is
+   self-contained for aliases too. */
+//-EXPECT-ERROR: Unknown type
+//BadAl<T>(T t_ = 0) {
+//    alias Leak<S> = T^;
+//}
+//int badal() { BadAl:Leak<int> p = nullptr; p; return 0; }
 
 int32 main() {
 
@@ -205,6 +303,78 @@ int32 main() {
     }
     Halo:Duo<int, int8> duo(4, 5);
     int n6 = duo.d_ + duo.e_; __println("n6 = " + n6);
+
+    /* the inner list re-using the outer's name: the call's binding wins
+       (int8 flavor, int call — 300 fits the CALL's T). */
+    Sh<int8> sh(2);
+    int p1 = sh.same(300); __println("p1 = " + p1);
+
+    /* hoisted lifecycle: hooks fire per instance object, reverse order. */
+    Ho:Sub<int, int8> hs(10, 3);
+    int p2 = hs.sum(); __println("p2 = " + p2);
+
+    /* the qualified construction EXPRESSION fills a plain class's field. */
+    Wrap w(Ho:Sub<int, int8>(7, 1));
+    int p3 = w.f_.sum(); __println("p3 = " + p3);
+
+    /* template-method self-recursion inside a flavor. */
+    Rec<int> rc;
+    int p4 = rc.fact(5); __println("p4 = " + p4);
+
+    /* --- tier 3: templates inside template lists (canon spellings). --- */
+    Vector< Vector<int> > vvi;
+    vvi;
+    Vector< Vector<int >> nrs;
+    nrs;
+
+    /* the tight form; construction through the nested spelling; chains. */
+    Vector<Vector<int>> tv(Vector<int>(5));
+    int q1 = tv.get().get(); __println("q1 = " + q1);
+    __println(##type(tv));
+
+    /* three deep: the lexer's `>>` + `>` combination. */
+    Vector<Vector<Vector<int>>> deep;
+    deep;
+
+    /* a nested use as an alias-template argument, and via the reference. */
+    Vector<int> vone(3);
+    Rf<Vector<int>> rv = ^vone;
+    int q2 = rv^.get(); __println("q2 = " + q2);
+    Vector<Vector<int>>^ tp = ^tv;
+    int q3 = tp^.get().get(); __println("q3 = " + q3);
+
+    /* a nested use in a function template's explicit type-list. */
+    int q4 = idOf<Vector<Vector<int>>>(^tv, 4); __println("q4 = " + q4);
+
+    /* two nested args under one use. */
+    Pair<Vector<int>, int8> pn;
+    __println(##type(pn));
+
+    /* `>>` and `<` stay expressions where no type gates. */
+    int sx = 1;
+    int sy = 8;
+    int q5 = sy >> sx; __println("q5 = " + q5);
+    bool q6 = sx < sy; __println("q6 = " + q6);
+
+    /* hoisted ALIAS templates: own list; ##type keeps the use as written. */
+    int rz = 11;
+    TClass:Ref<int> rp = ^rz;
+    int r1 = rp^; __println("r1 = " + r1);
+    __println(##type(rp));
+
+    /* an alias re-listing the outer's param: its own second slot binds it. */
+    TClass:Wide<int8, int> wv = 300; __println("r2 = " + wv);
+
+    /* alias templates inside a template FUNCTION and METHOD body. */
+    int r3 = viaAlias(7); __println("r3 = " + r3);
+    Meth<int> mm(1);
+    int r4 = mm.pick(9); __println("r4 = " + r4);
+
+    /* class + local-function templates inside template fn/method bodies. */
+    int r5 = viaLocal(12); __println("r5 = " + r5);
+    int r6 = viaFn(12); __println("r6 = " + r6);
+    Meth2<int> m2;
+    int r7 = m2.meth(4); __println("r7 = " + r7);
 
     return 0;
 }

@@ -2060,6 +2060,75 @@ Phase 9 — templates
     ("references", const) with aggregated twins (po = 4, tb = 105) proving
     the asymmetry. Author-side up-front checking stays deferred with
     two-phase.
+  * nested templates (three tiers)                       LANDED 2026-07-23
+    Canon test/template/tmpl_nested.sl. Diverts on existing machinery; ONE
+    new mechanism total.
+    TIER 1 — a TEMPLATE METHOD inside a CLASS TEMPLATE. The guard in
+    registerClassTemplate narrowed to HEADER-owned templates (focused "may
+    not contain a template method (not supported yet)" — no --instantiate
+    delivery channel; negative in tmpl_lib.slh); a TU-local flavor's clone
+    re-runs plain-class registration whose member divert mints the method
+    pattern PER FLAVOR, and the scope-bodies divert snapshots it under the
+    flavor's installed T-alias frame — the outer T is bound INSIDE the
+    snapshot by construction. THE MECHANISM: TemplateInfo captures
+    tmpl_self_stack (parse.h TmplSelf hoisted to namespace scope) and
+    instantiateTemplate saves/installs/restores it — without it the
+    pattern's bare receiver re-enters at classify with no self-redirect
+    ("requires a type-argument list"). Ownership collisions, re-open
+    contributions, block scope, memoization, mangling: all rode as-is.
+    Bundled fix: resolveStmt's kClassDef assert tolerates a registration
+    that ERRORED (every error return leaves the node unregistered by
+    design; the assert still fires on a clean-sink silent drop).
+    TIER 2 — a HOISTED CLASS TEMPLATE (`TClass:SClass<int> x;`). THE DESIGN
+    (user's): the inner list is SELF-CONTAINED — it re-lists any outer
+    param it uses (`UClass<U, T>`), so an instance keys on ONE arg list and
+    implies no outer flavor; the qualifier is the BARE host name (never
+    `TClass<int>:` — instance members keep their no-spelling rule); nesting
+    is namespacing, not closure. Registration mints a SUB-PATTERN entry
+    NAMED the qualified spelling itself ("TClass:SClass" — the outer owns
+    no frame; the ':' keeps the bare inner name unspellable); two diverts
+    try the composed name before the namespace walk (lookupAliasTemplateEntry
+    for the type use, resolveQualifiedRef for the construction EXPRESSION —
+    the second found as a gap probe: decl form worked, expression form
+    died); a kSlid fallback matches tmpl_self by the pattern's spelled name
+    (the receiver misses by entry id). Sub-patterns snapshot with their
+    outer. An unlisted outer param in the inner's body errors naturally
+    ("Unknown type 'T'" — negative pinned). Hooks, fields-of, recursion,
+    block scope, second flavors: pinned working.
+    TIER 3 — NESTED TEMPLATE TYPES (`Vec<Vec<int>>`). Grammar-only: the two
+    lookahead gates count ANGLE depth (`>>` at angle >= 1 closes two
+    levels; at angle 0 never a type — `a < b >> c` stays an expression),
+    and the two real closers split the max-munched `>>` IN PLACE — grammar
+    takes token::List& for exactly this; parse is single-pass-forward, so
+    rewriting `>>` to `>` + inserting the second `>` invalidates no
+    recorded index. widen's splitters were ALREADY depth-counting
+    (intern/spell/##type round-trip) and resolve's kTmplUse arm already
+    recursed into slots — zero changes past the parse. FALLOUT FIX: a
+    self-NESTED alias use (`Ref<Ref<T>>`) false-cycled — a use's ARGUMENTS
+    now resolve BEFORE the alias name joins the visiting set (composition,
+    not a cycle; the true-cycle check inside ensureAliasTemplatePattern
+    stands). Stale negatives converted: tmpl_class.sl (the tier-1
+    rejection), tmpl_alias.sl (the nested-use pair — one now positive, one
+    repointed at the print-intrinsic limit it stops at today).
+    DIAGNOSTIC (same session): a commonType failure spells an ALIAS operand
+    label=target ('T=float', 'X=int', 'Integer=int') via classify's
+    spellForMessage — found reading the tier-1 detour where 'T' and 'X'
+    hid the bound types; user chose the format. Negatives in tmpl_nested.sl
+    (the exact Box<float>.viaT(2) case) and expression/mixed.sl.
+    Suite: 84 positives / 894 negatives, 0 failures.
+    THEN — HOISTED ALIAS TEMPLATES + THE BODY PLACEMENTS (same day). An
+    alias template inside a class template hoists like tier 2: the
+    sub-pattern scan takes kAliasDecl too (kAlias entry named
+    "TClass:Ref", registerAliasTemplate; the pattern builds lazily from
+    its OWN markers, so self-contained holds free — an unlisted outer
+    param is "Unknown type"), and the composed-name divert accepts
+    kClass OR kAlias. `##type` keeps the use as written
+    ("TClass:Ref<int32>"). The BODY placements needed NOTHING: class /
+    local-function / alias templates inside a template FUNCTION's or
+    METHOD's body ride pristine-body + block-scope registration as-is —
+    probed, then pinned (viaAlias/viaLocal/viaFn/Meth/Meth2). Every form
+    of tmpl_nested.sl's canon nesting list is now landed TU-local.
+    Negative: alias target using an unlisted outer param.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

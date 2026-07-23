@@ -223,11 +223,17 @@ int32 main() {
     //-EXPECT-ERROR: Duplicate declaration
     //alias LR<U> = U[];
 
-    /* a use inside a function-template type-list is a NESTED template type —
-       deferred with the '>>' closer split (see todo); even the spaced form
-       reads as a comparison today. */
-    //-EXPECT-ERROR: Expected '='
+    /* a use inside a function-template type-list PARSES now (the nested-type
+       landing, tmpl_nested.sl); this case then stops at the print intrinsic,
+       whose segments don't take a reference type. */
+    //-EXPECT-ERROR: does not yet support segments
     //dump<Ref<uint32> >(#y);
+
+    /* a self-NESTED use is composition, not a cycle: Nest<int> = int^^. */
+    int nz = 9;
+    Ref<int> nr = ^nz;
+    Nest<int> nn = ^nr;
+    int nv = nn^^; __println("nv = " + nv);
 
     return 0;
 }
@@ -241,9 +247,9 @@ int32 main() {
 //alias Cyc<T> = Cyc<T>^;
 //Cyc<int> cy = nullptr;
 
-/* a NESTED use needs the deferred '>>' closer split. */
-//-EXPECT-ERROR: Expected
-//alias Nest<T> = Ref<Ref<T>>;
+/* a NESTED use in an alias target (the '>>' closer split + the composition-
+   not-cycle rule; used positively in main). */
+alias Nest<T> = Ref<Ref<T>>;
 
 /* a template alias may not take a class's name. */
 //-EXPECT-ERROR: Duplicate declaration

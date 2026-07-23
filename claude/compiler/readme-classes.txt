@@ -70,16 +70,24 @@ readme.txt TEMPLATES), and the virtual/user-op= flavors, whose vtable and
 canonical copy emit internal with their class. A source-side member not
 declared in the header exists only in the module's own flavors; a consumer
 may neither define nor re-open a header template ("defined by its module's
-source"); a header-owned class template may not contain a NESTED class
-(no body-delivery channel — rejected). Canon test/import/tmpl_test.sl +
-tmpl_test2.sl + tmpl_lib.slh/.sl.
+source"); a header-owned class template may not contain a NESTED class or a
+TEMPLATE METHOD (no body-delivery channel for either — rejected). Canon
+test/import/tmpl_test.sl + tmpl_test2.sl + tmpl_lib.slh/.sl.
 RESTRICTIONS: a class template owns its name against a LISTLESS opening or a
-plain class; no template methods inside a template class (rejected); an
-instance's members have NO qualified spelling from outside (`Kit<int>:Sub` —
-a qualifier segment is an identifier), and the `Base:` bypass cannot name an
-instance base for the same reason. The out-of-line template METHOD form
-(`T Class:m<T>`) stays deferred with the cross-TU bundle (the NAMESPACE
-flavor is landed — readme.txt TEMPLATES).
+plain class; an instance's members have NO qualified spelling from outside
+(`Kit<int>:Sub` — a qualifier segment is an identifier), and the `Base:`
+bypass cannot name an instance base for the same reason. NESTED TEMPLATES
+landed TU-local (readme.txt TEMPLATES; canon tmpl_nested.sl): a TEMPLATE
+METHOD inside a class template (per-flavor patterns; the snapshot carries
+the flavor's self-redirect), a HOISTED class OR alias template
+(`TClass:SClass<int>`, `TClass:Ref<int>` — the sub-pattern owns the
+qualified spelling; its template list is SELF-CONTAINED, re-listing any
+outer param it uses; the qualifier is the bare host name, never
+`TClass<int>:`), nested template TYPES (`Vec<Vec<int>>`, the `>>` closer
+split), and class/function/alias templates in a template function's or
+method's BODY (block-scope registration as-is). The out-of-line template METHOD
+form targeting a CLASS TEMPLATE owner stays deferred (the plain-class and
+namespace flavors are landed — readme.txt TEMPLATES).
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)

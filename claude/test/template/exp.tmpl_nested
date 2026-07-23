@@ -28,3 +28,27 @@ n3 = 2.5
 n4 = 33
 n5 = 20
 n6 = 9
+p1 = 300
+sub ctor 10
+p2 = 13
+sub ctor 7
+p3 = 8
+p4 = 120
+q1 = 5
+Vector<Vector<int>>
+q2 = 3
+q3 = 5
+q4 = 4
+Pair<Vector<int>, int8>
+q5 = 4
+q6 = true
+r1 = 11
+TClass:Ref<int>
+r2 = 300
+r3 = 7
+r4 = 9
+r5 = 12
+r6 = 24
+r7 = 12
+sub dtor 7
+sub dtor 10

@@ -91,6 +91,14 @@ Ucp<T>(T^ u_ = nullptr) {
 //    }
 //}
 
+/* a template method inside a header class template stays rejected too — its
+   instances aren't knowable to the source's --instantiate pass (a TU-local
+   class template takes both forms; tmpl_nested.sl). */
+//-EXPECT-ERROR: may not contain a template method
+//MBad<T>(T m_ = 0) {
+//    U tm<U>(U v);
+//}
+
 /* plain functions the SOURCE implements using templates: its own use of an
    aggregated flavor, and its use of ANOTHER library's template (tmpl_lib2) —
    the mixed-role proofs, observable from any consumer. */
