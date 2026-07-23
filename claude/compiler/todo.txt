@@ -257,6 +257,14 @@ REACH GOALS
     (non-C++, needs the default threaded through dispatch, not the call site).
     Purely a semantics choice — today's behavior is deliberate, not a bug.
 
+  * a header file that defines templates needs to be able to redirect to the file
+    that defines the templates if it's not the same name as the header and/or not
+    on the search path.
+    claude says:
+    5. Local-type instance with the template source missing — "needs its template
+    source (the .sl beside its header)"; aggregation-only modules remain fine.
+
+
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 
   * this is a footgun. c++ has a similar issue. it's a bit easier with slids.

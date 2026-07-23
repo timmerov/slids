@@ -68,6 +68,10 @@ T tpick<T>(T a, T b) { return b; }
    internally; a consumer's local-type instance has no `tick` and errors. */
 T tpock<T>(T a, T b) { tick(); return b; }
 
+/* the identifier flavor: a PRIVATE const read by a template body. */
+const int kBias = 100;
+T tbias<T>(T v) { return v + kBias; }
+
 /* the template method's body: the out-of-line form; a plain out-of-line
    member beside it. */
 T Gauge:scaled<T>(T v) { return v + v; }

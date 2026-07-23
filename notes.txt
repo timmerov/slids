@@ -4,10 +4,6 @@ template classes.
 imported templates.
 
   Deferred with pinned diagnostics (each has a negative in the suite)
-  4. Local-type instances of an imported class's template method — "not supported yet"; the body would have to emit against a declare-only owner class, which needs its own linkage story.
-  5. Local-type instance with the template source missing — "needs its template source (the .sl beside its header)"; aggregation-only modules remain fine.
-  6. Template bodies referencing their TU's private names, instantiated elsewhere — currently the honest-but-generic "Unknown function"; a sharper up-front rule (header-visible names only,
-  checked at the template) is future work.
   7. Member template methods inside class templates — still rejected outright.
 
   Design-line deferrals (pre-existing, unchanged by this landing)

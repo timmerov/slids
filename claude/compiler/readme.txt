@@ -1122,10 +1122,19 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     `<m>.sl` beside it (skipped when the ROOT's own stem is `<m>` — the
     sibling compiling itself, and the negative harness's relocated variants),
     marked template_source; grammar's declarations-only header check exempts
-    it, and resolve STRIPS its non-template content before relocation — so a
-    body referencing a TU-private name fails with the natural unresolved
-    error when inlined (only its own TU can emit such a body; the aggregated
-    flavor of the same template works). A function instance re-homes its
+    it, and resolve STRIPS its non-template content before relocation. A body
+    referencing a TU-private name therefore cannot inline — and gets THE
+    PRIVATE-NAME CHAIN, not a bare unknown-name error: the strip RECORDS every
+    name it drops (kind + file + token — tokens outlive the freed nodes), an
+    inline-instantiation context stack (template, use site, local class)
+    wraps all three body-resolution paths, and the unknown-function /
+    unresolved-identifier arms compose the full story — primary caret at the
+    CONSUMER'S use site, then the local class, the template's declaration,
+    the body's reference ("calls" / "references"), the private definition,
+    and the remedy ("declare '<name>' or class '<local>' in a header file to
+    make them public", attached to the last caret block — the renderer has no
+    caretless note form). The aggregated flavor of the same template still
+    works; the split-header remedy is verified (a_priv.slh pattern). A function instance re-homes its
     entry to the root file so the linkage decision emits `define internal`;
     a namespace-member instance rides the same re-home. A METHOD instance
     takes THE ONE SANCTIONED EXCEPTION to the owner-linkage rule: its owner
@@ -1179,9 +1188,11 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   channel; note the asymmetry: a source re-open's nested class compiles in
   the sibling but rejects in every consumer at load, and the source side is
   unpinnable without harness support), a local-type instance of a template
-  whose source is absent (focused message), a sharper up-front
-  header-visible-names rule for template bodies (today: the natural
-  unresolved-name error at the inline instantiation), explicit instantiation
+  whose source is absent (focused message), the AUTHOR-side up-front
+  header-visible-names check for template bodies (the CONSUMER side is
+  covered: the private-name chain diagnostic; warning the library author at
+  the template's own compile is a piece of two-phase checking, which slids
+  does not have), explicit instantiation
   as COMPILABLE source (the .sli block spelling, ungrammared), the .sli
   demand DIAGNOSTICS unpinned (the negative harness cannot plant a crafted
   .sli + --instantiate),

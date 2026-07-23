@@ -44,6 +44,10 @@ T tsum<T>(T a, T b);
 T tpick<T>(T a, T b);
 T tpock<T>(T a, T b);
 
+/* like `tpock`, but the body READS a private name (a const) instead of
+   calling one — the identifier flavor of the private-name diagnostic. */
+T tbias<T>(T v);
+
 /* an alias template is whole in the header — nothing to defer. */
 alias TRef<T> = T^;
 

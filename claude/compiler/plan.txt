@@ -2038,6 +2038,28 @@ Phase 9 — templates
     compiles in the sibling but rejects in every consumer at load —
     unpinnable without harness support. testhdr.sl now imports tmpl_lib so
     tmpl_lib.slh negatives run.
+    THEN — THE PRIVATE-NAME CHAIN DIAGNOSTIC (same day). An inline-local
+    instance whose body uses a template-source PRIVATE previously died with
+    a bare "Unknown function 'tick'" careted inside a library file the user
+    never wrote. Now: the strip RECORDS dropped names (tokens outlive the
+    freed nodes, so the private definition still carets), an
+    inline-instantiation context stack (template + use site + local class)
+    wraps the three body-resolution paths, and the unknown-name arms compose
+    the chain — primary at the consumer's USE SITE: "Cannot instantiate
+    'tpock' with the local type 'Loc': the template's body uses a name
+    private to its source; emitting this instance in this translation unit
+    would fail at link." — then notes: the local class, the template's
+    declaration, "its body calls/references '<name>' here" (the exact node,
+    clones keep source positions), the private definition, and the remedy
+    ("declare '<name>' or class '<local>' in a header file to make them
+    public" — user-worded; the 'declare the class' remedy verified: a
+    header-declared argument flips the flavor to aggregated). The remedy
+    rides the last caret block (the renderer has no caretless note form).
+    The a_priv.slh split-header pattern verified end-to-end by probe.
+    Pinned both flavors: tpock/tick ("calls", function) and tbias/kBias
+    ("references", const) with aggregated twins (po = 4, tb = 105) proving
+    the asymmetry. Author-side up-front checking stays deferred with
+    two-phase.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

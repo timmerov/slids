@@ -80,15 +80,24 @@ int32 main() {
     __println("pl = " + pl^.lv());
     int pk = tpick(3, 4); __println("pk = " + pk);
     int po = tpock(3, 4); __println("po = " + po);
+    int tb = tbias(5); __println("tb = " + tb);
 
     /* a template body that uses the source's PRIVATE helper can only be
-       emitted by the source's own TU — a local-type instance cannot inline
-       it, and the helper's name does not resolve here. */
-    //-EXPECT-ERROR: Unknown function
+       emitted by the source's own TU — a local-type instance gets the full
+       cross-TU chain: use site, local class, template, the body's reference,
+       the private definition, and the header remedy. */
+    //-EXPECT-ERROR: private to its source
     //Loc na(1);
     //Loc nb(2);
     //Loc^ pb = tpock(^na, ^nb);
     //__println("pb = " + pb^.lv());
+
+    /* the identifier flavor of the same chain: the body READS a private
+       const — the note says "references 'kBias'". */
+    //-EXPECT-ERROR: references 'kBias'
+    Loc ra(1);
+    Loc^ rb = tbias(^ra);
+    __println("rb = " + rb^.lv());
 
     /* THE CARVE-OUT: a local-type instance of an imported class's template
        method emits `define internal` HERE — the one sanctioned exception to

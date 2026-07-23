@@ -632,6 +632,8 @@ struct Tree {
         // are re-appended there for the body's bare member references.
         std::vector<int> member_entries;
         bool body_resolved = false;
+        int use_file = -1;   // the triggering use — the private-name
+        int use_tok = -1;    // diagnostic's primary caret at the drain
     };
     std::vector<PendingClassInstance> pending_class_instances;
     int class_instance_total = 0;   // lifetime count across all class templates. A
@@ -656,6 +658,27 @@ struct Tree {
     // transient frame alias.
     struct TmplSelf { int tmpl_entry; int instance_entry; };
     std::vector<TmplSelf> tmpl_self_stack;
+    // TEMPLATE-SOURCE strip records: the top-level names dropped from a loaded
+    // template source (private to the template's own TU). When an INLINE-LOCAL
+    // instance's body references one, the generic unknown-name error upgrades
+    // to the full cross-TU chain (use site, local class, template, reference
+    // site, private definition, remedy). First-seen wins.
+    struct StrippedPrivate {
+        std::string kind;
+        int file_id = -1;
+        int name_tok = -1;
+    };
+    std::map<std::string, StrippedPrivate> stripped_privates;
+    // The INLINE-LOCAL instantiation context, pushed around an inline
+    // instance's BODY resolution so the unknown-name arms can compose that
+    // chain. A stack: inline bodies may demand further inline instances.
+    struct InlineInstCtx {
+        int tmpl_entry = -1;
+        int use_file = -1;
+        int use_tok = -1;
+        widen::TypeRef local_arg = widen::kNoType;
+    };
+    std::vector<InlineInstCtx> inline_inst_ctx;
 
     // Indexed by file_id (token::List file order): true if that file was pulled
     // in via `import` (a `.slh` header — token::File::imported_by != -1). Filled

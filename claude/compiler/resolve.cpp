@@ -774,6 +774,45 @@ int resolveName(parse::Tree const& tree, std::string const& name) {
     return resolveNameDetail(tree, name, other);
 }
 
+// An unknown name hit while resolving an INLINE-LOCAL template instance's
+// body, where the name is a TEMPLATE SOURCE's private (stripped at load):
+// upgrade the generic unknown-name error to the full cross-TU chain — the
+// use site, the local class, the template, the reference, the private
+// definition, and the remedy. True = handled; the caller emits nothing.
+// `verb` reads as "its body <verb> 'name' here" — "calls" / "references".
+bool reportPrivateNameInInline(parse::Tree& tree, std::string const& name,
+                               int ref_file, int ref_tok, char const* verb,
+                               diagnostic::Sink& diag) {
+    if (tree.inline_inst_ctx.empty()) return false;
+    auto sp = tree.stripped_privates.find(name);
+    if (sp == tree.stripped_privates.end()) return false;
+    parse::Tree::InlineInstCtx const& ctx = tree.inline_inst_ctx.back();
+    if (ctx.tmpl_entry < 0) return false;
+    std::string tname = tree.entries[ctx.tmpl_entry].name;
+    std::string lname = "?";
+    int lfile = -1, ltok = -1;
+    auto ci = tree.classes.find(ctx.local_arg);
+    if (ci != tree.classes.end()) {
+        lname = ci->second.name;
+        lfile = ci->second.def_file_id;
+        ltok = ci->second.def_tok;
+    }
+    diagnostic::report(diag, {ctx.use_file, ctx.use_tok,
+        "Cannot instantiate '" + tname + "' with the local type '" + lname
+        + "': the template's body uses a name private to its source; emitting "
+        "this instance in this translation unit would fail at link.",
+        {{lfile, ltok, "local class '" + lname + "' declared here"},
+         {tree.entries[ctx.tmpl_entry].file_id, tree.entries[ctx.tmpl_entry].tok,
+          "'" + tname + "' declared here"},
+         {ref_file, ref_tok,
+          "its body " + std::string(verb) + " '" + name + "' here"},
+         {sp->second.file_id, sp->second.name_tok,
+          "'" + name + "' is defined here, private to the template's source. "
+          "note: declare '" + name + "' or class '" + lname
+          + "' in a header file to make them public."}}});
+    return true;
+}
+
 // Does any entry exist as a namespace member of the given name? Used to choose
 // "needs a qualifier" over "unresolved" when a bare lookup fails.
 bool namespaceMemberExists(parse::Tree const& tree, std::string const& name) {
@@ -1845,6 +1884,10 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 // the same name (which resolveNameDetail found first) shadows the field.
                 if (lowerFieldRef(tree, e, id, diag)) return;
                 if (id < 0) {
+                    if (reportPrivateNameInInline(tree, e.name, e.file_id,
+                                                  e.tok, "references", diag)) {
+                        return;
+                    }
                     if (namespaceMemberExists(tree, e.name)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
                             "'" + e.name + "' needs a namespace qualifier.", {}});
@@ -2385,6 +2428,10 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
     } else {
         id = resolveName(tree, s.name);
         if (id < 0) {
+            if (reportPrivateNameInInline(tree, s.name, s.file_id, s.tok,
+                                          "calls", diag)) {
+                return false;
+            }
             if (namespaceMemberExists(tree, s.name)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "'" + s.name + "' needs a namespace qualifier.", {}});
@@ -6957,6 +7004,8 @@ static std::unique_ptr<parse::Node> cloneDeep(parse::Node const& n) {
     return c;
 }
 
+static widen::TypeRef firstLocalArg(parse::Tree& tree,
+                                    std::vector<widen::TypeRef> const& args);
 static bool anyArgLocal(parse::Tree& tree,
                         std::vector<widen::TypeRef> const& args);
 
@@ -7079,7 +7128,14 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     ti.instances[args] = iid;
 
     if (clone->kind == parse::Kind::kFunctionDef) {
+        // An inline-local body resolves under the private-name diagnostic
+        // context: a reference to a name the template-source strip dropped
+        // reports the full cross-TU chain at THIS use site.
+        if (inline_local)
+            tree.inline_inst_ctx.push_back(
+                {tmpl_entry_id, file_id, tok, firstLocalArg(tree, args)});
         resolveFunctionBody(tree, *clone, diag, /*nested=*/ti.nested);
+        if (inline_local) tree.inline_inst_ctx.pop_back();
         mungeParamTypes(tree, *clone, diag);
         // An INLINE-local flavor is this TU's own function: re-home the entry
         // to the root file so the linkage decision (declared-in-header ->
@@ -7201,11 +7257,13 @@ static void restoreResolveState(parse::Tree& tree, SavedResolveState& s) {
     tree.current_base_name = std::move(s.base);
 }
 
-// Any type argument whose class is declared in THIS TU's own source (not an
-// imported header)? Such a flavor cannot aggregate — its spelling means nothing
-// to the template source's compile — so it instantiates INLINE, internal.
-static bool anyArgLocal(parse::Tree& tree,
-                        std::vector<widen::TypeRef> const& args) {
+// The first type argument whose class is declared in THIS TU's own source
+// (not an imported header) — kNoType if none. Such a flavor cannot aggregate:
+// its spelling means nothing to the template source's compile, so it
+// instantiates INLINE, internal. The returned class also names the
+// private-name diagnostic's "local class" note.
+static widen::TypeRef firstLocalArg(parse::Tree& tree,
+                                    std::vector<widen::TypeRef> const& args) {
     for (widen::TypeRef a : args) {
         widen::TypeRef s = widen::strip(a);
         while (widen::form(s) == widen::Type::Form::kPointer
@@ -7214,9 +7272,13 @@ static bool anyArgLocal(parse::Tree& tree,
         if (widen::form(s) != widen::Type::Form::kSlid) continue;
         auto ci = tree.classes.find(s);
         if (ci != tree.classes.end()
-            && !fileIsImported(tree, ci->second.def_file_id)) return true;
+            && !fileIsImported(tree, ci->second.def_file_id)) return s;
     }
-    return false;
+    return widen::kNoType;
+}
+static bool anyArgLocal(parse::Tree& tree,
+                        std::vector<widen::TypeRef> const& args) {
+    return firstLocalArg(tree, args) != widen::kNoType;
 }
 
 int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
@@ -7413,10 +7475,15 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         // Post-resolve (classify demanded this instance): everything is
         // registered, so the bodies resolve right here, under this frame's T
         // bindings; classify runs the late stages over the parked nodes.
+        // Inline-local bodies carry the private-name diagnostic context.
+        if (inline_local)
+            tree.inline_inst_ctx.push_back(
+                {tmpl_entry_id, file_id, tok, firstLocalArg(tree, args)});
         for (auto& c : clones) {
             resolveScopeBodies(tree, *c, /*isClass=*/true, diag);
             mungeParamTypes(tree, *c, diag);
         }
+        if (inline_local) tree.inline_inst_ctx.pop_back();
     }
 
     tree.tmpl_self_stack.pop_back();
@@ -7436,7 +7503,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         parse::TemplateInfo& ti = tree.templates.at(tmpl_entry_id);
         tree.pending_class_instances.push_back(
             {ti.host_list, ti.def, std::move(c), tmpl_entry_id, iid, args,
-             keep, /*body_resolved=*/late});
+             keep, /*body_resolved=*/late, file_id, tok});
     }
     parse::popFrame(tree);
     if (installed) restoreResolveState(tree, saved);
@@ -7459,8 +7526,18 @@ void drainClassTemplateBodies(parse::Tree& tree, diagnostic::Sink& diag) {
         parse::Node* node = tree.pending_class_instances[i].node.get();
         std::vector<widen::TypeRef> args = tree.pending_class_instances[i].args;
         std::vector<int> members = tree.pending_class_instances[i].member_entries;
+        int use_file = tree.pending_class_instances[i].use_file;
+        int use_tok = tree.pending_class_instances[i].use_tok;
         auto ti = tree.templates.find(tid);
         if (ti == tree.templates.end() || !node) continue;
+        // Inline-local bodies drain under the private-name diagnostic context
+        // (mode recomputed — the pending entry predates the drain).
+        bool inl = fileIsImported(tree, tree.entries[tid].file_id)
+            && !fileIsSibling(tree, tree.entries[tid].file_id)
+            && anyArgLocal(tree, args);
+        if (inl)
+            tree.inline_inst_ctx.push_back(
+                {tid, use_file, use_tok, firstLocalArg(tree, args)});
 
         SavedResolveState saved = saveResolveState(tree);
         installSnapshot(tree, ti->second);
@@ -7476,6 +7553,7 @@ void drainClassTemplateBodies(parse::Tree& tree, diagnostic::Sink& diag) {
         tree.tmpl_self_stack.push_back({tid, iid});
         resolveScopeBodies(tree, *node, /*isClass=*/true, diag);
         tree.tmpl_self_stack.pop_back();
+        if (inl) tree.inline_inst_ctx.pop_back();
         // Keep the members the BODY phase registered (the synthesized transfer
         // operators) live past the pop/restore — same move as instantiation.
         std::vector<int> keep;
@@ -7546,7 +7624,26 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 && (ch->kind == parse::Kind::kFunctionDef
                     || ch->kind == parse::Kind::kClassDef
                     || ch->kind == parse::Kind::kAliasDecl);
-            if (!keep) { ch.reset(); dropped = true; }
+            if (!keep) {
+                // Remember the dropped NAME: an inline-local instance body
+                // that references it gets the full private-name chain instead
+                // of a bare "Unknown ...". (The tokens survive the drop, so
+                // the record can caret the private definition.)
+                if (!ch->name.empty()) {
+                    char const* kind =
+                        ch->kind == parse::Kind::kFunctionDef  ? "function"
+                        : ch->kind == parse::Kind::kClassDef   ? "class"
+                        : ch->kind == parse::Kind::kAliasDecl  ? "alias"
+                        : ch->kind == parse::Kind::kEnumDecl   ? "enum"
+                        : ch->kind == parse::Kind::kNamespaceDecl ? "namespace"
+                                                               : "declaration";
+                    tree.stripped_privates.emplace(ch->name,
+                        parse::Tree::StrippedPrivate{kind, ch->file_id,
+                                                     ch->name_tok});
+                }
+                ch.reset();
+                dropped = true;
+            }
         }
         if (dropped) {
             program->children.erase(
