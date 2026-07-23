@@ -1290,6 +1290,20 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
         // whose symbols this TU does not own: resolve mints those as real definitions,
         // stamped with the CLASS's file_id, so an imported file_id on a definition means
         // "this TU did not write this" — declare it and link to the sibling's.
+        // THE ONE SANCTIONED EXCEPTION to the owner-linkage authority below: a
+        // template instance whose type-list names a TU-LOCAL type
+        // (Entry.tu_local_instance). The flavor is unspellable anywhere else —
+        // no other TU can define it or collide with it — so it emits `define
+        // internal` even under a declare-only owner. Keyed on the FLAG plus
+        // the owner's linkage (not "a plain header class"), so a future
+        // kDeclare class-template owner gets the same rule for free.
+        bool tu_local = f.resolved_entry_id >= 0
+            && f.resolved_entry_id < (int)in.entries.size()
+            && in.entries[f.resolved_entry_id].tu_local_instance;
+        if (tu_local && owner != widen::kNoType) {
+            fn->internal_def = true;
+            return fn;
+        }
         if (f.kind == parse::Kind::kFunctionDef && owner != widen::kNoType
             && widen::slidLinkage(owner) == widen::Type::Linkage::kDeclare
             && f.file_id >= 0 && f.file_id < (int)in.file_imported.size()

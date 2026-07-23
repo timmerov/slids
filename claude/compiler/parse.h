@@ -457,6 +457,12 @@ struct Entry {
                                   // duplicate of the target overload registered under the
                                   // alias name so it joins the overload set; it emits the
                                   // TARGET's symbol (symbolFor follows this to that entry).
+    bool tu_local_instance = false;  // kFunction: a template INSTANCE whose type-list
+                                  // names a TU-LOCAL type. The flavor is unspellable
+                                  // anywhere else, so it emits HERE, `define internal` —
+                                  // the ONE sanctioned exception to the owner-linkage
+                                  // rule when its owner class is declare-only (desugar
+                                  // liftMember).
     bool is_external = false;     // kFunction: DECLARED in an imported `.slh` header —
                                   // its definition legitimately lives in another
                                   // translation unit (linked in), so being undefined

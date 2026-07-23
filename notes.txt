@@ -3,13 +3,6 @@ agenda:
 template classes.
 imported templates.
 
-  Deferred by your explicit scope calls
-  1. Incomplete templates cross-TU — a header-declared ... template completing in another TU. The never-completed error ("close it with a re-open that omits the '...'") stands guard until
-  this lands.
-  2. Source redirection — the template source must share the header's base name; an @impl "other"-style override (v1's old wishlist item) is deferred.
-  3. Nested template types — the >> umbrella (lexer closer split + angle-depth in the gates): Pair<Vec<int>>, Ref<Ref<int>>. An alias argument smuggles an instance through meanwhile; the
-  umbrella got more central again since .sli spellings inherit the same limit.
-
   Deferred with pinned diagnostics (each has a negative in the suite)
   4. Local-type instances of an imported class's template method — "not supported yet"; the body would have to emit against a declare-only owner class, which needs its own linkage story.
   5. Local-type instance with the template source missing — "needs its template source (the .sl beside its header)"; aggregation-only modules remain fine.
@@ -29,8 +22,17 @@ imported templates.
     Adjacent open items, not template-line: todo.txt's two BUGS (the class-field default = Ctor(args) codegen assert; the swap inc/dec operand), and the Phase 8 cross-TU remainders
   (multi-header modules, C interop).
 
-claude wants to do this when import templates land.
-  3. Out-of-line definition (T Class:m<T>(...)) — deferred; the current parse rejection stays but its message gets scoped to the out-of-line form.
+    A different species of gap, not a linkage carve-out: a nested (hoisted) class declared inside a header class template. The header is declarations-only, so the nested class's method bodies
+  have no channel at all — the source's re-open machinery doesn't reach into a nested class. A local-T (or any) flavor would produce a nested class with declared-never-defined methods. That
+  needs a body-delivery design (nested re-open reach or out-of-line Outer:Inner:m depth), not a linkage flag — and it's currently silent rather than rejected, which arguably deserves a
+  focused diagnostic before anyone trips on it.
+
+  Deferred by your explicit scope calls
+  1. Incomplete templates cross-TU — a header-declared ... template completing in another TU. The never-completed error ("close it with a re-open that omits the '...'") stands guard until
+  this lands.
+  2. Source redirection — the template source must share the header's base name; an @impl "other"-style override (v1's old wishlist item) is deferred.
+  3. Nested template types — the >> umbrella (lexer closer split + angle-depth in the gates): Pair<Vec<int>>, Ref<Ref<int>>. An alias argument smuggles an instance through meanwhile; the
+  umbrella got more central again since .sli spellings inherit the same limit.
 
 
 things to do before commits:

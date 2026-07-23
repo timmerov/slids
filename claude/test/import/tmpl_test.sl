@@ -90,12 +90,18 @@ int32 main() {
     //Loc^ pb = tpock(^na, ^nb);
     //__println("pb = " + pb^.lv());
 
-    /* a local-type instance of an imported class's TEMPLATE METHOD is
-       deferred (its body would need to emit against a declare-only class). */
-    //-EXPECT-ERROR: not supported
-    //Loc ml(2);
-    //Loc^ mq = g.scaled(^ml);
-    //__println("mq = " + mq^.lv());
+    /* THE CARVE-OUT: a local-type instance of an imported class's template
+       method emits `define internal` HERE — the one sanctioned exception to
+       the owner-linkage rule (the flavor is unspellable anywhere else). */
+    Loc ml(2);
+    Loc ml2(6);
+    Loc^ mq = g.tsel(^ml, ^ml2);
+    __println("mq = " + mq^.lv());
+
+    /* a namespace-member template's local-type instance needs NO carve-out —
+       a namespace member follows the file re-home, like a free function. */
+    Loc^ nn = Spc2:nid(^ml);
+    __println("nn = " + nn^.lv());
 
     return 0;
 }

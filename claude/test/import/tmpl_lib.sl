@@ -88,8 +88,21 @@ TPair<K, V>() {
     V vv() { return v_; }
 }
 
-/* the namespace-member template's body, external form. */
+/* the namespace-member templates' bodies, external form. */
 T Spc2:nsq<T>(T v) { return v * v; }
+T Spc2:nid<T>(T v) { return v; }
+
+/* the pointer-friendly member template (local-type instances inline it). */
+T Gauge:tsel<T>(T a, T b) { return b; }
+
+/* the skewed user copy: it NULLS — observable proof the user op ran. */
+Ucp<T>() {
+    op=(Ucp^ s) { u_ = nullptr; }
+    int un() {
+        if (u_ == nullptr) { return 0; }
+        return 1;
+    }
+}
 
 /* mixed role: this template SOURCE consumes tmpl_lib2's template... */
 int viaW2() {

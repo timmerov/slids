@@ -63,10 +63,16 @@ operators, the hooks, the vtable of a virtual flavor all cross the seam as
 external symbols (a consumer may derive a local class from an aggregated
 instance base and dispatch through it). A flavor with a LOCAL type argument
 instead clones the loaded source's bodies and emits INTERNAL in the consumer
-— the only TU that can. A source-side member not declared in the header
-exists only in the module's own flavors; a consumer may neither define nor
-re-open a header template ("defined by its module's source"). Canon
-test/import/tmpl_test.sl + tmpl_test2.sl + tmpl_lib.slh/.sl.
+— the only TU that can; that includes a TEMPLATE METHOD of an imported plain
+class, whose instance is the ONE sanctioned exception to the owner-linkage
+rule (an internal method of a declare-only class — Entry.tu_local_instance;
+readme.txt TEMPLATES), and the virtual/user-op= flavors, whose vtable and
+canonical copy emit internal with their class. A source-side member not
+declared in the header exists only in the module's own flavors; a consumer
+may neither define nor re-open a header template ("defined by its module's
+source"); a header-owned class template may not contain a NESTED class
+(no body-delivery channel — rejected). Canon test/import/tmpl_test.sl +
+tmpl_test2.sl + tmpl_lib.slh/.sl.
 RESTRICTIONS: a class template owns its name against a LISTLESS opening or a
 plain class; no template methods inside a template class (rejected); an
 instance's members have NO qualified spelling from outside (`Kit<int>:Sub` —

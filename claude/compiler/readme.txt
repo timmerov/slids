@@ -1126,10 +1126,16 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     body referencing a TU-private name fails with the natural unresolved
     error when inlined (only its own TU can emit such a body; the aggregated
     flavor of the same template works). A function instance re-homes its
-    entry to the root file so the linkage decision emits `define internal`.
-    Rejected with focused messages: the source missing entirely, and a
-    local-type instance of an imported class's template METHOD (its body
-    would emit against a declare-only owner).
+    entry to the root file so the linkage decision emits `define internal`;
+    a namespace-member instance rides the same re-home. A METHOD instance
+    takes THE ONE SANCTIONED EXCEPTION to the owner-linkage rule: its owner
+    class is declare-only here, but the flavor is unspellable anywhere else
+    (no other TU can define it or collide with it), so
+    Entry.tu_local_instance — stamped on the inline path — makes liftMember
+    emit it `define internal` under the kDeclare owner. The exception keys
+    on the FLAG plus the owner's LINKAGE, not "a plain header class", so a
+    future kDeclare class-template owner inherits the rule. Rejected with a
+    focused message: the template source missing entirely.
   - SIBLING: the template source's own compile — full bodies, external
     defines (the entry/clone file_ids are the header's, so the existing
     declared-in-header linkage rules emit them visible).
@@ -1167,13 +1173,18 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   limit), header-declared INCOMPLETE templates (cross-TU completion — the
   never-completed `...` error stands in), source REDIRECTION (`@impl`-style;
   the source must share the header's base name), member template methods
-  inside a class template (rejected today), local-type instances of an
-  imported class's template METHOD and of a template whose source is absent
-  (both reject with focused messages), a sharper up-front header-visible-names
-  rule for template bodies (today: the natural unresolved-name error at the
-  inline instantiation), explicit instantiation as COMPILABLE source (the
-  .sli block spelling, ungrammared), the .sli demand DIAGNOSTICS unpinned
-  (the negative harness cannot plant a crafted .sli + --instantiate),
+  inside a class template (rejected today), a NESTED CLASS inside a
+  header-owned class template (rejected — a header is declarations-only and
+  a re-open cannot reach into a nested class, so its bodies have no delivery
+  channel; note the asymmetry: a source re-open's nested class compiles in
+  the sibling but rejects in every consumer at load, and the source side is
+  unpinnable without harness support), a local-type instance of a template
+  whose source is absent (focused message), a sharper up-front
+  header-visible-names rule for template bodies (today: the natural
+  unresolved-name error at the inline instantiation), explicit instantiation
+  as COMPILABLE source (the .sli block spelling, ungrammared), the .sli
+  demand DIAGNOSTICS unpinned (the negative harness cannot plant a crafted
+  .sli + --instantiate),
   QUALIFIED naming of a class-template instance's members from outside
   (`Kit<int>:Sub` has no spelling — a qualifier segment is an identifier;
   inside the body they resolve bare) and the `Base:` bypass naming an instance

@@ -5236,14 +5236,28 @@ int tryMergeGlobalDecl(parse::Tree& tree, int prev, parse::Node const& d) {
 void registerClassTemplate(parse::Tree& tree, parse::Node& node,
                            std::vector<std::unique_ptr<parse::Node>>* host_list,
                            int owner, diagnostic::Sink& diag) {
-    // The deferred form, rejected up front (it would otherwise ride the clone).
-    // Applies to EVERY opening — the scan runs before the re-open divert below.
+    // The deferred forms, rejected up front (they would otherwise ride the
+    // clone). Both scans run before the re-open divert below, so they cover
+    // EVERY opening. A nested class is rejected only for a HEADER-owned
+    // template (a header is declarations-only and a re-open cannot reach
+    // into a nested class, so its bodies have no delivery channel; a
+    // TU-local template keeps its nested classes — tmpl_class.sl Kit:Sub).
+    // fileIsImported covers the header's openings AND a loaded template
+    // source's re-opens alike.
     for (auto& m : node.children) {
-        if (m && (m->kind == parse::Kind::kFunctionDef
-                  || m->kind == parse::Kind::kFunctionDecl)
+        if (!m) continue;
+        if ((m->kind == parse::Kind::kFunctionDef
+             || m->kind == parse::Kind::kFunctionDecl)
             && !m->type_params.empty()) {
             diagnostic::report(diag, {m->file_id, m->name_tok,
                 "A class template may not contain a template method.", {}});
+            return;
+        }
+        if (m->kind == parse::Kind::kClassDef
+            && fileIsImported(tree, node.file_id)) {
+            diagnostic::report(diag, {m->file_id, m->name_tok,
+                "A class template declared in a header may not contain a "
+                "nested class (not supported yet).", {}});
             return;
         }
     }
@@ -6977,18 +6991,6 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
             "its header), which was not found.", {}});
         return -1;
     }
-    if (inline_local && tree.entries[tmpl_entry_id].owner_ns_frame >= 0) {
-        int cid = parse::classEntryForFrame(
-            tree, tree.entries[tmpl_entry_id].owner_ns_frame);
-        if (cid >= 0
-            && widen::slidLinkage(widen::strip(tree.entries[cid].slids_type))
-                   == widen::Type::Linkage::kDeclare) {
-            diagnostic::report(diag, {file_id, tok,
-                "A local-type instance of an imported class's template method "
-                "is not supported yet.", {}});
-            return -1;
-        }
-    }
 
     // Save the caller's transient scope state (empty at classify time; mid-pipeline
     // values during a chained instantiation), install the definition-point snapshot.
@@ -7081,8 +7083,14 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
         mungeParamTypes(tree, *clone, diag);
         // An INLINE-local flavor is this TU's own function: re-home the entry
         // to the root file so the linkage decision (declared-in-header ->
-        // external) reads it as file-local — emitted `define internal`.
-        if (inline_local) tree.entries[iid].file_id = 0;
+        // external) reads it as file-local — emitted `define internal`. The
+        // flag is the METHOD carve-out: a member instance's linkage follows
+        // its OWNER class (declare-only here), and liftMember overrides that
+        // for a flavor nobody else can spell.
+        if (inline_local) {
+            tree.entries[iid].file_id = 0;
+            tree.entries[iid].tu_local_instance = true;
+        }
     } else {
         // A DECLARATION-ONLY instance: the pattern is a header's bodyless
         // template declaration and this TU is a consumer — the body is

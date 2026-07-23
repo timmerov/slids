@@ -2013,10 +2013,31 @@ Phase 9 — templates
     consumers, transfers + user-op= + hooks + vtables across the seam,
     pointer/multi-arg/namespace demand spellings, global/new/array/tuple
     forms) + tmpl_lib.slh/.sl + tmpl_lib2.slh/.sl. Deferred: header-declared
-    incomplete templates, `@impl` source redirection, local-type instances
-    of an imported class's template METHOD, .sli demand diagnostics
+    incomplete templates, `@impl` source redirection, .sli demand diagnostics
     (unpinnable without negative-harness support for planting a crafted
     .sli), explicit instantiation as compilable source.
+    THEN — THE METHOD CARVE-OUT + NESTED-CLASS DIAGNOSTIC (same day). A
+    local-type instance of an imported class's TEMPLATE METHOD un-deferred:
+    the body was always present (the out-of-line def relocates in and
+    merges) — only desugar's owner-linkage authority demoted it to a
+    declare. Entry.tu_local_instance, stamped on the inline path, is THE ONE
+    SANCTIONED EXCEPTION in liftMember: an internal method of a declare-only
+    class, legal because the flavor is unspellable anywhere else (two TUs
+    coining same-named local classes can mint byte-identical symbols — both
+    internal, no collision). Keyed on the flag + the owner's LINKAGE, so a
+    future kDeclare class-template owner inherits the rule. Bundled pins:
+    a namespace-member local-type instance (NO carve-out — the file re-home
+    covers it like a free function), an inline-local VIRTUAL flavor (vtable
+    internal), an inline-local USER-op= flavor (the deliberately-nulling
+    user copy proves the user's op became the internal canonical __$copy).
+    And the FOCUSED DIAGNOSTIC: a nested class inside a header-owned class
+    template rejects at registration ("may not contain a nested class") —
+    a header is declarations-only and a re-open cannot reach into a nested
+    class, so its bodies have no delivery channel; TU-local templates keep
+    theirs (Kit:Sub). Asymmetry noted: a SOURCE re-open's nested class
+    compiles in the sibling but rejects in every consumer at load —
+    unpinnable without harness support. testhdr.sl now imports tmpl_lib so
+    tmpl_lib.slh negatives run.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

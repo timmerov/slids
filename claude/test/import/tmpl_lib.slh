@@ -65,10 +65,27 @@ TPair<K, V>(K k_ = 0, V v_ = 0) {
     V vv();
 }
 
-/* a namespace-member template. */
+/* a namespace-member template — `nid` is pointer-friendly, for the
+   local-type path (a namespace member needs no carve-out: it follows the
+   file re-home, like a free function). */
 Spc2 {
     T nsq<T>(T v);
+    T nid<T>(T v);
 }
+
+/* a user op= with an OBSERVABLE skew (it nulls instead of copying) — the
+   canonical copy of an inline-local flavor must be the USER's, internal. */
+Ucp<T>(T^ u_ = nullptr) {
+    op=(Ucp^ s);
+    int un();
+}
+
+/* a nested class inside a header class template has no body channel. */
+//-EXPECT-ERROR: may not contain a nested class
+//NBad<T>(T n_ = 0) {
+//    Inner(int i_ = 0) {
+//    }
+//}
 
 /* plain functions the SOURCE implements using templates: its own use of an
    aggregated flavor, and its use of ANOTHER library's template (tmpl_lib2) —
@@ -80,5 +97,6 @@ int viaOwn();
    the source via the out-of-line form. */
 Gauge(int g_ = 0) {
     T scaled<T>(T v);
+    T tsel<T>(T a, T b);
     int base();
 }

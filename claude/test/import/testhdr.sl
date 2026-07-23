@@ -22,3 +22,4 @@ it is only ever compiled by the negative runner, one throwaway copy per case.
 */
 
 import library;
+import tmpl_lib;

@@ -25,6 +25,11 @@ VShape<int> : MyDer(int m_ = 0) {
     virtual int vid() { return 100 + m_; }
 }
 
+/* a local class for the inline-local virtual / user-op= pins. */
+Lok(int k_ = 0) {
+    int kv() { return k_ + 1; }
+}
+
 /* an aggregated flavor as a GLOBAL (registry-constructed, external hooks). */
 global Vector<int> gv2;
 
@@ -113,6 +118,19 @@ int32 main() {
     int r5 = vt[0].sum() + vt[1]; __println("r5 = " + r5);
     intptr zd = sizeof(Vector<int8>) - 2 * sizeof(int8);
     __println("zd = " + zd);
+
+    /* inline-local flavors of the VIRTUAL and USER-op= templates: the vtable
+       and the canonical copy emit internal here, riding the class-linkage
+       override. The nulling user op= proves the USER's copy ran. */
+    Lok lk(4);
+    VShape<Lok^> vl(^lk);
+    Lok^ vr = vl.vid();
+    __println("vv = " + vr^.kv());
+    Ucp<Lok> uc;
+    uc.u_ = ^lk;
+    __println("u2 = " + uc.un());
+    Ucp<Lok> ud = uc;
+    __println("u3 = " + ud.un());
 
     /* a source-side member NOT declared in the header is not part of a
        consumer's interface. */
