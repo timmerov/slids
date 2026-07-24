@@ -13,9 +13,12 @@ BUILD_DIR = ../../build/test/$(DIR)
 
 # The runnable programs (a work-in-progress sandbox). `demo` and `string_test` are
 # each a standalone program that `import string;` and link the library's `string.o`.
+# `vector_test` consumes the vector TEMPLATE library — vector.sl compiles after it
+# with --instantiate (the .sli demand flow).
 SAMPLES = \
 	demo \
-	string_test
+	string_test \
+	vector_test
 
 # Every translation unit linked into the demo binary: the program plus each
 # imported library's .sl. `import string;` is a textual include of string.slh
@@ -45,6 +48,19 @@ $(BIN_DIR)/demo: $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(OBJS)))
 # string_test links its own object plus the library's string.o (its sibling definitions).
 $(BIN_DIR)/string_test: $(BUILD_DIR)/string_test.o $(BUILD_DIR)/string.o
 	$(CXX) $^ -o $@
+
+vector_test: $(BIN_DIR)/vector_test
+
+$(BIN_DIR)/vector_test: $(BUILD_DIR)/vector_test.o $(BUILD_DIR)/vector.o
+	$(CXX) $^ -o $@
+
+# THE POST-COMPILE PRE-LINK STAGE (the test/import shape): vector.sl is a
+# TEMPLATE source — it compiles AFTER its consumer, reading the demand pool
+# (vector_test's .sli, dumped beside its .ll) with --instantiate, so every
+# demanded flavor is emitted once, externally, by the library's own TU.
+$(BUILD_DIR)/vector.ll: vector.sl $(BUILD_DIR)/vector_test.ll $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d --instantiate $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@

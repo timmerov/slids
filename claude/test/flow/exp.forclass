@@ -66,6 +66,10 @@ inferred (begin/end/next value):
 inferred (class element -> by reference):
   1,2
   3,4
+bothpair inferred -> begin/end/next (1 element):
+  5,6
+bothpair explicit ref -> begin/end/next (1 element):
+  5,6
 malformed-but-unused (uses begin/end/next):
   5
   6

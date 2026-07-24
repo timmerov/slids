@@ -606,11 +606,19 @@ FOR-CLASS — ITERATING A CLASS BY ITS PROTOCOL (landed; resolve understandForCl
     begin/end/next — arity 0/0/1, all returning (and next taking) the SAME type. A
     malformed set is not an error on its own; it just can't form the protocol, and a
     malformed set is IGNORED when the other protocol is usable.
-  * SELECTION (option D): both protocols defined → the loop-var type must be EXPLICIT
-    (an inferred one is an error), and its shape picks — a VALUE loop var selects
-    size/op[], a REFERENCE selects begin/end/next. Exactly one defined → it is used
-    (it serves both loop-var shapes). Neither → "not iterable". A typeless loop var is
+  * SELECTION (option D): both protocols defined → the loop-var SHAPE picks — a VALUE
+    loop var selects size/op[], a REFERENCE selects begin/end/next. The explicit-type
+    demand fires only for a PRIMITIVE element (both shapes legal, a genuine tie); a
+    CLASS element has ONE legal shape — reference — so it is inferred, not asked.
+    Exactly one defined → it is used. Neither → "not iterable". A typeless loop var is
     inferred: a primitive element binds by value, a class element by reference.
+  * THE LOOP VARIABLE IS A PRIMITIVE OR A REFERENCE — never a class by value (that
+    would be a whole-class copy per iteration). Enforced three ways: an explicit
+    non-reference loop var over a class element rejects ("must be a reference
+    ('T^')") on BOTH protocol sides; a typeless head naming an EXISTING local CLASS
+    variable rejects up front ("is a class variable" — the loop never reuses the
+    named object, and rejecting beats silently shadowing it); inference never
+    produces the class-by-value shape.
   * LOWERED AT RESOLVE, not retagged for desugar (the array/tuple model). The lowering
     emits METHOD CALLS (begin/size/next/op[]), and a call minted in desugar is never
     classified — so understandForClass rebuilds the node as a kForLongStmt and
@@ -691,9 +699,14 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
   * EXPLICIT DESTRUCTOR `lvalue.~()` — a kDtorCallStmt (grammar: `.` then `~` in the
     name-led lvalue chain — a destructor call, not a field). codegen runs
     emitDestructHooks on the receiver's address with NO free / no null (placement
-    cleanup; the buffer is reclaimed separately). classify requires a class receiver.
-    (Double-destruct of a scope-managed value via `value.~()` is the author's
-    problem — not guarded.)
+    cleanup; the buffer is reclaimed separately). classify requires the POINTER
+    form (`ptr^.~()` — a named object is scope-managed; an explicit `.~()` on it
+    would double-destruct) and a CLASS or PRIMITIVE receiver: a PRIMITIVE
+    pointee's `.~()` is a NO-OP (neutralized to an empty block) — the
+    PSEUDO-DESTRUCTOR rule (v1's too): a generic destroy path spells
+    `ptr^.~()` for EVERY element type, so the primitive flavors of a container
+    template must compile and do nothing. Anything else ("int^^") rejects, the
+    alias operand spelled label=target.
   * FIELD ACCESS through deref / iterator — `.field` lowers to a slot kIndexExpr;
     emitElementAddr's per-segment walk roots on a variable's alloca OR a deref `ptr^`
     (the pointer value), and an ITERATOR step loads the sequence pointer + GEPs by

@@ -16,6 +16,12 @@ usage:
     function-name ( argument-list )
 
 the type-list may be inferred from the argument-list.
+
+special handling of template type parameters.
+slids is pass by value.
+a template function needs to be able to handle primitive and class types.
+a convention of convenience applies here.
+
 */
 
 /*

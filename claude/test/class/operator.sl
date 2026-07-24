@@ -861,6 +861,14 @@ int32 main() {
     barr[2] = 7;                      // write through the op[] reference
     __println("ar2 = " + barr[2]);    // ar2 = 7
 
+    /* ---- `^obj[i]` — the address of a class-indexed element IS the op[]
+       call's returned reference (`^X^` cancels; the addr-of does not re-wrap).
+       Read and write through the taken reference. ---- */
+    int^ are = ^barr[1];
+    __println("ar3 = " + are^);       // ar3 = 200
+    are^ = 42;
+    __println("ar4 = " + barr[1]);    // ar4 = 42
+
     /* ---- out-of-line operators ---- */
     Ool oola(4);
     Ool oolb(4);

@@ -2129,6 +2129,42 @@ Phase 9 — templates
     probed, then pinned (viaAlias/viaLocal/viaFn/Meth/Meth2). Every form
     of tmpl_nested.sl's canon nesting list is now landed TU-local.
     Negative: alias target using an unlisted outer param.
+  * the vector-sandbox batch (four landings)             LANDED 2026-07-23
+    test/progress/vector* (the user's cross-TU template Vector library —
+    build wired: consumer first, vector.sl compiles after with --instantiate
+    reading the .sli pool) flushed out four compiler gaps in sequence, each
+    hit by real container code:
+    - PLACEMENT NEW AS A STATEMENT (grammar parseNewStmt -> kExprStmt):
+      `new(ptr) T;` runs for the ctor, the value (the addr in hand)
+      discarded. ONLY the placement form — bare `new T;` rejects ("a
+      discarded allocation would leak"). Canon pointer/new.sl.
+    - THE ADDR-OF-DEREF CANCELLATION (classify kAddrOfExpr): `^X^` IS X.
+      A class `obj[i]` infers into `(obj.op[](i))^`, so the user spelling
+      `^self[index]` asserted in codegen (whose addr-of takes only resolved
+      idents / index GEPs) — the for-class lowering had dodged exactly this
+      by building the op[] call directly (its own comment says so). The
+      cancellation makes the user spelling yield the op[] call's reference
+      itself. Canon class/operator.sl (`^barr[1]` read + write).
+    - FOR-CLASS: THE CLASS-ELEMENT RULES (resolve understandForClass), from
+      the canon (forclass.sl line 8: the loop variable is a primitive or a
+      reference): [1] the both-protocols explicit-type demand fires only
+      for a PRIMITIVE element — a class element has one legal shape
+      (reference), inferred, not asked; [2] an explicit non-reference loop
+      var over a class element rejects on both protocol sides (was a
+      silent whole-class copy per iteration, shape 4); [3] a typeless head
+      naming an EXISTING local CLASS variable rejects up front (the loop
+      never reuses the object; rejecting beats shadowing). New BothPair
+      fixture (both protocols over class elements, differing spans, so the
+      selection is observable).
+    - THE PSEUDO-DESTRUCTOR RULE (classify kDtorCallStmt; v1's rule): a
+      PRIMITIVE pointee's `ptr^.~()` is a NO-OP (statement neutralized to
+      an empty block) — a container's destroy path spells `ptr^.~()` for
+      every element type, so Vector<int>'s flavors must compile. The
+      pointer-form requirement stands for primitives too; a non-class
+      non-primitive receiver still rejects, spelled label=target.
+    End state: vector_test builds through the full cross-TU chain
+    (inline-local Vector<Value> + aggregated Vector<int> via .sli) and runs
+    with ctor/dtor count 0 after every scope. Suite green throughout.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

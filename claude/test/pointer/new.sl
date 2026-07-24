@@ -155,6 +155,27 @@ int32 main() {
     delete raw_ptr;
     __println("dtor 20 before");
 
+    /* placement new as a STATEMENT: run for the ctor side effect, the value
+       (the addr already in hand) discarded; the dtor called directly after. */
+    __println("ctor 21 after");
+    int8[] raw2 = new int8[sizeof(Simple)];
+    new(raw2) Simple(21);
+    Simple^ sview = <Simple^> raw2;
+    __println("splaced= " + sview^.x_);
+    sview^.~();
+    delete raw2;
+    __println("dtor 21 before");
+
+    /* a PRIMITIVE pointee's `.~()` is a NO-OP — the pseudo-destructor rule:
+       a generic destroy path spells `ptr^.~()` for every element type, so
+       the primitive flavors must compile (and do nothing). */
+    int8[] rawi = new int8[sizeof(int)];
+    int^ iview = new(rawi) int;
+    iview^ = 5;
+    iview^.~();
+    __println("pseudo= " + iview^);
+    delete rawi;
+
     /* a TRIVIAL class: field-init only (no ctor/dtor output), plain free. */
     pl = new Plain(1, 2);                              // multi-field construct
     __println("plain single: " + pl^.a_ + " " + pl^.b_);   // 1 2
@@ -335,10 +356,16 @@ int32 main() {
     //ap2 = new Simple[2](1);
     //delete ap2;
 
-    /* an explicit destructor call needs a class receiver. */
-    //-EXPECT-ERROR: A destructor call '.~()' requires a class object
+    /* an explicit destructor call still needs the pointer form — a NAMED
+       object (even a primitive, whose `.~()` would be a no-op) rejects. */
+    //-EXPECT-ERROR: only allowed on a placement-constructed object
     //int32 ni = 0;
     //ni.~();
+
+    /* a non-class, non-primitive receiver has no destructor spelling at all. */
+    //-EXPECT-ERROR: A destructor call '.~()' requires a class object
+    //int^^ npp = nullptr;
+    //npp^.~();
 
     /* a TUPLE element must be statically sized: a slot that is a class (runtime-sized
        via __$sizeof) leaves the whole tuple unsized, so it is not allocatable. */
@@ -352,6 +379,11 @@ int32 main() {
     //int edn = 2;
     //ed = new int[3][edn];
     //delete ed;
+
+    /* a bare `new` STATEMENT discards its allocation — only the placement
+       form (the addr is already in hand) is a statement. */
+    //-EXPECT-ERROR: must be a placement new
+    //new Simple(1);
 
     return 0;
 }

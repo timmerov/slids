@@ -17,7 +17,7 @@ begin/end/next must return the exact same type.
 begin/end/next must have arity 0/0/1.
 the loop variable type must be explicit if the class implements both sets
 of loop functions.
-if the loop variable is the contained type then size/op[] is used.
+if the loop variable is the contained primitive type then size/op[] is used.
 if the loop variable is a reference to the contained type then
 begin/end/next is used.
 the loop functions are not rejected if they are malformed.
@@ -256,6 +256,31 @@ PairVec(Pair p_ = (1, 2), Pair q_ = (3, 4)) {
     }
 }
 
+// BOTH protocols over CLASS elements — a class binds only by REFERENCE, so an
+// inferred loop var needs no explicit type to select: begin/end/next is the
+// one legal shape. size/op[] spans both fields, begin/end/next the FIRST only,
+// making the selection observable. By-value spellings reject (negatives).
+BothPair(Pair p_ = (5, 6), Pair q_ = (7, 8)) {
+    int size() {
+        return 2;
+    }
+    Pair^ op[](int i) {
+        if (i == 0) { return ^p_; }
+        return ^q_;
+    }
+    Pair^ begin() {
+        return ^p_;
+    }
+    Pair^ end() {
+        Pair[] p = <Pair[]> <mutable> ^p_;
+        return p + 1;
+    }
+    Pair^ next(Pair^ prev) {
+        Pair[] p = <Pair[]> <mutable> prev;
+        return p + 1;
+    }
+}
+
 // Inheritance — a derived class iterates via the base's inherited size/op[].
 IdxBase(int a_ = 100, int b_ = 200) {
     int size() {
@@ -372,6 +397,17 @@ int32 main() {
         __println("  " + r^.x_ + "," + r^.y_);
     }
 
+    // ---- both protocols + CLASS elements: no tie, the reference infers ----
+    BothPair bpc;
+    __println("bothpair inferred -> begin/end/next (1 element):");
+    for (e : bpc) {
+        __println("  " + e^.x_ + "," + e^.y_);
+    }
+    __println("bothpair explicit ref -> begin/end/next (1 element):");
+    for (Pair^ e : bpc) {
+        __println("  " + e^.x_ + "," + e^.y_);
+    }
+
     // ---- a malformed protocol is ignored when another is usable ----
     __println("malformed-but-unused (uses begin/end/next):");
     Mixed mx;
@@ -452,6 +488,39 @@ int32 main() {
 //    Both both;
 //    for (x : both) {
 //        return x^;
+//    }
+//    return 0;
+//}
+
+// A by-value CLASS loop var is rejected — the loop variable must be a
+// primitive or a reference (size/op[] side).
+//-EXPECT-ERROR: must be a reference
+//int neg_class_by_value() {
+//    PairVec npv;
+//    for (Pair e : npv) {
+//        return e.x_;
+//    }
+//    return 0;
+//}
+
+// ...and the begin/end/next side of the same rule.
+//-EXPECT-ERROR: must be a reference
+//int neg_class_by_value_bnn() {
+//    BothPair nbp;
+//    for (Pair e : nbp) {
+//        return e.x_;
+//    }
+//    return 0;
+//}
+
+// A typeless head naming an EXISTING CLASS variable: a class cannot be the
+// loop variable, and the loop never reuses the named object.
+//-EXPECT-ERROR: is a class variable
+//int neg_existing_class_var() {
+//    PairVec npv;
+//    Pair e;
+//    for (e : npv) {
+//        return e.x_;
 //    }
 //    return 0;
 //}

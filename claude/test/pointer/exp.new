@@ -26,6 +26,12 @@ ctor 20 after
 Simple:ctor: 20
 Simple:dtor: 20
 dtor 20 before
+ctor 21 after
+Simple:ctor: 21
+splaced= 21
+Simple:dtor: 21
+dtor 21 before
+pseudo= 5
 plain single: 1 2
 plain array: 9 8
 default ctor after

@@ -3111,6 +3111,24 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
     bool has_type = (var_decl.return_type != widen::kNoType);
     bool lv_is_ref = has_type && isReferenceType(var_decl.return_type);
 
+    // A TYPELESS head naming an EXISTING CLASS variable: the head spelling
+    // reads as "loop into my object", which for-class never does (the loop
+    // declares its own variable), and a class can never BE the loop variable
+    // — reject rather than silently shadow.
+    if (!has_type) {
+        int prev = resolveName(tree, var_decl.name);
+        if (prev >= 0 && tree.entries[prev].kind == parse::EntryKind::kLocalVar) {
+            widen::TypeRef pt = widen::strip(parse::entryType(tree, prev));
+            if (widen::form(pt) == widen::Type::Form::kSlid
+                && tree.classes.count(pt) > 0) {
+                diagnostic::report(diag, {vfile, vtok,
+                    "'" + var_decl.name + "' is a class variable; the for-loop "
+                    "variable must be a primitive or a reference.", {}});
+                return Completion::Normal;
+            }
+        }
+    }
+
     ForClassProto bnn = classifyBeginEndNext(tree, cls, cname);
     ForClassProto soi = classifySizeOpIndex(tree, cls, cname);
     bool bnnGood = bnn.status == ForClassProto::Good;
@@ -3133,19 +3151,46 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
         return Completion::Normal;
     }
 
-    // Select the protocol (option D): when both are defined the loop var must be
-    // explicit, and its shape picks — a value picks size/op[], a reference picks
-    // begin/end/next.
+    auto isPrim = [](widen::TypeRef t) {
+        return widen::form(widen::strip(t)) == widen::Type::Form::kPrimitive; };
+    // The ELEMENT a good protocol yields: the pointee of the reference it
+    // hands back, or the value itself for a value-returning begin/end/next.
+    auto elemOf = [](ForClassProto const& p) -> widen::TypeRef {
+        if (p.ret == widen::kNoType) return widen::kNoType;
+        if (isReferenceType(p.ret))
+            return widen::get(widen::strip(p.ret)).pointee;
+        return p.ret;
+    };
+    // The canon rule behind every arm below: the loop VARIABLE must be a
+    // primitive or a reference — a class element binds by reference, never
+    // by value (a by-value class loop var would be a whole-class copy per
+    // iteration).
+    auto rejectClassByValue = [&](widen::TypeRef elem) {
+        diagnostic::report(diag, {vfile, vtok, "The element type '"
+            + widen::spellOrEmpty(elem) + "' is a class; the for-loop "
+            "variable must be a reference ('" + widen::spellOrEmpty(elem)
+            + "^').", {}});
+    };
+
+    // Select the protocol (option D): when both are defined the loop var's
+    // SHAPE picks — a value picks size/op[], a reference picks begin/end/next.
+    // The tie is real only for a PRIMITIVE element (both shapes legal): a
+    // CLASS element can only bind by reference, so it is inferred, not asked.
     bool use_bnn;
     if (bnnGood && soiGood) {
         if (!has_type) {
-            diagnostic::report(diag, {vfile, vtok, "Type '" + cname
-                + "' defines both size/op[] and begin/end/next; the for-loop "
-                  "variable type must be written explicitly to select a protocol.",
-                {}});
-            return Completion::Normal;
+            if (!isPrim(elemOf(bnn)) && !isPrim(elemOf(soi))) {
+                use_bnn = true;   // class element: reference is the one shape
+            } else {
+                diagnostic::report(diag, {vfile, vtok, "Type '" + cname
+                    + "' defines both size/op[] and begin/end/next; the for-loop "
+                      "variable type must be written explicitly to select a protocol.",
+                    {}});
+                return Completion::Normal;
+            }
+        } else {
+            use_bnn = lv_is_ref;
         }
-        use_bnn = lv_is_ref;
     } else {
         use_bnn = bnnGood;
     }
@@ -3158,8 +3203,6 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
     //   5: size/op[], loop var by-REF  (ref = ^c[i])
     int shape;
     widen::TypeRef size_ret = widen::kNoType, count_ty = widen::kNoType;
-    auto isPrim = [](widen::TypeRef t) {
-        return widen::form(widen::strip(t)) == widen::Type::Form::kPrimitive; };
     if (use_bnn) {
         widen::TypeRef iter = bnn.ret;
         if (isReferenceType(iter)) {
@@ -3168,6 +3211,10 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
                 shape = isPrim(elem) ? 2 : 3;
                 var_decl.return_type = isPrim(elem) ? elem : iter;
             } else {
+                if (!lv_is_ref && !isPrim(elem)) {
+                    rejectClassByValue(elem);
+                    return Completion::Normal;
+                }
                 shape = lv_is_ref ? 3 : 2;
             }
         } else {
@@ -3190,6 +3237,10 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
             shape = isPrim(elem) ? 4 : 5;
             var_decl.return_type = isPrim(elem) ? elem : widen::internPointer(elem);
         } else {
+            if (!lv_is_ref && !isPrim(elem)) {
+                rejectClassByValue(elem);
+                return Completion::Normal;
+            }
             shape = lv_is_ref ? 5 : 4;
         }
     }

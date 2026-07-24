@@ -1286,6 +1286,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             assert(e.children.size() == 1 && "kAddrOfExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
+            // `^X^` CANCELS: the address of a deref IS the pointer value.
+            // The class-index sugar leans on this — inferExpr just rewrote a
+            // class `obj[i]` into `(obj.op[](i))^`, so `^obj[i]` is the op[]
+            // call's returned reference itself. (The for-class lowering builds
+            // the call directly for the same reason — resolve's shape-4/5
+            // comment; the USER spelling `^self[index]` lands here.)
+            if (operand.kind == parse::Kind::kDerefExpr) {
+                auto inner = std::move(operand.children[0]);
+                e = std::move(*inner);
+                return;
+            }
             if (operand.inferred_type != widen::kNoType) {
                 bool indexed = (operand.kind == parse::Kind::kIndexExpr);
                 e.inferred_type = indexed                         // structural — keeps an
@@ -6570,12 +6581,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& recv = *s.children[0];
             inferExpr(tree, recv, widen::kNoType, diag);
             widen::TypeRef rs = widen::strip(recv.inferred_type);
+            bool dtor_is_class = widen::form(rs) == widen::Type::Form::kSlid
+                              && tree.classes.count(rs) > 0;
+            bool dtor_is_prim = widen::form(rs) == widen::Type::Form::kPrimitive;
             if (recv.inferred_type != widen::kNoType
-                && !(widen::form(rs) == widen::Type::Form::kSlid
-                     && tree.classes.count(rs) > 0)) {
+                && !dtor_is_class && !dtor_is_prim) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "A destructor call '.~()' requires a class object; got '"
-                    + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
+                    + spellForMessage(recv.inferred_type) + "'.", {}});
             } else if (recv.inferred_type != widen::kNoType
                        && recv.kind != parse::Kind::kDerefExpr) {
                 diagnostic::report(diag, {s.file_id, s.tok,
@@ -6583,6 +6596,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     "placement-constructed object reached through a pointer "
                     "('ptr^.~()'); an automatically-managed object is destroyed "
                     "at scope exit.", {}});
+            } else if (dtor_is_prim) {
+                // A PRIMITIVE pointee has no destructor: the call is a NO-OP —
+                // the pseudo-destructor rule generic code needs (a container's
+                // destroy path spells `ptr^.~()` for EVERY element type; the
+                // primitive flavors must compile). Neutralize the statement.
+                s.kind = parse::Kind::kBlockStmt;
+                s.children.clear();
             }
             return;
         }

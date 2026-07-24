@@ -30,6 +30,31 @@ imported templates.
   3. Nested template types — the >> umbrella (lexer closer split + angle-depth in the gates): Pair<Vec<int>>, Ref<Ref<int>>. An alias argument smuggles an instance through meanwhile; the
   umbrella got more central again since .sli spellings inherit the same limit.
 
+  Rejected with focused messages (no delivery channel):
+  - Template method inside a header-owned class template — "may not contain a template method (not supported yet)". An aggregated flavor is declaration-only; the inner pattern's instances
+  are consumer-private, so the source's --instantiate pass can never know which flavors to emit. (This session's guard; negative in tmpl_lib.slh.)
+  - Nested class inside a header-owned class template — same shape, same reason ("may not contain a nested class"), from the cross-TU landing. Asymmetry noted in the docs: a source re-open's
+  nested class compiles in the sibling but rejects in every consumer.
+  - Header-declared incomplete template (... completed in another TU) — "cross-TU completion of a template is not supported yet."
+  - Local-type instance with the template source absent — focused error; structurally impossible rather than unbuilt (nobody else can emit the flavor).
+
+  Rules by design (not gaps):
+  - A consumer may not define or re-open a header template ("defined by its module's source") — the alternative was silent per-TU divergence.
+  - A source-only member exists in the sibling's flavors and is "no method" in a consumer's — the header is the interface.
+  - A template body leaning on TU-private names can't instantiate inline — the private-name chain diagnostic.
+
+  Deferred / unbuilt:
+  - Out-of-line template method targeting a class-template owner (T Vec:m<X>() — the plain-class and namespace owners landed with cross-TU).
+  - Source redirection (@impl-style — the source must share the header's base name).
+  - Author-side up-front private-name checking (consumer side is covered; the author finds out when a consumer does).
+  - Explicit instantiation as compilable source (the .sli spelling, ungrammared) — tooling, not semantics.
+
+  Believed working but unpinned — flagging honestly:
+  - Nested template TYPES across the seam (Vector<Vector<int>> of a header template): I stated it rides free because the .sli spellings round-trip through widen's depth-counting splitters —
+  that reasoning is solid but no test/import case pins a nested-arg aggregation end-to-end.
+  - Hoisted alias template in a header-owned class template (TClass:Ref<...> where TClass comes from a header): my header guard rejects nested classes and template methods but says nothing
+  about a nested alias template — and unlike those two, an alias is type-level (no bodies to deliver), so it plausibly just works... or plausibly does something unexamined. This is the one
+  genuinely uninspected corner this session created.
 
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.

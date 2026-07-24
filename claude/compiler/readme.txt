@@ -1421,7 +1421,12 @@ STAGE FILES (.h / .cpp pairs)
             [plus further `[d]` dims that are the element's trailing dims — multi-dim
             `new int[n][2][2]`], an optional `(args)` ctor tuple; children[0]=count-or-
             null, [1]=addr-or-null, [2]=ctor-args-or-null)). `delete p;` is
-            a statement (kDeleteStmt). Stamps (file_id, tok)
+            a statement (kDeleteStmt). PLACEMENT new is ALSO a statement
+            (parseNewStmt -> a kExprStmt wrapping the kNewExpr): `new(ptr) T;`
+            runs for the ctor side effect, the value (the addr already in
+            hand) discarded — a container's construct path needs exactly this
+            spelling. ONLY the placement form: bare `new T;` rejects ("a
+            discarded allocation would leak"). Stamps (file_id, tok)
             on every node for source
             attribution. A HEADER HOLDS DECLARATIONS ONLY: a body parsed out of
             an imported file (rejectBodyInHeader, called at each of the two sites
@@ -2315,7 +2320,14 @@ STAGE FILES (.h / .cpp pairs)
               Pointers & arrays (Phase 4). References (`T^`) and iterators
             (`T[]`) are both LLVM `ptr`; `anyptr` (nullptr) too. kAddrOfExpr
             `^var` is the operand's alloca register (no load); kDerefExpr loads
-            the pointer then loads the pointee. A fixed-size array `T name[N]`
+            the pointer then loads the pointee. codegen's addr-of takes ONLY a
+            resolved ident or an index GEP — every other shape must be
+            collapsed upstream: classify's kAddrOfExpr arm CANCELS `^X^` to X
+            (the address of a deref IS the pointer value), which is what makes
+            `^obj[i]` on a CLASS work — the index sugar had just become
+            `(obj.op[](i))^`, so the addr-of yields the op[] call itself (the
+            for-class lowering builds that call directly for the same reason;
+            the user spelling `^self[index]` rides the cancellation). A fixed-size array `T name[N]`
             is an aggregate alloca, STANDARD row-major (`int[5][3]` ->
             `[5 x [3 x i32]]`, leftmost dim outermost — llvmForRef wraps the dims
             last-first); emitElementAddr walks a kIndexExpr chain to the base and

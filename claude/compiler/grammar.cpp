@@ -2494,6 +2494,28 @@ struct Parser {
         return expect(token::Kind::kGt, ">");
     }
 
+    // `new (addr) T ...;` as a STATEMENT — placement construction, run for the
+    // ctor side effect, the value (the addr already in hand) discarded via the
+    // ordinary kExprStmt evaluate-and-discard. ONLY the placement form: a bare
+    // `new T;` discards its ALLOCATION — a guaranteed leak — and stays rejected.
+    std::unique_ptr<parse::Node> parseNewStmt() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        auto expr = parseExpr();
+        if (!expr) return nullptr;
+        // The statement must BE the new-expression (`new int + 1;` is not a
+        // statement shape), and it must carry the placement address.
+        if (expr->kind != parse::Kind::kNewExpr || !expr->children[1]) {
+            errorAt(stmt_tok, "A 'new' statement must be a placement new "
+                    "('new (addr) T ...'); a discarded allocation would leak.");
+            return nullptr;
+        }
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        auto node = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
+        node->children.push_back(std::move(expr));
+        return node;
+    }
+
     std::unique_ptr<parse::Node> parseDeleteStmt() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
@@ -3396,6 +3418,7 @@ struct Parser {
             return parseBreakContinue(parse::Kind::kContinueStmt);
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kDelete) return parseDeleteStmt();
+        if (t.kind == token::Kind::kNew) return parseNewStmt();
         if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();
