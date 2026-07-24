@@ -43,8 +43,10 @@ inside a template class landed later (tmpl_nested.sl); nested uses
 (`Pair<Vec<int>>`) stay with the `>>` umbrella todo.
 */
 
-/* the workhorse: fields and methods on T, a user binary operator. */
+/* the workhorse: fields and methods on T, a user binary operator, and a member
+   const (read from outside via the instance-qualified spelling). */
 Vec<T>(T x_ = 0, T y_ = 0) {
+    const int kVid = 3;
     T sum() { return x_ + y_; }
     T addx(T v) { x_ = x_ + v; return x_; }
     op+(Vec^ p, Vec^ q) { x_ = p^.x_ + q^.x_; y_ = p^.y_ + q^.y_; }
@@ -95,9 +97,24 @@ Base0 : TDer<T>(T t_ = 0) {
 /* a virtual template class, and a plain class deriving from its instance. */
 VB<T>(T z_ = 3) {
     virtual T tagv() { return z_; }
+    /* the own-class pin (depth 0) spelled with the instance's own name. */
+    T selfq() { return VB<T>:z_; }
 }
 VB<int> : VK(int y_ = 0) {
     virtual int tagv() { return 100 + y_; }
+    /* the `Base:` bypass naming the INSTANCE base — the inheritance.sl canon
+       triple: the base field, the explicit-self twin, and the static call. */
+    int trio() { return VB<int>:z_ + VB<int>:self.z_ + VB<int>:tagv(); }
+}
+/* a second derived level: the instance base is TWO `_$base` hops away. */
+VK : VKK(int w_ = 0) {
+    virtual int tagv() { return 200 + w_; }
+    int deep() { return VB<int>:tagv() + VK:tagv(); }
+}
+/* a TEMPLATE deriving from its own parameter's flavor: the bypass qualifier
+   spells the base with T (`VB<T>:`), canonicalized per instance. */
+VB<T> : TVD<T>(T u_ = 0) {
+    T mixv() { return VB<T>:tagv() + u_; }
 }
 
 /* a container instance drives for-class (op[]/size). */
@@ -113,6 +130,7 @@ Trio<T>(T a_ = 0, T b_ = 0, T c_ = 0) {
 /* a template declared in a namespace. */
 Space {
     Boxed<T>(T b_ = 0) {
+        const int kBox = 7;
         T get() { return b_ + 1; }
     }
 }
@@ -180,6 +198,22 @@ Kit<T>(T k_ = 2) {
     T viaFree(T x) { return thru(x) + k_; }
 }
 
+/* an instance-qualified nested class in a SIGNATURE position. */
+int useSub(Kit<int>:Sub^ p) { return p^.sv(); }
+
+/* ...as a plain class's FIELD (REQUIRED — the in-place construction value
+   arrives at the construction site, the Hold pattern)... */
+SubHold(Kit<int>:Sub h_) {
+    int hv() { return h_.sv(); }
+}
+
+/* ...through an ALIAS (the class identity — def_id — must ride the handle,
+   not the spelling)... */
+alias KSub = Kit<int>:Sub;
+
+/* ...and as a GLOBAL (registry-constructed static storage). */
+global Kit<int>:Sub gsub;
+
 /* for-class, the begin/end/next (by value) flavor. */
 Cnt<T>(T n_ = 3) {
     T begin() { return 0; }
@@ -219,6 +253,13 @@ void fnB() {
     }
     Loc2<int> l(5);
     __println("fb = " + l.id());
+}
+
+/* a flavor minted in ONE function answers instance-qualified lookups from
+   ANOTHER — the memo is TU-wide, member lookup falls back to DECLARED. */
+void fnC() {
+    Kit<int64> kc(9);
+    __println("fc = " + kc.subv());
 }
 
 /* a template owns its name: no plain-class duplicate, no re-open. */
@@ -448,6 +489,71 @@ int32 main() {
     (Vec<int> dva, int dvb) = tup;
     int c15 = dva.sum() + dvb; __println("c15 = " + c15);
 
+    /* INSTANCE-QUALIFIED member spellings from outside the body: the nested
+       class as a decl type, a statement construction, a heap new, a value-
+       position construction, a signature position, and sizeof. */
+    Kit<int>:Sub ks(9);
+    int iq1 = ks.sv(); __println("iq1 = " + iq1);
+    int iq2 = Kit<int>:Sub(8).sv(); __println("iq2 = " + iq2);
+    Kit<int>:Sub^ ksp = new Kit<int>:Sub(5);
+    int iq3 = ksp^.sv(); __println("iq3 = " + iq3);
+    int iq4 = useSub(^ks); __println("iq4 = " + iq4);
+    intptr iqz = sizeof(Kit<int>:Sub) - sizeof(int); __println("iqz = " + iqz);
+
+    /* the member alias, the enum (type + value), and the member const. */
+    Kit<int>:Elem ie = 21; __println("iq5 = " + ie);
+    Kit<int>:E ev2 = Kit<int>:E:eTwo; __println("iq6 = " + ev2);
+    int iq7 = Kit<int>:kBase; __println("iq7 = " + iq7);
+
+    /* an alias argument names the SAME flavor; a new flavor is minted BY the
+       qualifier alone (no other Kit<float> use exists in this file). */
+    int iq8 = Kit<Integer>:kBase + Kit<int>:E:eOne; __println("iq8 = " + iq8);
+    int iq9 = Kit<float>:kBase; __println("iq9 = " + iq9);
+
+    /* a namespace-member template instance as the qualifier... */
+    int iq10 = Space:Boxed<int>:kBox; __println("iq10 = " + iq10);
+
+    /* ...and a NESTED type-list in the qualifier (the `>>` split). */
+    int iq11 = Vec<Vec<int>>:kVid; __println("iq11 = " + iq11);
+
+    /* the instance-qualified enum value as a case label. */
+    int iq12 = 0;
+    switch (ev2) {
+        Kit<int>:E:eTwo: { iq12 = 22; }
+        default: { iq12 = 1; }
+    }
+    __println("iq12 = " + iq12);
+
+    /* the `Base:` bypass naming the instance base (the trio inside VK), the
+       depth-2 chain (VKK), and virtual dispatch still landing most-derived. */
+    int iq13 = vk.trio(); __println("iq13 = " + iq13);
+    VKK vkk(1, 2, 3);
+    int iq14 = vkk.deep(); __println("iq14 = " + iq14);
+    int iq15 = vkk.tagv(); __println("iq15 = " + iq15);
+    VB<int>^ vkp = ^vkk;
+    int iq16 = vkp^.tagv(); __println("iq16 = " + iq16);
+    TVD<int> tvd(5, 6);
+    int iq17 = tvd.mixv(); __println("iq17 = " + iq17);
+
+    /* the own-class pin inside the template body itself. */
+    int iq18 = vb0.selfq(); __println("iq18 = " + iq18);
+
+    /* the flavor fnC minted: its members answer qualified from here. */
+    fnC();
+    int64 iq23 = Kit<int64>:kBase + Kit<int64>:E:eTwo;
+    __println("iq23 = " + iq23);
+
+    /* the remaining type positions: an alias to the qualified spelling, an
+       array, the plain-class field, the global; ##type reports as written. */
+    KSub k4(3);
+    int iq19 = k4.sv(); __println("iq19 = " + iq19);
+    Kit<int>:Sub sarr[2];
+    int iq20 = sarr[0].sv() + sarr[1].sv(); __println("iq20 = " + iq20);
+    SubHold sh(Kit<int>:Sub(4));
+    int iq21 = sh.hv(); __println("iq21 = " + iq21);
+    int iq22 = gsub.sv(); __println("iq22 = " + iq22);
+    __println("iqt: " + ##type(ks));
+
     /* the type-list is required. */
     //-EXPECT-ERROR: requires a type-argument list
     //Vec miss;
@@ -511,6 +617,23 @@ int32 main() {
     /* a function template is not a type. */
     //-EXPECT-ERROR: is not a template
     //thru<int> tx = 5; __println("tx = " + tx);
+
+    /* an instance's frame is not a member-registration target. */
+    //-EXPECT-ERROR: template instance
+    //int Kit<int>:kNew = 5; __println("kn = " + Kit<int>:kNew);
+
+    /* a member the instance does not have. */
+    //-EXPECT-ERROR: is not a type in
+    //Kit<int>:NoSuch nsx; __println("ns = " + nsx.sv());
+
+    /* an instance-qualified METHOD still needs a receiver object. */
+    //-EXPECT-ERROR: Unresolved identifier
+    //Kit<int>:total();
+
+    /* a flavor that is NOT a base is no bypass — outside any class the
+       qualified method call has no receiver to bind. */
+    //-EXPECT-ERROR: Unresolved identifier
+    //VB<int8>:tagv();
 
     return 0;
 }

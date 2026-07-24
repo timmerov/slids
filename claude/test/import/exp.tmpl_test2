@@ -19,6 +19,8 @@ tr dtor 9
 tg = 9
 r1 = 7
 r2 = 104
+r2b = 9
+y4 = 7
 r3 = 300
 r4 = 5
 Bird:ctor: 1 2

@@ -1,9 +1,6 @@
 
 agenda:
 
-  Design-line deferrals (pre-existing, unchanged by this landing)
-  12. The spelling limits: an instance's members have no qualified spelling from outside (Kit<int>:Sub), and Base: can't name an instance base.
-
     Adjacent open items, not template-line: todo.txt's two BUGS (the class-field default = Ctor(args) codegen assert; the swap inc/dec operand), and the Phase 8 cross-TU remainders
   (multi-header modules, C interop).
 

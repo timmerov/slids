@@ -54,6 +54,35 @@ things to test:
 deferred tests:
     temporary class objects in expressions and type conversions.
 
+canon clarification regarding the construction sequence:
+
+    Class obj;  -->
+        initialize all fields to default values.
+        call the ctor hook.
+
+    Class obj( initialization-tuple ); -->
+        initialize fields from the initialization tuple.
+        initialize remaining fields to default values.
+        call the ctor hook.
+
+    PodClass obj = same-pod-class-initializer;
+        initialize fields from the initialization pod object.
+        call the ctor hook.
+
+    Class obj = assignment-operator-rhs; -->
+        initialize all fields to default values.
+        call the ctor hook.
+        call the assignment operator.
+
+    Class obj = initialization-tuple; -->
+        initialize fields from the initialization tuple.
+        initialize remaining fields to default values.
+        call the ctor hook.
+
+non-default assignment operator has precedence over initialization by tuple.
+the initialization tuple may contain simple objects - where the object class
+has no ctor and there is on matching assignment operator.
+
 notes:
 
 naming conventions are optional.

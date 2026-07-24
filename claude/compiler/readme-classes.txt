@@ -83,9 +83,15 @@ source"); a header-owned class template may not contain a NESTED class or a
 TEMPLATE METHOD (no body-delivery channel for either — rejected). Canon
 test/import/tmpl_test.sl + tmpl_test2.sl + tmpl_lib.slh/.sl.
 RESTRICTIONS: a class template owns its name against a LISTLESS opening or a
-plain class; an instance's members have NO qualified spelling from outside
-(`Kit<int>:Sub` — a qualifier segment is an identifier), and the `Base:`
-bypass cannot name an instance base for the same reason. NESTED TEMPLATES
+plain class. An instance's members ARE nameable from outside
+(`Kit<int>:Sub` / `:Elem` / `:E:eOne` / `:kBase` — a qualifier segment may
+carry the type-arg list; the one chain walker resolves it as a type use,
+minting the flavor on demand), and the `Base:` bypass names an instance
+base through any spelling of the flavor (`VB<int>:tagv()`, `VB<T>:` in the
+template's own body — the qualifier canonicalizes to the registered
+instance before the depth walk); an instance qualifier is never a
+REGISTRATION target ("Cannot add a member to a template instance").
+NESTED TEMPLATES
 landed TU-local (readme.txt TEMPLATES; canon tmpl_nested.sl): a TEMPLATE
 METHOD inside a class template (per-flavor patterns; the snapshot carries
 the flavor's self-redirect), a HOISTED class OR alias template

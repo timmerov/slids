@@ -57,6 +57,13 @@ int32 main() {
     /* the alias template (type-level only — no demand recorded). */
     TRef<int> tr = ^fs; __println("tr = " + tr^);
 
+    /* INSTANCE-QUALIFIED members of an aggregated flavor from a consumer:
+       the header's const and member alias, and a flavor minted BY the
+       qualifier alone (no other Vector<int64> use — the demand rides). */
+    int y1 = Vector<int>:kTag; __println("y1 = " + y1);
+    Vector<int>:Elem ye = 5; __println("y2 = " + ye);
+    int64 y3 = Vector<int64>:kTag; __println("y3 = " + y3);
+
     /* the template METHOD across the seam, inferred and explicit. */
     Gauge g(7);
     int ms = g.scaled(5); __println("ms = " + ms);

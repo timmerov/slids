@@ -626,14 +626,21 @@ struct Parser {
         if (peekKind(o) == token::Kind::kColonColon) o++;
         if (peekKind(o) != token::Kind::kIdentifier) return false;
         o++;
-        while (peekKind(o) == token::Kind::kColon) {
-            if (peekKind(o + 1) != token::Kind::kIdentifier) return false;
-            o += 2;
-        }
-        // The core type is the qualified name, plus an optional template-alias
-        // arg group (`Ref<int> p`); a type-suffix run then the name decides
+        // EVERY segment may carry a type-arg group: an INTERIOR one is an
+        // instance qualifier (`Kit<int>:Sub s`), the TAIL one the ordinary
+        // template use (`Ref<int> p`). A type-suffix run then the name decides
         // decl-vs-statement (shared with the tuple-led gate below).
-        return typeSuffixesThenName(skipTypeArgGroup(o));
+        while (true) {
+            int p = skipTypeArgGroup(o);
+            if (peekKind(p) == token::Kind::kColon
+                && peekKind(p + 1) == token::Kind::kIdentifier) {
+                o = p + 2;
+                continue;
+            }
+            o = p;
+            break;
+        }
+        return typeSuffixesThenName(o);
     }
 
     // From offset `o`, skip a MAXIMAL run of type-suffix tokens and return the offset
@@ -871,10 +878,43 @@ struct Parser {
         return true;
     }
 
+    // After a segment identifier, a `<` whose type-arg group's closer is
+    // immediately followed by `:` is an INSTANCE-QUALIFIER segment
+    // (`Kit<int>:Sub`) — absorb the group into the segment's spelling,
+    // canonically (", " joins, args re-parsed by the real type parser), the
+    // parseClassDef instance-base discipline. A group NOT followed by `:` is
+    // left alone (a tail template use / template call / comparison — the
+    // caller's business). Returns false only on a malformed absorbed group.
+    bool absorbInstanceArgs(std::string& seg) {
+        if (peek().kind != token::Kind::kLt) return true;
+        int after = skipTypeArgGroup(0);
+        if (after <= 0 || peekKind(after) != token::Kind::kColon) return true;
+        advance();   // <
+        seg += "<";
+        while (true) {
+            std::string arg = parseType(nullptr, TopDim::Consume, nullptr);
+            if (arg.empty()) return false;
+            seg += arg;
+            if (peek().kind == token::Kind::kComma) {
+                advance();   // ,
+                seg += ", ";
+                continue;
+            }
+            break;
+        }
+        if (peek().kind == token::Kind::kRShift) splitRShift();
+        if (!expect(token::Kind::kGt, ">")) return false;
+        seg += ">";
+        return true;
+    }
+
     // Parse a (possibly qualified) name at the current token. Fills `segments`
     // with each `:`-separated identifier and `toks` with each segment's token
     // index (for per-segment carets); sets `global` for a leading `::`.
     // `Space:Nested:kFour` -> {Space, Nested, kFour}; `::kBest` -> global, {kBest}.
+    // An interior segment may carry a type-arg list (`Kit<int>:Sub` — a
+    // class-template instance as the qualifier); the list rides inside the
+    // segment's spelling.
     bool parseQualifiedName(std::vector<std::string>& segments,
                             std::vector<int>& toks, bool& global) {
         global = false;
@@ -889,6 +929,7 @@ struct Parser {
         segments.push_back(peek().text);
         toks.push_back(pos);
         advance();
+        if (!absorbInstanceArgs(segments.back())) return false;
         // A qualified NAME segment is always an identifier (or `self`), never `op` and never
         // a ctor/dtor — so a `:op` / `:_(` / `:~(` here is NOT part of the name: it starts a
         // qualified OPERATOR- or HOOK-definition head (`Class:op+=(...)`, `Class:_()`,
@@ -914,6 +955,7 @@ struct Parser {
             segments.push_back(peek().text);
             toks.push_back(pos);
             advance();
+            if (!absorbInstanceArgs(segments.back())) return false;
         }
         return true;
     }
@@ -936,12 +978,18 @@ struct Parser {
         segments.push_back(peek().text);
         toks.push_back(pos);
         advance();
+        // An instance qualifier (`Kit<int>:E:eOne:`) absorbs like the general
+        // parser. Absorption fires only on a group whose closer is followed by
+        // `:` — never the chain's FINAL segment — so the over-consume rewind
+        // below still pops a plain one-token segment.
+        if (!absorbInstanceArgs(segments.back())) return false;
         while (peek().kind == token::Kind::kColon
                && peekKind(1) == token::Kind::kIdentifier) {
             advance();   // ':'
             segments.push_back(peek().text);
             toks.push_back(pos);
             advance();   // ident
+            if (!absorbInstanceArgs(segments.back())) return false;
         }
         // Over-consumed (no terminator `:` follows) -> the last segment is the
         // body's first identifier; give it back so the preceding `:` terminates.

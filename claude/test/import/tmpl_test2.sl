@@ -23,6 +23,9 @@ alias Integer2 = int;
 /* a LOCAL class deriving from an AGGREGATED instance base. */
 VShape<int> : MyDer(int m_ = 0) {
     virtual int vid() { return 100 + m_; }
+    /* the `Base:` bypass naming the AGGREGATED instance base — the canon
+       triple; the static call binds the base's EXTERNAL vid across the seam. */
+    int trio() { return VShape<int>:s_ + VShape<int>:self.s_ + VShape<int>:vid(); }
 }
 
 /* a local class for the inline-local virtual / user-op= pins. */
@@ -79,6 +82,10 @@ int32 main() {
     MyDer md(3, 4);
     VShape<int>^ vp = ^md;
     int r2 = vp^.vid(); __println("r2 = " + r2);
+    int r2b = md.trio(); __println("r2b = " + r2b);
+
+    /* the instance-qualified const through an already-demanded flavor. */
+    int y4 = Vector<int16>:kTag; __println("y4 = " + y4);
 
     /* two type parameters — a comma in the demand spelling. */
     TPair<int, int8> tp(300, 5);

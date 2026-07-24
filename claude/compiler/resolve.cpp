@@ -848,6 +848,41 @@ int findMemberLive(parse::Tree const& tree, int ns_frame,
     return -1;
 }
 
+// Is `ns_frame` the member frame of a template INSTANCE, or nested anywhere
+// inside one (an enum facet of an instance's enum)? Walks owner frames up to
+// the first CLASS frame and asks whether that class is a flavor.
+bool frameInsideInstance(parse::Tree const& tree, int ns_frame) {
+    int guard = 32;
+    while (ns_frame >= 0 && ns_frame != kGlobalFrame && guard-- > 0) {
+        int cid = parse::classEntryForFrame(tree, ns_frame);
+        if (cid >= 0)
+            return tree.entries[cid].name.find('<') != std::string::npos;
+        int owner = -1;   // the entry owning this frame; hop to ITS owner frame
+        for (parse::Entry const& e : tree.entries) {
+            if (e.ns_frame_id == ns_frame) { owner = e.owner_ns_frame; break; }
+        }
+        ns_frame = owner;
+    }
+    return false;
+}
+
+// Member lookup for the qualified-name walkers: live first, and for a frame
+// inside a template INSTANCE, fall back to the DECLARED member set. The
+// instance memo is TU-wide (any spelling anywhere reaches the same flavor),
+// but its members' liveness was published in the scope that first minted it
+// and dies with that scope's frame — a flavor minted inside one function must
+// still answer `Kit<int>:Sub` (and `Kit<int>:E:eTwo`, one frame deeper) from
+// another. Namespaces and plain classes keep pure liveness (their scope rules
+// are the point).
+int findMemberLiveOrInstance(parse::Tree const& tree, int ns_frame,
+                             std::string const& name) {
+    int id = findMemberLive(tree, ns_frame, name);
+    if (id >= 0) return id;
+    if (frameInsideInstance(tree, ns_frame))
+        return findMemberDeclared(tree, ns_frame, name);
+    return -1;
+}
+
 
 // Human-readable form of a qualifier chain (e.g. "Space:Nested", or "::" for a
 // bare global qualifier) for the leaf "has no member" diagnostic.
@@ -887,16 +922,46 @@ int entryNamespaceFrame(parse::Tree const& tree, int id) {
 // lands on the offending segment's token, and the message names the chain
 // resolved so far — the SOLE chain walker, shared by qualified refs, inline
 // member decls, and bare aliases, so all three word identically. Returns -1 on a
-// diagnosed error.
-int resolveNamespaceSegments(parse::Tree const& tree,
+// diagnosed error. A segment carrying a type-arg list (`Kit<int>:...`) names a
+// class-template INSTANCE: the qualified prefix resolves as a type use — the
+// same kTmplUse arm every use site rides, memoized, so a qualifier MINTS the
+// flavor exactly like any other use — and the walk continues in the instance's
+// member frame.
+int resolveNamespaceSegments(parse::Tree& tree,
                              std::vector<std::string> const& segments,
                              std::vector<int> const& toks, bool global,
                              int file_id, diagnostic::Sink& diag) {
+    // The qualified-prefix spelling through segment `upto`, resolved as a type
+    // (`Spc:Kit<int>` -> the flavor's kSlid), then bridged to its frame.
+    auto instanceFrame = [&](std::size_t upto) -> int {
+        std::string spelling;
+        if (global) spelling = "::";
+        for (std::size_t k = 0; k <= upto; ++k) {
+            if (k) spelling += ":";
+            spelling += segments[k];
+        }
+        bool reported = false;
+        std::set<std::string> visiting;
+        widen::TypeRef t = resolveTypeRef(tree, widen::intern(spelling), visiting,
+                                          reported, file_id, toks[upto], diag);
+        if (reported) return -1;
+        int cid = parse::classEntryForType(tree, widen::deepStrip(t));
+        if (cid < 0) {
+            diagnostic::report(diag, {file_id, toks[upto],
+                "'" + spelling + "' is not a class-template instance.", {}});
+            return -1;
+        }
+        return tree.entries[cid].ns_frame_id;
+    };
     int cur;
     std::size_t i;
     if (global) {
         cur = kGlobalFrame;
         i = 0;
+    } else if (segments[0].find('<') != std::string::npos) {
+        cur = instanceFrame(0);
+        if (cur < 0) return -1;
+        i = 1;
     } else {
         int frame = entryNamespaceFrame(tree, resolveName(tree, segments[0]));
         if (frame < 0) {
@@ -908,7 +973,13 @@ int resolveNamespaceSegments(parse::Tree const& tree,
         i = 1;
     }
     for (; i < segments.size(); ++i) {
-        int frame = entryNamespaceFrame(tree, findMemberLive(tree, cur, segments[i]));
+        if (segments[i].find('<') != std::string::npos) {
+            cur = instanceFrame(i);   // the full prefix re-resolves (memoized)
+            if (cur < 0) return -1;
+            continue;
+        }
+        int frame = entryNamespaceFrame(
+            tree, findMemberLiveOrInstance(tree, cur, segments[i]));
         if (frame < 0) {
             diagnostic::report(diag, {file_id, toks[i],
                 "'" + segments[i] + "' is not a namespace member of '"
@@ -942,7 +1013,7 @@ int resolveQualifiedRef(parse::Tree& tree, parse::Node& node,
     int frame = resolveNamespaceSegments(tree, node.qualifier, node.qualifier_toks,
                                          node.global_qualified, node.file_id, diag);
     if (frame < 0) return -1;
-    int id = findMemberLive(tree, frame, node.name);
+    int id = findMemberLiveOrInstance(tree, frame, node.name);
     if (id >= 0) return id;
     if (findMemberDeclared(tree, frame, node.name) >= 0) {
         diagnostic::report(diag, {node.file_id, node.name_tok,
@@ -960,6 +1031,31 @@ bool isQualified(parse::Node const& n) {
     return n.global_qualified || !n.qualifier.empty();
 }
 
+// Split a qualified spelling into its `:` segments, ANGLE-AWARE: a `:` inside
+// a type-arg group or tuple parens (`Kit<Spc:T>:Sub`) belongs to the segment,
+// not the chain — an instance-qualifier segment keeps its whole `Name<args>`
+// spelling. A leading `::` sets `global`. The one splitter for every spelling-
+// level qualified-name consumer (resolveQualifiedType, lookupAliasTemplateEntry).
+void splitQualifiedSpelling(std::string const& base,
+                            std::vector<std::string>& segs, bool& global) {
+    global = false;
+    std::size_t i = 0;
+    if (base.size() >= 2 && base[0] == ':' && base[1] == ':') {
+        global = true;
+        i = 2;
+    }
+    std::string cur;
+    int depth = 0;
+    for (; i < base.size(); ++i) {
+        char c = base[i];
+        if (c == '<' || c == '(') depth++;
+        else if (c == '>' || c == ')') depth--;
+        if (c == ':' && depth == 0) { segs.push_back(cur); cur.clear(); }
+        else cur.push_back(c);
+    }
+    segs.push_back(cur);
+}
+
 // Resolve a namespace-qualified type spelling (`Space:Dir`, `::A:B:Type`) to its
 // underlying type. The leading segments name a namespace path; the final segment
 // must be a type living there — today an enum (a kNamespace carrying a non-empty
@@ -974,17 +1070,7 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
                                  widen::TypeRef* out_handle) {
     std::vector<std::string> segs;
     bool global = false;
-    std::size_t i = 0;
-    if (base.size() >= 2 && base[0] == ':' && base[1] == ':') {
-        global = true;
-        i = 2;
-    }
-    std::string cur;
-    for (; i < base.size(); ++i) {
-        if (base[i] == ':') { segs.push_back(cur); cur.clear(); }
-        else cur.push_back(base[i]);
-    }
-    segs.push_back(cur);
+    splitQualifiedSpelling(base, segs, global);
     // Use the real per-segment tokens when parse captured them (and they align
     // with the segments); otherwise point every segment at the flat decl token.
     std::vector<int> toks =
@@ -996,7 +1082,7 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
     std::vector<int> ptoks(toks.begin(), toks.end() - 1);
     int frame = resolveNamespaceSegments(tree, path, ptoks, global, file_id, diag);
     if (frame < 0) { reported = true; return ""; }
-    int id = findMemberLive(tree, frame, segs.back());
+    int id = findMemberLiveOrInstance(tree, frame, segs.back());
     // A member type is an enum facet (a kNamespace carrying a non-empty underlying),
     // a member type-alias (`Space:Float`), or a hoisted CLASS (`Outer:Inner`). The
     // caller re-wraps with the written qualified name as label. CRITICAL: a class's
@@ -1047,19 +1133,12 @@ int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
     }
     std::vector<std::string> segs;
     bool global = false;
-    std::size_t i = 0;
-    if (name.size() >= 2 && name[0] == ':' && name[1] == ':') { global = true; i = 2; }
-    std::string cur;
-    for (; i < name.size(); ++i) {
-        if (name[i] == ':') { segs.push_back(cur); cur.clear(); }
-        else cur.push_back(name[i]);
-    }
-    segs.push_back(cur);
+    splitQualifiedSpelling(name, segs, global);
     std::vector<std::string> path(segs.begin(), segs.end() - 1);
     std::vector<int> ptoks(path.size(), tok);
     int frame = resolveNamespaceSegments(tree, path, ptoks, global, file_id, diag);
     if (frame < 0) { reported = true; return -1; }
-    return findMemberLive(tree, frame, segs.back());
+    return findMemberLiveOrInstance(tree, frame, segs.back());
 }
 
 // Bind each template type parameter as an alias to its kTmplParamDefId marker
@@ -1778,9 +1857,24 @@ std::unique_ptr<parse::Node> buildFieldLvalue(parse::Tree& tree, std::string con
 // current class (1 = immediate base), else 0. Used by the `Base:` qualifier.
 int baseClassDepth(parse::Tree& tree, std::string const& className) {
     if (tree.current_base_name.empty()) return 0;
+    widen::TypeRef cls = widen::kNoType;
     int id = resolveName(tree, tree.current_base_name);
-    if (id < 0 || tree.entries[id].kind != parse::EntryKind::kClass) return 0;
-    widen::TypeRef cls = widen::strip(tree.entries[id].slids_type);
+    if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kClass) {
+        cls = widen::strip(tree.entries[id].slids_type);
+    } else if (tree.current_base_name.find('<') != std::string::npos) {
+        // An INSTANCE base (`VB<int> : VK`): its spelling doesn't name-resolve,
+        // but the flavor was minted when this class registered, so the type use
+        // is a memo hit. Failures stay in the throwaway sink — a 0 depth just
+        // defers to the normal lookup's own diagnosis.
+        diagnostic::Sink probe;
+        bool reported = false;
+        std::set<std::string> visiting;
+        cls = widen::deepStrip(resolveTypeRef(tree,
+            widen::intern(tree.current_base_name), visiting, reported,
+            /*file_id=*/-1, /*tok=*/-1, probe));
+        if (reported) return 0;
+    }
+    if (cls == widen::kNoType) return 0;
     // Backstop only: a cyclic base chain is diagnosed by checkClassByValueAcyclic
     // (a base is a by-value `_$base` field); this guard just bounds the walk.
     int guard = (int)tree.classes.size() + 2;
@@ -1812,6 +1906,31 @@ int selfOrBaseDepth(parse::Tree& tree, std::string const& className) {
     return d > 0 ? d : -1;
 }
 
+// Canonicalize a `Base:` qualifier that names a template INSTANCE (`VB<int>`,
+// `VB<Integer>`, `VB<T>` inside a flavor's body) to the flavor's registered
+// class name and type, so the string-keyed depth walk (ClassInfo.name) and the
+// member checks see the SAME flavor through any spelling. A non-instance
+// spelling passes through untouched; one that fails to resolve stays as
+// written with kNoType — the normal lookup path re-diagnoses it (failures
+// here go to a throwaway sink).
+void canonicalizeInstanceQualifier(parse::Tree& tree, std::string& q,
+                                   widen::TypeRef& out_type,
+                                   int file_id, int tok) {
+    out_type = widen::kNoType;
+    if (q.find('<') == std::string::npos) return;
+    diagnostic::Sink probe;
+    bool reported = false;
+    std::set<std::string> visiting;
+    widen::TypeRef t = resolveTypeRef(tree, widen::intern(q), visiting,
+                                      reported, file_id, tok, probe);
+    if (reported) return;
+    t = widen::deepStrip(t);
+    auto ci = tree.classes.find(t);
+    if (ci == tree.classes.end()) return;
+    q = ci->second.name;
+    out_type = t;
+}
+
 bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
                              diagnostic::Sink& diag, bool unevaluated) {
     // Spelling `X:self.method(args)` — a method call whose receiver (children[0]) is the
@@ -1823,7 +1942,10 @@ bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
         && e.children[0]->kind == parse::Kind::kIdentExpr
         && e.children[0]->qualifier.size() == 1
         && e.children[0]->name == "self") {
-        int depth = selfOrBaseDepth(tree, e.children[0]->qualifier[0]);
+        std::string qname = e.children[0]->qualifier[0];
+        widen::TypeRef qtype;
+        canonicalizeInstanceQualifier(tree, qname, qtype, e.file_id, e.tok);
+        int depth = selfOrBaseDepth(tree, qname);
         if (depth < 0) return false;   // an unrelated qualifier — let normal lookup diagnose
         e.children[0] = buildBaseReceiver(depth, e.file_id, e.tok);   // self._$base...(depth)
         e.bypass_virtual = true;
@@ -1834,17 +1956,24 @@ bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
     if (e.qualifier.size() != 1) return false;
     // 0 = the OWN class (`Self:` — no reframe), d>=1 = a transitive base (`Base:` at
     // depth d), -1 = neither (not in the self chain -> defer to normal lookup).
-    int depth = selfOrBaseDepth(tree, e.qualifier[0]);
+    std::string qname = e.qualifier[0];
+    widen::TypeRef qtype;
+    canonicalizeInstanceQualifier(tree, qname, qtype, e.file_id, e.tok);
+    int depth = selfOrBaseDepth(tree, qname);
     if (depth < 0) return false;
     bool is_call  = (e.kind == parse::Kind::kCallExpr || e.kind == parse::Kind::kCallStmt);
     bool is_ident = (e.kind == parse::Kind::kIdentExpr);
     if (!is_call && !is_ident) return false;
     // `X:member` reframes self ONLY for an INSTANCE member (a field, a method, or `self`).
     // A static (const / alias / enum / nested type) is left for the normal qualified-name
-    // lookup — it is not reached through `self` / `self._$base`.
-    int aid = resolveName(tree, e.qualifier[0]);
-    if (aid < 0) return false;
-    widen::TypeRef anc = widen::strip(tree.entries[aid].slids_type);
+    // lookup — it is not reached through `self` / `self._$base`. An instance qualifier
+    // already resolved its type above (its spelling doesn't name-resolve).
+    widen::TypeRef anc = qtype;
+    if (anc == widen::kNoType) {
+        int aid = resolveName(tree, e.qualifier[0]);
+        if (aid < 0) return false;
+        anc = widen::strip(tree.entries[aid].slids_type);
+    }
     auto ci = tree.classes.find(anc);
     bool is_field = (ci != tree.classes.end())
         && parse::classHasField(ci->second, e.name);
@@ -6704,6 +6833,27 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                          || ch->kind == parse::Kind::kClassDef);
         bool is_enum = (ch->kind == parse::Kind::kEnumDecl);
         bool is_const = (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const);
+        // A DEFINITION whose qualifier names a template INSTANCE
+        // (`int Kit<int>:kNew = 5;`) is never a registration target: a flavor's
+        // members come only from the template's own openings. Reject focused,
+        // before the sibling walk mis-blames the scope. Only definition kinds —
+        // a qualified CALL/ident statement rides the ordinary lookup.
+        if (is_fn || is_scope || is_enum
+            || (ch->kind == parse::Kind::kAliasDecl
+                && ch->return_type != widen::kNoType)
+            || ch->kind == parse::Kind::kVarDeclStmt) {
+            bool inst = false;
+            for (auto const& q : ch->qualifier)
+                if (q.find('<') != std::string::npos) { inst = true; break; }
+            if (inst) {
+                diagnostic::report(diag, {ch->file_id, ch->qualifier_toks[0],
+                    "Cannot add a member to a template instance; re-open the "
+                    "template itself so every flavor gets it.", {}});
+                ch.reset();
+                moved = true;
+                continue;
+            }
+        }
         // A qualified alias with a TARGET is an external member; a bare qualified alias
         // (`alias Ns:Sub;`, kNoType) is a namespace IMPORT resolved at its use scope —
         // leave it in place.

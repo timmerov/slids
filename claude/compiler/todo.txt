@@ -24,6 +24,15 @@ BUGS
     spellings — today it neither works nor errors. Found while probing class
     templates; tmpl_class.sl avoids it (required field, constructed in place).
 
+  * AN UNRELATED CLASS QUALIFIER ON A METHOD CALL IS SILENTLY DROPPED — inside a
+    method, `OtherClass:method()` where OtherClass is NOT in the self chain loses
+    its qualifier to the bare-method rewrite and rebinds as a dispatched
+    `self.method()` whenever the current class has a method of that name (wrong
+    target, no diagnostic; e.g. `VB<int8>:tagv()` inside a class derived from
+    `VB<int>`). Outside a class it errors ("Unresolved identifier '_$recv'").
+    The rewrite should probably reject an unrelated class qualifier instead of
+    dropping it. Found while landing instance-qualified spellings.
+
 
 UNBLOCKED FEATURES
 

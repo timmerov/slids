@@ -16,8 +16,13 @@ every demanded flavor once.
 */
 
 /* the workhorse: fields + bodyless method declarations; the bodies live in
-   tmpl_lib.sl as a RE-OPEN of this primary opening. */
+   tmpl_lib.sl as a RE-OPEN of this primary opening. The const and the member
+   alias are whole in the header (leaf members are not stripped from a
+   declare-only clone) — consumers read them instance-qualified
+   (`Vector<int>:kTag`). */
 Vector<T>(T data_ = 0, T extra_ = 0) {
+    const int kTag = 7;
+    alias Elem = T;
     void push(T v);
     T sum();
 }

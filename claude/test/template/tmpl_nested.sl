@@ -66,8 +66,10 @@ SELF-CONTAINED: the inner lists every parameter it uses (re-listing an
 outer's name if wanted — the binding surface is the inner list alone), so
 an instance is keyed by one arg list, needs no outer flavor, and splices
 into the outer's host list as an ordinary class. the outer contributes
-only the name qualifier: no outer template list in the spelling (`TClass:`,
-never `TClass<int>:`). inside its own bodies the bare inner name means the
+the name qualifier: the bare host (`TClass:`) is canonical, and since the
+instance-qualified landing (2026-07-24) `TClass<int>:SClass<float>` also
+resolves — the instance qualifier walks to the flavor's per-instance
+sub-pattern. inside its own bodies the bare inner name means the
 instance (matched by the pattern's spelled name — the entry name carries
 the ':'). the bare inner name resolves nowhere outside.
 
@@ -214,9 +216,9 @@ CoexF<T>(T f_ = 0) {
 //-EXPECT-ERROR: Unknown type
 //int bads() { SClass<int> s; s; return 0; }
 
-/* the qualifier is the bare host name — never the host with a type-list. */
-//-EXPECT-ERROR: Expected
-//int badq() { TClass<int>:SClass<float> s; s; return 0; }
+/* the bare-host qualifier stays canonical; the INSTANCE-qualified spelling
+   (`TClass<int>:SClass<float>`) also resolves since the instance-qualified
+   landing (2026-07-24) — pinned as a positive in main. */
 
 /* a hoisted template's list is SELF-CONTAINED: an outer param it does not
    re-list is simply not in scope. */
@@ -301,6 +303,11 @@ int32 main() {
 
     /* a second flavor of the same hoisted template — independent memo. */
     TClass:SClass<float> sf(2.5); __println("n3 = " + sf.s_);
+
+    /* the INSTANCE-qualified spelling of a hoisted template (legal since the
+       instance-qualified landing): the qualifier mints TClass<int> and the
+       walk reaches its per-flavor sub-pattern. */
+    TClass<int>:SClass<float> sq(4.5); __println("nq = " + sq.s_);
 
     /* methods on a hoisted instance: the bare receiver name, both params
        from the one self-contained list. */

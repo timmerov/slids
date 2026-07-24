@@ -2276,6 +2276,80 @@ Phase 9 — templates
     (read AND write), a CLASS operand through the convention, the spaced
     `op< <T>`, the out-of-line `Ool:op*<T>`, a class-template flavor's
     template op, and the three exclusion negatives. Suite green.
+  * instance-qualified spellings (`Kit<int>:member`)      LANDED 2026-07-24
+    Canon tmpl_class.sl (the iq block). LIFTS the two spelling limits the
+    nested-templates landing recorded: an instance's members now HAVE a
+    qualified spelling from outside (`Kit<int>:Sub` / `:Elem` / `:E:eOne` /
+    `:kBase`), and the `Base:` bypass CAN name an instance base
+    (`VB<int>:tagv()`) — supersedes tier 2's "never `TClass<int>:`" note.
+    GRAMMAR: one absorber (absorbInstanceArgs) — after a qualified-name
+    segment, a `<` whose type-arg group's closer is immediately followed by
+    `:` is an instance qualifier; the group re-parses through parseType and
+    rides INSIDE the segment's spelling, canonically (", " joins — the
+    parseClassDef instance-base discipline). Wired into parseQualifiedName
+    (statements, expressions, declared names), the case-label variant
+    (absorption never takes the FINAL segment, so the over-consume rewind
+    still pops a plain one-token segment), and looksLikeQualifiedTypedDecl
+    (a group after EVERY segment, not just the tail, so `Kit<int>:Sub s;`
+    gates as a decl). `>` immediately followed by `:` is unambiguous in
+    every context (no ternary; case labels own their variant).
+    RESOLVE: the ONE chain walker (resolveNamespaceSegments) grew the
+    instance segment — the qualified prefix resolves as a TYPE USE through
+    the same kTmplUse arm every use site rides, memoized, so a qualifier
+    MINTS the flavor like any other use (`Kit<float>:kBase` demands the
+    flavor by itself); the walk then continues in the instance's member
+    frame (classEntryForType -> ns_frame_id). The spelling-level `:` splits
+    went angle-aware (splitQualifiedSpelling — one splitter for
+    resolveQualifiedType + lookupAliasTemplateEntry). Everything above the
+    walker rode free: decl / signature / field / global / array positions,
+    sizeof, new, constructions (statement + expression + argument), member
+    alias / enum / const reads, an alias TO the qualified spelling (def_id
+    rides the handle), ##type as written, case labels, and — fallout —
+    `TClass<int>:SClass<float>` (a hoisted template under an instance
+    qualifier) now resolves through the per-instance sub-pattern.
+    THE BYPASS: tryResolveBaseQualifier canonicalizes a '<'-bearing
+    qualifier to the flavor's registered name + type
+    (canonicalizeInstanceQualifier — throwaway sink; a failed spelling
+    stays as written and the normal path re-diagnoses), so the
+    string-keyed depth walk matches ClassInfo.name through ANY spelling
+    (alias args; `VB<T>:` inside the template's own body — TVD canon);
+    baseClassDepth grew the same memo-hit fallback for an instance
+    current_base_name. The canon triple + depth-2 + own-class pin all
+    pinned (trio / deep / selfq).
+    REJECTION: an instance qualifier is never a REGISTRATION target —
+    relocateOutOfLineMembers rejects the definition kinds focused ("Cannot
+    add a member to a template instance") before the sibling walk
+    mis-blames the scope.
+    FALLOUT, resolved next day: tmpl_nested.sl's tier-2 negative
+    (`TClass<int>:SClass<float>`, "the qualifier is the bare host name")
+    was the exact spelling this landing legalizes — converted to a
+    positive (nq); the walk reaches the flavor's per-instance sub-pattern.
+    PRE-EXISTING, found and left alone: the field-default-with-
+    construction-args assert (ALREADY tracked in todo.txt — reached here
+    via the qualified spelling; the iq test uses a required field
+    instead); and inside a method, an unrelated `Class:method()`
+    qualifier is silently DROPPED and rebinds as dispatched
+    `self.method()` when the name exists (the rewrite
+    tryResolveBaseQualifier pre-empts for real bases) — now a todo.txt
+    BUGS entry.
+    LIVENESS (2026-07-24, day 2 — found by the negative variants): the
+    instance memo is TU-wide but a flavor's member LIVENESS died with the
+    scope that first minted it — minted in fn A, `Kit<int>:Sub` failed
+    from fn B, and one frame deeper `Kit<int>:E:eTwo` failed as "not
+    visible" (an enum facet's frame is a NAMESPACE, so a class-frame
+    check alone missed it). Fix: findMemberLiveOrInstance — live first,
+    DECLARED fallback when frameInsideInstance (the owner-frame walk to
+    the first class frame, '<' in its name) — at all four walker lookup
+    sites; namespaces and plain classes keep pure liveness. Regression:
+    tmpl_class.sl fnC + iq23.
+    CROSS-TU (same day; canon tmpl_test.sl y1-y3, tmpl_test2.sl r2b/y4):
+    a header template's const + member alias ride declare-only clones
+    whole (leaf members are not stripped) and answer instance-qualified
+    from any consumer; a consumer's QUALIFIER alone mints an aggregated
+    flavor (`Vector<int64>:kTag` — the .sli demand rides, --instantiate
+    emits it); the bypass statically binds the aggregated base's
+    EXTERNAL virtual across the seam (MyDer's trio).
+    Suite: all positives and negatives green.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

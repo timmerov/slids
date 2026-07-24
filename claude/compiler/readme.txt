@@ -1309,6 +1309,33 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   spells an ALIAS operand as label=target ('T=float', 'Integer=int') — the
   bound types were unreadable through bare template-param labels.
 
+  INSTANCE-QUALIFIED SPELLINGS (canon tmpl_class.sl, the iq block). An
+  instance's members are nameable from outside: `Kit<int>:Sub` (nested
+  class — every type position: decl, signature, field, global, array,
+  sizeof, new, alias target), `Kit<int>:Elem` (member alias),
+  `Kit<int>:E` / `Kit<int>:E:eOne` (enum type / value, case labels
+  included), `Kit<int>:kBase` (member const), and the `Base:` bypass can
+  name an instance base (`VB<int>:tagv()`, all four spellings, any depth,
+  `VB<T>:` inside the template's own body). GRAMMAR: one absorber
+  (absorbInstanceArgs) — after a qualified-name segment, a `<` whose
+  type-arg group's closer is immediately followed by `:` is an instance
+  qualifier; the args re-parse through parseType and ride INSIDE the
+  segment's spelling, canonically (", "). Wired into parseQualifiedName,
+  the case-label variant, and looksLikeQualifiedTypedDecl (a group after
+  EVERY segment). RESOLVE: the ONE chain walker (resolveNamespaceSegments)
+  resolves a '<'-bearing segment's qualified prefix as a TYPE USE — the
+  same kTmplUse arm as any use site, memoized, so a qualifier MINTS the
+  flavor on demand — and continues in the instance's member frame; the
+  spelling-level `:` splits are angle-aware (splitQualifiedSpelling). The
+  bypass canonicalizes the spelled qualifier to the flavor's registered
+  name + type (canonicalizeInstanceQualifier; baseClassDepth has the same
+  memo-hit fallback for an instance base name), so alias-spelled args
+  match. An instance qualifier is never a REGISTRATION target
+  (relocateOutOfLineMembers rejects the definition kinds focused). A
+  hoisted nested template under an instance qualifier
+  (`TClass<int>:SClass<float>`) resolves through the per-instance
+  sub-pattern as fallout.
+
   DEFERRED: TYPE-ranked overloading AMONG templates (arity-only is landed —
   same-arity same-name TEMPLATES stay a collision; plain-beats-template
   coexistence with plain functions is landed),
@@ -1331,11 +1358,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   as COMPILABLE source (the .sli block spelling, ungrammared), the .sli
   demand DIAGNOSTICS unpinned (the negative harness cannot plant a crafted
   .sli + --instantiate),
-  QUALIFIED naming of a class-template instance's members from outside
-  (`Kit<int>:Sub` has no spelling — a qualifier segment is an identifier;
-  inside the body they resolve bare; the HOISTED form `Kit:Sub<...>` is the
-  supported spelling for a nested TEMPLATE) and the `Base:` bypass naming an
-  instance base (same spelling limit), the out-of-line template METHOD form
+  the out-of-line template METHOD form
   targeting a CLASS TEMPLATE owner, static-bypass beyond what falls out
   free, deeper qualifier chains to a sub-pattern (`Spc:Outer:Inner` — the
   composed-name divert reaches one level). Canon
