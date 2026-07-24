@@ -539,22 +539,6 @@ void resolveTmplArgs(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     }
 }
 
-// Any same-scope TEMPLATE function entry of this name — a member scope when
-// `owner` >= 0, else file scope. The collision rule's search, shared by the
-// file-scope function pass and the scope-member registration.
-int findSameScopeTemplate(parse::Tree const& tree, std::string const& name,
-                          int owner) {
-    for (std::size_t idx = 0; idx < tree.entries.size(); idx++) {
-        parse::Entry const& pe = tree.entries[idx];
-        if (pe.kind != parse::EntryKind::kFunction || !pe.is_template
-            || pe.name != name) continue;
-        if (owner >= 0 ? pe.owner_ns_frame == owner
-                       : (pe.owner_ns_frame < 0 && pe.parent_frame_id == 0))
-            return (int)idx;
-    }
-    return -1;
-}
-
 // The ONE place an entry's KIND is named for a diagnostic ("Cannot assign to <noun>
 // 'x'"). A named enum is a kNamespace whose slids_type carries the underlying type; a
 // plain namespace's is kNoType — so an enum reads "enum", not "namespace". Shared by
@@ -2533,9 +2517,11 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
     // ARITY-ONLY TEMPLATE OVERLOADING: the argument count selects among the
     // same-scope same-name templates (their ranges are disjoint by
     // registration) — retarget BEFORE the type-list checks read the stamped
-    // def. No fit leaves the original stamp; the existing arity/inference
+    // def. An EXPLICIT type-list forces the template even off a PLAIN stamp
+    // (plain-beats-template applies to inference-dispatched calls only).
+    // No fit leaves the original stamp; the existing arity/inference
     // diagnostics fire downstream.
-    if (entry.is_template) {
+    if (entry.is_template || !s.tmpl_args.empty()) {
         int pick = retargetTemplateByArity(tree, id, s.children.size());
         if (pick >= 0) id = pick;
     }
@@ -4714,6 +4700,16 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
             "A template function must have a body.", {}});
         return;
     }
+    // Template forms of the TRANSFER-FAMILY operators are excluded (canon
+    // tmpl_operator.sl): op= threads the value-init probe and op<-- / op<-->
+    // the transfer invariant's canonical ops — funnels where "the operator"
+    // is structural, not a name-dispatched call.
+    if (node.name == "op=" || node.name == "op<--" || node.name == "op<-->") {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "A template '" + node.name + "' is not supported; the "
+            "assignment and transfer operators take concrete types.", {}});
+        return;
+    }
     // Collision scan — ARITY-ONLY OVERLOADING: same-name TEMPLATES coexist
     // when their arity ranges are DISJOINT (the call's argument count then
     // selects; there is no type-based ranking). A same-name PLAIN function
@@ -4728,7 +4724,6 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
     }
     int merge_target = -1;    // the header decl this definition completes
     int header_owned = -1;    // any header-owned same-name sibling
-    int plain_clash = -1;     // a same-name NON-template function
     int overlap_clash = -1;   // a template sibling with an overlapping range
     int first_header_decl = -1;
     bool module_def = false;  // this node is the header's own module defining
@@ -4741,7 +4736,10 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
         if (owner >= 0 ? c.owner_ns_frame != owner
                        : (c.owner_ns_frame >= 0
                           || c.parent_frame_id != cur_frame)) continue;
-        if (!c.is_template) { plain_clash = (int)id0; continue; }
+        // A same-name PLAIN function COEXISTS: plain-beats-template dispatch
+        // (the plain overload set is tried first; the template is the
+        // fallback) — so `op+=(int)` and `op+=<T>(T)` live side by side.
+        if (!c.is_template) continue;
         auto pit = tree.templates.find((int)id0);
         bool c_header = pit != tree.templates.end() && pit->second.def
             && fileIsImported(tree, c.file_id);
@@ -4800,10 +4798,6 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
               tree.entries[header_owned].tok, "declared here"}}});
         return;
     }
-    if (plain_clash >= 0) {
-        reportTemplateNameClash(diag, node, tree.entries[plain_clash]);
-        return;
-    }
     if (overlap_clash >= 0) {
         reportTemplateNameClash(diag, node, tree.entries[overlap_clash]);
         return;
@@ -4811,11 +4805,11 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
     int other = owner >= 0 ? findMemberDeclared(tree, owner, node.name)
                            : parse::findInFrame(tree, parse::currentFrameId(tree),
                                                 node.name);
-    // A same-name FUNCTION TEMPLATE is a vetted arity sibling (the scan
-    // above passed it) — only a NON-template-function occupant collides.
+    // A same-name FUNCTION is a vetted neighbor — a template is an arity
+    // sibling (the scan above passed it), a plain function coexists under
+    // plain-beats-template dispatch. Only a NON-function occupant collides.
     if (other >= 0
-        && !(tree.entries[other].kind == parse::EntryKind::kFunction
-             && tree.entries[other].is_template)) {
+        && tree.entries[other].kind != parse::EntryKind::kFunction) {
         parse::Entry const& pe = tree.entries[other];
         reportNameCollision(diag, "Duplicate declaration of '" + node.name + "'.",
                             pe.file_id, pe.tok, node.file_id, node.name_tok);
@@ -5018,12 +5012,15 @@ void registerNestedFunctions(parse::Tree& tree,
         // the same scope — match an existing same-name entry: the signature must agree, and
         // a second definition is a duplicate.
         int existing = parse::findInFrame(tree, parse::currentFrameId(tree), ch->name);
+        // A block-scope TEMPLATE sibling coexists (plain-beats-template
+        // dispatch); the decl/def merge below pairs PLAIN entries only.
+        if (existing >= 0
+            && tree.entries[existing].kind == parse::EntryKind::kFunction
+            && tree.entries[existing].is_template) {
+            existing = -1;
+        }
         if (existing >= 0) {
             parse::Entry& prev = tree.entries[existing];
-            if (prev.kind == parse::EntryKind::kFunction && prev.is_template) {
-                reportTemplateNameClash(diag, *ch, prev);
-                continue;
-            }
             if (prev.kind != parse::EntryKind::kFunction
                 || prev.slids_type != ch->return_type
                 || prev.param_types != ptypes) {
@@ -5700,13 +5697,9 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
                                          /*nested=*/false, frame, diag);
                 continue;
             }
-            // A TEMPLATE member owns its name — a plain same-name method is a
-            // collision, not an overload (the reverse direction is checked by
-            // registerTemplateFunction itself).
-            if (int tmpl = findSameScopeTemplate(tree, m->name, frame); tmpl >= 0) {
-                reportTemplateNameClash(diag, *m, tree.entries[tmpl]);
-                continue;
-            }
+            // A plain member beside a same-name TEMPLATE member is legal:
+            // plain-beats-template dispatch (the plain set is tried first,
+            // the template is the fallback) — `op+=(int)` + `op+=<T>(T)`.
             // A same-name CLASS METHOD is an OVERLOAD — register it as a separate
             // entry (classify picks among them by signature; an identical-signature
             // pair is caught as a dup DEFINITION there). A same-name NON-function
@@ -8210,13 +8203,9 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 ch->resolved_entry_id = existing;
                 continue;
             }
-            // A TEMPLATE with this name owns it — a plain function is a collision,
-            // not an overload.
-            if (int tmpl = findSameScopeTemplate(tree, ch->name, /*owner=*/-1);
-                tmpl >= 0) {
-                reportTemplateNameClash(diag, *ch, tree.entries[tmpl]);
-                continue;
-            }
+            // A plain function beside a same-name TEMPLATE is legal:
+            // plain-beats-template dispatch (plain set first, template
+            // fallback).
             // No matching-signature function. A same-name NON-function entry (a
             // class / alias / enum / namespace / const) is a collision, not an
             // overload — find one and report.

@@ -71,12 +71,12 @@ materialization into a reference). after binding (inferred or explicit) the
 call is an ordinary single-candidate call: widening / implicit casts / class
 coercion apply as spec.
 
-a template owns its name: colliding with any same-name function or template in
-the same scope is a compile error (overload participation deferred). templates
-declare anywhere a function does — file scope, namespaces, blocks.
-
-deferred: nested template types (the >> closer split), overloads, methods,
-classes, cross-tu. alias templates landed: see tmpl_alias.sl.
+overloading: same-name templates coexist iff their ARITY ranges are disjoint
+(the argument count selects; no type ranking); a same-name PLAIN function
+coexists too — PLAIN BEATS TEMPLATE (the plain set is probed first, widening
+included; the template binds what no plain takes; an explicit type-list
+forces the template). templates declare anywhere a function does — file
+scope, namespaces, blocks.
 */
 
 T add<T>(T a, T b) {
@@ -110,10 +110,11 @@ T make<T>() {
     return r;
 }
 
-/* a template may not share its name with a plain function. */
-//-EXPECT-ERROR: may not share its name
-//int clash(int a) { return a; }
-//T clash<T>(T v) { return v; }
+/* PLAIN BEATS TEMPLATE: a plain function and a same-name template coexist.
+   The plain wins whenever it MATCHES (widening included); the template
+   takes what the plain cannot; an explicit type-list forces the template. */
+int coex(int a) { return a + 1000; }
+T coex<T>(T v) { return v; }
 
 /* ARITY-ONLY OVERLOADING: same-name templates with DISTINCT parameter
    counts coexist; the call's argument count selects. */
@@ -464,6 +465,16 @@ int32 main() {
     int w2 = twoWay(4, 5); __println("w2 = " + w2);
     int w3 = twoWay<int>(6); __println("w3 = " + w3);
     Pair wp = twoWay(p1, p2); __println("wp = " + wp.x_ + "," + wp.y_);
+
+    /* PLAIN BEATS TEMPLATE: the plain matches (widening included), the
+       template takes the rest, an explicit list forces the template. */
+    int cx1 = coex(1); __println("cx1 = " + cx1);
+    int8 cs8 = 3;
+    int cx2 = coex(cs8); __println("cx2 = " + cx2);
+    int z9 = 5;
+    int^ zr9 = ^z9;
+    int^ cx3 = coex(zr9); __println("cx3 = " + cx3^);
+    int cx4 = coex<int>(2); __println("cx4 = " + cx4);
 
     return 0;
 }

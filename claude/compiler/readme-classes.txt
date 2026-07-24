@@ -10,11 +10,16 @@ to those name "readme.txt <SECTION>".
 
 TEMPLATES × CLASSES, current state (readme.txt TEMPLATES owns the design):
 a class body may declare a TEMPLATE METHOD (`T scaled<T>(T v) { ... }`) — it shares
-its name only with ARITY-DISJOINT template siblings (arity-only overloading; the
-user-arg count selects; template-vs-plain stays a collision), shadows and is
-shadowed across the base chain like any method (the `Base:m(v)` bypass spelling
-pins a base's template through a shadow), may not be `virtual`, and its instances
-leave a virtual class's vtable undisturbed. A templated HOOK is unspellable (`_`/`~` take no template-list). A
+its name with ARITY-DISJOINT template siblings (the count selects) AND with plain
+methods (PLAIN BEATS TEMPLATE: the plain set is probed first, the template binds
+what no plain takes), shadows and is shadowed across the base chain like any
+method (the `Base:m(v)` bypass spelling pins a base's template through a shadow),
+may not be `virtual`, and its instances leave a virtual class's vtable
+undisturbed. TEMPLATE OPERATORS (`op*<T>(Vec^ a, T b)`, canon tmpl_operator.sl)
+are template methods named `op<sym>`: inference-only dispatch, plain-beats-
+template per family (`op+=(int)` beside `op+=<T>(T)`), per-INSTANCE validation
+of the operator rules; template op= / op<-- / op<--> are rejected (the
+value-init probe and the transfer invariant take concrete operators). A templated HOOK is unspellable (`_`/`~` take no template-list). A
 function template's T may bind a class — through REFERENCE parameters (`T^`), or
 through the BY-VALUE spelling via THE CONVENTION OF CONVENIENCE (readme.txt
 TEMPLATES): a bare-`T` param whose binding is a class/tuple becomes `(const T)^`

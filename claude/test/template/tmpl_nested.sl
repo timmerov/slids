@@ -203,14 +203,12 @@ Gauge<T>() {
     S twice<S>(S s) { return s + s; }
 }
 
-/* a template method owns its name inside a class template too — the plain
-   rule re-fires per flavor, at the instance's registration. */
-//-EXPECT-ERROR: may not share its name
-//BadN<T>(T a_ = 0) {
-//    int m(int v) { return v; }
-//    U m<U>(U v) { return v; }
-//}
-//int badn_use() { BadN<int> b; return b.a_; }
+/* PLAIN BEATS TEMPLATE inside a class-template flavor too: the plain wins
+   when it matches; the template takes the rest. */
+CoexF<T>(T f_ = 0) {
+    int m(int v) { return v + 100; }
+    U m<U>(U v) { return v; }
+}
 
 /* a hoisted template's bare name resolves nowhere outside its host. */
 //-EXPECT-ERROR: Unknown type
@@ -399,6 +397,12 @@ int32 main() {
     /* arity-only overloading inside a flavor: the count selects per flavor. */
     int r9 = ti.choose(3); __println("r9 = " + r9);
     int r10 = ti.choose(3, 4); __println("r10 = " + r10);
+
+    /* plain beats template inside a flavor: plain for int, template else. */
+    CoexF<int> cfx;
+    int r11 = cfx.m(1); __println("r11 = " + r11);
+    int64 rbig = 9;
+    int64 r12 = cfx.m(rbig); __println("r12 = " + r12);
 
     return 0;
 }

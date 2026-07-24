@@ -3,7 +3,7 @@ test method templates.
 
 definition:
 
-    return-type metod-name < template-list > ( parameter-list ) { body }
+    return-type method-name < template-list > ( parameter-list ) { body }
 
 template-list is a comma separate list of identifiers used as types.
 the return type maybe a type from the template-list.
@@ -66,11 +66,14 @@ call then rides the ordinary method path (defaults, conversions, coercion).
 the body is a method body: bare fields, self, and sibling calls resolve
 normally.
 
-a template method owns its name within its class (no overload set, either
-direction); virtual is rejected (instances are unbounded, vtable slots are
-not); the out-of-line form (`T Class:m<T>`) landed with cross-TU templates —
-it relocates into the class like any external member, adding (or, given a
-header declaration, defining) a member template.
+overloading within a class: same-name method templates coexist iff their
+arity ranges are disjoint (the count selects); a same-name PLAIN method
+coexists too — PLAIN BEATS TEMPLATE (plain set probed first, template
+fallback, explicit list forces the template). virtual is rejected
+(instances are unbounded, vtable slots are not); the out-of-line form
+(`T Class:m<T>`) landed with cross-TU templates — it relocates into the
+class like any external member, adding (or, given a header declaration,
+defining) a member template.
 */
 
 /* the workhorse: explicit + inferred calls, field read/write, memoization. */
@@ -173,19 +176,15 @@ Counter(int c_ = 0) {
 Counter : Kid(int k_ = 0) {
 }
 
-/* a template method may not share its name with a plain method... */
-//-EXPECT-ERROR: may not share its name
-//Bad1(int b_ = 0) {
-//    int m(int v) { return v; }
-//    T m<T>(T v) { return v; }
-//}
-
-/* ...in either direction. */
-//-EXPECT-ERROR: may not share its name
-//Bad2(int b_ = 0) {
-//    T m<T>(T v) { return v; }
-//    int m(int v) { return v; }
-//}
+/* PLAIN BEATS TEMPLATE in a class, BOTH declaration orders: the plain wins
+   when it matches, the template takes the rest, an explicit list forces
+   the template. */
+Coex(int c_ = 0) {
+    int m(int v) { return v + 100; }
+    S m<S>(S s) { return s; }
+    T t2<T>(T v) { return v + 2; }
+    int t2(int v) { return v + 20; }
+}
 
 /* a template method may not be virtual. */
 //-EXPECT-ERROR: may not be virtual
@@ -313,6 +312,18 @@ int32 main() {
     int y1 = j.pairup(1); __println("y1 = " + y1);
     int y2 = j.pairup(2, 3); __println("y2 = " + y2);
     int y3 = j.pairup<int>(4); __println("y3 = " + y3);
+
+    /* plain beats template, both declaration orders; the template takes
+       what the plain cannot; an explicit list forces the template. */
+    Coex co;
+    int z1 = co.m(1); __println("z1 = " + z1);
+    int cz = 5;
+    int^ czr = ^cz;
+    int^ z2 = co.m(czr); __println("z2 = " + z2^);
+    int z3 = co.m<int>(4); __println("z3 = " + z3);
+    int z4 = co.t2(1); __println("z4 = " + z4);
+    int64 zbig = 8;
+    int64 z5 = co.t2(zbig); __println("z5 = " + z5);
 
     /* explicit type arguments on a plain method. */
     //-EXPECT-ERROR: is not a template method

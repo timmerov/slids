@@ -2786,7 +2786,13 @@ int instantiateAndClassify(parse::Tree& tree, int tid,
         constfold::runOn(tree, *inst, diag);
         if (!diagnostic::hasErrors(diag)) {
             classifyFunctionSignature(tree, *inst, diag);
-            if (inst->kind == parse::Kind::kFunctionDef) {
+            // A TEMPLATE OPERATOR's pattern dodges the class-walk validation
+            // (patterns are skipped wholesale), so the type-dependent operator
+            // rules run per INSTANCE, here, with the binding in hand.
+            if (isOperatorName(inst->name))
+                validateOperatorSignatureTypes(*inst, diag);
+            if (inst->kind == parse::Kind::kFunctionDef
+                && !diagnostic::hasErrors(diag)) {
                 classifyFunctionBody(tree, *inst, diag);
                 inst->capture_types.clear();
                 for (int cid : inst->captures) {
@@ -2881,48 +2887,126 @@ bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& d
     return true;
 }
 
-void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
-    // A TEMPLATE callee: bind the type-list, instantiate on demand, retarget the
-    // call at the instance — which then rides the ordinary single-candidate path
-    // below (defaults, conversions, the coercion retry, nested-fn captures).
-    if (s.resolved_entry_id >= 0
-        && tree.entries[s.resolved_entry_id].kind == parse::EntryKind::kFunction
-        && tree.entries[s.resolved_entry_id].is_template) {
-        if (!classifyTemplateCall(tree, s, diag)) return;
-    }
-    // Gather same-name free-function candidates (an unqualified call). A
-    // qualified call was resolved to a single namespace member upstream; a single
-    // free function keeps resolve's resolution.
-    std::vector<int> cands;
-    bool qualified = !s.qualifier.empty() || s.global_qualified;
-    // A call resolved to a NAMESPACE / class-scope member (owner_ns_frame >= 0) — a
-    // qualified `Ns:fn(...)` — gathers its overload set in that member's frame, so
-    // overloads (INCLUDING function aliases) resolve by argument type rather than keeping
-    // resolve's single pick. (resolve may have cleared the qualifier, so key off the entry.)
-    bool member_call = s.resolved_entry_id >= 0
-        && tree.entries[s.resolved_entry_id].kind == parse::EntryKind::kFunction
-        && tree.entries[s.resolved_entry_id].owner_ns_frame >= 0;
-    if (member_call) {
-        int fr = tree.entries[s.resolved_entry_id].owner_ns_frame;
-        for (std::size_t id = 0; id < tree.entries.size(); id++) {
-            parse::Entry const& e = tree.entries[id];
-            if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == fr
-                && e.name == s.name
-                && !e.is_template && e.tmpl_args.empty())   // a template owns its
-                cands.push_back((int)id);                   // name; instances share it
+std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
+                                         std::string const& name);
+
+// TEMPLATE-OPERATOR FALLBACK (plain beats template): when a plain operator
+// probe found nothing, bind a same-name TEMPLATE operator's pattern over the
+// operand(s) and instantiate — the instance id then flows wherever the plain
+// id would (the chain stamps, the emit calls). A bind miss rolls its
+// diagnostics back (this is a fallback, not a demand); an instantiation
+// error is real and stands.
+int instantiateOperatorTemplate(parse::Tree& tree, widen::TypeRef cls,
+                                std::string const& opname,
+                                std::vector<parse::Node*> const& args,
+                                int file_id, int tok, diagnostic::Sink& diag) {
+    for (int id : declaredMemberOverloads(tree, cls, opname)) {
+        if (!tree.entries[id].is_template) continue;
+        int lo, hi;
+        resolve::templateArityRange(tree, id, lo, hi);
+        if ((int)args.size() < lo || (int)args.size() > hi) continue;
+        parse::Node stub;
+        stub.kind = parse::Kind::kCallExpr;
+        stub.name = opname;
+        stub.file_id = file_id;
+        stub.tok = tok;
+        std::vector<widen::TypeRef> bound;
+        std::size_t mark = diag.records.size();
+        if (!bindTemplateTypeList(tree, stub, id, args, /*recv_offset=*/1,
+                                  tok, diag, bound)) {
+            diag.records.resize(mark);
+            continue;
         }
-    } else if (!qualified) {
+        return instantiateAndClassify(tree, id, bound, stub, diag);
+    }
+    return -1;
+}
+
+void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    // Same-scope candidate sets, keyed off the entry resolve stamped: PLAIN
+    // overloads and TEMPLATE siblings (instances never join either).
+    // PLAIN BEATS TEMPLATE: a pure-plain set rides the established paths
+    // below; a MIXED set probes the plains silently and falls back to the
+    // template; an explicit type-list FORCES the template. Plain gathering
+    // keeps the established scope rules: a MEMBER frame ranks its whole set
+    // (incl. function aliases); an unqualified FILE-SCOPE call ranks the
+    // free overloads; a nested (block) or `::`-qualified call keeps
+    // resolve's single pick.
+    std::vector<int> cands;
+    std::vector<int> tcands;
+    bool qualified = !s.qualifier.empty() || s.global_qualified;
+    int anchor = s.resolved_entry_id;
+    if (anchor >= 0
+        && tree.entries[anchor].kind == parse::EntryKind::kFunction
+        && tree.entries[anchor].tmpl_args.empty()) {
+        int own = tree.entries[anchor].owner_ns_frame;
+        int pf = tree.entries[anchor].parent_frame_id;
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
             parse::Entry const& e = tree.entries[id];
-            // Overload candidates are FILE-SCOPE free functions (parent_frame_id
-            // == the global frame 0). A nested function (in a body frame) was
-            // already resolved singly by resolve and must not collide with a
-            // same-named nested function in another host.
-            if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame < 0
-                && e.parent_frame_id == 0 && e.name == s.name
-                && !e.is_template && e.tmpl_args.empty()) {   // never rank a template
-                cands.push_back((int)id);                     // pattern or an instance
+            if (e.kind != parse::EntryKind::kFunction || e.name != s.name)
+                continue;
+            if (!e.tmpl_args.empty()) continue;   // never rank an instance
+            if (e.owner_ns_frame != own) continue;
+            if (own < 0 && e.parent_frame_id != pf) continue;
+            if (e.is_template) {
+                tcands.push_back((int)id);
+                continue;
             }
+            if (own >= 0 || (!qualified && pf == 0) || (int)id == anchor)
+                cands.push_back((int)id);
+        }
+    }
+    if (!tcands.empty()) {
+        bool want_tmpl = !s.tmpl_args.empty() || cands.empty();
+        bool plain_probed = false;
+        if (!want_tmpl) {
+            // The silent PLAIN probe: rank the plain set; on a match the call
+            // is a plain call (the single-path refresh below re-types the
+            // args with full context); on a miss, roll the diagnostics back
+            // and fall to the template.
+            for (auto& ch : s.children) {
+                if (ch) inferExpr(tree, *ch, widen::kNoType, diag);
+            }
+            std::vector<parse::Node*> pargs;
+            for (auto& ch : s.children) pargs.push_back(ch.get());
+            std::size_t mark = diag.records.size();
+            int best = pickOverload(tree, cands, pargs, /*recv_offset=*/0,
+                                    s.name, s.file_id, s.tok, diag);
+            if (best >= 0) {
+                s.resolved_entry_id = best;
+                cands.clear();
+            } else {
+                diag.records.resize(mark);
+                plain_probed = true;
+                want_tmpl = true;
+            }
+        }
+        if (want_tmpl) {
+            // The argument count selects the arity sibling; then bind,
+            // instantiate, and retarget at the instance — which rides the
+            // single-candidate refresh below (defaults, conversions, the
+            // coercion retry, nested-fn captures).
+            int pick = resolve::retargetTemplateByArity(tree, tcands[0],
+                                                        s.children.size());
+            if (pick < 0) {
+                if (plain_probed) {
+                    // Neither set takes this call — the plain report reads
+                    // better than a template-arity complaint.
+                    std::vector<parse::Node*> pargs;
+                    for (auto& ch : s.children) pargs.push_back(ch.get());
+                    pickOverload(tree, cands, pargs, /*recv_offset=*/0,
+                                 s.name, s.file_id, s.tok, diag);
+                } else {
+                    diagnostic::report(diag, {s.file_id, s.name_tok,
+                        "Wrong number of arguments to template '" + s.name
+                        + "': no overload takes "
+                        + std::to_string(s.children.size()) + ".", {}});
+                }
+                return;
+            }
+            s.resolved_entry_id = pick;
+            if (!classifyTemplateCall(tree, s, diag)) return;
+            cands.clear();
         }
     }
     if (cands.size() <= 1) {
@@ -5188,13 +5272,17 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     std::vector<parse::Node*> uargs;
     for (std::size_t i = 1; i < s.children.size(); i++) uargs.push_back(s.children[i].get());
 
-    // TEMPLATE candidates: the ownership rule keeps templates and plain
-    // methods apart, so the set is all-template or all-plain. ARITY-ONLY
-    // OVERLOADING: same-name method templates carry disjoint arity ranges —
-    // the user-arg count selects the one candidate.
+    // Split the member set: PLAIN overloads vs TEMPLATE siblings (arity-only
+    // overloading keeps template ranges disjoint). PLAIN BEATS TEMPLATE:
+    // with both present the plain set is probed silently first and the
+    // template is the fallback — `op+=(int)` beside `op+=<T>(T)` picks the
+    // plain for an int rhs, the template otherwise. An explicit type-list
+    // forces the template.
     std::vector<int> tcands;
+    std::vector<int> pcands;
     for (int c0 : cands) {
         if (tree.entries[c0].is_template) tcands.push_back(c0);
+        else pcands.push_back(c0);
     }
 
     // Explicit type arguments only make sense on a template method.
@@ -5204,8 +5292,23 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
         return;
     }
 
-    int methodId;
-    if (!tcands.empty()) {
+    int methodId = -1;
+    bool plain_probed = false;
+    if (!tcands.empty() && !pcands.empty() && s.tmpl_args.empty()) {
+        // The silent PLAIN probe; on a miss, roll back and fall through to
+        // the template arm.
+        for (auto* a : uargs) if (a) inferExpr(tree, *a, widen::kNoType, diag);
+        std::size_t mark = diag.records.size();
+        methodId = pickOverload(tree, pcands, uargs, /*recv_offset=*/1,
+                                s.name, s.file_id, s.name_tok, diag);
+        if (methodId < 0) {
+            diag.records.resize(mark);
+            plain_probed = true;
+        }
+    }
+    if (methodId >= 0) {
+        // plain probe hit — adopted below like any picked overload.
+    } else if (!tcands.empty()) {
         int pick = -1;
         for (int c0 : tcands) {
             int lo, hi;
@@ -5216,10 +5319,16 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             }
         }
         if (pick < 0) {
-            diagnostic::report(diag, {s.file_id, s.name_tok,
-                "Wrong number of arguments to template method '" + s.name
-                + "': no overload takes "
-                + std::to_string(uargs.size()) + ".", {}});
+            if (plain_probed) {
+                // Neither set takes this call — the plain report reads better.
+                pickOverload(tree, pcands, uargs, /*recv_offset=*/1,
+                             s.name, s.file_id, s.name_tok, diag);
+            } else {
+                diagnostic::report(diag, {s.file_id, s.name_tok,
+                    "Wrong number of arguments to template method '" + s.name
+                    + "': no overload takes "
+                    + std::to_string(uargs.size()) + ".", {}});
+            }
             return;
         }
         // Bind the type-list — explicit, or unified from the USER args
@@ -5309,8 +5418,10 @@ int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& 
                       std::string const& opname, diagnostic::Sink& diag) {
     std::vector<int> cands;
     for (int id : declaredMemberOverloads(tree, cls, opname))
-        if (tree.entries[id].param_types.size() == 2)   // [_$recv, one user param]
-            cands.push_back(id);
+        if (tree.entries[id].param_types.size() == 2   // [_$recv, one user param]
+            && !tree.entries[id].is_template)          // a PURE PLAIN probe —
+            cands.push_back(id);                       // template fallback is
+                                                       // the caller's, lazily
     // recv_offset = 1: `_$recv` is implicit, so only the single user operand `rhs` is
     // ranked (an assignment operator is arity-1). A cast drops rhs's const only for the
     // read-only argConvertCost scoring inside the shared core.
@@ -5441,6 +5552,16 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
                         bool needs_construct = false) {
     if (widen::form(widen::strip(clsType)) != widen::Type::Form::kSlid) return false;
     int op_id = findClassOperator(tree, clsType, rhs, opname, diag);
+    // PLAIN BEATS TEMPLATE, the assign-family leg: the plain probe missed
+    // outright (-1, not an ambiguity) — bind a TEMPLATE operator over the
+    // rhs. The transfer family (op= / op<-- / op<-->) has no template form
+    // (rejected at registration), so those callers never take this arm.
+    if (op_id == -1) {
+        std::vector<parse::Node*> targs{&rhs};
+        op_id = instantiateOperatorTemplate(tree, widen::strip(clsType),
+                                            opname, targs, rhs.file_id,
+                                            rhs.tok, diag);
+    }
     if (op_id < 0) return false;
     // A SYNTHESIZED op dispatches exactly like a USER one — the operator is the operator,
     // whoever wrote it. (It used to bail: "the codegen transfer path already calls
@@ -5698,7 +5819,8 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
         // core rather than findClassOperator's arity-1 probe.
         std::vector<int> cands;
         for (int id : declaredMemberOverloads(tree, C, opname))
-            if (tree.entries[id].param_types.size() == 3)   // [_$recv, lhs, rhs]
+            if (tree.entries[id].param_types.size() == 3   // [_$recv, lhs, rhs]
+                && !tree.entries[id].is_template)
                 cands.push_back(id);
         std::vector<parse::Node*> args{&lhs, &rhs};
         OverloadRank r = rankOverload(tree, cands, args, 1);
@@ -5712,6 +5834,20 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
         bin_id = r.best;
     }
     int aug_id    = findClassOperator(tree, C, rhs, opname + "=", diag);
+    // PLAIN BEATS TEMPLATE, lazily: only when BOTH direct plain probes missed
+    // do the template operators bind (aug first — it fuses; then the 2-arg
+    // binary). Direct plain > direct template > coerced plain (the coercion
+    // retry below stays last).
+    if (aug_id < 0 && bin_id < 0) {
+        std::vector<parse::Node*> aargs{&rhs};
+        aug_id = instantiateOperatorTemplate(tree, C, opname + "=", aargs,
+                                             e.file_id, e.tok, diag);
+        if (aug_id < 0) {
+            std::vector<parse::Node*> bargs{&lhs, &rhs};
+            bin_id = instantiateOperatorTemplate(tree, C, opname, bargs,
+                                                 e.file_id, e.tok, diag);
+        }
+    }
     int eq_lhs_id = findClassOperator(tree, C, lhs, "op=", diag);
     int eq_rhs_id = findClassOperator(tree, C, rhs, "op=", diag);
     // The move INTO a live target. Its source is the accumulator — a value of C — so probe
@@ -5746,7 +5882,8 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
         if (classHasOperatorArity(tree, C, opname, 2)) {
             std::vector<int> cands2;
             for (int id : declaredMemberOverloads(tree, C, opname))
-                if (tree.entries[id].param_types.size() == 3) cands2.push_back(id);
+                if (tree.entries[id].param_types.size() == 3
+                    && !tree.entries[id].is_template) cands2.push_back(id);
             std::vector<parse::Node*> args2{&lhs, &nrhs};
             OverloadRank r2 = rankOverload(tree, cands2, args2, 1);
             if (r2.tied.size() <= 1) bin_id = r2.best;

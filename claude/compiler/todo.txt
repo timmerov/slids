@@ -51,6 +51,8 @@ UNBLOCKED FEATURES
   * need to review diagnostic messages. some are littered with incomprehensible
     jargon. use opus not fable.
 
+  * template overloads are only partially landed. restricted to by arity.
+
 
 BLOCKED FEATURES
 

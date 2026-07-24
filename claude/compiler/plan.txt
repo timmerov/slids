@@ -2236,6 +2236,46 @@ Phase 9 — templates
     comparison mix, shift count, int-lvalue aug). augment.sl gained the
     float-lvalue aug positives; its bitwise `&=` negative survived
     unchanged. Suite green; the galaxy sandbox builds end-to-end.
+  * template operators + PLAIN BEATS TEMPLATE            LANDED 2026-07-23
+    Canon tmpl_operator.sl (user's design; excludes op= op<-- op<-->).
+    A template OPERATOR is a template method named `op<sym>` — the whole
+    machinery rides. GRAMMAR: the template-list parses after the
+    MAX-MUNCHED symbol (looksLikeFunctionDef's op arm + the parse head's
+    `!is_op` gate dropped); the `<`-family needs whitespace (`op< <T>` —
+    `op<<T>` is the shift symbol). Dispatch is INFERENCE-ONLY (operators
+    have no type-list position; a T in no parameter is unusable).
+    Type-dependent operator rules validate per INSTANCE
+    (instantiateAndClassify runs validateOperatorSignatureTypes on
+    operator-named instances — patterns dodge the class-walk validation).
+    Template op= / op<-- / op<--> REJECTED at registration (the value-init
+    probe and the transfer invariant's canonical ops take concrete types).
+    PLAIN BEATS TEMPLATE, uniform (functions, methods, operators — the
+    user's expand): a plain function/method/operator COEXISTS with a
+    same-name template; the plain overload set is probed FIRST (silently
+    when a template fallback exists — the diag-rollback trick; a plain
+    wins whenever it MATCHES, widening included), the template binds what
+    no plain takes, an explicit type-list forces the template
+    (resolveCallTarget retargets off a plain stamp). Precedence: direct
+    plain > direct template > coerced plain. Probe sites: classifyCall
+    (restructured: unified plain/template candidate gathering by the
+    stamped entry's scope), inferMethodCall (pcands/tcands split — serves
+    methods AND the comparison / index / unary operator families), the
+    binary CHAIN (stampClassBinary's lazy aug-then-bin fallbacks — probes
+    stay pure: findClassOperator excludes templates), and
+    dispatchAssignInit (the compound leg; -1 only, an ambiguity does not
+    fall back) — the operator legs via instantiateOperatorTemplate (bind
+    the pattern over the operands, roll back a bind miss, hand back the
+    instance id). Registration: the plain-clash arms removed at all four
+    sites (registerTemplateFunction, the member loop, the file-scope and
+    nested-fn passes). Four "may not share its name" negatives converted
+    to plain-beats-template positives (tmpl_function coex, tmpl_method
+    Coex both orders, tmpl_nested CoexF per-flavor); same-arity
+    template-template stays a collision (dup + the new BadA operator
+    negative). tmpl_operator pins: canon scalar op*<T> (int + float),
+    the op+=(int)/op+=<T>(T) canon pair, template comparison + op[]
+    (read AND write), a CLASS operand through the convention, the spaced
+    `op< <T>`, the out-of-line `Ool:op*<T>`, a class-template flavor's
+    template op, and the three exclusion negatives. Suite green.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

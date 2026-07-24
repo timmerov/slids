@@ -54,5 +54,7 @@ r7 = 12
 r8 = 7
 r9 = 3
 r10 = 7
+r11 = 101
+r12 = 9
 sub dtor 7
 sub dtor 10

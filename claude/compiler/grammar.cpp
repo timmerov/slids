@@ -3807,6 +3807,17 @@ struct Parser {
                 && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
             else if (isOperatorSymbolKind(peekKind(o))) o++;
             else return false;
+            // A TEMPLATE-LIST after the SYMBOL — `op*<T>(` — the same bounded
+            // skip as the named arm below (the symbol was max-munched, so the
+            // `<` here is the list's).
+            if (peekKind(o) == token::Kind::kLt
+                && peekKind(o + 1) == token::Kind::kIdentifier) {
+                int q = o + 1;
+                while (peekKind(q) == token::Kind::kIdentifier
+                       && peekKind(q + 1) == token::Kind::kComma
+                       && peekKind(q + 2) == token::Kind::kIdentifier) q += 2;
+                if (peekKind(q + 1) == token::Kind::kGt) o = q + 2;
+            }
         } else {
             if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
             o++;
@@ -4358,12 +4369,14 @@ struct Parser {
                 return nullptr;
             }
         }
-        // A TEMPLATE-LIST — `T add<T, U>(params)`. Plain named functions only for now:
-        // an operator / hook never has one (its `<` would be the operator symbol), and a
-        // qualified (out-of-line member) template is rejected below with the method form.
+        // A TEMPLATE-LIST — `T add<T, U>(params)`, and OPERATORS take one too
+        // (`op*<T>(Vec^ a, T b)` — parseOperatorName max-munched the symbol,
+        // so the `<` here is unambiguously the list's; the `<`-family needs
+        // whitespace: `op< <T>` — `op<<T>` lexes as the SHIFT symbol). A hook
+        // never has one (`_`/`~` have no name position for a list).
         std::vector<std::string> type_params;
         std::vector<int> type_param_toks;
-        if (!is_op && !is_hook && peek().kind == token::Kind::kLt) {
+        if (!is_hook && peek().kind == token::Kind::kLt) {
             advance();   // <
             while (true) {
                 if (peek().kind != token::Kind::kIdentifier) {

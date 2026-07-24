@@ -1,18 +1,7 @@
 
 agenda:
-template classes.
-imported templates.
-
-  Deferred with pinned diagnostics (each has a negative in the suite)
-  7. Member template methods inside class templates — still rejected outright.
 
   Design-line deferrals (pre-existing, unchanged by this landing)
-  8. Template overload participation / specialization — a template owns its name.
-  9. Operator templates (op+<T> — readme notes they're a method call away from the existing binder).
-  10. Uninstantiated template bodies are unchecked beyond parse — and the surface grew again: class-template bodies and now loaded template-source bodies in consumers are equally unchecked
-  until instantiated.
-  11. Explicit instantiation as compilable slids — the .sli deliberately uses the Vector<int>; statement shape so it can graduate into the language later, but the grammar doesn't accept it
-  as source today.
   12. The spelling limits: an instance's members have no qualified spelling from outside (Kit<int>:Sub), and Base: can't name an instance base.
 
     Adjacent open items, not template-line: todo.txt's two BUGS (the class-field default = Ctor(args) codegen assert; the swap inc/dec operand), and the Phase 8 cross-TU remainders

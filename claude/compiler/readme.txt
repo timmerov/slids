@@ -885,11 +885,31 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   classify's method funnel; the --instantiate demand loop instantiates EVERY
   fitting sibling, since a demand spelling carries no arity — an uncalled
   arity emits as unused external code, bloat not breakage). Overlapping
-  ranges (including via DEFAULTS — [1,2] collides with [1,1]) and
-  template-vs-plain, both directions, stay compile errors: overloading is by
-  ARITY only, never by type ranking. The cross-TU decl/def merge picks the
+  ranges (including via DEFAULTS — [1,2] collides with [1,1]) stay compile
+  errors: TEMPLATE siblings overload by ARITY only, never by type ranking.
+  A same-name PLAIN function COEXISTS — PLAIN BEATS TEMPLATE: the plain
+  overload set is probed first (silently when a template fallback exists; a
+  plain wins whenever it MATCHES, widening included), the template binds
+  what no plain takes, and an EXPLICIT type-list forces the template
+  (resolveCallTarget retargets even off a plain stamp). Precedence: direct
+  plain > direct template > coerced plain. The probe sites: classifyCall
+  (free / namespace / block), inferMethodCall (methods AND the comparison /
+  index / unary operator families it serves), the binary CHAIN
+  (stampClassBinary's lazy fallbacks), and dispatchAssignInit (the
+  compound-assign leg) — the last three via instantiateOperatorTemplate,
+  which binds a template operator's pattern over the operands and hands
+  back the instance id. The cross-TU decl/def merge picks the
   matching header declaration AMONG the siblings. Uniform across every
   template kind, declaration site, and class flavor.
+  TEMPLATE OPERATORS (canon tmpl_operator.sl) are template methods named
+  `op<sym>` — the machinery rides whole. Grammar: the template-list parses
+  after the MAX-MUNCHED symbol (the `<`-family needs whitespace — `op< <T>`;
+  `op<<T>` is the shift symbol). Dispatch is INFERENCE-ONLY (an operator use
+  has no type-list position); a T in no parameter is unusable. Type-
+  dependent operator restrictions validate per INSTANCE
+  (instantiateAndClassify). EXCLUDED: template op= / op<-- / op<--> —
+  rejected at registration; the value-init probe and the transfer
+  invariant's canonical operators take concrete types.
   Its BODY stays in pristine parse state
   — every stage skips a kFunctionDef with non-empty type_params (constfold's walk,
   classify's walks, desugar's copyNode/flattenScope/collectGlobals, resolve's munge) —
@@ -997,10 +1017,10 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   always PARSES; the target decides at relocation, where its kind is known: a CLASS
   target (an external template method) rejects there ("An out-of-line template
   definition is not supported yet") — deferred with the cross-TU bundle.
-  RULES: a template method shares its name only with ARITY-DISJOINT template
-  siblings (the same arity-only overloading as free templates — the user-arg
-  count selects in the method funnel; template-vs-plain stays a collision,
-  both directions, checked at registration); base-chain shadowing stays normal — a
+  RULES: a template method shares its name with ARITY-DISJOINT template
+  siblings (the count selects) AND with plain methods — PLAIN BEATS
+  TEMPLATE in the method funnel (plain set probed silently first, template
+  fallback, explicit list forces); base-chain shadowing stays normal — a
   derived template shadows a base plain method and vice versa, and the
   static-bypass spelling (`Base:m(v)` / `Base:m<int>(v)`) pins the BASE's template
   through a shadow with NO template-specific code (the reframe makes the receiver
@@ -1289,9 +1309,12 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   spells an ALIAS operand as label=target ('T=float', 'Integer=int') — the
   bound types were unreadable through bare template-param labels.
 
-  DEFERRED: TYPE-ranked overload participation (arity-only overloading is
-  LANDED — same-arity same-name stays a collision; joining a PLAIN
-  function's overload set stays rejected both directions),
+  DEFERRED: TYPE-ranked overloading AMONG templates (arity-only is landed —
+  same-arity same-name TEMPLATES stay a collision; plain-beats-template
+  coexistence with plain functions is landed),
+  template op= / op<-- / op<--> (excluded by design — see TEMPLATE
+  OPERATORS above), unary template operators (a T in no parameter is
+  uninferable and operators take no explicit list),
   header-declared INCOMPLETE templates (cross-TU completion — the
   never-completed `...` error stands in), source REDIRECTION (`@impl`-style;
   the source must share the header's base name), a NESTED CLASS inside a
