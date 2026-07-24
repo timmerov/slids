@@ -42,6 +42,14 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                              std::vector<widen::TypeRef> const& args,
                              int file_id, int tok, diagnostic::Sink& diag);
 
+// ARITY-ONLY TEMPLATE OVERLOADING helpers — defined with the template
+// machinery (bottom of the file), declared in resolve.h for classify's
+// method funnel, forward-declared here for the call-target retarget and
+// the registration overlap check.
+void templateArityRange(parse::Tree const& tree, int tid, int& lo, int& hi);
+int retargetTemplateByArity(parse::Tree const& tree, int tid,
+                            std::size_t nargs);
+
 namespace {
 
 bool isPrintIntrinsic(std::string const& name) {
@@ -2522,6 +2530,15 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             {{entry.file_id, entry.tok, what + " declared here"}}});
         return false;
     }
+    // ARITY-ONLY TEMPLATE OVERLOADING: the argument count selects among the
+    // same-scope same-name templates (their ranges are disjoint by
+    // registration) — retarget BEFORE the type-list checks read the stamped
+    // def. No fit leaves the original stamp; the existing arity/inference
+    // diagnostics fire downstream.
+    if (entry.is_template) {
+        int pick = retargetTemplateByArity(tree, id, s.children.size());
+        if (pick >= 0) id = pick;
+    }
     s.resolved_entry_id = id;
     return true;
 }
@@ -4672,26 +4689,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 // list, and — at the point the body WOULD have resolved — snapshots resolve's
 // transient scope state so instantiation can re-enter resolution there later.
 
-// Any same-scope same-name function entry (template or not). `frame` < 0 means a
-// namespace/class member scope identified by `owner`; else a lexical frame.
-int findSameScopeFunction(parse::Tree const& tree, std::string const& name,
-                          int owner, int parent_frame) {
-    for (std::size_t id = 0; id < tree.entries.size(); id++) {
-        parse::Entry const& e = tree.entries[id];
-        if (e.kind != parse::EntryKind::kFunction || e.name != name) continue;
-        if (!e.tmpl_args.empty()) continue;   // an instance shares its template's name
-        if (owner >= 0 ? e.owner_ns_frame == owner
-                       : (e.owner_ns_frame < 0 && e.parent_frame_id == parent_frame))
-            return (int)id;
-    }
-    return -1;
-}
-
 void reportTemplateNameClash(diagnostic::Sink& diag, parse::Node const& node,
                              parse::Entry const& prev) {
     diagnostic::report(diag, {node.file_id, node.name_tok,
-        "A template function may not share its name with another function; '"
-        + node.name + "' owns its name (overloading a template is not supported).",
+        "A template function may not share its name with another function "
+        "unless both are templates with distinct parameter counts; '"
+        + node.name + "' collides (overloading is by ARITY only).",
         {{prev.file_id, prev.tok, "first declared here"}}});
 }
 
@@ -4711,66 +4714,108 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
             "A template function must have a body.", {}});
         return;
     }
-    // Collision, both directions: a template owns its name in its scope —
-    // EXCEPT the cross-TU decl/def pair: a header's bodyless template
-    // declaration MERGES with the same-signature definition in this file
-    // (the header's sibling), exactly as a plain function's decl + def merge.
-    int prev = findSameScopeFunction(tree, node.name, owner,
-                                     parse::currentFrameId(tree));
-    if (prev >= 0) {
-        auto pit = tree.templates.find(prev);
-        // A HEADER-owned template (its entry registered from the header's
-        // declaration — true whether or not a loaded source already merged a
-        // body onto the pattern).
-        bool prev_header_tmpl = pit != tree.templates.end() && pit->second.def
-            && fileIsImported(tree, tree.entries[prev].file_id);
-        bool prev_is_header_decl = prev_header_tmpl
+    // Collision scan — ARITY-ONLY OVERLOADING: same-name TEMPLATES coexist
+    // when their arity ranges are DISJOINT (the call's argument count then
+    // selects; there is no type-based ranking). A same-name PLAIN function
+    // still clashes (template-vs-plain overloading unsupported), as does an
+    // OVERLAPPING range. The cross-TU decl/def MERGE picks the matching
+    // header declaration AMONG the siblings (same type-list + same params).
+    int this_lo = 0, this_hi = 0;
+    for (auto const& p : node.params) {
+        if (!p || p->name == "_$recv") continue;
+        this_hi++;
+        if (p->children.empty()) this_lo++;
+    }
+    int merge_target = -1;    // the header decl this definition completes
+    int header_owned = -1;    // any header-owned same-name sibling
+    int plain_clash = -1;     // a same-name NON-template function
+    int overlap_clash = -1;   // a template sibling with an overlapping range
+    int first_header_decl = -1;
+    bool module_def = false;  // this node is the header's own module defining
+    int cur_frame = parse::currentFrameId(tree);
+    for (std::size_t id0 = 0; id0 < tree.entries.size(); id0++) {
+        parse::Entry const& c = tree.entries[id0];
+        if (c.kind != parse::EntryKind::kFunction || c.name != node.name)
+            continue;
+        if (!c.tmpl_args.empty()) continue;   // an instance shares the name
+        if (owner >= 0 ? c.owner_ns_frame != owner
+                       : (c.owner_ns_frame >= 0
+                          || c.parent_frame_id != cur_frame)) continue;
+        if (!c.is_template) { plain_clash = (int)id0; continue; }
+        auto pit = tree.templates.find((int)id0);
+        bool c_header = pit != tree.templates.end() && pit->second.def
+            && fileIsImported(tree, c.file_id);
+        bool c_header_decl = c_header
             && pit->second.def->kind == parse::Kind::kFunctionDecl;
-        // Only the header's OWN MODULE supplies the definition: a loaded
-        // template source, or the sibling TU compiling itself. A CONSUMER's
-        // same-name definition must not merge — it would be silently ignored
-        // (the consumer's flavors are declare-only) while shadowing the real
-        // one — nor collide as an overload: reject it by name.
+        // Only the header's OWN MODULE supplies definitions: a loaded
+        // template source, or the sibling TU compiling itself.
         bool def_here = node.kind == parse::Kind::kFunctionDef
             && (fileIsTemplateSource(tree, node.file_id)
                 || (!fileIsImported(tree, node.file_id)
-                    && fileIsSibling(tree, tree.entries[prev].file_id)));
-        if (prev_is_header_decl && def_here) {
-            if (node.type_params != pit->second.def->type_params
-                || node.params.size() != pit->second.def->params.size()) {
-                diagnostic::report(diag, {node.file_id, node.name_tok,
-                    "The template definition does not match the header's "
-                    "declaration of '" + node.name + "'.",
-                    {{pit->second.def->file_id, pit->second.def->name_tok,
-                      "declared here"}}});
-                return;
-            }
-            // Adopt the DEFINITION as the pattern (it has the body to clone);
-            // the entry — and its resolved pattern signature — stays.
-            pit->second.def = &node;
-            pit->second.host_list = host_list;
-            node.resolved_entry_id = prev;
-            tree.entries[prev].def_file_id = node.file_id;
-            tree.entries[prev].def_tok = node.name_tok;
-            return;
+                    && fileIsSibling(tree, c.file_id)));
+        if (def_here) module_def = true;
+        if (c_header_decl && first_header_decl < 0)
+            first_header_decl = (int)id0;
+        if (c_header_decl && def_here
+            && node.type_params == pit->second.def->type_params
+            && node.params.size() == pit->second.def->params.size()) {
+            merge_target = (int)id0;
+            break;
         }
-        if (prev_header_tmpl && node.kind == parse::Kind::kFunctionDef
-            && !fileIsImported(tree, node.file_id)
-            && !fileIsTemplateSource(tree, node.file_id)) {
-            diagnostic::report(diag, {node.file_id, node.name_tok,
-                "A template declared in a header is defined by its module's "
-                "source file; '" + node.name + "' cannot be defined here.",
-                {{tree.entries[prev].file_id, tree.entries[prev].tok,
-                  "declared here"}}});
-            return;
-        }
-        reportTemplateNameClash(diag, node, tree.entries[prev]);
+        if (c_header) header_owned = (int)id0;
+        int lo, hi;
+        templateArityRange(tree, (int)id0, lo, hi);
+        if (!(this_hi < lo || hi < this_lo)) overlap_clash = (int)id0;
+    }
+    if (merge_target >= 0) {
+        // Adopt the DEFINITION as the pattern (it has the body to clone);
+        // the entry — and its resolved pattern signature — stays.
+        auto pit = tree.templates.find(merge_target);
+        pit->second.def = &node;
+        pit->second.host_list = host_list;
+        node.resolved_entry_id = merge_target;
+        tree.entries[merge_target].def_file_id = node.file_id;
+        tree.entries[merge_target].def_tok = node.name_tok;
+        return;
+    }
+    if (module_def && first_header_decl >= 0) {
+        // The module's own definition matched NO header declaration.
+        auto pit = tree.templates.find(first_header_decl);
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "The template definition does not match the header's "
+            "declaration of '" + node.name + "'.",
+            {{pit->second.def->file_id, pit->second.def->name_tok,
+              "declared here"}}});
+        return;
+    }
+    if (header_owned >= 0 && node.kind == parse::Kind::kFunctionDef
+        && !fileIsImported(tree, node.file_id)
+        && !fileIsTemplateSource(tree, node.file_id)) {
+        // A CONSUMER's same-name definition must not merge — it would be
+        // silently ignored while shadowing the real one — nor overload it.
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "A template declared in a header is defined by its module's "
+            "source file; '" + node.name + "' cannot be defined here.",
+            {{tree.entries[header_owned].file_id,
+              tree.entries[header_owned].tok, "declared here"}}});
+        return;
+    }
+    if (plain_clash >= 0) {
+        reportTemplateNameClash(diag, node, tree.entries[plain_clash]);
+        return;
+    }
+    if (overlap_clash >= 0) {
+        reportTemplateNameClash(diag, node, tree.entries[overlap_clash]);
         return;
     }
     int other = owner >= 0 ? findMemberDeclared(tree, owner, node.name)
                            : parse::findInFrame(tree, parse::currentFrameId(tree),
                                                 node.name);
-    if (other >= 0) {
+    // A same-name FUNCTION TEMPLATE is a vetted arity sibling (the scan
+    // above passed it) — only a NON-template-function occupant collides.
+    if (other >= 0
+        && !(tree.entries[other].kind == parse::EntryKind::kFunction
+             && tree.entries[other].is_template)) {
         parse::Entry const& pe = tree.entries[other];
         reportNameCollision(diag, "Duplicate declaration of '" + node.name + "'.",
                             pe.file_id, pe.tok, node.file_id, node.name_tok);
@@ -7217,6 +7262,44 @@ bool isBareTypeParam(widen::TypeRef t, std::vector<std::string> const& names) {
         if (p == n) return true;
     }
     return false;
+}
+
+// The ARITY RANGE of a template pattern: [required, total] USER parameters
+// (`_$recv` excluded). ARITY-ONLY OVERLOADING: same-name templates in one
+// scope are legal iff their ranges are DISJOINT — a call's argument count
+// then selects exactly one candidate, and no type-based ranking is needed.
+void templateArityRange(parse::Tree const& tree, int tid, int& lo, int& hi) {
+    lo = 0;
+    hi = 0;
+    auto it = tree.templates.find(tid);
+    if (it == tree.templates.end() || !it->second.def) return;
+    for (auto const& p : it->second.def->params) {
+        if (!p || p->name == "_$recv") continue;
+        hi++;
+        if (p->children.empty()) lo++;   // no default -> required
+    }
+}
+
+// The same-scope template SIBLING whose arity range admits `nargs` — the
+// entry itself when it fits, a same-name sibling otherwise, -1 when none
+// does. The selection half of arity-only overloading; shared by the free-
+// call retarget (resolveCallTarget), classify's method funnel, and the
+// --instantiate demand loop.
+int retargetTemplateByArity(parse::Tree const& tree, int tid,
+                            std::size_t nargs) {
+    parse::Entry const& e = tree.entries[tid];
+    for (std::size_t id = 0; id < tree.entries.size(); id++) {
+        parse::Entry const& c = tree.entries[id];
+        if (c.kind != parse::EntryKind::kFunction || !c.is_template
+            || !c.tmpl_args.empty()   // an instance shares its template's name
+            || c.name != e.name
+            || c.owner_ns_frame != e.owner_ns_frame
+            || c.parent_frame_id != e.parent_frame_id) continue;
+        int lo, hi;
+        templateArityRange(tree, (int)id, lo, hi);
+        if ((int)nargs >= lo && (int)nargs <= hi) return (int)id;
+    }
+    return -1;
 }
 
 int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,

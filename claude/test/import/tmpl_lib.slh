@@ -38,6 +38,12 @@ Box<T>(T^ p_ = nullptr) {
 /* a function template, declared; its definition merges in tmpl_lib.sl. */
 T tsum<T>(T a, T b);
 
+/* ARITY-ONLY template overloading across the seam: two same-name templates
+   with distinct parameter counts; a demand spelling carries no arity, so the
+   --instantiate pass emits every fitting sibling. */
+T tpair<T>(T a);
+T tpair<T>(T a, T b);
+
 /* pointer-friendly twins: `tpick`'s body is self-contained (a local-type
    instance can inline it); `tpock`'s body leans on a tmpl_lib-PRIVATE helper,
    so only tmpl_lib's own TU can emit its flavors. */

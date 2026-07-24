@@ -1,0 +1,37 @@
+/*
+dump prints the type name and value of a variable.
+uses the stringification operator #.
+*/
+
+import dump;
+import string;
+
+/*
+usage:
+    int x = 42;
+    dump(#x);
+output:
+    int x = 42
+*/
+void dump<T>(
+    DumpTuple<T>^ tuple
+) {
+    println(String + tuple^[0] + ":" + tuple^[1] + ": "
+        + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
+}
+
+/*
+usage:
+    int x = 42;
+    dump(#x, "37");
+output:
+    int x = 42 : 37;
+*/
+void dump<T>(
+    DumpTuple<T>^ tuple,
+    char[] expected
+) {
+    println(String + tuple^[0] + ":" + tuple^[1] + ": "
+        + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^
+        + " : " + expected);
+}

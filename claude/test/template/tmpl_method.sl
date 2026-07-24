@@ -96,6 +96,10 @@ Jar(int n_ = 0) {
        instance's param is `(const S)^`; uses auto-deref. */
     S same<S>(S s) { return s; }
     int peek<S>(S s) { return s.x_ + n_; }
+    /* ARITY-ONLY OVERLOADING on method templates: distinct counts coexist;
+       the call's argument count selects. */
+    T pairup<T>(T a) { return a + n_; }
+    T pairup<T>(T a, T b) { return a + b; }
     /* method self-recursion: the memo is seeded before the body resolves. */
     T fact<T>(T n) {
         if (n <= 1) { return n; }
@@ -304,6 +308,11 @@ int32 main() {
     Vec hd = oi.dub(cv); __println("f1 = " + hd.x_);
     Vec kd = kid.echoK(cv); __println("f2 = " + kd.x_);
     Vec vd2 = c.ident(cv); __println("f3 = " + vd2.x_);
+
+    /* arity-only overloading on a method template: count selects. */
+    int y1 = j.pairup(1); __println("y1 = " + y1);
+    int y2 = j.pairup(2, 3); __println("y2 = " + y2);
+    int y3 = j.pairup<int>(4); __println("y3 = " + y3);
 
     /* explicit type arguments on a plain method. */
     //-EXPECT-ERROR: is not a template method

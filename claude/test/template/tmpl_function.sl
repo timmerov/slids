@@ -115,10 +115,20 @@ T make<T>() {
 //int clash(int a) { return a; }
 //T clash<T>(T v) { return v; }
 
-/* two templates may not share a name (overloads deferred). */
+/* ARITY-ONLY OVERLOADING: same-name templates with DISTINCT parameter
+   counts coexist; the call's argument count selects. */
+T twoWay<T>(T a) { return a + a; }
+T twoWay<T>(T a, T b) { return a + b + b; }
+
+/* two templates of the SAME arity may not share a name (no type ranking). */
 //-EXPECT-ERROR: may not share its name
 //T dup<T>(T v) { return v; }
 //U dup<U>(U v) { return v; }
+
+/* overlap counts by RANGE — a default makes [1,2] collide with [1,1]. */
+//-EXPECT-ERROR: may not share its name
+//T dfl<T>(T v) { return v; }
+//T dfl<T>(T v, T w = 3) { return v + w; }
 
 /* a mixed signature: T infers from the first argument; the concrete int64
    parameter is a not-template part — its argument converts normally. */
@@ -447,6 +457,13 @@ int32 main() {
        the convention is for TEMPLATE-typed params only. */
     //-EXPECT-ERROR: must be a pointer
     //int ncc = concrete(1, p1); __println("ncc = " + ncc);
+
+    /* ARITY-ONLY OVERLOADING: the count selects, inferred and explicit; a
+       class binding rides the convention through either arity. */
+    int w1 = twoWay(4); __println("w1 = " + w1);
+    int w2 = twoWay(4, 5); __println("w2 = " + w2);
+    int w3 = twoWay<int>(6); __println("w3 = " + w3);
+    Pair wp = twoWay(p1, p2); __println("wp = " + wp.x_ + "," + wp.y_);
 
     return 0;
 }

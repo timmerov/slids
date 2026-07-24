@@ -86,6 +86,9 @@ TClass<T>(T t_) {
     }
     SClass<S>(S s_) { }
     UClass<U, T>(U u_, T t_) { }
+    /* arity-only overloading inside a class-template flavor. */
+    S choose<S>(S s) { return s; }
+    S choose<S>(S a, S b) { return a + b; }
     /* hoisted ALIAS templates ride the same sub-pattern rules: own list,
        bare-host qualifier, re-list an outer param to use it. */
     alias Ref<S> = S^;
@@ -390,6 +393,10 @@ int32 main() {
     Cp ca(3);
     Cp cb(4);
     int r8 = dp.both(ca, cb); __println("r8 = " + r8);
+
+    /* arity-only overloading inside a flavor: the count selects per flavor. */
+    int r9 = ti.choose(3); __println("r9 = " + r9);
+    int r10 = ti.choose(3, 4); __println("r10 = " + r10);
 
     return 0;
 }

@@ -6,6 +6,9 @@ mid
 tr dtor 3
 fs = 7
 f8 = 3
+t1 = 10
+t2 = 17
+t3 = 14
 tr = 7
 ms = 10
 mx = 16

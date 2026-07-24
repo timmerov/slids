@@ -865,9 +865,20 @@ each flavor is compiled ONCE per project, by the template's own source TU)
 
   A template (`T add<T>(T a, T b) { ... }`) registers as an ordinary kFunction entry
   (Entry.is_template) in whatever frame declares it — file, namespace, or block — so
-  scoping, shadowing, and duplicate detection are the normal ones. A template OWNS its
-  name: any same-scope same-name function or template is a compile error, both
-  directions (overload participation deferred). Its BODY stays in pristine parse state
+  scoping, shadowing, and duplicate detection are the normal ones. ARITY-ONLY
+  OVERLOADING: same-scope same-name TEMPLATES coexist iff their arity ranges —
+  [required, total] user params, `_$recv` excluded (templateArityRange) — are
+  DISJOINT; the call's ARGUMENT COUNT then selects (retargetTemplateByArity at
+  resolveCallTarget for free/namespace/block calls; the tcands filter in
+  classify's method funnel; the --instantiate demand loop instantiates EVERY
+  fitting sibling, since a demand spelling carries no arity — an uncalled
+  arity emits as unused external code, bloat not breakage). Overlapping
+  ranges (including via DEFAULTS — [1,2] collides with [1,1]) and
+  template-vs-plain, both directions, stay compile errors: overloading is by
+  ARITY only, never by type ranking. The cross-TU decl/def merge picks the
+  matching header declaration AMONG the siblings. Uniform across every
+  template kind, declaration site, and class flavor.
+  Its BODY stays in pristine parse state
   — every stage skips a kFunctionDef with non-empty type_params (constfold's walk,
   classify's walks, desugar's copyNode/flattenScope/collectGlobals, resolve's munge) —
   until a call binds the type-list. An uninstantiated body is therefore UNCHECKED
@@ -974,8 +985,10 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   always PARSES; the target decides at relocation, where its kind is known: a CLASS
   target (an external template method) rejects there ("An out-of-line template
   definition is not supported yet") — deferred with the cross-TU bundle.
-  RULES: a template method OWNS its name within its class (no overload set, both
-  directions, checked at registration); base-chain shadowing stays normal — a
+  RULES: a template method shares its name only with ARITY-DISJOINT template
+  siblings (the same arity-only overloading as free templates — the user-arg
+  count selects in the method funnel; template-vs-plain stays a collision,
+  both directions, checked at registration); base-chain shadowing stays normal — a
   derived template shadows a base plain method and vice versa, and the
   static-bypass spelling (`Base:m(v)` / `Base:m<int>(v)`) pins the BASE's template
   through a shadow with NO template-specific code (the reframe makes the receiver
@@ -1264,7 +1277,9 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   spells an ALIAS operand as label=target ('T=float', 'Integer=int') — the
   bound types were unreadable through bare template-param labels.
 
-  DEFERRED: overload participation,
+  DEFERRED: TYPE-ranked overload participation (arity-only overloading is
+  LANDED — same-arity same-name stays a collision; joining a PLAIN
+  function's overload set stays rejected both directions),
   header-declared INCOMPLETE templates (cross-TU completion — the
   never-completed `...` error stands in), source REDIRECTION (`@impl`-style;
   the source must share the header's base name), a NESTED CLASS inside a

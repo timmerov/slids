@@ -5141,21 +5141,44 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     std::vector<parse::Node*> uargs;
     for (std::size_t i = 1; i < s.children.size(); i++) uargs.push_back(s.children[i].get());
 
+    // TEMPLATE candidates: the ownership rule keeps templates and plain
+    // methods apart, so the set is all-template or all-plain. ARITY-ONLY
+    // OVERLOADING: same-name method templates carry disjoint arity ranges —
+    // the user-arg count selects the one candidate.
+    std::vector<int> tcands;
+    for (int c0 : cands) {
+        if (tree.entries[c0].is_template) tcands.push_back(c0);
+    }
+
     // Explicit type arguments only make sense on a template method.
-    if (!s.tmpl_args.empty()
-        && !(cands.size() == 1 && tree.entries[cands[0]].is_template)) {
+    if (!s.tmpl_args.empty() && tcands.empty()) {
         diagnostic::report(diag, {s.file_id, s.name_tok,
             "'" + s.name + "' is not a template method.", {}});
         return;
     }
 
     int methodId;
-    if (cands.size() == 1 && tree.entries[cands[0]].is_template) {
-        // A TEMPLATE method (its collision rule makes it the sole member of its
-        // name): bind the type-list — explicit, or unified from the USER args
+    if (!tcands.empty()) {
+        int pick = -1;
+        for (int c0 : tcands) {
+            int lo, hi;
+            resolve::templateArityRange(tree, c0, lo, hi);
+            if ((int)uargs.size() >= lo && (int)uargs.size() <= hi) {
+                pick = c0;
+                break;
+            }
+        }
+        if (pick < 0) {
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "Wrong number of arguments to template method '" + s.name
+                + "': no overload takes "
+                + std::to_string(uargs.size()) + ".", {}});
+            return;
+        }
+        // Bind the type-list — explicit, or unified from the USER args
         // against the patterns behind the receiver slot — instantiate, and
         // proceed exactly as with a plain single method.
-        methodId = classifyTemplateMethodCall(tree, s, cands[0], uargs, diag);
+        methodId = classifyTemplateMethodCall(tree, s, pick, uargs, diag);
         if (methodId < 0) return;
     } else if (cands.size() == 1) {
         // Single method: keep the detailed arity error (a RANGE now — defaults make
@@ -7623,15 +7646,19 @@ void classifyInstantiationDemands(parse::Tree& tree, diagnostic::Sink& diag) {
         widen::TypeRef t = widen::intern(d.spelling);
         if (widen::form(t) != widen::Type::Form::kTmplUse) continue;  // reported
         std::string name = widen::get(t).name;
-        int tid = -1;
+        // ARITY-ONLY OVERLOADING: a demand spelling names template + type
+        // args but carries NO arity, so it addresses EVERY same-name sibling
+        // whose type-list fits — instantiate them all (an arity the consumer
+        // never called emits as unused external code: bloat, not breakage).
+        std::vector<int> tids;
         auto colon = name.find(':');
         if (colon == std::string::npos) {
             for (std::size_t i = 0; i < tree.entries.size(); i++) {
                 parse::Entry const& e = tree.entries[i];
                 if (e.kind == parse::EntryKind::kFunction && e.is_template
+                    && e.tmpl_args.empty()
                     && e.owner_ns_frame < 0 && e.name == name) {
-                    tid = (int)i;
-                    break;
+                    tids.push_back((int)i);
                 }
             }
         } else {
@@ -7651,35 +7678,40 @@ void classifyInstantiationDemands(parse::Tree& tree, diagnostic::Sink& diag) {
             for (std::size_t i = 0; frame >= 0 && i < tree.entries.size(); i++) {
                 parse::Entry const& e = tree.entries[i];
                 if (e.kind == parse::EntryKind::kFunction && e.is_template
+                    && e.tmpl_args.empty()
                     && e.owner_ns_frame == frame && e.name == member) {
-                    tid = (int)i;
-                    break;
+                    tids.push_back((int)i);
                 }
             }
         }
-        auto ti = tid >= 0 ? tree.templates.find(tid) : tree.templates.end();
-        if (ti == tree.templates.end()) {
+        if (tids.empty()) {
             diagnostic::report(diag, {-1, -1,
                 "Unknown template in instantiation demand '" + d.spelling
                 + "'.", {}});
             continue;
         }
         std::vector<widen::TypeRef> slots = widen::get(t).slots;
-        if (slots.size() != ti->second.def->type_params.size()) {
+        bool any_fit = false;
+        for (int tid : tids) {
+            auto ti = tree.templates.find(tid);
+            if (ti == tree.templates.end()) continue;
+            if (slots.size() != ti->second.def->type_params.size()) continue;
+            any_fit = true;
+            std::vector<widen::TypeRef> bound;
+            for (widen::TypeRef s : slots)
+                bound.push_back(widen::removeConst(widen::deepStrip(s)));
+            parse::Node stub;
+            stub.kind = parse::Kind::kCallExpr;
+            stub.name = d.spelling;
+            stub.file_id = -1;
+            stub.tok = -1;
+            instantiateAndClassify(tree, tid, bound, stub, diag);
+        }
+        if (!any_fit) {
             diagnostic::report(diag, {-1, -1,
                 "Wrong number of template arguments in instantiation demand '"
                 + d.spelling + "'.", {}});
-            continue;
         }
-        std::vector<widen::TypeRef> bound;
-        for (widen::TypeRef s : slots)
-            bound.push_back(widen::removeConst(widen::deepStrip(s)));
-        parse::Node stub;
-        stub.kind = parse::Kind::kCallExpr;
-        stub.name = d.spelling;
-        stub.file_id = -1;
-        stub.tok = -1;
-        instantiateAndClassify(tree, tid, bound, stub, diag);
     }
 }
 

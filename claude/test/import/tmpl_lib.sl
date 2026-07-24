@@ -61,6 +61,10 @@ Box<T>() {
 /* the function template's definition merges with the header's declaration. */
 T tsum<T>(T a, T b) { return a + b; }
 
+/* the ARITY pair: each definition merges with its same-arity declaration. */
+T tpair<T>(T a) { return a + a; }
+T tpair<T>(T a, T b) { return a + b + b; }
+
 /* self-contained body: a consumer's local-type instance can inline it. */
 T tpick<T>(T a, T b) { return b; }
 

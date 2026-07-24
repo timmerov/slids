@@ -11,22 +11,13 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
-# The runnable programs (a work-in-progress sandbox). `demo` and `string_test` are
-# each a standalone program that `import string;` and link the library's `string.o`.
-# `vector_test` consumes the vector TEMPLATE library — vector.sl compiles after it
-# with --instantiate (the .sli demand flow).
+# The runnable programs (a work-in-progress sandbox). `string_test` and
+# `vector_test` exercise their libraries; `galaxy` is the scratch sandbox — it
+# consumes all of them (dump + math + string + vector).
 SAMPLES = \
-	demo \
+	galaxy \
 	string_test \
 	vector_test
-
-# Every translation unit linked into the demo binary: the program plus each
-# imported library's .sl. `import string;` is a textual include of string.slh
-# (declarations only) — the DEFINITIONS live in string.sl, its sibling, which is
-# compiled to its own object and linked in here.
-OBJS = \
-	demo \
-	string
 
 .PHONY: all clean negatives positives $(SAMPLES)
 
@@ -34,16 +25,12 @@ all: $(SAMPLES)
 
 negatives:
 
-# Only string_test carries a golden. `demo` is the scratch sandbox — its output changes
-# freely as work in progress moves through it, so pinning it would just be churn.
+# Only string_test carries a golden. `galaxy` is work in progress — its output
+# changes freely, so pinning it would just be churn.
 positives: all
 	@../run_positives.sh $(DIR) string_test
 
-demo: $(BIN_DIR)/demo
 string_test: $(BIN_DIR)/string_test
-
-$(BIN_DIR)/demo: $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(OBJS)))
-	$(CXX) $^ -o $@
 
 # string_test links its own object plus the library's string.o (its sibling definitions).
 $(BIN_DIR)/string_test: $(BUILD_DIR)/string_test.o $(BUILD_DIR)/string.o
@@ -54,13 +41,27 @@ vector_test: $(BIN_DIR)/vector_test
 $(BIN_DIR)/vector_test: $(BUILD_DIR)/vector_test.o $(BUILD_DIR)/vector.o
 	$(CXX) $^ -o $@
 
-# THE POST-COMPILE PRE-LINK STAGE (the test/import shape): vector.sl is a
-# TEMPLATE source — it compiles AFTER its consumer, reading the demand pool
-# (vector_test's .sli, dumped beside its .ll) with --instantiate, so every
-# demanded flavor is emitted once, externally, by the library's own TU.
-$(BUILD_DIR)/vector.ll: vector.sl $(BUILD_DIR)/vector_test.ll $(SLIDSC)
+# galaxy consumes every library: dump + string + vector are slids TUs linked in;
+# math.slh's `import { }` block binds libm, so the link needs -lm.
+galaxy: $(BIN_DIR)/galaxy
+
+$(BIN_DIR)/galaxy: $(BUILD_DIR)/galaxy.o $(BUILD_DIR)/dump.o \
+		$(BUILD_DIR)/string.o $(BUILD_DIR)/vector.o
+	$(CXX) $^ -lm -o $@
+
+# THE POST-COMPILE PRE-LINK STAGE (the test/import shape): a template source
+# compiles AFTER its consumers, reading the demand pool (each consumer's .sli,
+# dumped beside its .ll) with --instantiate, so every demanded flavor is
+# emitted once, externally, by the library's own TU. vector has TWO consumers
+# (vector_test + galaxy); dump's consumer is galaxy.
+$(BUILD_DIR)/vector.ll: vector.sl $(BUILD_DIR)/vector_test.ll \
+		$(BUILD_DIR)/galaxy.ll $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d --instantiate $(BUILD_DIR)
+
+$(BUILD_DIR)/dump.ll: dump.sl $(BUILD_DIR)/galaxy.ll $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d --instantiate $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@

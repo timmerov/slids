@@ -1,0 +1,33 @@
+/*
+dump prints the type name and value of a variable.
+uses the stringification operator #.
+*/
+
+/*
+this is the tuple type used by the dump templates.
+*/
+alias DumpTuple<T> = (
+    char[],  // ##file
+    char[],  // ##line
+    char[],  // ##type
+    char[],  // ##name
+    T^       // value
+);
+
+/*
+usage:
+    int x = 42;
+    dump(#x);
+output:
+    int x = 42
+*/
+void dump<T>(DumpTuple<T>^ tuple);
+
+/*
+usage:
+    int x = 42;
+    dump(#x, "37");
+output:
+    int x = 42 : 37;
+*/
+void dump<T>(DumpTuple<T>^ tuple, char[] expected);

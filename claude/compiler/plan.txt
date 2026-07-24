@@ -2188,6 +2188,33 @@ Phase 9 — templates
     class bindings across namespace/block/nested-in-template functions,
     hoisted/derived/virtual/template flavors, the outer-T member-template
     param (tmpl_nested r8), and the concrete-param rejection.
+  * ARITY-ONLY template overloading                      LANDED 2026-07-23
+    Driven by dump.slh (the sandbox's two same-name `dump<T>` arities).
+    THE RULE: same-scope same-name templates coexist iff their ARITY RANGES
+    — [required, total] user params, `_$recv` excluded — are DISJOINT
+    (defaults widen the range: [1,2] collides with [1,1]); the call's
+    ARGUMENT COUNT selects, so no type ranking exists. Template-vs-plain
+    stays rejected both directions; same-arity same-name stays a collision
+    (the old negatives still pass — the message keeps its "may not share
+    its name" head). UNIFORM: free / namespace / block / nested-in-template
+    functions, method templates in every class flavor (incl. class-template
+    flavors — the registration funnel is shared, so the relaxation was
+    free there). Mechanics: registerTemplateFunction's single-prev check
+    became a SIBLING SCAN (plain-clash / overlap-clash / the cross-TU
+    decl-def MERGE now picks the matching-arity header declaration among
+    siblings; a module def matching NO declaration keeps the "does not
+    match" error); templateArityRange + retargetTemplateByArity exported
+    for the three selection sites — resolveCallTarget (free calls, BEFORE
+    the type-list checks read the stamped def), classify's method funnel
+    (the tcands filter replaces the sole-template assumption), and the
+    --instantiate demand loop, which instantiates EVERY fitting sibling
+    (a demand spelling carries no arity; an uncalled arity emits as unused
+    external code — bloat, not breakage — noted for future refinement).
+    Instance symbols already encode param types (Itanium), so same-name
+    instances never collide. Canon: tmpl_function twoWay + dfl negative,
+    tmpl_method pairup, tmpl_nested choose (per-flavor), cross-TU
+    tmpl_lib.slh/.sl tpair through the .sli chain (one demand spelling,
+    both flavors emitted). Suite green; dump.slh compiles.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

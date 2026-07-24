@@ -48,6 +48,12 @@ int32 main() {
     int fs = tsum(3, 4); __println("fs = " + fs);
     int8 f8 = tsum<int8>(1, 2); __println("f8 = " + f8);
 
+    /* the ARITY-overloaded pair across the seam: the argument count selects;
+       one demand spelling (`tpair<int>`) emits BOTH aggregated flavors. */
+    int t1 = tpair(5); __println("t1 = " + t1);
+    int t2 = tpair(5, 6); __println("t2 = " + t2);
+    int t3 = tpair<int>(7); __println("t3 = " + t3);
+
     /* the alias template (type-level only — no demand recorded). */
     TRef<int> tr = ^fs; __println("tr = " + tr^);
 
