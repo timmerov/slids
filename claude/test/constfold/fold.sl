@@ -33,12 +33,17 @@ those are the three computation types.
 the computation type that is compatible with two constants depends on their
 kinds and values.
 if both kinds are float use float64,
-else if one kind is float then compile error,
+else if one kind is float then see below,
 else if both kinds are unsigned use uint64,
 else if the nominal size of one constant is uint64
     if the value of the other constant is negative then compile error
     else use uint64,
 else use int64.
+
+integer and float types may be mixed for a subset of binary math operations:
++ - / * %.
+all other usages are compile error.
+the integer is silently converted to float.
 
 constants are stored as strings.
 the kind field determines how the numeric value is converted to a string.

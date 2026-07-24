@@ -73,7 +73,7 @@ const float64 kCentralBulgeRadius = kCentralBulgeRadiusLY * kMetersPerLightyear;
 const float64 kRingsMass = kGalaxyMass - kCentralBulgeMass;
 
 /* estimated rotation period of the galaxy: 225 to 250 million years. */
-const float64 kRotationPeriodYr = 237_000_000;
+const float64 kRotationPeriodYr = 237_000_000.0;
 const float64 kRotationPeriod = kRotationPeriodYr * kSecondsPerYear;
 
 /* we assume the entire galaxy rotates as a rigid disk. */
@@ -166,6 +166,9 @@ Galaxy(
         /* the mass of each slice. */
         on_mass = on_ring^.mass_ / on_ring^.slices_;
         by_mass = by_ring^.mass_ / by_ring^.slices_;
+
+        // ==tsc==
+        on_mass;
 
         /* radius of each ring. */
         on_r = on_ring^.radius_;

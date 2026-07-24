@@ -87,6 +87,42 @@ std::string preferredSpelling(std::string const& t) {
     return t;
 }
 
+// THE ARITHMETIC CONVENIENCE (canon widen.sl rule 1a): for the five
+// arithmetic operators (+ - * / % and their aug-assign twins) an INTEGER
+// operand silently converts to the FLOAT operand's type — the result is the
+// float side's type, alias label intact. Everything else — comparisons
+// (the 2^53 equality trap stays fenced), shifts, bitwise, logical — keeps
+// the family wall: "No common type". bool stays excluded (its own kind);
+// char rides as its implementation integer. Returns the float side's type,
+// or kNoType when the rule does not apply.
+widen::TypeRef arithFloatMix(widen::TypeRef l, widen::TypeRef r,
+                             std::string const& op) {
+    if (op != "+" && op != "-" && op != "*" && op != "/" && op != "%")
+        return widen::kNoType;
+    widen::TypeKind lk, rk;
+    if (!widen::classify(widen::strip(l), lk)
+        || !widen::classify(widen::strip(r), rk)) return widen::kNoType;
+    auto isInt = [](widen::TypeKind const& k) {
+        return k.cat == widen::Category::kSignedInt
+            || k.cat == widen::Category::kUnsignedInt;
+    };
+    if (lk.cat == widen::Category::kFloat && isInt(rk)) return l;
+    if (rk.cat == widen::Category::kFloat && isInt(lk)) return r;
+    return widen::kNoType;
+}
+
+// The arithmetic convenience's LITERAL half: an integer literal operand in an
+// admitted mix re-kinds as a WEAK float literal in place (decimal text is a
+// valid float spelling), so downstream literal-widening never sees a
+// cross-family ask. char/bool literals stay strict (not "integers").
+void flexIntLiteralToFloat(parse::Node& n, widen::TypeRef float_side) {
+    if (n.kind != parse::Kind::kIntLiteral
+        && n.kind != parse::Kind::kUintLiteral) return;
+    n.kind = parse::Kind::kFloatLiteral;
+    n.strong_type = widen::kNoType;           // weak — the partner governs
+    n.inferred_type = widen::strip(float_side);
+}
+
 // Spell a type for a diagnostic. An ALIAS spells as label AND target —
 // 'T=int', 'Integer=int' — so a message like "No common type for 'T' and 'X'"
 // says what the labels are actually bound to.
@@ -2345,11 +2381,22 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
 
             widen::TypeRef optyRef;
             if (!widen::commonType(lhs.inferred_type, rhs.inferred_type, optyRef)) {
-                diagnostic::report(diag, {e.file_id, e.tok,
-                    "No common type for '" + lt + "' and '"
-                    + rt + "'; use an explicit type conversion.",
-                    {}});
-                return;
+                // The arithmetic convenience: + - * / % convert an integer
+                // operand to the float operand's type; everything else keeps
+                // the family wall.
+                optyRef = arithFloatMix(lhs.inferred_type, rhs.inferred_type, op);
+                if (optyRef == widen::kNoType) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "No common type for '" + lt + "' and '"
+                        + rt + "'; use an explicit type conversion.",
+                        {}});
+                    return;
+                }
+                // A weak INT literal operand re-kinds as a float literal
+                // outright (its decimal text is a valid float spelling), so
+                // the literal-widening path never sees a cross-family ask.
+                flexIntLiteralToFloat(lhs, optyRef);
+                flexIntLiteralToFloat(rhs, optyRef);
             }
             if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
@@ -3118,8 +3165,8 @@ void checkValueWiden(widen::TypeRef dest, widen::TypeRef src,
     widen::TypeKind st, dt;
     if (!widen::classify(src, st) || !widen::classify(dest, dt)) return;
     if (st.cat == dt.cat && st.bits == dt.bits) return;
-    std::string s = widen::spellOrEmpty(src);
-    std::string d = widen::spellOrEmpty(dest);
+    std::string s = spellForMessage(src);    // an alias spells label=target
+    std::string d = spellForMessage(dest);
     using C = widen::Category;
     auto narrow = [&] {
         diagnostic::report(diag, {file_id, tok,
@@ -6476,11 +6523,20 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             inferExpr(tree, rhs, s.return_type, diag);
             widen::TypeRef optyRef;
             if (!widen::commonType(s.return_type, rhs.inferred_type, optyRef)) {
-                diagnostic::report(diag, {s.file_id, s.tok,
-                    "No common type for '" + spellForMessage(s.return_type) + "' and '"
-                    + spellForMessage(rhs.inferred_type)
-                    + "'; use an explicit type conversion.", {}});
-                return;
+                // The arithmetic convenience's aug twins (+= -= *= /= %=): an
+                // INTEGER rhs converts to a FLOAT lvalue's type. The reverse
+                // (int lvalue, float rhs) stays rejected — the store-back
+                // would narrow.
+                optyRef = arithFloatMix(s.return_type, rhs.inferred_type, op);
+                if (optyRef == widen::kNoType
+                    || widen::strip(optyRef) != widen::strip(s.return_type)) {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "No common type for '" + spellForMessage(s.return_type) + "' and '"
+                        + spellForMessage(rhs.inferred_type)
+                        + "'; use an explicit type conversion.", {}});
+                    return;
+                }
+                flexIntLiteralToFloat(rhs, optyRef);
             }
             if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {s.file_id, s.tok,

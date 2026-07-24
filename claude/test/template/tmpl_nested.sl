@@ -232,10 +232,9 @@ Gauge<T>() {
 //-EXPECT-ERROR: Wrong number of template arguments
 //int bada() { TClass<int> t(1); return t.smethod<int, int>(5); }
 
-/* a cross-family mix inside a flavor's method instance: the message spells
-   each ALIAS as label=target, so the bound types are visible through T/X. */
-//-EXPECT-ERROR: No common type for 'T=float' and 'X=int'
-//float badm() { Box<float> bb(0.5); return bb.viaT(2); }
+/* the arithmetic convenience reaches template bindings: T=float + X=int
+   inside viaT's body now converts (was the 'T=float'/'X=int' negative; the
+   alias label=target message is pinned by expression/mixed.sl's comparison). */
 
 /* an alias target may not use an UNLISTED outer param — the hoisted list is
    self-contained for aliases too. */
@@ -273,6 +272,9 @@ int32 main() {
     Box<float> bf(0.5);
     float f5 = bf.viaT(1.5); __println("f5 = " + f5);
     float f6 = bf.echo(0.25); __println("f6 = " + f6);
+    /* the arithmetic convenience through template bindings: T=float, X=int —
+       `v_ + x` converts the int operand. */
+    float f7 = bf.viaT(2); __println("f7 = " + f7);
 
     /* two class params under one method template. */
     Pair<int, int8> p(100, 27);

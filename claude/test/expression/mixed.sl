@@ -126,24 +126,20 @@ int32 main() {
     // int64 bad_nc = bu64 + bi8;
     // __println("bad_nc= " + bad_nc);
 
-    // -- negative: int and float never silently mix --
-    //-EXPECT-ERROR: No common type for 'int16' and 'float32'; use an explicit type conversion.
-    // float32 bad_i16_f32 = bi16 + bf32;
-    // __println("bad_i16_f32= " + bad_i16_f32);
-    //-EXPECT-ERROR: No common type for 'int32' and 'float32'; use an explicit type conversion.
-    // float64 bad_i32_f32 = bi32 + bf32;
-    // __println("bad_i32_f32= " + bad_i32_f32);
-    //-EXPECT-ERROR: No common type for 'float32' and 'int'; use an explicit type conversion.
-    // float32 bad_f32_intlit = bf32 + 3;
-    // __println("bad_f32_intlit= " + bad_f32_intlit);
+    // -- the arithmetic convenience: + - * / % mix int into float (widen.sl
+    //    rule 1a); comparisons keep the family wall (negative below). --
+    float32 mixp_i16_f32 = bi16 + bf32;   __println("mixp_i16_f32= " + mixp_i16_f32);
+    float32 mixp_i32_f32 = bi32 * bf32;   __println("mixp_i32_f32= " + mixp_i32_f32);
+    float32 mixp_f32_lit = bf32 + 3;      __println("mixp_f32_lit= " + mixp_f32_lit);
 
-    // -- negative: ALIAS operands spell label=target, so the bound types show --
+    // -- negative: ALIAS operands spell label=target, so the bound types show
+    //    (a COMPARISON — arithmetic would now convert). --
     //-EXPECT-ERROR: No common type for 'Integer=int' and 'Flt=float'; use an explicit type conversion.
     // alias Integer = int;
     // alias Flt = float;
     // Integer bad_al_a = 1;
     // Flt bad_al_b = 1.5;
-    // int bad_al = bad_al_a + bad_al_b;
+    // bool bad_al = bad_al_a < bad_al_b;
     // __println("bad_al= " + bad_al);
     //-EXPECT-ERROR: Cannot implicitly convert 'float' to 'int8'; use an explicit type conversion.
     // int8 bad_fltlit_int = 3.0;

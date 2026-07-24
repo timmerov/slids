@@ -50,3 +50,6 @@ r_not_mul= 100
 r_and_sub= 99
 r_lt_or= 101
 r_not_xor= 5
+mixp_i16_f32= 11.5
+mixp_i32_f32= 150
+mixp_f32_lit= 4.5

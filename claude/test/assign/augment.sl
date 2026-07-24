@@ -107,6 +107,11 @@ int32 main() {
     int32 xint_l = 0;  __println("xint_l= " + xint_l);
     xint_l ||= 5;      __println("xint_l ||= 5 → " + xint_l);  // 1 (0 || 5 = true; zext to i32)
 
+    // -- the arithmetic convenience's aug twins (widen.sl rule 1a): an int
+    //    rhs converts to a FLOAT lvalue; bitwise aug stays walled (negative). --
+    xf32 += 2;      __println("xf32p= " + xf32);
+    xf32 *= xi32;   __println("xf32m= " + xf32);
+
     // -- negative augassigns --
     // Setup vars used only by the negatives below; declared so the //-EXPECT-ERROR
     // runner's uncommented lines find them in scope.

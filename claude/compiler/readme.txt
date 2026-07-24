@@ -134,6 +134,18 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
   * widen  — the established numeric rules: a weak literal flexes; a strong-const
     or typed value widens WITHIN family only (narrow / sign-cross / int<->float
     cross-family reject). intptr is in the integer family here.
+    THE ONE cross-family admission is THE ARITHMETIC CONVENIENCE (canon
+    widen.sl rule 1a + fold.sl 43-46): for + - * / % (and their aug twins on
+    a FLOAT lvalue) an INTEGER operand silently converts to the float
+    operand's type — classify's binary/aug arms try arithFloatMix after
+    commonType fails, an int LITERAL re-kinds as a weak float literal in
+    place (flexIntLiteralToFloat), constfold folds mixed literal pairs on
+    the float path, and widen::convert's int->float arm (sitofp/uitofp)
+    lowers the runtime operand. bool stays excluded (its own kind); an int
+    lvalue aug (`i += f`) still rejects (the store-back would narrow);
+    comparisons / shifts / bitwise keep the family wall — the 2^53 equality
+    trap stays fenced. ASSIGNMENT is untouched: `float64 x = i;` still
+    rejects — the convenience is an expression rule, not a conversion rule.
   * ptr    — pointer rules (classify ptrImplicitOk): a typed pointer target needs
     a MATCHING pointee, or an iterator->reference demote of the same pointee.
     Unrelated pointees are an error (an explicit cast is required). A STRING LITERAL is

@@ -2215,6 +2215,27 @@ Phase 9 — templates
     tmpl_method pairup, tmpl_nested choose (per-flavor), cross-TU
     tmpl_lib.slh/.sl tpair through the .sli chain (one demand spelling,
     both flavors emitted). Suite green; dump.slh compiles.
+  * the arithmetic convenience (int -> float mixing)     LANDED 2026-07-23
+    Canon widen.sl rule 1a + fold.sl 43-46 (user's design): for the FIVE
+    arithmetic operators + - * / % (and their aug twins on a FLOAT lvalue)
+    an INTEGER operand silently converts to the float operand's type — one
+    op-gated branch per arm, NO change to assignment, parameters, overload
+    ranking, or template inference. Comparisons / shifts / bitwise keep the
+    family wall (the 2^53 equality trap stays fenced); bool stays excluded
+    (its own kind); `i += f` rejects at the store-back. Mechanics: classify
+    arithFloatMix after commonType fails (binary + aug arms);
+    flexIntLiteralToFloat re-kinds a weak int literal in place (decimal
+    text IS a float spelling) so the literal-widening wall never fires;
+    constfold folds mixed literal pairs on the float path (comparisons of
+    mixed literals still error); widen::convert gained the int->float
+    lowering arm (sitofp/uitofp — the explicit-cast path already had one).
+    Also: checkValueWiden's messages now spell aliases label=target.
+    Thirteen pinned negatives converted to positives across widen.sl,
+    mixed.sl, constant.sl, tmpl_nested.sl (the 'T=float'/'X=int' pin moved
+    to mixed.sl's COMPARISON form); new negatives pin the walls (bool mix,
+    comparison mix, shift count, int-lvalue aug). augment.sl gained the
+    float-lvalue aug positives; its bitwise `&=` negative survived
+    unchanged. Suite green; the galaxy sandbox builds end-to-end.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

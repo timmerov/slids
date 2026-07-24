@@ -452,7 +452,21 @@ std::string convert(std::string const& src_val,
         return narrow();
     }
 
-    // int-class → float and float → int-class are cross-family: no silent mix.
+    // INTEGER → FLOAT: the arithmetic convenience (widen.sl rule 1a — the
+    // classify binary/aug arms admit + - * / % mixes and hand the operand
+    // here typed for the float side). signed -> sitofp; unsigned -> uitofp.
+    if (dest_tk.cat == Category::kFloat
+        && (src_tk.cat == Category::kSignedInt
+            || src_tk.cat == Category::kUnsignedInt)) {
+        std::string tmp = newWidenTmp();
+        char const* opc =
+            (src_tk.cat == Category::kSignedInt) ? "sitofp" : "uitofp";
+        out << "  " << tmp << " = " << opc << " " << llvmIntType(src_tk.bits)
+            << " " << src_val << " to " << llvmFloatType(dest_tk.bits) << "\n";
+        return tmp;
+    }
+
+    // float → int-class stays cross-family: no silent mix.
     return convertErrPlain();
 }
 

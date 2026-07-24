@@ -931,16 +931,38 @@ std::unique_ptr<parse::Node> tryFoldBinary(parse::Node& node, diagnostic::Sink& 
     bool lhs_float = lhs.kind == parse::Kind::kFloatLiteral;
     bool rhs_float = rhs.kind == parse::Kind::kFloatLiteral;
 
-    // fold.sl:35-36 no-mix: one float + one int-class is a compile error.
+    bool is_cmp = (op == "==" || op == "!=" || op == "<"
+                || op == "<=" || op == ">"  || op == ">=");
+
+    // THE ARITHMETIC CONVENIENCE (fold.sl 43-46): for + - * / % an INTEGER
+    // literal mixed with a float literal silently converts to float and the
+    // pair folds on the float path (computation type float64). bool / char
+    // literals and every OTHER operator (comparisons included) keep the
+    // no-mix compile error.
     if (lhs_float != rhs_float) {
+        bool arith = (op == "+" || op == "-" || op == "*" || op == "/"
+                   || op == "%");
+        parse::Node const& iop = lhs_float ? rhs : lhs;
+        bool int_class = iop.kind == parse::Kind::kIntLiteral
+                      || iop.kind == parse::Kind::kUintLiteral;
+        if (arith && int_class) {
+            // An integer's decimal text IS a valid float spelling — re-kind a
+            // COPY as a weak float literal (the float partner's strong type,
+            // if any, governs the fold's flexing as usual).
+            parse::Node conv;
+            conv.kind = parse::Kind::kFloatLiteral;
+            conv.text = iop.text;
+            conv.file_id = iop.file_id;
+            conv.tok = iop.tok;
+            return lhs_float
+                ? tryFoldFloatBinary(node, lhs, conv, op, is_cmp, diag)
+                : tryFoldFloatBinary(node, conv, rhs, op, is_cmp, diag);
+        }
         diagnostic::report(diag, {node.file_id, node.tok,
             "No common type for floating-point and integer-class literals; "
             "use an explicit type conversion.", {}});
         return nullptr;
     }
-
-    bool is_cmp = (op == "==" || op == "!=" || op == "<"
-                || op == "<=" || op == ">"  || op == ">=");
 
     if (lhs_float) {
         return tryFoldFloatBinary(node, lhs, rhs, op, is_cmp, diag);

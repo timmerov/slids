@@ -52,7 +52,9 @@ unsigned integers are silently widened to larger unsigned integers.
 unsigned integers are silently widened to a larger unsigned integer,
 then silently reinterpreted as a signed integer of the same larger size.
 floating point numbers are silently widened to larger floating point numbers.
-floating point types and integer types never silently mix -
+integers are silently type converted to floating point numbers for a limited
+set of binary math operations: + - * / % += -= *= /= %=.
+otherwise, floating point types and integer types never silently mix -
 an explicit type conversion is required.
 
 1b. widen a weak operand to a known target type:
@@ -415,34 +417,37 @@ int32 main() {
     // int64 bad_u64_i64 = xu64 + xi64;
     // __println("bad_u64_i64= " + bad_u64_i64);
 
-    // -- negative: int and float never silently mix --
-    //-EXPECT-ERROR: No common type for 'int16' and 'float32'; use an explicit type conversion.
-    // float32 bad_i16_f32 = bi16 + bf32;
-    // __println("bad_i16_f32= " + bad_i16_f32);
-    //-EXPECT-ERROR: No common type for 'uint8' and 'float32'; use an explicit type conversion.
-    // float32 bad_u8_f32 = bu8 + bf32;
-    // __println("bad_u8_f32= " + bad_u8_f32);
-    //-EXPECT-ERROR: No common type for 'int32' and 'float64'; use an explicit type conversion.
-    // float64 bad_i32_f64 = bi32 + bf64;
-    // __println("bad_i32_f64= " + bad_i32_f64);
-    //-EXPECT-ERROR: No common type for 'uint16' and 'float64'; use an explicit type conversion.
-    // float64 bad_u16_f64 = bu16 + bf64;
-    // __println("bad_u16_f64= " + bad_u16_f64);
+    // -- THE ARITHMETIC CONVENIENCE (rule 1a): + - * / % silently convert an
+    //    integer operand to the float operand's type; the aug twins ride. --
+    float32 mix_i16_f32 = bi16 + bf32;  __println("mix_i16_f32= " + mix_i16_f32);
+    float32 mix_u8_f32 = bu8 * bf32;    __println("mix_u8_f32= " + mix_u8_f32);
+    float64 mix_i32_f64 = bi32 - bf64;  __println("mix_i32_f64= " + mix_i32_f64);
+    float64 mix_u16_f64 = bu16 / bf64;  __println("mix_u16_f64= " + mix_u16_f64);
+    float64 mix_i64_f64 = xi64 % bf64;  __println("mix_i64_f64= " + mix_i64_f64);
+    float32 mix_i32_f32 = bi32 + bf32;  __println("mix_i32_f32= " + mix_i32_f32);
+    float32 mix_f32_lit = bf32 + 3;     __println("mix_f32_lit= " + mix_f32_lit);
+    float64 mix_aug = 1.5;
+    mix_aug += bi32;                    __println("mix_aug1= " + mix_aug);
+    mix_aug *= 2;                       __println("mix_aug2= " + mix_aug);
+
+    // -- negative: the convenience is ARITHMETIC-only — bool is its own kind,
+    //    comparisons keep the family wall (the equality trap stays fenced). --
     //-EXPECT-ERROR: No common type for 'bool' and 'float32'; use an explicit type conversion.
     // float32 bad_bool_f32 = xb + bf32;
     // __println("bad_bool_f32= " + bad_bool_f32);
-    //-EXPECT-ERROR: No common type for 'int64' and 'float64'; use an explicit type conversion.
-    // float64 bad_i64_f64 = xi64 + bf64;
-    // __println("bad_i64_f64= " + bad_i64_f64);
     //-EXPECT-ERROR: No common type for 'int32' and 'float64'; use an explicit type conversion.
     // bool bad_cmp_i32_f64 = bi32 != bf64;
     // __println("bad_cmp_i32_f64= " + bad_cmp_i32_f64);
-    //-EXPECT-ERROR: No common type for 'float32' and 'int'; use an explicit type conversion.
-    // float32 bad_f32_intlit = bf32 + 3;
-    // __println("bad_f32_intlit= " + bad_f32_intlit);
-    //-EXPECT-ERROR: No common type for 'int32' and 'float32'; use an explicit type conversion.
-    // float32 bad_i32_f32 = bi32 + bf32;
-    // __println("bad_i32_f32= " + bad_i32_f32);
+    //-EXPECT-ERROR: No common type for 'int32' and 'float32'
+    // bool bad_lt_i32_f32 = bi32 < bf32;
+    // __println("bad_lt_i32_f32= " + bad_lt_i32_f32);
+    //-EXPECT-ERROR: Shift count must be integer-class
+    // int bad_shift = bi32 << bf32;
+    // __println("bad_shift= " + bad_shift);
+    //-EXPECT-ERROR: No common type
+    // int32 bad_aug_int = bi32;
+    // bad_aug_int += bf32;
+    // __println("bad_aug_int= " + bad_aug_int);
 
     // -- negative: confusing-error (int32+uint32 → int64, assign narrows back to int32) --
     //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int32'; use an explicit type conversion.

@@ -220,11 +220,18 @@ int32 main() {
     //int yVar = 7;
     //const kBad = yVar + 1;
 
-    /* compile error — a float mixed with an integer-class operand has no common
-       type (the float / integer-class fold is rejected). */
+    /* the arithmetic convenience (fold.sl 43-46): a float / integer-class
+       literal mix folds on the FLOAT path for + - * / % — the integer
+       converts silently; a COMPARISON of the same pair stays a compile
+       error (negative below). */
+    const kFloatIntMix = 3.5 + 2;
+    __println("kFloatIntMix= " + kFloatIntMix);
+    const kFloatIntMod = 7.5 % 2;
+    __println("kFloatIntMod= " + kFloatIntMod);
 
     //-EXPECT-ERROR: No common type for floating-point and integer-class literals
-    //const kFloatIntMix = 3.5 + 2;
+    //const kFloatIntCmp = 3.5 < 2;
+    //__println("kFloatIntCmp= " + kFloatIntCmp);
 
     /* compile error — two STRONG integer consts whose common type would exceed 64
        bits (a signed/unsigned 64-bit mix): rejected, same as the variable path. */
