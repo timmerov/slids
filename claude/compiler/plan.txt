@@ -2165,6 +2165,29 @@ Phase 9 — templates
     End state: vector_test builds through the full cross-TU chain
     (inline-local Vector<Value> + aggregated Vector<int> via .sli) and runs
     with ctor/dtor count 0 after every scope. Suite green throughout.
+  * the convention of convenience                        LANDED 2026-07-23
+    Canon tmpl_function.sl + tmpl_method.sl (user's design; v1 had it): a
+    BARE-`T` parameter passes by value when T binds a primitive (references
+    ARE primitives — the pointer copies) and as `(const T)^` otherwise, so
+    one generic body serves every binding. UNIFORM — every template kind,
+    every declaration site, every class flavor; no exceptions (the
+    method/function-parity principle). Three pieces: spelling-based
+    detection at the PATTERN (isBareTypeParam at both instantiation
+    funnels; enclosing class-template lists via the snapshot's
+    tmpl_self_stack, so a member template's bare OUTER T converts too; a
+    CONCRETE class param never does), the mungeParamType arm (the
+    array-by-pointer model verbatim; the flag is IN/OUT — pattern-bare in,
+    arm-fired out — because keying the entry flag off the final pointer
+    FORM deref'd a `T=int^` binding, the landing's one real bug), and ONE
+    deref funnel (classify's ident arm rewrites uses to `arg^` in place —
+    every consumer composes; `^arg` collapses via the `^X^` cancellation;
+    the generated ident is marked against re-entrant double-deref).
+    Call sites needed NOTHING (a class lvalue already converts to `T^` by
+    address). Converted tmpl_function's "T may not bind a class by value"
+    negative into the marquee positive (add(p1, p2) through op+); pinned
+    class bindings across namespace/block/nested-in-template functions,
+    hoisted/derived/virtual/template flavors, the outer-T member-template
+    param (tmpl_nested r8), and the concrete-param rejection.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

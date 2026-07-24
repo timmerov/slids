@@ -14,9 +14,12 @@ name within the class (no overload set), shadows and is shadowed across the base
 chain like any method (the `Base:m(v)` bypass spelling pins a base's template through
 a shadow), may not be `virtual`, and its instances leave a virtual class's vtable
 undisturbed. A templated HOOK is unspellable (`_`/`~` take no template-list). A
-function template's T may bind a class — through REFERENCE parameters (`T^`), the
-normal "a class parameter must be a reference" rule; instance bodies dispatch class
-operators and return class values through the ordinary machinery, methods included.
+function template's T may bind a class — through REFERENCE parameters (`T^`), or
+through the BY-VALUE spelling via THE CONVENTION OF CONVENIENCE (readme.txt
+TEMPLATES): a bare-`T` param whose binding is a class/tuple becomes `(const T)^`
+with auto-deref'd uses, uniform across every template kind and class flavor;
+instance bodies dispatch class operators and return class values through the
+ordinary machinery, methods included.
 A class BODY may also declare an ALIAS template (used qualified `Box:BR<int>` or
 bare by the class's own members), and a class field may be typed by a template-alias
 use.

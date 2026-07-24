@@ -133,12 +133,5 @@ int32 main() {
     //__println(##line + ": "); { SuperCtor s(makeCtor(),4); s; }
     //__println(##line + ": "); { SuperCtor s = (makeCtor(),4); s; }
 */
-/*
-    S nop<S>(S s) { return s; }
-    Class(int a) { }
-    Class cls(42);
-    obj = nop<Class>(cls);
-    __println(obj.a);
-*/
     return 0;
 }

@@ -41,17 +41,6 @@ UNBLOCKED FEATURES
     requires a class type". Swap-init default-constructs the target and then re-dispatches
     as an ordinary swap statement, and only the construct half is class-only.
 
-  * NESTED TEMPLATE TYPES. A template type nested inside another angle-bracket
-    list does not parse, for two stacked reasons. (1) The lexer reads `>>` as one
-    right-shift token, so `Ref<Ref<T>>`, a bare cast `<Ref<int>>`, and any
-    `Vec<Vec<int>>`-shaped spelling never see their two closers. (2) The call-
-    site lookahead gate rejects an inner `<` outright, so even the SPACED form
-    of a template-alias use inside a function-template type-list
-    (`dump<Ref<int> >(...)`) reads as a comparison and fails. Reachable today
-    via alias templates (pinned by tmpl_alias.sl negatives); becomes central
-    when class templates land. The fix is one piece of the same design: split
-    the closer while a type-list is open, and teach the gates angle depth.
-
   * UNINSTANTIATED TEMPLATE BODIES ARE UNCHECKED. A template's body is held in
     parse state until a call binds its type-list, so a template nobody calls can
     contain any nonsense that parses — undefined names, type errors — and the
@@ -141,8 +130,6 @@ BLOCKED FEATURES
     Plus a minor wart: resolve's possibly-zero DA may report "use of uninitialized"
     on the (now-unreachable) after-code before classify flags it. Low value
     (`while (true)` / empty-cond are the common forms and fully handled), real cost.
-
-  * TEMPLATED ALIAS — `alias X<...> = T;`.
 
   * UNUSED PARAMETER AS A COMPILE ERROR — NEEDS REVIEW. Today the unused-local
     sweep (resolve) covers only body-declared locals; parameters are exempt

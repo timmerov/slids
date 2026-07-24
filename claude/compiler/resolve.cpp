@@ -6463,6 +6463,13 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
     using F = widen::Type::Form;
     widen::TypeRef st = widen::strip(p.return_type);   // see through alias for the form
     F f = widen::form(st);
+    // tmpl_value_param is IN/OUT: on entry, "the pattern spelled a bare `T`";
+    // on exit, "the convention arm REWROTE this param" — only that arm re-sets
+    // it, so the caller's entry-flag sync can't confuse a class binding
+    // (rewritten, uses auto-deref) with a pointer binding (by value — the
+    // pointer arm's ordinary const-pointee applies, no deref).
+    bool conv = p.tmpl_value_param;
+    p.tmpl_value_param = false;
     bool already_const = (widen::form(p.return_type) == F::kConst);
     bool is_recv = (p.name == "_$recv");   // synthesized method receiver — const-method = Phase 6
 
@@ -6484,6 +6491,19 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
         return;
     }
     if (f == F::kTuple || f == F::kSlid) {
+        // THE CONVENTION OF CONVENIENCE: a template instance's BARE-`T` param
+        // whose binding is a class / tuple becomes `(const T)^` — the array
+        // model, so the same generic body serves a primitive binding (by
+        // value, no arm fires) and a non-primitive one (by reference to
+        // const; "nothing better until const-correctness lands"). classify
+        // auto-derefs its uses off Entry.tmpl_ref_param (synced below).
+        if (conv) {
+            widen::TypeRef v = p.return_type;
+            if (!p.is_mutable && !already_const) v = widen::internConst(v);
+            p.return_type = widen::internPointer(v);
+            p.tmpl_value_param = true;   // OUT: the arm fired — uses auto-deref
+            return;
+        }
         diagnostic::report(diag, {p.file_id, p.tok,   // caret the TYPE, not the name
             "A non-primitive parameter must be a pointer (reference / iterator) or "
             "an array; got '" + widen::spellOrEmpty(p.return_type) + "'.", {}});
@@ -6524,11 +6544,18 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
             }
         }
         // Re-sync each body-frame param entry's slids_type so SymTab seeding at
-        // codegen and identifier resolution at classify see the rewrite.
+        // codegen and identifier resolution at classify see the rewrite. A
+        // convention param that became a pointer marks its entry so classify's
+        // ident arm auto-derefs every use (the body stays generic).
         for (auto& p : node.params) {
             if (p && p->resolved_entry_id >= 0
                 && p->resolved_entry_id < static_cast<int>(tree.entries.size())) {
                 tree.entries[p->resolved_entry_id].slids_type = p->return_type;
+                if (p->tmpl_value_param
+                    && widen::form(widen::strip(p->return_type))
+                       == widen::Type::Form::kPointer) {
+                    tree.entries[p->resolved_entry_id].tmpl_ref_param = true;
+                }
             }
         }
     }
@@ -7138,6 +7165,7 @@ static std::unique_ptr<parse::Node> cloneDeep(parse::Node const& n) {
     c->class_conversion = n.class_conversion;
     c->agg_conv_spill = n.agg_conv_spill;
     c->is_mutable = n.is_mutable;
+    c->tmpl_value_param = n.tmpl_value_param;
     c->is_virtual = n.is_virtual;
     c->is_pure = n.is_pure;
     c->is_foreign = n.is_foreign;
@@ -7172,6 +7200,24 @@ static widen::TypeRef firstLocalArg(parse::Tree& tree,
                                     std::vector<widen::TypeRef> const& args);
 static bool anyArgLocal(parse::Tree& tree,
                         std::vector<widen::TypeRef> const& args);
+
+// THE CONVENTION OF CONVENIENCE (canon tmpl_function.sl): a parameter whose
+// PATTERN type is a BARE template type parameter (`T v`) passes by value when
+// T binds a primitive (or reference — references are primitives) and as
+// `(const T)^` otherwise — mungeParamType's array model, extended. Detection
+// is spelling-based, at the pattern: EXACTLY a type-parameter name, no
+// suffix / qualifier — a concrete class param (`Gauge v`) keeps the plain
+// rejection. Uniform across every template kind and nesting (fn, method,
+// class-template methods, member templates — no exceptions).
+bool isBareTypeParam(widen::TypeRef t, std::vector<std::string> const& names) {
+    if (t == widen::kNoType) return false;
+    if (widen::form(t) != widen::Type::Form::kSlid) return false;
+    std::string const& n = widen::get(t).name;
+    for (auto const& p : names) {
+        if (p == n) return true;
+    }
+    return false;
+}
 
 int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
                         std::vector<widen::TypeRef> const& args,
@@ -7247,6 +7293,26 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     auto clone = cloneDeep(*ti.def);
     clone->type_params.clear();
     clone->type_param_toks.clear();
+    // The convention of convenience: flag each param the PATTERN spelled as a
+    // bare template type parameter — the template's own list, plus any
+    // ENCLOSING class template's (a flavor's member template spells the outer
+    // T bare; the snapshot records its enclosing instantiations).
+    {
+        std::vector<std::string> tp_names = ti.def->type_params;
+        for (auto const& sf : ti.tmpl_self_stack) {
+            auto eti = tree.templates.find(sf.tmpl_entry);
+            if (eti != tree.templates.end() && eti->second.def) {
+                for (auto const& n : eti->second.def->type_params)
+                    tp_names.push_back(n);
+            }
+        }
+        for (std::size_t i = 0;
+             i < clone->params.size() && i < ti.def->params.size(); i++) {
+            if (clone->params[i] && ti.def->params[i]
+                && isBareTypeParam(ti.def->params[i]->return_type, tp_names))
+                clone->params[i]->tmpl_value_param = true;
+        }
+    }
     // An AGGREGATED flavor keeps the signature, sheds the body (the loaded
     // template source supplied one): declaration-only here.
     if (declare_only && clone->kind == parse::Kind::kFunctionDef) {
@@ -7582,6 +7648,21 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                 }
             }
             clones.push_back(std::move(c));
+        }
+    }
+    // The convention of convenience for the flavor's METHODS: flag each param
+    // the pattern spelled as a bare `T` of the class's own list. A member
+    // TEMPLATE's params stamp at ITS instantiation (which also sees the outer
+    // list through the snapshot's tmpl_self_stack) — skip them here.
+    for (auto& c : clones) {
+        for (auto& m : c->children) {
+            if (!m || (m->kind != parse::Kind::kFunctionDef
+                       && m->kind != parse::Kind::kFunctionDecl)) continue;
+            if (!m->type_params.empty()) continue;
+            for (auto& p : m->params) {
+                if (p && isBareTypeParam(p->return_type, def->type_params))
+                    p->tmpl_value_param = true;
+            }
         }
     }
 

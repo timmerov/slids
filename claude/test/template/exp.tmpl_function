@@ -15,7 +15,7 @@ s = 36
 e = 49
 za =  62
 11 3
-tmpl_function.sl:256: int64 answer = 42
+tmpl_function.sl:line#: int64 answer = 42
 nt = 42
 ne = 4
 nx = 12
@@ -36,3 +36,13 @@ hey 9
 sh = 101
 lt = true
 of = 1007
+px = 13,24
+pi1 = 3,4
+pi2 = 10,20
+tu = 5,6
+iv = 9
+zr = 4
+pxr = 6
+ps = 6,8
+pb = 10,20
+pn = 3,4

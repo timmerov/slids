@@ -1176,6 +1176,35 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   tree.entries at every touch; never hold an Entry& across resolution. The
   entries-vector twin of the arena's retired capture-before-intern discipline.
 
+  THE CONVENTION OF CONVENIENCE (canon tmpl_function.sl + tmpl_method.sl): a
+  parameter whose type is a BARE template type parameter (`T v`) passes by
+  value when T binds a primitive — references are primitives; the pointer
+  itself copies — and as `(const T)^` otherwise ("nothing better until
+  const-correctness lands"), so ONE generic body serves every binding.
+  UNIFORM, no exceptions: every template kind (function, method, member
+  template, class-template method) at every declaration site (file scope,
+  namespace, block, nested in templates) in every class flavor (plain,
+  hoisted, derived, virtual, template). Three pieces:
+  - DETECTION is spelling-based, at the PATTERN: exactly a type-parameter
+    name — the template's own list, plus any ENCLOSING class template's
+    (a flavor's member template spells the outer T bare; the enclosing
+    lists arrive through the snapshot's tmpl_self_stack). Stamped on the
+    instance clone's params (isBareTypeParam) at both instantiation
+    funnels. A CONCRETE class param in a template (`Pair p`) never
+    converts — the plain rejection stands.
+  - THE MUNGE ARM (mungeParamType): a flagged param whose binding is a
+    class/tuple becomes `(const T)^` — the array-by-pointer model verbatim.
+    The flag is IN/OUT (pattern-spelled-bare in, arm-FIRED out) so the
+    entry sync can't confuse a class binding with a POINTER binding
+    (`T=int^` stays a by-value pointer with the ordinary const-pointee;
+    keying off the final form deref'd it — the landing's one real bug).
+  - ONE DEREF FUNNEL (classify's ident arm): a use of a converted param
+    rewrites in place to `arg^`, so every consumer — field access,
+    receiver, operand, return, argument — composes on the deref and the
+    body stays generic (the canon's body-transform rule). `^arg` collapses
+    through the `^X^` cancellation back to the reference; the generated
+    inner ident is marked against re-entrant double-deref.
+
   NESTED TEMPLATES (canon test/template/tmpl_nested.sl). Three TU-local
   forms; the landing was diverts on existing machinery plus ONE mechanism:
   - a TEMPLATE METHOD inside a CLASS TEMPLATE: the flavor clone re-runs

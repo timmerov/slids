@@ -56,6 +56,14 @@ Pair<K, V>(K k_ = 0, V v_ = 0) {
     V val() { return v_; }
 }
 
+/* the convention-of-convenience fixture: a class with the operators Vec's
+   T-typed methods dispatch, so Vec<CPoint>'s `T addx(T v)` — a bare-T method
+   param binding a CLASS — takes `(const CPoint)^` behind the value spelling. */
+CPoint(int c_ = 0) {
+    op=(CPoint^ r) { c_ = r^.c_; }
+    op+(CPoint^ p, CPoint^ q) { c_ = p^.c_ + q^.c_; }
+}
+
 /* lifecycle hooks in a template: ctor/dtor run per instance object. */
 Trace<T>(T t_ = 0) {
     _() { __println("ctor " + t_); }
@@ -238,6 +246,13 @@ int32 main() {
     /* the user operator on instances. */
     Vec<int> s = a + b;
     int e8 = s.sum(); __println("e8 = " + e8);
+
+    /* THE CONVENTION OF CONVENIENCE, uniform: a CLASS type argument — the
+       flavor's T-typed method params pass by reference-to-const behind the
+       value spelling; sum/addx dispatch CPoint's operators through it. */
+    Vec<CPoint> vcp(CPoint(3), CPoint(4));
+    CPoint cc1 = vcp.sum(); __println("cc1 = " + cc1.c_);
+    CPoint cc2 = vcp.addx(CPoint(10)); __println("cc2 = " + cc2.c_);
 
     /* an alias argument names the SAME instance; ##type reports as written. */
     Vec<Integer> d2 = a;

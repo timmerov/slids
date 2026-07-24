@@ -145,6 +145,14 @@ Sh<T>(T t_ = 0) {
     T same<T>(T v) { return v; }
 }
 
+/* the CONVENTION OF CONVENIENCE reaches a member template's OUTER param: `T`
+   spelled bare in the member's own signature converts by the FLAVOR's
+   binding (the enclosing list arrives through the snapshot's self-redirect). */
+Cp(int c_ = 0) { }
+Depth<T>(T d_ = 0) {
+    int both<S>(S s, T t) { return s.c_ + t.c_; }
+}
+
 /* lifecycle hooks in a hoisted template; a hoisted instance as a plain
    class's FIELD, filled by the qualified construction EXPRESSION. */
 Ho<T>(T unused_ = 0) {
@@ -375,6 +383,13 @@ int32 main() {
     int r6 = viaFn(12); __println("r6 = " + r6);
     Meth2<int> m2;
     int r7 = m2.meth(4); __println("r7 = " + r7);
+
+    /* the convention on a member template's OUTER param: both S and T bind
+       the class Cp; both params arrive `(const Cp)^` behind the spelling. */
+    Depth<Cp> dp;
+    Cp ca(3);
+    Cp cb(4);
+    int r8 = dp.both(ca, cb); __println("r8 = " + r8);
 
     return 0;
 }

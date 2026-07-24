@@ -18,10 +18,40 @@ usage:
 the type-list may be inferred from the argument-list.
 
 special handling of template type parameters.
-slids is pass by value.
-a template function needs to be able to handle primitive and class types.
-a convention of convenience applies here.
+a template function needs to be able to handle primitive and not-primitive types.
+a convention of convenience applies here: a parameter of template type is
+passed by value if the template type is a primitive.
+otherwise it's passed by reference to const.
+this convention applies to all template functions regardless of where they are
+declared - including: file-scope, nested, namespace, nested in templates, etc.
 
+    void template_function<T>(T arg);
+
+    template_function<int>(42);  -->
+        void template_function(int arg);
+
+    Class(int a_) { }
+    Class obj(37);
+    template_function<Class>(obj);  -->
+        void template_function(Class^ arg);
+
+    alias Tuple = (int,int);
+    Tuple t = (1,2);
+    template_function<Tuple>(t);  -->
+        void template_function(Tuple^ arg);
+
+the template body must rewrite every usage of the argument when it is converted
+to a reference.
+
+    void template_function<T>(T arg) {
+        __println(arg);
+    }
+
+transforms - when T is not-primitive - to:
+
+    void template_function<T>(T^ arg) {
+        __println(arg^);
+    }
 */
 
 /*
@@ -100,7 +130,7 @@ void zork<T>(T a, int64 b) {
    rvalue (materializes into the ref), its char[] slots are the not-template
    parts (normal matching), and T binds through the value-pointer slot. */
 void dump<T>( (char[], char[], char[], char[], T^)^ tuple) {
-    __println(tuple^[0] + ":" + tuple^[1] + ": "
+    __println(tuple^[0] + ":line#: "
         + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }
 
@@ -126,6 +156,31 @@ Pair(int x_ = 0, int y_ = 0) {
 }
 T addc<T>(T^ a, T^ b) {
     return a^ + b^;
+}
+
+/* the convention-of-convenience fixtures: a bare-T identity (every binding
+   kind flows through it), and `^param` handed to an explicit-ref template. */
+T idf<T>(T v) {
+    return v;
+}
+int viaAddr<T>(T p) {
+    T r = addc(^p, ^p);
+    return r.x_;
+}
+
+/* ...a template's body declaring a LOCAL template — the inner's bare-S param
+   converts by ITS binding when the outer instantiates ("nested in
+   templates" per the canon list). */
+T outerId<T>(T v) {
+    S innerId<S>(S s) { return s; }
+    return innerId(v);
+}
+
+/* ...but a CONCRETE class param in a template is NOT of template type — the
+   convention never fires for it; the plain rule rejects (negative below). */
+T concrete<T>(T a, Pair p) {
+    p;
+    return a;
 }
 
 /* a template declared inside a METHOD body: its instances are nested functions
@@ -354,10 +409,44 @@ int32 main() {
     //-EXPECT-ERROR: not a function
     //int amb = a < b > (0); __println("amb = " + amb);
 
-    /* T may not bind a class through a BY-VALUE parameter: the instance obeys
-       the normal rule that a class parameter must be a reference. */
+    /* THE CONVENTION OF CONVENIENCE: T binds a class through the by-value
+       spelling — the instance's param is really `(const Pair)^`, the body
+       stays generic (`a + b` dispatches op+ through the auto-deref), and the
+       result returns by value. */
+    Pair px = add(p1, p2); __println("px = " + px.x_ + "," + px.y_);
+
+    /* ...the identity shape: class in, class out, explicit and inferred. */
+    Pair pi1 = idf<Pair>(p1); __println("pi1 = " + pi1.x_ + "," + pi1.y_);
+    Pair pi2 = idf(p2); __println("pi2 = " + pi2.x_ + "," + pi2.y_);
+
+    /* ...a tuple binding converts the same way. */
+    (int, int) tt = (5, 6);
+    (int, int) tu = idf(tt);
+    __println("tu = " + tu[0] + "," + tu[1]);
+
+    /* ...a primitive binds by value, and a REFERENCE is a primitive (the
+       pointer itself copies; no convention rewrite). */
+    int iv = idf(9); __println("iv = " + iv);
+    int zz = 4;
+    int^ zr = idf(^zz); __println("zr = " + zr^);
+
+    /* ...`^param` composes: the addr-of of the auto-deref is the reference. */
+    int pxr = viaAddr(p1); __println("pxr = " + pxr);
+
+    /* ...a NAMESPACE template converts the same way. */
+    Pair ps = Space:twice(p1); __println("ps = " + ps.x_ + "," + ps.y_);
+
+    /* ...a BLOCK-scope template too. */
+    S blockId<S>(S s) { return s; }
+    Pair pb = blockId(p2); __println("pb = " + pb.x_ + "," + pb.y_);
+
+    /* ...and a local template INSIDE a template's body. */
+    Pair pn = outerId(p1); __println("pn = " + pn.x_ + "," + pn.y_);
+
+    /* a CONCRETE class param inside a template keeps the plain rejection —
+       the convention is for TEMPLATE-typed params only. */
     //-EXPECT-ERROR: must be a pointer
-    //Pair px = add(p1, p2); __println("px = " + px.x_);
+    //int ncc = concrete(1, p1); __println("ncc = " + ncc);
 
     return 0;
 }

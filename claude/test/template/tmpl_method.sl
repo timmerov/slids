@@ -16,6 +16,42 @@ usage:
     function-name ( argument-list )
 
 the type-list may be inferred from the argument-list.
+
+special handling of template type parameters.
+a template method needs to be able to handle primitive and not-primitive types.
+a convention of convenience applies here: a parameter of template type is
+passed by value if the template type is a primitive.
+otherwise it's passed by reference to const.
+this convention applies to all template methods declared in all class flavors
+including: plain, hoisted, derived, virtual, template, etc.
+
+    void template_method<T>(T arg);
+
+    template_method<int>(42);  -->
+        void template_method(int arg);
+
+    Class(int a_) { }
+    Class obj(37);
+    template_method<Class>(obj);  -->
+        void template_method(Class^ arg);
+
+    alias Tuple = (int,int);
+    Tuple t = (1,2);
+    template_method<Tuple>(t);  -->
+        void template_method(Tuple^ arg);
+
+the template body must rewrite every usage of the argument when it is converted
+to a reference.
+
+    void template_method<T>(T arg) {
+        __println(arg);
+    }
+
+transforms - when T is not-primitive - to:
+
+    void template_method<T>(T^ arg) {
+        __println(arg^);
+    }
 */
 
 /*
@@ -56,6 +92,10 @@ Jar(int n_ = 0) {
     T comb<T>(T^ a, T^ b) { return a^ + b^; }
     /* an alias-template use in a template method's signature. */
     T viaRf<T>(Rf<T> p) { return p^; }
+    /* the convention of convenience: a bare-S param binding a CLASS — the
+       instance's param is `(const S)^`; uses auto-deref. */
+    S same<S>(S s) { return s; }
+    int peek<S>(S s) { return s.x_ + n_; }
     /* method self-recursion: the memo is seeded before the body resolves. */
     T fact<T>(T n) {
         if (n <= 1) { return n; }
@@ -106,6 +146,8 @@ Vv : Ww(int w_ = 0) {
 Shape(int s_ = 0) {
     virtual int id() { return 1; }
     T tag<T>(T v) { return v + s_; }
+    /* the convention in a VIRTUAL class: S binds a class. */
+    S ident<S>(S s) { return s; }
 }
 Shape : Circle(int r_ = 0) {
     virtual int id() { return 2; }
@@ -118,9 +160,11 @@ Outer(int o_ = 0) {
     }
 }
 
-/* a base's template method reached through a derived receiver. */
+/* a base's template method reached through a derived receiver. `echoK` pins
+   the convention through the DERIVED receiver (S binds a class). */
 Counter(int c_ = 0) {
     T plus<T>(T v) { return v + c_; }
+    S echoK<S>(S s) { return s; }
 }
 Counter : Kid(int k_ = 0) {
 }
@@ -222,6 +266,12 @@ int32 main() {
     /* method self-recursion. */
     int fc = j.fact(5); __println("fc = " + fc);
 
+    /* THE CONVENTION OF CONVENIENCE on a method template: S binds a class
+       through the by-value spelling — the instance takes `(const Vec)^`
+       behind it, and the body stays generic. */
+    Vec vcs = j.same(v1); __println("cs = " + vcs.x_);
+    int cp = j.peek(v1); __println("cp = " + cp);
+
     /* the out-of-line member template. */
     int ol = j.extra(4); __println("ol = " + ol);
 
@@ -246,6 +296,14 @@ int32 main() {
     Shape^ sp = ^c;
     __println("vd = " + sp^.id());
     __println("st = " + sp^.tag(3));
+
+    /* the convention across the FLAVORS (class bindings everywhere): the
+       hoisted class's dub (Vec+Vec through op+), the base's echoK through the
+       derived receiver, and the virtual class's ident. */
+    Vec cv(5);
+    Vec hd = oi.dub(cv); __println("f1 = " + hd.x_);
+    Vec kd = kid.echoK(cv); __println("f2 = " + kd.x_);
+    Vec vd2 = c.ident(cv); __println("f3 = " + vd2.x_);
 
     /* explicit type arguments on a plain method. */
     //-EXPECT-ERROR: is not a template method

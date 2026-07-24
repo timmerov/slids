@@ -1926,6 +1926,35 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     "Function call is missing parameter list '()'.", {}});
                 return;
             }
+            // THE CONVENTION OF CONVENIENCE: a template instance's bare-`T`
+            // param bound to a class/tuple is really `(const T)^` — rewrite
+            // the ident to a DEREF so every consumer (field access, receiver,
+            // return, argument) sees the T lvalue and the body stays generic.
+            // (`^s` composes: the addr-of arm's `^X^` cancellation hands back
+            // the reference itself.) The generated INNER ident is marked
+            // (tmpl_value_param) so a re-entrant infer over the deref doesn't
+            // rewrite it again into a double deref.
+            if (tree.entries[e.resolved_entry_id].tmpl_ref_param
+                && !e.tmpl_value_param) {
+                auto inner = std::make_unique<parse::Node>();
+                inner->kind = parse::Kind::kIdentExpr;
+                inner->name = e.name;
+                inner->name_tok = e.name_tok;
+                inner->file_id = e.file_id;
+                inner->tok = e.tok;
+                inner->resolved_entry_id = e.resolved_entry_id;
+                inner->tmpl_value_param = true;   // conversion already applied
+                inner->inferred_type =
+                    parse::entryType(tree, e.resolved_entry_id);
+                e.kind = parse::Kind::kDerefExpr;
+                e.name.clear();
+                e.resolved_entry_id = -1;
+                e.children.clear();
+                e.children.push_back(std::move(inner));
+                e.inferred_type =
+                    pointeeType(e.children[0]->inferred_type);
+                return;
+            }
             e.inferred_type = parse::entryType(tree, e.resolved_entry_id);
             // The alias label is the type itself when it's a (scalar) alias —
             // drives binaryLabel's sticky-alias rule; the kAlias type is the

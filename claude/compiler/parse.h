@@ -308,6 +308,14 @@ struct Node {
                                  // decl and yields the tuple (like a construction lift).
     bool is_mutable = false;     // kParam: declared with leading `mutable` — opts OUT
                                  // of the default const-pointee munge (mungeParamType)
+    bool tmpl_value_param = false;  // The convention of convenience, three roles:
+                                 // kParam BEFORE munge — the pattern spelled this
+                                 // param's type as a BARE template type parameter
+                                 // (`T v`); kParam AFTER munge — the convention arm
+                                 // FIRED (class/tuple binding rewritten `(const T)^`;
+                                 // a primitive/pointer binding clears it); kIdentExpr —
+                                 // classify's auto-deref already wrapped this ident
+                                 // (re-entrant infer must not double-deref).
     bool is_virtual = false;     // kFunctionDef/kFunctionDecl (a class method or the
                                  // `_$dtor`): declared with leading `virtual` — dispatched
                                  // through the vtable. A class with >=1 virtual method is
@@ -463,6 +471,11 @@ struct Entry {
                                   // the ONE sanctioned exception to the owner-linkage
                                   // rule when its owner class is declare-only (desugar
                                   // liftMember).
+    bool tmpl_ref_param = false;  // kLocalVar: a template instance's BARE-T parameter
+                                  // that munged to `(const T)^` (tmpl_value_param, class/
+                                  // tuple binding). classify's ident arm auto-derefs
+                                  // every use, so the body stays generic (`s` is a T
+                                  // lvalue for every binding).
     bool is_external = false;     // kFunction: DECLARED in an imported `.slh` header —
                                   // its definition legitimately lives in another
                                   // translation unit (linked in), so being undefined
