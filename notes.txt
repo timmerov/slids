@@ -1,9 +1,6 @@
 
 agenda:
 
-    Adjacent open items, not template-line: todo.txt's two BUGS (the class-field default = Ctor(args) codegen assert; the swap inc/dec operand), and the Phase 8 cross-TU remainders
-  (multi-header modules, C interop).
-
     A different species of gap, not a linkage carve-out: a nested (hoisted) class declared inside a header class template. The header is declarations-only, so the nested class's method bodies
   have no channel at all — the source's re-open machinery doesn't reach into a nested class. A local-T (or any) flavor would produce a nested class with declared-never-defined methods. That
   needs a body-delivery design (nested re-open reach or out-of-line Outer:Inner:m depth), not a linkage flag — and it's currently silent rather than rejected, which arguably deserves a

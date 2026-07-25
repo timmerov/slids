@@ -65,7 +65,6 @@ note: at this time it is not possible to declare a bare tuple of size 1.
 however, the constructor-style syntax (see suph above) can parse a tuple of size 1.
 use that syntax.
 there are no plans to support tuples of size 1.
-the declaration-assignment syntax (see supg above) likely will never work.
 
 compile errors:
 
@@ -76,6 +75,8 @@ compile errors:
     Class err2 = 1.4;
 
 notes:
+
+see canon clarifications in construct.sl.
 
 naming conventions are optional.
 they are never used to resolve parse.

@@ -396,6 +396,9 @@ global (
    ctor that fills them on first touch (and, for a class, a synthesized dtor at exit). */
 global int grid_[3] = (10, 20, 30);       /* array, constant init */
 global (int, bool) combo_ = (7, true);    /* tuple, constant init */
+global char greet_[6] = "hello";          /* a string literal IS a constant
+                                             (canon 2026-07-24); the ARRAY
+                                             global form. */
 
 /* NAMED group — members reached as `garage:<member>`. */
 global garage(
@@ -781,6 +784,9 @@ int32 main() {
     grid_[1] = 99;
     __println("grid1=" + grid_[1]);          // 99
     __println("combo=" + combo_[0] + "," + combo_[1]);                 // 7,true
+    __println("greet=" + greet_);            // hello — the string-init array global
+    greet_[0] = 'j';
+    __println("greet2=" + greet_);           // jello — writable storage, not the literal
     __println("wid=" + w_.id_ + "," + w_.tag_);   // widget:ctor, then 42,7 (arg + default)
     __println("wid2=" + wid2_.id_ + "," + wid2_.tag_);  // widget:ctor, then 42,7 — `= 42`
                                                         // is the same field-fill
@@ -1058,6 +1064,13 @@ int32 main() {
 /* a TUPLE global with a non-constant slot. */
 //-EXPECT-ERROR: is not a constant expression
 //global (int, int) nctup_ = (shots_, 2);
+
+/* a string literal is a CONSTANT (the array global `greet_` above is the
+   working form), but the ITERATOR-global spelling stays gated downstream —
+   its storage story (a pointer into what?) is the string-constant gap. */
+//-EXPECT-ERROR: String constants are not yet supported
+//global char[] giter_ = "iter";
+//int32 use_giter() { __println("gi = " + giter_); return 0; }
 
 /* a POINTER global initialized to the ADDRESS of another global. `^shots_` is a
    link-time constant in C's model; it is still a READ of another global here, and the

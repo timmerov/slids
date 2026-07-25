@@ -2,6 +2,10 @@
 test using class fields in statements and expressions.
 test inferring field types from default values.
 
+the default values for fields must be foldable constants or aggregates of
+foldable constants.
+
+claude says (presumably blessed):
 a field with no explicit type infers its type from its default value, like an
 inferred local / param / const: a = 1 -> int, b = 3.14 -> float, c = 'q' -> char,
 d = true -> bool. the WIDTH follows the value (9999999999 exceeds int32 -> int64).
@@ -71,6 +75,58 @@ Class(
     }
 }
 
+/* class-typed fields with CONSTANT defaults — the by-slot recursive fill:
+   a scalar default, a tuple default, a HOOKED field class (its ctor runs at
+   the fill), and a tuple default on a field class that HAS a matching user
+   op= (a field default field-lists; the op= is never consulted). */
+Pt(int x_ = 0, int y_ = 0) {
+    int psum() { return x_ + y_; }
+}
+Hooked(int h_ = 0) {
+    _() { __println("Hooked:ctor: " + h_); }
+    ~() { __println("Hooked:dtor: " + h_); }
+}
+Oped(int p_ = 0, int q_ = 0) {
+    op=( (int, int)^ t ) {
+        p_ = t^[0];
+        q_ = t^[1];
+        __println("Oped:op=: must not run for a field default");
+    }
+}
+Nest(
+    Pt a_ = 3,          // scalar constant -> by-slot fill (x_=3, y_ defaults)
+    Pt b_ = (4, 5),     // tuple of constants -> by-slot fill
+    Hooked c_ = 9,      // hooked field class: fills, then its ctor hook runs
+    Oped d_ = (6, 7)    // matching user op= exists; the default still field-lists
+) {
+    int nsum() { return a_.psum() + b_.psum() + c_.h_ + d_.p_ + d_.q_; }
+}
+
+/* the remaining CONSTANT default shapes: a folded negative literal, an enum
+   value (folds to its literal), an array field's constant aggregate, a
+   nullptr pointer default, and a class field from a NAMED const (folded
+   before the check — the fold-then-check order is load-bearing). */
+enum int Ez ( ezOne = 1, ezTwo );
+Mix(
+    int n_ = -3,
+    Ez e_ = Ez:ezTwo,
+    int a_[2] = (4, 5),
+    int^ r_ = nullptr,
+    Pt k_ = K,
+    char[] i_ = "a",       // a string literal IS a constant (canon 2026-07-24)
+    char s_[6] = "hello"   // ...in the sized-array spelling too
+) {
+    int msum() { return n_ + e_ + a_[0] + a_[1] + k_.psum(); }
+    bool nullr() { return r_ == nullptr; }
+    void strs() { __println("strs = " + i_ + " " + s_); }
+}
+
+/* the fill recurses to ANY depth: a full-tuple default for a field whose
+   class itself holds class-typed fields. */
+Deep(Nest n_ = ((1, 2), (3, 4), 8, (5, 6))) {
+    int dsum() { return n_.nsum(); }
+}
+
 int32 main() {
 
     // every field default-initialized.
@@ -93,8 +149,33 @@ int32 main() {
     // (compute into a local — a parenthesized `+` inside a print arg is a separate
     // pre-existing print-concatenation gap, not a field issue.)
     def.a = def.a + 1000;          // obj.field write, reading obj.field
-    int outsum = def.a + def.g;    // obj.field + obj.field in arithmetic
+    int outsum = def.a + def.g;    // obj.field + def.g in arithmetic
     __println("def.outsum = " + outsum);
+
+    // class-typed fields fill from CONSTANT defaults, by slot recursively; the
+    // hooked field's ctor runs at the fill; Oped's op= never prints.
+    {
+        Nest ns;
+        __println("nest = " + ns.nsum());
+        Nest np((10, 20));
+        __println("npart = " + np.nsum());
+    }
+
+    // the remaining constant shapes: negative literal, enum value, array
+    // aggregate, nullptr, class-from-named-const. -3 + 2 + 4 + 5 + 5 = 13.
+    Mix mx;
+    __println("mix = " + mx.msum());
+    __println("mixr = " + mx.nullr());
+    mx.strs();
+    Mix mo(, , , , , "zz", "world");
+    mo.strs();
+
+    // the by-slot fill recurses through a class-of-classes default.
+    // (1+2) + (3+4) + 8 + (5+6) = 29.
+    {
+        Deep dp;
+        __println("deep = " + dp.dsum());
+    }
 
     return 0;
 }
@@ -104,3 +185,58 @@ int32 main() {
 //NoType(x) {
 //    void p() { __println("" + x); }
 //}
+
+/* a field default that CONSTRUCTS is code, not data — a default must be a
+   foldable constant or an aggregate of foldable constants. */
+//-EXPECT-ERROR: is not a constant expression
+//BadC(Pt p_ = Pt(7)) { }
+//int badc() { BadC b; return b.p_.psum(); }
+
+/* the zero-arg construction spelling is still a construction, not data — an
+   ABSENT default already means "default-construct the field". */
+//-EXPECT-ERROR: is not a constant expression
+//BadZ(Pt p_ = Pt()) { }
+//int badz() { BadZ b; return b.p_.psum(); }
+
+/* the check recurses into aggregate slots. */
+//-EXPECT-ERROR: is not a constant expression
+//BadT((int, Pt) t_ = (1, Pt(2))) { }
+//int badt() { BadT b; return b.t_[0]; }
+
+/* a CALL default is code too. */
+//-EXPECT-ERROR: is not a constant expression
+//int five() { return 5; }
+//BadF(int f_ = five()) { }
+//int badf() { BadF b; return b.f_; }
+
+/* the rule reaches a template FLAVOR's fields (checked per instance). */
+//-EXPECT-ERROR: is not a constant expression
+//BadTm<T>(T t_ = 1, Pt p_ = Pt(3)) { }
+//int badtm() { BadTm<int> b; return b.t_; }
+
+/* ...a BLOCK-SCOPE class... */
+//-EXPECT-ERROR: is not a constant expression
+//int badl() {
+//    BadL(Pt p_ = Pt(4)) { }
+//    BadL b;
+//    return b.p_.psum();
+//}
+
+/* ...and a field APPENDED by an incomplete class's re-open. */
+//-EXPECT-ERROR: is not a constant expression
+//Inc(int a_ = 1, ...) { }
+//Inc(Pt p_ = Pt(5)) { }
+//int badi() { Inc b; return b.a_; }
+
+/* heap allocation in a default is code twice over. */
+//-EXPECT-ERROR: is not a constant expression
+//BadH(int^ h_ = new int) { }
+//int badh() { BadH b; return b.h_^; }
+
+/* (a string-literal default is a CONSTANT — positives in Mix above.) */
+
+/* a TYPELESS field cannot infer from an aggregate (inference is scalar-only
+   — its own, earlier diagnostic). */
+//-EXPECT-ERROR: must be a constant expression
+//BadY(y = (1, 2)) { }
+//int bady() { BadY b; return b.y[0]; }

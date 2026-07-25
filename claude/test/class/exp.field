@@ -7,3 +7,16 @@ part.expr = 17
 def.more = 115
 part.more = 142
 def.outsum = 1108
+Hooked:ctor: 9
+nest = 34
+Hooked:ctor: 9
+npart = 61
+Hooked:dtor: 9
+Hooked:dtor: 9
+mix = 13
+mixr = true
+strs = a hello
+strs = zz world
+Hooked:ctor: 8
+deep = 29
+Hooked:dtor: 8

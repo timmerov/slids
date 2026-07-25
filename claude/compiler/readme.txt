@@ -783,10 +783,13 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
       `= ((1,2),(3,4))`) is the one that builds them.
     * NOT a read of another variable (`= other_global`, `= ^g`) and NOT a call (`= f()`,
       `Widget w(f())`).
-    * The CLASS is never policed beyond the initializer: its field DEFAULTS and its CTOR
-      BODY are code and may do whatever they like (allocate, call, touch other globals —
-      canon does all three). That is what the lazy gate is for, and it is where a global
-      built FROM another global belongs: `global (Widget c) { _() { c = w_; } ~() {} }`.
+    * The class's field DEFAULTS obey the SAME rule (classifyScope's per-field check,
+      the same isConstantInit predicate — canon test/class/field.sl): a default is data
+      read at every defaulting fill, so a construction (any arity, zero-arg included)
+      or call default is rejected at the class definition. Only the CTOR BODY is code
+      and may do whatever it likes (allocate, call, touch other globals — canon does
+      all three). That is what the lazy gate is for, and it is where a global built
+      FROM another global belongs: `global (Widget c) { _() { c = w_; } ~() {} }`.
     * This is POLICY, not soundness — the first-touch gate orders cross-global reads
       correctly (a global's ctor touching another fires that one's gate first). It is
       rejected because an initializer that quietly reads another global looks like data and

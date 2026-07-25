@@ -15,6 +15,8 @@ q=22
 grid=10,20,30
 grid1=99
 combo=7,true
+greet=hello
+greet2=jello
 widget:ctor
 wid=42,7
 widget:ctor

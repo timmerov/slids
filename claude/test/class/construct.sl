@@ -80,8 +80,8 @@ canon clarification regarding the construction sequence:
         call the ctor hook.
 
 non-default assignment operator has precedence over initialization by tuple.
-the initialization tuple may contain simple objects - where the object class
-has no ctor and there is on matching assignment operator.
+the initialization tuple may contain objects as long as no matching assignment
+operator exists.
 
 notes:
 

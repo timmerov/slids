@@ -136,8 +136,10 @@ Space {
 }
 
 /* a PLAIN class embedding an instance by value (field + transitive layout),
-   and doubling as the not-a-template negative below. */
-Wrap(Vec<int> in_ = Vec<int>()) {
+   and doubling as the not-a-template negative below. The default is a
+   CONSTANT aggregate (canon: a field default is data — a `Vec<int>()`
+   construction default is rejected). */
+Wrap(Vec<int> in_ = (0, 0)) {
     int wsum() { return in_.sum(); }
 }
 

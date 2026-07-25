@@ -2350,6 +2350,51 @@ Phase 9 — templates
     emits it); the bypass statically binds the aggregated base's
     EXTERNAL virtual across the seam (MyDer's trio).
     Suite: all positives and negatives green.
+  * A FIELD DEFAULT IS DATA                              LANDED 2026-07-24
+    Canon test/class/field.sl (the user's rule: "the default values for
+    fields must be foldable constants or aggregates of foldable
+    constants") + initialize.sl + construct.sl's construction-sequence
+    block. Fixes the todo bug (a construction-with-args field default
+    reached codegen's emitCall arity assert — "neither works nor errors").
+    ONE check in classifyScope's kClassDef field loop (beside the
+    abstract-embed check), REUSING isConstantInit — the globals
+    predicate, so "a global's initializer is data" and "a field default
+    is data" are one rule with one definition and one wording family
+    ("is not a constant expression"). It runs after constfold, so a
+    constant EXPRESSION default (`BASE+5`, a named const, an enum
+    member) is already a literal and passes; a construction (ANY arity —
+    the zero-arg `Pt()` too: an ABSENT default already default-
+    constructs; the `Wrap(Vec<int> in_ = Vec<int>())` positive was
+    canon-corrected to `= (0, 0)`), a call, a `new`, a string literal
+    (the globals twin's exact boundary), or any unfolded expression is
+    rejected at the class definition.
+    STILL LEGAL, pinned (field.sl Mix/Nest/Deep): negative literals,
+    enum values, array-field aggregates, nullptr pointer defaults,
+    class fields from scalar/tuple constants and from a NAMED const
+    (by-slot recursive fill to any depth — Deep's class-of-classes
+    default), a HOOKED field class (ctor at the fill), and a field
+    class WITH a matching user op= (a default always field-lists; the
+    op= is never consulted).
+    REACH, pinned negative each: template flavors (classifyScope runs
+    on instance clones), block-scope classes, and a field APPENDED by
+    an incomplete class's re-open (re-open kClassDef nodes pass the
+    same loop).
+    FOUND, left alone: a FUNCTION-param call default
+    (`int f(int a = five())`) asserts in classify's inferExpr — param
+    defaults are captured as literal text (fillDefaults), so they were
+    always constants-only de facto, unenforced; a todo candidate.
+    REVISED same day (user's canon): A STRING LITERAL IS A CONSTANT —
+    `A(char[] a = "a")` and the sized-array `char s_[6] = "hello"` are
+    valid defaults (one arm in isConstantInit; the const spellings
+    revisit with const enforcement, Phase 6). Both spellings pinned
+    positive in field.sl (Mix), defaults + empty-slot overrides.
+    FALLOUT on the predicate's other user: `global char gs[6] = "hello"`
+    now compiles and runs (the array-global form); `global char[] gi`
+    still rejects downstream ("String constants are not yet supported"
+    — the iterator-global gap, its own message, unchanged). BOTH pinned
+    in assign/global.sl: greet_ (init, read, and a write-through — real
+    storage, not the literal) + the giter_ negative.
+    Suite: 905 negatives, all positives green.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

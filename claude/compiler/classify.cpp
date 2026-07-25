@@ -40,9 +40,11 @@ bool isLiteralKind(parse::Kind k) {
 // rule exists to exclude back in. The DECLARATOR form `global Widget w(5);` remains the
 // spelling for a class global with field values: `(5)` there is the FIELD LIST — data —
 // not an rhs expression. `= 5` and `= (7, 9)` are the same fill.
-// The class is never policed beyond that: its field DEFAULTS and its CTOR BODY are code
-// and may do whatever they like. That is what the lazy first-touch gate is for, and it
-// is where a global built from another global belongs — say it out loud, in a ctor:
+// FIELD DEFAULTS obey the same rule (classifyScope's per-field check — the same
+// predicate): a default is data read at every defaulting fill, so a construction or
+// call default is rejected. Only the CTOR BODY is code and may do whatever it likes.
+// That is what the lazy first-touch gate is for, and it is where a global built from
+// another global belongs — say it out loud, in a ctor:
 // `global (Widget c) { _() { c = w_; } ~() {} }`.
 // Rejecting a non-constant initializer is not a soundness fix (the gate orders
 // cross-global reads correctly); it is language policy. An initializer that quietly
@@ -50,6 +52,11 @@ bool isLiteralKind(parse::Kind k) {
 bool isConstantInit(parse::Node const& e) {
     if (isLiteralKind(e.kind)) return true;
     if (e.kind == parse::Kind::kNullptrLiteral) return true;
+    // A string literal IS a constant (canon 2026-07-24: `A(char[] a = "a")` is
+    // valid) — it is const char[N] STORAGE, data through and through. The const
+    // spellings (`const char[]`, `(const char)[]`) revisit with const
+    // enforcement (Phase 6).
+    if (e.kind == parse::Kind::kStringLiteral) return true;
     if (e.kind != parse::Kind::kTupleExpr) return false;
     for (auto const& c : e.children) {
         if (c && !isConstantInit(*c)) return false;
@@ -867,6 +874,20 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
                 diagnostic::report(diag, {p->file_id, p->name_tok,
                     "Field '" + p->name + "' cannot embed the abstract class '"
                     + widen::spellOrEmpty(ft) + "' by value; use a reference '^'.", {}});
+            }
+            // A FIELD DEFAULT IS DATA — a foldable constant or an aggregate of
+            // foldable constants (canon field.sl/initialize.sl; the globals
+            // rule's twin, same predicate). A construction (`Pt(7)`, and the
+            // zero-arg `Pt()` — an ABSENT default already default-constructs)
+            // or a call is code in the fill path and is rejected. Checked here,
+            // after constfold folded defaults, so a constant EXPRESSION
+            // spelling (`BASE+5`, a named const) has already become a literal.
+            if (!p->children.empty() && p->children[0]
+                && !isConstantInit(*p->children[0])) {
+                diagnostic::report(diag, {p->file_id, p->name_tok,
+                    "Default for field '" + p->name + "' is not a constant "
+                    "expression; a field default is data — construct the field "
+                    "at the instantiation site instead.", {}});
             }
         }
     }

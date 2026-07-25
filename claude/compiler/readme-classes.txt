@@ -141,6 +141,19 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     ClassInfo; desugar lowers it to a kIndexExpr over the field's slot index, so it
     never reaches codegen (slot access by name). `^field` address-of walks
     kFieldExpr chains (resolve) and emitElementAddr GEPs a kSlid slot.
+  * A FIELD DEFAULT IS DATA — a foldable constant or an aggregate of foldable
+    constants, nothing else (canon test/class/field.sl; the globals rule's twin,
+    the SAME isConstantInit predicate, checked in classifyScope's kClassDef field
+    loop AFTER constfold folded defaults so a constant expression / named const /
+    enum member passes as its literal). A STRING LITERAL is a constant (canon
+    2026-07-24: `A(char[] a = "a")` and the sized-array `char s_[6] = "hello"`
+    are both valid; the const spellings revisit with const enforcement). A
+    construction (any arity — zero-arg too: an absent default already
+    default-constructs), a call, or a `new` is rejected at the class definition.
+    The check reaches template FLAVORS (instance clones run classifyScope),
+    block-scope classes, and re-open-APPENDED fields. A default always
+    FIELD-LISTS at the fill — a matching user op= on the field's class is never
+    consulted (the field op= exclusion below).
   * CONSTRUCTION (classify classifyClassInit) normalizes every init form to a
     per-field tuple: each field = init slot, else the author default (read LIVE off
     the kParam node — constfold may have replaced it), else default-constructed
