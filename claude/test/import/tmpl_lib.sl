@@ -51,6 +51,17 @@ Traced<T>() {
     T get() { return t_; }
 }
 
+/* the COMPLETING re-open of the header's incomplete template: no trailing
+   `...`, so it closes the class and supplies the fields with the bodies. */
+Grow<T>(
+    T sum_ = 0,
+    intptr n_ = 0
+) {
+    void add(T v) { sum_ = sum_ + v; n_ = n_ + 1; }
+    T total() { return sum_; }
+    intptr count() { return n_; }
+}
+
 Box<T>() {
     int has() {
         if (p_ == nullptr) { return 0; }

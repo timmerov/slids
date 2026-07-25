@@ -64,6 +64,16 @@ int32 main() {
     Vector<int>:Elem ye = 5; __println("y2 = " + ye);
     int64 y3 = Vector<int64>:kTag; __println("y3 = " + y3);
 
+    /* the header-declared INCOMPLETE template (`Grow<T>(...)`): the source's
+       completing re-open supplied the fields, so the flavor has the FULL
+       layout here — methods work and sizeof folds. */
+    Grow<int> gr;
+    gr.add(5);
+    gr.add(7);
+    __println("y4 = " + gr.total() + " " + gr.count());
+    intptr y5 = sizeof(Grow<int64>) - 2 * sizeof(int64);
+    __println("y5 = " + y5);
+
     /* the template METHOD across the seam, inferred and explicit. */
     Gauge g(7);
     int ms = g.scaled(5); __println("ms = " + ms);

@@ -87,6 +87,14 @@ int32 main() {
     /* the instance-qualified const through an already-demanded flavor. */
     int y4 = Vector<int16>:kTag; __println("y4 = " + y4);
 
+    /* the SECOND consumer's flavors of the header-incomplete template: the
+       shared flavor dedups across the seam; a fresh one demands its own. */
+    Grow<int> g2;
+    g2.add(3);
+    Grow<int64> g3;
+    g3.add(400);
+    __println("y6 = " + g2.total() + " " + g3.total());
+
     /* two type parameters — a comma in the demand spelling. */
     TPair<int, int8> tp(300, 5);
     int r3 = tp.kk(); __println("r3 = " + r3);

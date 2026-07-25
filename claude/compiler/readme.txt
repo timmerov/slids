@@ -1197,6 +1197,15 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     defines (the entry/clone file_ids are the header's, so the existing
     declared-in-header linkage rules emit them visible).
 
+  An INCOMPLETE header template completes CROSS-TU for free: the header
+  declares `Tmpl<T>(...)` (interface only — even fieldless), and the loaded
+  template source's completing re-open (no trailing `...`) closes it and
+  supplies the field list + bodies through the ordinary incomplete-class
+  machinery (pending_fields) — every consumer sees the FULL layout (sizeof
+  folds) because the source is always loaded beside its header. Canon
+  test/import Grow (tmpl_lib.slh/.sl, both consumers). The "never
+  completed" error fires only when NO loaded opening closes the template.
+
   THE .SLI POOL (human-readable, slids-shaped — the block statements are the
   reference's explicit-instantiation spelling, so the format can graduate
   into the language unchanged). Each consumer compile writes `<out>.sli`
@@ -1363,8 +1372,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   template op= / op<-- / op<--> (excluded by design — see TEMPLATE
   OPERATORS above), unary template operators (a T in no parameter is
   uninferable and operators take no explicit list),
-  header-declared INCOMPLETE templates (cross-TU completion — the
-  never-completed `...` error stands in), source REDIRECTION (`@impl`-style;
+  source REDIRECTION (`@impl`-style;
   the source must share the header's base name), a NESTED CLASS inside a
   header-owned class template (rejected — a header is declarations-only and
   a re-open cannot reach into a nested class, so its bodies have no delivery

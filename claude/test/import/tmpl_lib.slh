@@ -62,6 +62,15 @@ T tbias<T>(T v);
 /* an alias template is whole in the header — nothing to defer. */
 alias TRef<T> = T^;
 
+/* a header-declared INCOMPLETE template — interface only, not even fields;
+   the source's completing re-open (no trailing `...`) supplies the field
+   list and the bodies. Consumers get the FULL layout (sizeof folds). */
+Grow<T>(...) {
+    void add(T v);
+    T total();
+    intptr count();
+}
+
 /* a USER transfer operator declared here: it is the flavor's canonical copy,
    defined across the seam by the source's re-open. */
 Acc<T>(T v_ = 0) {
@@ -94,6 +103,12 @@ Ucp<T>(T^ u_ = nullptr) {
     op=(Ucp^ s);
     int un();
 }
+
+/* a header-incomplete template that NO loaded opening ever completes. */
+//-EXPECT-ERROR: never completed
+//Ngrow<T>(...) {
+//    void nadd(T v);
+//}
 
 /* a nested class inside a header class template has no body channel. */
 //-EXPECT-ERROR: may not contain a nested class

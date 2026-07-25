@@ -2,9 +2,6 @@
 agenda:
 
   Deferred by your explicit scope calls
-  1. Incomplete templates cross-TU — a header-declared ... template completing in another TU. The never-completed error ("close it with a re-open that omits the '...'") stands guard until
-  this lands.
-  2. Source redirection — the template source must share the header's base name; an @impl "other"-style override (v1's old wishlist item) is deferred.
   3. Nested template types — the >> umbrella (lexer closer split + angle-depth in the gates): Pair<Vec<int>>, Ref<Ref<int>>. An alias argument smuggles an instance through meanwhile; the
   umbrella got more central again since .sli spellings inherit the same limit.
 

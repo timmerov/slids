@@ -7786,10 +7786,11 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         auto memo = it->second.instances.find(args);
         if (memo != it->second.instances.end()) return memo->second;
     }
-    // A never-completed INCOMPLETE template has no layout to instantiate. A
-    // plain class left open completes in another translation unit via its
-    // header; cross-TU templates have not landed, so this is an error, not a
-    // half-class. (The end-of-resolve sweep catches the never-USED case;
+    // A never-completed INCOMPLETE template has no layout to instantiate.
+    // Cross-TU completion WORKS (a header's `Tmpl<T>(...)` closes via the
+    // loaded template source's completing re-open — canon test/import
+    // Grow): this fires only when NO loaded opening closed it, in any
+    // configuration. (The end-of-resolve sweep catches the never-USED case;
     // open_reported keeps the two sites to one diagnostic.)
     if (it->second.cls_open) {
         if (!it->second.open_reported) {
@@ -7797,7 +7798,6 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             diagnostic::report(diag, {file_id, tok,
                 "Class template '" + tree.entries[tmpl_entry_id].name
                 + "' is declared incomplete ('...') and never completed; "
-                "cross-TU completion of a template is not supported yet — "
                 "close it with a re-open that omits the '...'.", {}});
         }
         return -1;
@@ -8644,19 +8644,19 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // constfold/classify/desugar/codegen) walk it like any class.
     drainClassTemplateBodies(tree, diag);
 
-    // A class template whose `...` was never closed — used or not — errors: a
-    // plain class left open completes in another TU via its header, but
-    // cross-TU templates have not landed. (A USED open template reported at
-    // its use; open_reported keeps this to one diagnostic.)
+    // A class template whose `...` was never closed — used or not — errors.
+    // Cross-TU completion works (the header's incomplete template closes via
+    // the loaded source's completing re-open — canon test/import Grow), so
+    // reaching here means NO loaded opening closed it. (A USED open template
+    // reported at its use; open_reported keeps this to one diagnostic.)
     for (auto& [tid, ti] : tree.templates) {
         if (!ti.def || ti.def->kind != parse::Kind::kClassDef) continue;
         if (ti.cls_open && !ti.open_reported) {
             ti.open_reported = true;
             diagnostic::report(diag, {ti.def->file_id, ti.def->name_tok,
                 "Class template '" + ti.def->name + "' is declared incomplete "
-                "('...') and never completed; cross-TU completion of a template "
-                "is not supported yet — close it with a re-open that omits the "
-                "'...'.", {}});
+                "('...') and never completed; close it with a re-open that "
+                "omits the '...'.", {}});
         }
     }
     tree.resolve_done = true;
