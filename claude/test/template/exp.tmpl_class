@@ -99,6 +99,16 @@ iq17 = 11
 iq18 = 9
 fc = 7
 iq23 = 42
+ns1 = 10
+ns2 = 15
+ns3 = 106
+NH:ctor: 5
+held2
+NH:dtor: 5
+ns4 = 5
+ns5 = 5
+ns6 = 30
+ns7 = 10
 iq19 = 3
 iq20 = 12
 iq21 = 4

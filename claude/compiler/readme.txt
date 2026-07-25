@@ -1337,7 +1337,25 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   (relocateOutOfLineMembers rejects the definition kinds focused). A
   hoisted nested template under an instance qualifier
   (`TClass<int>:SClass<float>`) resolves through the per-instance
-  sub-pattern as fallout.
+  sub-pattern as fallout — and chains to ANY DEPTH
+  (`A<int>:H<int>:D<int>`): a per-flavor sub-pattern entry is NAMED by
+  its host clone's spelling, so each level's instantiation names the
+  next. A MIXED chain (`A:H<int>:D<int>`) rides patternDefers — a
+  segment naming a frameless PATTERN defers when the next segment
+  carries the list (the pair is one spelling); a LISTLESS pattern
+  qualifier is focused ("requires a type-argument list to reach its
+  members"). Member lookup falls back to the DECLARED set anywhere
+  INSIDE an instance (findMemberLiveOrInstance + frameInsideInstance,
+  walking class owners — a flavor's members' liveness dies with the
+  scope that first minted it, and the fallback also serves a plain
+  nested class's or enum facet's frame, `A<int>:N:kN`). The full
+  species matrix rides the per-flavor machinery — nested classes
+  derived from a SIBLING, a file-scope base, or an INSTANCE base
+  spelled with the outer T (virtual, dispatchable); hooked and
+  user-op= nested classes; hoisted templates derived from a file-scope
+  base or an instance base of their OWN list; templates inside PLAIN
+  nested classes; namespace-hosted chains (`Spc3:B<int>:C<float>`) —
+  canon tmpl_class.sl (Spec) + tmpl_nested.sl (Host2).
 
   DEFERRED: TYPE-ranked overloading AMONG templates (arity-only is landed —
   same-arity same-name TEMPLATES stay a collision; plain-beats-template
@@ -1363,8 +1381,11 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   .sli + --instantiate),
   the out-of-line template METHOD form
   targeting a CLASS TEMPLATE owner, static-bypass beyond what falls out
-  free, deeper qualifier chains to a sub-pattern (`Spc:Outer:Inner` — the
-  composed-name divert reaches one level). Canon
+  free, UNIFYING the bare-host and instance-qualified spellings of ONE
+  hoisted flavor (`A:H<int>` and `A<int>:H<int>` currently mint DISTINCT
+  classes — the file-level and per-instance sub-patterns memoize
+  separately, so their pointers don't interconvert; the self-contained
+  inner-list design says they should be one class). Canon
   test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl +
   tmpl_class.sl + tmpl_complete.sl + tmpl_nested.sl; cross-TU canon
   test/import/tmpl_test.sl +

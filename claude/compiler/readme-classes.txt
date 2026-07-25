@@ -97,12 +97,22 @@ METHOD inside a class template (per-flavor patterns; the snapshot carries
 the flavor's self-redirect), a HOISTED class OR alias template
 (`TClass:SClass<int>`, `TClass:Ref<int>` — the sub-pattern owns the
 qualified spelling; its template list is SELF-CONTAINED, re-listing any
-outer param it uses; the qualifier is the bare host name, never
-`TClass<int>:`), nested template TYPES (`Vec<Vec<int>>`, the `>>` closer
-split), and class/function/alias templates in a template function's or
-method's BODY (block-scope registration as-is). The out-of-line template METHOD
-form targeting a CLASS TEMPLATE owner stays deferred (the plain-class and
-namespace flavors are landed — readme.txt TEMPLATES).
+outer param it uses; the bare host name is the canonical qualifier, and
+the instance-qualified `TClass<int>:SClass<float>` also resolves — the
+per-instance sub-pattern; NOTE the two spellings currently mint DISTINCT
+classes, readme.txt TEMPLATES deferred), nested template TYPES
+(`Vec<Vec<int>>`, the `>>` closer split), and class/function/alias
+templates in a template function's or method's BODY (block-scope
+registration as-is). Nesting composes to ANY DEPTH
+(`A<int>:H<int>:D<int>`, aliases and consts at depth, namespace-hosted
+chains) and BASES ride at every level: a nested class may derive from a
+SIBLING, a file-scope class, or a template INSTANCE (spelled with the
+outer T, virtual + dispatchable); a hoisted template may derive from a
+file-scope class or an instance of its OWN list; hooks and user
+transfer operators in nested classes fire per flavor — canon
+tmpl_class.sl (Spec) + tmpl_nested.sl (Host2). The out-of-line template
+METHOD form targeting a CLASS TEMPLATE owner stays deferred (the
+plain-class and namespace flavors are landed — readme.txt TEMPLATES).
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)

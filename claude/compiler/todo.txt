@@ -28,6 +28,9 @@ BUGS
     — pre-existing, distinct from the field bug: param defaults are captured as literal text
     (fillDefaults), so they were always de-facto constants-only, just unenforced.
 
+  *   T Shape:Corner:dist() { ... }        // ✗ the out-of-line qualifier walks ONE
+                                       //   level — no Outer:Inner:m depth
+
 
 UNBLOCKED FEATURES
 

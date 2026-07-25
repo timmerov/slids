@@ -2395,6 +2395,39 @@ Phase 9 — templates
     in assign/global.sl: greet_ (init, read, and a write-through — real
     storage, not the literal) + the giter_ negative.
     Suite: 905 negatives, all positives green.
+  * NESTED SPECIES + DEEP CHAINS                          LANDED 2026-07-24
+    (The instance-qualified landing's completion pass — canon
+    tmpl_class.sl Spec + tmpl_nested.sl Host2/Spc3.) EVERY nested-class
+    species rides the per-flavor machinery, pinned: a plain nested
+    class; nested DERIVED from the SIBLING, from a FILE-SCOPE base, and
+    from a TEMPLATE-INSTANCE base spelled with the outer T (virtual —
+    dispatch lands most-derived); a HOOKED nested class (per-flavor
+    ctor/dtor balance); a USER-op= nested class (the skew proves the
+    transfer invariant); hoisted templates DERIVED from a file-scope
+    base and from an instance base of their OWN list (`VW<S> : HV<S>` —
+    self-contained); a template inside a PLAIN nested class; per-flavor
+    independence (a second flavor's species are their own classes);
+    the sibling-base bypass INSIDE a flavor's nested derived (`N:nv()`);
+    a const inside a nested class of a flavor (`Spec<int>:N:kN`).
+    DEPTH IS FREE: `A<int>:H<int>:D<int>` composes to any depth because
+    a per-flavor sub-pattern entry is NAMED by its host clone's
+    spelling — each level's instantiation names the next; aliases and
+    consts resolve at depth; namespace-hosted chains work
+    (`Spc3:B<int8>:C<float>`); distinct args at every level key
+    independent flavors. TWO walker fixes fell out: patternDefers — a
+    segment naming a frameless PATTERN defers when the NEXT segment
+    carries the list (the mixed chain `A:H<int>:D<int>`), and a
+    LISTLESS pattern qualifier gets the focused "requires a
+    type-argument list to reach its members" (negatives pinned:
+    `Host2:H:D<int>`, `Host2:P:E<int>`); and frameInsideInstance walks
+    class OWNERS upward (a plain nested class's or enum facet's frame
+    is inside the instance too — `A<int>:N:kN` cross-function).
+    FINDING (user decision pending): `A:H<int>` and `A<int>:H<int>`
+    mint DISTINCT classes — the file-level and per-instance
+    sub-patterns memoize separately, pointers don't interconvert; the
+    self-contained inner-list design says one class. Recorded in
+    readme.txt's deferred list; not pinned either way.
+    Suite: all positives and negatives green.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

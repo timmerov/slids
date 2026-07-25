@@ -849,14 +849,19 @@ int findMemberLive(parse::Tree const& tree, int ns_frame,
 }
 
 // Is `ns_frame` the member frame of a template INSTANCE, or nested anywhere
-// inside one (an enum facet of an instance's enum)? Walks owner frames up to
-// the first CLASS frame and asks whether that class is a flavor.
+// inside one — an enum facet of an instance's enum, or a plain NESTED class
+// of a flavor (`A<int>:N:kN` — N's own name is bare; its OWNER is the
+// flavor)? Walks owner frames upward, asking each class on the way.
 bool frameInsideInstance(parse::Tree const& tree, int ns_frame) {
     int guard = 32;
     while (ns_frame >= 0 && ns_frame != kGlobalFrame && guard-- > 0) {
         int cid = parse::classEntryForFrame(tree, ns_frame);
-        if (cid >= 0)
-            return tree.entries[cid].name.find('<') != std::string::npos;
+        if (cid >= 0) {
+            if (tree.entries[cid].name.find('<') != std::string::npos)
+                return true;
+            ns_frame = tree.entries[cid].owner_ns_frame;   // nested: ask the owner
+            continue;
+        }
         int owner = -1;   // the entry owning this frame; hop to ITS owner frame
         for (parse::Entry const& e : tree.entries) {
             if (e.ns_frame_id == ns_frame) { owner = e.owner_ns_frame; break; }
@@ -953,6 +958,26 @@ int resolveNamespaceSegments(parse::Tree& tree,
         }
         return tree.entries[cid].ns_frame_id;
     };
+    // A segment naming a class-template PATTERN owns no frame. When the NEXT
+    // segment carries a type-arg list, the pair is ONE spelling (`A:H<int>` —
+    // the hoisted sub-pattern's use, `A:H<int>:D<int>` the deep chain): defer,
+    // and let the next iteration's instanceFrame resolve the combined prefix.
+    // Without a following list there is no flavor to look inside — focused.
+    auto patternDefers = [&](int entry_id, std::size_t i) -> bool {
+        if (entry_id < 0
+            || tree.entries[entry_id].kind != parse::EntryKind::kClass
+            || !tree.entries[entry_id].is_template) {
+            return false;
+        }
+        if (i + 1 < segments.size()
+            && segments[i + 1].find('<') != std::string::npos) {
+            return true;
+        }
+        diagnostic::report(diag, {file_id, toks[i],
+            "Class template '" + segments[i]
+            + "' requires a type-argument list to reach its members.", {}});
+        return false;
+    };
     int cur;
     std::size_t i;
     if (global) {
@@ -963,13 +988,20 @@ int resolveNamespaceSegments(parse::Tree& tree,
         if (cur < 0) return -1;
         i = 1;
     } else {
-        int frame = entryNamespaceFrame(tree, resolveName(tree, segments[0]));
+        int id = resolveName(tree, segments[0]);
+        int frame = entryNamespaceFrame(tree, id);
         if (frame < 0) {
-            diagnostic::report(diag, {file_id, toks[0],
-                "'" + segments[0] + "' is not a namespace.", {}});
-            return -1;
+            if (!patternDefers(id, 0)) {
+                if (!diagnostic::hasErrors(diag)) {
+                    diagnostic::report(diag, {file_id, toks[0],
+                        "'" + segments[0] + "' is not a namespace.", {}});
+                }
+                return -1;
+            }
+            cur = -1;   // no frame yet — segments[1] carries the list
+        } else {
+            cur = frame;
         }
-        cur = frame;
         i = 1;
     }
     for (; i < segments.size(); ++i) {
@@ -978,12 +1010,15 @@ int resolveNamespaceSegments(parse::Tree& tree,
             if (cur < 0) return -1;
             continue;
         }
-        int frame = entryNamespaceFrame(
-            tree, findMemberLiveOrInstance(tree, cur, segments[i]));
+        int id = findMemberLiveOrInstance(tree, cur, segments[i]);
+        int frame = entryNamespaceFrame(tree, id);
         if (frame < 0) {
-            diagnostic::report(diag, {file_id, toks[i],
-                "'" + segments[i] + "' is not a namespace member of '"
-                + qualPrefixText(segments, global, i) + "'.", {}});
+            if (patternDefers(id, i)) continue;   // next segment has the list
+            if (!diagnostic::hasErrors(diag)) {
+                diagnostic::report(diag, {file_id, toks[i],
+                    "'" + segments[i] + "' is not a namespace member of '"
+                    + qualPrefixText(segments, global, i) + "'.", {}});
+            }
             return -1;
         }
         cur = frame;

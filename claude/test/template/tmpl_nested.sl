@@ -212,6 +212,46 @@ CoexF<T>(T f_ = 0) {
     U m<U>(U v) { return v; }
 }
 
+/* HOISTED templates with BASES — a file-scope base and an instance base of
+   the hoisted class's OWN list (self-contained: `VW<S>` binds S from HV's
+   list) — and DEPTH-2 nesting: a template inside a hoisted template, and a
+   template inside a PLAIN nested class. */
+HBase(int hb_ = 1) {
+    int bump() { return hb_ + 10; }
+}
+VW<S>(S z_ = 3) {
+    virtual S tagv() { return z_; }
+}
+Host2<T>(T t_ = 2) {
+    HBase : HD<S>(S g_ = 9) { S gv() { return bump() + g_; } }
+    VW<S> : HV<S>(S k_ = 2) { virtual S tagv() { return 200 + k_; } }
+    H<S>(S h_ = 8) {
+        S hv() { return h_; }
+        D<U>(U d_ = 4) { U dv() { return d_; } }
+        /* depth-2 DERIVED, a depth-2 ALIAS template, a depth-2 const. */
+        HBase : G<U>(U g2_ = 1) { U g2v() { return bump() + g2_; } }
+        alias R2<U> = U^;
+        const int kH = 40;
+    }
+    P(T p_ = 3) {
+        E<U>(U e_ = 6) { U ev() { return e_; } }
+    }
+}
+
+/* a deep flavor minted in ONE function answers qualified from another. */
+void warmH() {
+    Host2<int>:H<int> wh(9);
+    __println("wh = " + wh.hv());
+}
+
+/* a NAMESPACE-hosted template with a nested template: the chain crosses
+   namespace -> pattern -> flavor -> sub-flavor. */
+Spc3 {
+    B<T>(T b_ = 3) {
+        C<S>(S c_ = 6) { S cv() { return c_; } }
+    }
+}
+
 /* a hoisted template's bare name resolves nowhere outside its host. */
 //-EXPECT-ERROR: Unknown type
 //int bads() { SClass<int> s; s; return 0; }
@@ -219,6 +259,20 @@ CoexF<T>(T f_ = 0) {
 /* the bare-host qualifier stays canonical; the INSTANCE-qualified spelling
    (`TClass<int>:SClass<float>`) also resolves since the instance-qualified
    landing (2026-07-24) — pinned as a positive in main. */
+
+/* a LISTLESS pattern qualifier names no flavor — there is nothing to look
+   inside (`Host2:H:D<int>` — H needs its list). */
+//-EXPECT-ERROR: requires a type-argument list
+//int badh() { Host2:H:D<int> x(1); return x.dv(); }
+
+/* a PLAIN nested class depends on the outer flavor — the bare-pattern
+   qualifier cannot reach it (`Host2<int>:P:E<int>` is the spelling). */
+//-EXPECT-ERROR: requires a type-argument list
+//int badp() { Host2:P:E<int> x(1); return x.ev(); }
+
+/* an unknown member at depth carets the deep prefix. */
+//-EXPECT-ERROR: is not a type in
+//int badn() { Host2<int>:H<int>:NoSuch x; x; return 0; }
 
 /* a hoisted template's list is SELF-CONTAINED: an outer param it does not
    re-list is simply not in scope. */
@@ -308,6 +362,46 @@ int32 main() {
        instance-qualified landing): the qualifier mints TClass<int> and the
        walk reaches its per-flavor sub-pattern. */
     TClass<int>:SClass<float> sq(4.5); __println("nq = " + sq.s_);
+
+    /* hoisted templates with bases: the file-scope base, and the own-list
+       instance base with dispatch landing most-derived. */
+    Host2:HD<int> hd(1, 9);
+    int hx1 = hd.gv(); __println("hx1 = " + hx1);
+    Host2:HV<int> hv(3, 2);
+    VW<int>^ wp = ^hv;
+    int hx2 = wp^.tagv(); __println("hx2 = " + hx2);
+
+    /* DEPTH-2 chains, every qualifier mix: bare host, bare-host-then-
+       instance, and the full instance chain (whose H<int> flavor was minted
+       in warmH — the cross-function lookup); plus a template inside a
+       PLAIN nested class. */
+    warmH();
+    Host2:H<int> hh(8);
+    int hx3 = hh.hv(); __println("hx3 = " + hx3);
+    Host2:H<int>:D<int> dd1(4);
+    int hx4 = dd1.dv(); __println("hx4 = " + hx4);
+    Host2<int>:H<int>:D<int> dd2(5);
+    int hx5 = dd2.dv(); __println("hx5 = " + hx5);
+    Host2<int>:P:E<int> pe(6);
+    int hx6 = pe.ev(); __println("hx6 = " + hx6);
+
+    /* depth-2 derived (its base reached through two hoisting levels), the
+       depth-2 alias template, the depth-2 member const, and DISTINCT args
+       at every level keying independent flavors. */
+    Host2<int>:H<int>:G<int> hg(1, 2);
+    int hx7 = hg.g2v(); __println("hx7 = " + hx7);
+    int zz = 5;
+    Host2<int>:H<int>:R2<int> hrp = ^zz;
+    __println("hx8 = " + hrp^);
+    int hx9 = Host2<int>:H<int>:kH; __println("hx9 = " + hx9);
+    Host2<int>:H<int8>:D<float> hdf(1.5);
+    __println("hx10 = " + hdf.dv());
+
+    /* the namespace-hosted chain, same and mixed flavors. */
+    Spc3:B<int>:C<int> sc(6);
+    int hx11 = sc.cv(); __println("hx11 = " + hx11);
+    Spc3:B<int8>:C<float> scf(1.5);
+    __println("hx12 = " + scf.cv());
 
     /* methods on a hoisted instance: the bare receiver name, both params
        from the one self-contained list. */

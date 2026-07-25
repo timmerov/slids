@@ -264,6 +264,35 @@ void fnC() {
     __println("fc = " + kc.subv());
 }
 
+/* the NESTED-CLASS SPECIES, all riding the per-flavor machinery: a plain
+   nested class; derived from the plain SIBLING; derived from a FILE-SCOPE
+   base; derived from a TEMPLATE-INSTANCE base spelled with the outer T
+   (virtual, dispatchable); a HOOKED nested class (per-flavor ctor/dtor);
+   and a USER-op= nested class (the transfer invariant, per flavor). */
+SBase(int sb_ = 1) {
+    int bump() { return sb_ + 10; }
+}
+Spec<T>(T t_ = 2) {
+    N(T n_ = 5) {
+        const int kN = 30;
+        T nv() { return n_; }
+    }
+    N : ND(T d_ = 7) {
+        T dv() { return nv() + d_; }
+        /* the bypass naming the SIBLING base inside a flavor's nested class. */
+        T dv2() { return N:nv() + d_; }
+    }
+    SBase : NB(T e_ = 4) { T ev() { return bump() + e_; } }
+    VB<T> : NV(T f_ = 6) { virtual T tagv() { return 100 + f_; } }
+    NH(T h_ = 1) {
+        _() { __println("NH:ctor: " + h_); }
+        ~() { __println("NH:dtor: " + h_); }
+    }
+    NO(T o_ = 0) {
+        op=(NO^ s) { o_ = s^.o_ + 1; }
+    }
+}
+
 /* a template owns its name: no plain-class duplicate, no re-open. */
 //-EXPECT-ERROR: owns its name
 //Vec(int dup_ = 0) { }
@@ -544,6 +573,33 @@ int32 main() {
     fnC();
     int64 iq23 = Kit<int64>:kBase + Kit<int64>:E:eTwo;
     __println("iq23 = " + iq23);
+
+    /* the nested-class species, per flavor: derived-from-sibling, from a
+       file-scope base, from an instance base (dispatch lands most-derived),
+       hooks balance, and the user copy skew proves no blit. */
+    Spec<int>:ND snd(3, 7);
+    int ns1 = snd.dv(); __println("ns1 = " + ns1);
+    Spec<int>:NB snb(1, 4);
+    int ns2 = snb.ev(); __println("ns2 = " + ns2);
+    Spec<int>:NV snv(3, 6);
+    VB<int>^ svp = ^snv;
+    int ns3 = svp^.tagv(); __println("ns3 = " + ns3);
+    {
+        Spec<int>:NH snh(5);
+        __println("held2");
+    }
+    Spec<int>:NO sno(4);
+    Spec<int>:NO sn2 = sno;
+    int ns4 = sn2.o_; __println("ns4 = " + ns4);
+
+    /* a SECOND flavor's species are their own classes. */
+    Spec<int64>:ND wnd(2, 3);
+    int64 ns5 = wnd.dv(); __println("ns5 = " + ns5);
+
+    /* a const INSIDE a plain nested class of a flavor (three segments, plain
+       interior), and the sibling-base bypass from inside the nested derived. */
+    int ns6 = Spec<int>:N:kN; __println("ns6 = " + ns6);
+    int ns7 = snd.dv2(); __println("ns7 = " + ns7);
 
     /* the remaining type positions: an alias to the qualified spelling, an
        array, the plain-class field, the global; ##type reports as written. */
