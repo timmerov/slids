@@ -1,20 +1,7 @@
 
 agenda:
 
-  Rejected with focused messages (no delivery channel):
-  - Template method inside a header-owned class template — "may not contain a template method (not supported yet)". An aggregated flavor is declaration-only; the inner pattern's instances
-  are consumer-private, so the source's --instantiate pass can never know which flavors to emit. (This session's guard; negative in tmpl_lib.slh.)
-  - Nested class inside a header-owned class template — same shape, same reason ("may not contain a nested class"), from the cross-TU landing. Asymmetry noted in the docs: a source re-open's
-  nested class compiles in the sibling but rejects in every consumer.
-  - Header-declared incomplete template (... completed in another TU) — "cross-TU completion of a template is not supported yet."
-  - Local-type instance with the template source absent — focused error; structurally impossible rather than unbuilt (nobody else can emit the flavor).
-
-  Rules by design (not gaps):
-  - A consumer may not define or re-open a header template ("defined by its module's source") — the alternative was silent per-TU divergence.
-  - A source-only member exists in the sibling's flavors and is "no method" in a consumer's — the header is the interface.
-  - A template body leaning on TU-private names can't instantiate inline — the private-name chain diagnostic.
-
-  Deferred / unbuilt:
+Deferred / unbuilt:
   - Out-of-line template method targeting a class-template owner (T Vec:m<X>() — the plain-class and namespace owners landed with cross-TU).
   - Source redirection (@impl-style — the source must share the header's base name).
   - Author-side up-front private-name checking (consumer side is covered; the author finds out when a consumer does).

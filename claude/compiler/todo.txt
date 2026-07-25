@@ -58,6 +58,20 @@ UNBLOCKED FEATURES
   * need to review diagnostic messages. some are littered with incomprehensible
     jargon. use opus not fable.
 
+  * Template method inside a header-owned class template — "may not contain a template method
+    (not supported yet)". An aggregated flavor is declaration-only; the inner pattern's instances
+    are consumer-private, so the source's --instantiate pass can never know which flavors to emit.
+    (This session's guard; negative in tmpl_lib.slh.)
+
+  *  Nested class inside a header-owned class template — same shape, same reason ("may not contain
+    a nested class"), from the cross-TU landing. Asymmetry noted in the docs: a source re-open's
+    nested class compiles in the sibling but rejects in every consumer.
+
+  * this error is detectable at compile time. so we could get a nice diagnostic instead of a
+    random link error.
+    Local-type instance with the template source absent — focused error; structurally impossible
+    rather than unbuilt (nobody else can emit the flavor).
+
 
 BLOCKED FEATURES
 
