@@ -38,9 +38,11 @@ existing machinery; ##type reports the use as written.
 
 the type-list is required (no inference from construction arguments). a
 template owns its name (no overloads, no re-open); incomplete (`...`) and
-external members (`T Vec:m()`) are rejected this landing; template methods
-inside a template class landed later (tmpl_nested.sl); nested uses
-(`Pair<Vec<int>>`) stay with the `>>` umbrella todo.
+external members (`T Vec:m()`) were rejected this landing (both landed
+later — completion via re-open, external members into the pattern);
+template methods inside a template class landed later (tmpl_nested.sl);
+nested uses (`Pair<Vec<int>>`) landed with the `>>` closer split
+(tmpl_nested.sl tier 3).
 */
 
 /* the workhorse: fields and methods on T, a user binary operator, and a member
@@ -181,8 +183,9 @@ Data(int d_ = 3) {
     int dv() { return d_; }
 }
 
-/* an INSTANCE as a type argument, smuggled through an alias (the nested
-   `Pair<Vec<int>>` spelling stays deferred with the `>>` split). */
+/* an INSTANCE as a type argument through an alias — the alias-spelled and
+   direct (`Pair<Vec<int>>`, legal since the `>>` split landed) forms name
+   the same flavor; this pins the alias canonicalization. */
 alias VI = Vec<int>;
 
 /* the full member vocabulary in a template body: const, alias, enum, a nested

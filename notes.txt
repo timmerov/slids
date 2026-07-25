@@ -1,10 +1,6 @@
 
 agenda:
 
-  Deferred by your explicit scope calls
-  3. Nested template types — the >> umbrella (lexer closer split + angle-depth in the gates): Pair<Vec<int>>, Ref<Ref<int>>. An alias argument smuggles an instance through meanwhile; the
-  umbrella got more central again since .sli spellings inherit the same limit.
-
   Rejected with focused messages (no delivery channel):
   - Template method inside a header-owned class template — "may not contain a template method (not supported yet)". An aggregated flavor is declaration-only; the inner pattern's instances
   are consumer-private, so the source's --instantiate pass can never know which flavors to emit. (This session's guard; negative in tmpl_lib.slh.)

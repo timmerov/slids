@@ -27,9 +27,9 @@ signature resolves its arguments where that template's own T is in scope, the
 two features compose with no extra machinery (dump below).
 
 declarable anywhere an alias is (file, namespace, class body, block); usable at
-every type position (parseType owns the `Name<args>` form). single-level only:
-a nested use (`Ref<Ref<int>>`) dies on the unsplit `>>` token — deferred with
-the closer-splitting todo item.
+every type position (parseType owns the `Name<args>` form). nested uses
+(`Ref<Ref<int>>`) landed with the `>>` closer split — a use's ARGUMENTS resolve
+before the alias name joins the cycle set (composition, not a cycle; Nest<T>).
 */
 
 alias Plain = int;
