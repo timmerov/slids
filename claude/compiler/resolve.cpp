@@ -254,8 +254,7 @@ std::string memberQualifiedName(parse::Tree const& tree, int entry_id) {
 // recursion: an expansion may need a pattern not yet built).
 widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
                                           std::set<std::string>& visiting,
-                                          bool& reported, diagnostic::Sink& diag,
-                                          int use_file_id = -1, int use_tok = -1);
+                                          bool& reported, diagnostic::Sink& diag);
 // The entry a template-alias use names — bare (scope-aware) or qualified
 // (`Deep:RT<int>`). -1 when absent (the caller reports).
 int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
@@ -264,6 +263,38 @@ int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
 void registerAliasTemplate(parse::Tree& tree, parse::Node& node);
 void validateAliasTemplate(parse::Tree& tree, parse::Node& node,
                            diagnostic::Sink& diag);
+
+bool fileIsImported(parse::Tree const& tree, int file_id);
+
+// Does `t` reach a LISTLESS flavor (`TClass<>`) anywhere — as the leaf, behind
+// pointers/arrays, inside a tuple slot? A listless flavor is a qualifier, not
+// a type: it never declares storage and never binds a template argument.
+bool reachesListlessFlavor(parse::Tree const& tree, widen::TypeRef t) {
+    using F = widen::Type::Form;
+    widen::Type const& ty = widen::get(t);
+    switch (ty.form) {
+        case F::kPointer:
+        case F::kIterator: return reachesListlessFlavor(tree, ty.pointee);
+        case F::kArray:    return reachesListlessFlavor(tree, ty.elem);
+        case F::kAlias:
+        case F::kConst:    return reachesListlessFlavor(tree, ty.underlying);
+        case F::kTuple:
+        case F::kTmplUse:
+            for (auto s : ty.slots)
+                if (reachesListlessFlavor(tree, s)) return true;
+            return false;
+        case F::kSlid: {
+            int cid = parse::classEntryForType(tree, t);
+            return cid >= 0 && tree.entries[cid].listless;
+        }
+        case F::kNone:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+            return false;
+    }
+    return false;
+}
 
 widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                               std::set<std::string>& visiting, bool& reported,
@@ -326,7 +357,18 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 if (cti == tree.templates.end()) return t;   // registration errored
                 std::size_t nparams = cti->second.def->type_params.size();
                 std::vector<widen::TypeRef> args = widen::get(t).slots;
-                if (args.size() != nparams) {
+                // The EMPTY list `<>` names the LISTLESS flavor — the qualifier
+                // reaching the members with no dependency on the list. Owned
+                // templates only: a header template's flavors are cross-TU
+                // spellings, and `<>` is excluded from the bundle.
+                if (args.empty() && fileIsImported(tree, tree.entries[id].file_id)) {
+                    reported = true;
+                    diagnostic::report(diag, {file_id, tok,
+                        "'" + name + "<>' is not available for a template "
+                        "declared in a header (not supported yet).", {}});
+                    return t;
+                }
+                if (!args.empty() && args.size() != nparams) {
                     reported = true;
                     diagnostic::report(diag, {file_id, tok,
                         "Wrong number of template arguments for '" + name + "': "
@@ -344,6 +386,16 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                         return t;
                     }
                     a = widen::removeConst(widen::deepStrip(a));
+                    // A LISTLESS flavor never binds an argument slot.
+                    if (reachesListlessFlavor(tree, a)) {
+                        reported = true;
+                        diagnostic::report(diag, {file_id, tok,
+                            "'" + widen::spell(a) + "' cannot be a template "
+                            "argument: an empty type-argument list only "
+                            "qualifies members ('" + widen::spell(a)
+                            + ":member').", {}});
+                        return t;
+                    }
                 }
                 int iid = instantiateClassTemplate(tree, id, args, file_id, tok,
                                                    diag);
@@ -390,8 +442,7 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 a = resolveTypeRef(tree, a, visiting, reported, file_id, tok, diag);
             visiting.insert(name);
             widen::TypeRef pat =
-                ensureAliasTemplatePattern(tree, id, visiting, reported, diag,
-                                           file_id, tok);
+                ensureAliasTemplatePattern(tree, id, visiting, reported, diag);
             visiting.erase(name);
             if (pat == widen::kNoType) return t;
             return widen::internAlias(label,
@@ -529,6 +580,19 @@ void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
     type_ref = resolveTypeRef(tree, type_ref, visiting, reported,
                               file_id, tok, diag, seg_toks);
     if (!reported) requireKnownType(tree, type_ref, file_id, tok, diag);
+    // A LISTLESS flavor (`TClass<>`) is a qualifier, not a type — it never
+    // declares storage (no field, no local, no parameter, no pointee).
+    if (!reported && reachesListlessFlavor(tree, type_ref)) {
+        int cid = parse::classEntryForType(
+            tree, widen::deepStrip(type_ref));
+        std::string spelled = widen::spellOrEmpty(type_ref);
+        diagnostic::report(diag, {file_id, tok,
+            "'" + spelled + "' does not name a usable type: the empty "
+            "type-argument list only qualifies members ('"
+            + (cid >= 0 ? tree.entries[cid].name : spelled)
+            + ":member'); supply a real type-argument list to declare "
+            "storage.", {}});
+    }
 }
 
 // Resolve a call node's explicit template type-list in the current scope. Shared
@@ -924,6 +988,25 @@ int entryNamespaceFrame(parse::Tree const& tree, int id) {
     return -1;
 }
 
+// A failed member lookup in a LISTLESS flavor's frame: when the name was
+// STRIPPED from the clone (a field, a method, or a member depending on the
+// unbound list), the failure gets the RULE and the remedy, not the generic
+// "no member". Returns true when it reported. The one message for every
+// qualified-lookup site, so all spellings word identically.
+bool reportListlessStripped(parse::Tree& tree, int frame,
+                            std::string const& name, int file_id, int tok,
+                            diagnostic::Sink& diag) {
+    auto it = tree.listless_stripped.find(frame);
+    if (it == tree.listless_stripped.end()) return false;
+    if (!it->second.second.count(name)) return false;
+    diagnostic::report(diag, {file_id, tok,
+        "'" + name + "' depends on '" + it->second.first
+        + "'s template parameters, which the empty list '<>' does not bind; "
+        "qualify with a real type-argument list ('" + it->second.first
+        + "<...>:" + name + "').", {}});
+    return true;
+}
+
 // Walk a chain of namespace segments to the frame it names. `segments`/`toks`
 // are parallel; each segment must resolve to a namespace or class. The caret
 // lands on the offending segment's token, and the message names the chain
@@ -960,25 +1043,23 @@ int resolveNamespaceSegments(parse::Tree& tree,
         }
         return tree.entries[cid].ns_frame_id;
     };
-    // A segment naming a class-template PATTERN owns no frame. When the NEXT
-    // segment carries a type-arg list, the pair is ONE spelling (`A:H<int>` —
-    // the hoisted sub-pattern's use, `A:H<int>:D<int>` the deep chain): defer,
-    // and let the next iteration's instanceFrame resolve the combined prefix.
-    // Without a following list there is no flavor to look inside — focused.
-    auto patternDefers = [&](int entry_id, std::size_t i) -> bool {
+    // A segment naming a class-template PATTERN owns no frame: only a FLAVOR
+    // has members to look inside, so a pattern qualifier must carry a list —
+    // a real one, or the empty `<>` (the listless flavor) for the members
+    // with no dependency on the list. The bare-pattern spelling is an error.
+    auto patternRejects = [&](int entry_id, std::size_t i) -> bool {
         if (entry_id < 0
             || tree.entries[entry_id].kind != parse::EntryKind::kClass
             || !tree.entries[entry_id].is_template) {
             return false;
         }
-        if (i + 1 < segments.size()
-            && segments[i + 1].find('<') != std::string::npos) {
-            return true;
-        }
         diagnostic::report(diag, {file_id, toks[i],
             "Class template '" + segments[i]
-            + "' requires a type-argument list to reach its members.", {}});
-        return false;
+            + "' requires a type-argument list to reach its members ('"
+            + segments[i] + "<...>:member'; '" + segments[i]
+            + "<>:member' reaches the members that do not depend on the "
+            "list).", {}});
+        return true;
     };
     int cur;
     std::size_t i;
@@ -993,17 +1074,13 @@ int resolveNamespaceSegments(parse::Tree& tree,
         int id = resolveName(tree, segments[0]);
         int frame = entryNamespaceFrame(tree, id);
         if (frame < 0) {
-            if (!patternDefers(id, 0)) {
-                if (!diagnostic::hasErrors(diag)) {
-                    diagnostic::report(diag, {file_id, toks[0],
-                        "'" + segments[0] + "' is not a namespace.", {}});
-                }
-                return -1;
+            if (!patternRejects(id, 0) && !diagnostic::hasErrors(diag)) {
+                diagnostic::report(diag, {file_id, toks[0],
+                    "'" + segments[0] + "' is not a namespace.", {}});
             }
-            cur = -1;   // no frame yet — segments[1] carries the list
-        } else {
-            cur = frame;
+            return -1;
         }
+        cur = frame;
         i = 1;
     }
     for (; i < segments.size(); ++i) {
@@ -1015,11 +1092,13 @@ int resolveNamespaceSegments(parse::Tree& tree,
         int id = findMemberLiveOrInstance(tree, cur, segments[i]);
         int frame = entryNamespaceFrame(tree, id);
         if (frame < 0) {
-            if (patternDefers(id, i)) continue;   // next segment has the list
-            if (!diagnostic::hasErrors(diag)) {
-                diagnostic::report(diag, {file_id, toks[i],
-                    "'" + segments[i] + "' is not a namespace member of '"
-                    + qualPrefixText(segments, global, i) + "'.", {}});
+            if (!patternRejects(id, i) && !diagnostic::hasErrors(diag)) {
+                if (!reportListlessStripped(tree, cur, segments[i],
+                                            file_id, toks[i], diag)) {
+                    diagnostic::report(diag, {file_id, toks[i],
+                        "'" + segments[i] + "' is not a namespace member of '"
+                        + qualPrefixText(segments, global, i) + "'.", {}});
+                }
             }
             return -1;
         }
@@ -1033,20 +1112,6 @@ int resolveNamespaceSegments(parse::Tree& tree,
 // member looked up within it.
 int resolveQualifiedRef(parse::Tree& tree, parse::Node& node,
                         diagnostic::Sink& diag) {
-    // A nested class template's SUB-PATTERN is registered under the qualified
-    // spelling itself ("Outer:Inner") — try the composed name before the
-    // namespace walk (the outer template owns no frame), so the construction
-    // EXPRESSION `Outer:Inner<args>(args)` reaches it like the decl form does.
-    if (!node.global_qualified && !node.qualifier.empty()) {
-        std::string composed;
-        for (auto const& q : node.qualifier) composed += q + ":";
-        composed += node.name;
-        if (int sub = resolveName(tree, composed);
-            sub >= 0 && tree.entries[sub].kind == parse::EntryKind::kClass
-            && tree.entries[sub].is_template) {
-            return sub;
-        }
-    }
     int frame = resolveNamespaceSegments(tree, node.qualifier, node.qualifier_toks,
                                          node.global_qualified, node.file_id, diag);
     if (frame < 0) return -1;
@@ -1055,6 +1120,10 @@ int resolveQualifiedRef(parse::Tree& tree, parse::Node& node,
     if (findMemberDeclared(tree, frame, node.name) >= 0) {
         diagnostic::report(diag, {node.file_id, node.name_tok,
             "'" + node.name + "' is not visible from this scope.", {}});
+        return -1;
+    }
+    if (reportListlessStripped(tree, frame, node.name, node.file_id,
+                               node.name_tok, diag)) {
         return -1;
     }
     std::string prefix = qualPrefixText(node.qualifier, node.global_qualified,
@@ -1143,9 +1212,12 @@ std::string resolveQualifiedType(parse::Tree& tree, std::string const& base,
     bool is_member_class = id >= 0
         && tree.entries[id].kind == parse::EntryKind::kClass;
     if (!is_enum_facet && !is_member_alias && !is_member_class) {
-        diagnostic::report(diag, {file_id, toks.back(),
-            "'" + segs.back() + "' is not a type in '"
-            + qualPrefixText(segs, global, segs.size() - 1) + "'.", {}});
+        if (!reportListlessStripped(tree, frame, segs.back(), file_id,
+                                    toks.back(), diag)) {
+            diagnostic::report(diag, {file_id, toks.back(),
+                "'" + segs.back() + "' is not a type in '"
+                + qualPrefixText(segs, global, segs.size() - 1) + "'.", {}});
+        }
         reported = true;
         return "";
     }
@@ -1158,16 +1230,6 @@ int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
                              int file_id, int tok, diagnostic::Sink& diag,
                              bool& reported) {
     if (name.find(':') == std::string::npos) return resolveName(tree, name);
-    // A nested CLASS or ALIAS template's SUB-PATTERN is registered under the
-    // qualified spelling itself ("Outer:Inner") — the whole name is the entry
-    // name, so try it before the namespace walk (which would reject the outer
-    // template: a pattern owns no frame).
-    if (int sub = resolveName(tree, name);
-        sub >= 0 && tree.entries[sub].is_template
-        && (tree.entries[sub].kind == parse::EntryKind::kClass
-            || tree.entries[sub].kind == parse::EntryKind::kAlias)) {
-        return sub;
-    }
     std::vector<std::string> segs;
     bool global = false;
     splitQualifiedSpelling(name, segs, global);
@@ -1195,8 +1257,10 @@ void bindTypeParamMarkers(parse::Tree& tree, parse::Node const& node) {
     }
 }
 
-// Does `t` still carry one of `names` as an unknown kSlid leaf? Returns the
-// first one found, or "". (The walk only reads — nothing interns.)
+// Does `t` carry one of `names` as a leaf name anywhere — an unknown kSlid
+// leaf, or a kTmplUse head/argument? Returns the first one found, or "".
+// (The walk only reads — nothing interns.) Serves the listless flavor's
+// dependency scan: a member whose spelling reaches an unbound list parameter.
 std::string findUnknownLeafNamed(widen::TypeRef t,
                                  std::vector<std::string> const& names) {
     using F = widen::Type::Form;
@@ -1226,36 +1290,9 @@ std::string findUnknownLeafNamed(widen::TypeRef t,
     return "";
 }
 
-// The one PREDICTABLE pattern-build failure of a HOISTED alias sub-pattern
-// ("Host:Alias"): the target names an outer (host) parameter the SELF-CONTAINED
-// inner list doesn't re-list — legal instance-qualified (the flavor binds it),
-// unresolvable bare. Returns that parameter's name, or "" when this isn't that.
-std::string unlistedOuterParam(parse::Tree& tree, std::string const& alias_name,
-                               parse::Node const& node, widen::TypeRef pat) {
-    std::size_t colon = alias_name.rfind(':');
-    if (colon == std::string::npos) return "";
-    std::string host = alias_name.substr(0, colon);
-    parse::Node const* hdef = nullptr;
-    for (auto const& [eid, hti] : tree.templates) {
-        if (tree.entries[eid].name == host
-            && tree.entries[eid].kind == parse::EntryKind::kClass
-            && tree.entries[eid].is_template) { hdef = hti.def; break; }
-    }
-    if (!hdef) return "";
-    std::vector<std::string> unlisted;
-    for (auto const& p : hdef->type_params) {
-        bool listed = false;
-        for (auto const& own : node.type_params) if (own == p) listed = true;
-        if (!listed) unlisted.push_back(p);
-    }
-    if (unlisted.empty()) return "";
-    return findUnknownLeafNamed(pat, unlisted);
-}
-
 widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
                                           std::set<std::string>& visiting,
-                                          bool& reported, diagnostic::Sink& diag,
-                                          int use_file_id, int use_tok) {
+                                          bool& reported, diagnostic::Sink& diag) {
     auto it = tree.templates.find(entry_id);
     if (it == tree.templates.end()) return widen::kNoType;
     parse::TemplateInfo& ti = it->second;
@@ -1278,31 +1315,7 @@ widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
                                         node.file_id, node.name_tok, diag);
     parse::popFrame(tree);
     if (inserted) visiting.erase(alias_name);
-    if (!reported) {
-        // The hoisted-sub-pattern failure gets the RULE, anchored at the USE
-        // when one is on hand, not the definition-site "Unknown type" fallback.
-        std::string outer = unlistedOuterParam(tree, alias_name, node, pat);
-        if (!outer.empty()) {
-            reported = true;
-            std::size_t colon = alias_name.rfind(':');
-            std::string host = alias_name.substr(0, colon);
-            std::string self = alias_name.substr(colon + 1);
-            diagnostic::Record r{
-                use_file_id >= 0 ? use_file_id : node.file_id,
-                use_file_id >= 0 ? use_tok : node.name_tok,
-                "Cannot expand '" + alias_name + "' bare: its target uses '"
-                + outer + "', a parameter of the enclosing class template — "
-                "only an instance-qualified use ('" + host + "<...>:" + self
-                + "<...>') binds it. Re-list '" + outer + "' in the alias's "
-                "own template list to allow the bare form.", {}};
-            if (use_file_id >= 0)
-                r.notes.push_back({node.file_id, node.name_tok,
-                                   "the target uses '" + outer + "' here"});
-            diagnostic::report(diag, r);
-        } else {
-            requireKnownType(tree, pat, node.file_id, node.name_tok, diag);
-        }
-    }
+    if (!reported) requireKnownType(tree, pat, node.file_id, node.name_tok, diag);
     tree.entries[entry_id].slids_type = pat;
     return pat;
 }
@@ -1531,7 +1544,11 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         // registerLocalClasses, namespace-local + class-nested by recursion). Fields are
         // final (the TYPES phase ran) and user ops are registered, so the appended methods
         // resolve in place in the member loop below. Covers EVERY class kind uniformly.
-        synthesizeClassTransferOps(tree, node, diag);
+        // A LISTLESS flavor is the one exception: no object of it can exist, so
+        // nothing can ever transfer one — no ops, no symbols.
+        if (node.resolved_entry_id < 0
+            || !tree.entries[node.resolved_entry_id].listless)
+            synthesizeClassTransferOps(tree, node, diag);
         // And, for a completed-incomplete header class, the complete ctor (@C__$ctor) an
         // opaque importer cannot construct itself. Same choke point, same reason.
         synthesizeOpaqueCtor(tree, node, diag);
@@ -5160,20 +5177,6 @@ void snapshotTemplate(parse::Tree& tree, parse::Node& node) {
                                                  //   instantiation keeps its flavor's
                                                  //   bare-name redirect
     ti.snapshot_taken = true;
-    // A kClassDef pattern's NESTED CLASS TEMPLATES (sub-patterns, registered
-    // beside it under "Outer:Inner") share its definition-point visibility —
-    // capture theirs with the same state. (The file-scope snapshot pass also
-    // reaches them through tree.templates; snapshot_taken keeps it single.)
-    if (node.kind == parse::Kind::kClassDef) {
-        for (auto& m : node.children) {
-            if (m && m->kind == parse::Kind::kClassDef && !m->type_params.empty()
-                && m->resolved_entry_id >= 0) {
-                auto sit = tree.templates.find(m->resolved_entry_id);
-                if (sit != tree.templates.end() && !sit->second.snapshot_taken)
-                    snapshotTemplate(tree, *m);
-            }
-        }
-    }
     // A BLOCK template's body may CAPTURE host locals — but it resolves only at
     // instantiation, after the host's unused-local sweep. Mark every host local
     // the body names as READ now, so a local used only inside the template
@@ -5800,51 +5803,14 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
     ti.cls_open = node.is_incomplete;   // trailing `...` — re-opens may append
     tree.templates[node.resolved_entry_id] = std::move(ti);
 
-    // A NESTED CLASS TEMPLATE (tmpl_nested.sl): register a SUB-PATTERN under
-    // the qualified spelling ("Outer:Inner"), the only spelling that reaches
-    // it — lookupAliasTemplateEntry's full-name divert. Its template list is
-    // SELF-CONTAINED: it names every parameter it uses (including any of the
-    // outer's — `UClass<U, T>` re-lists T); the outer contributes only the
-    // name qualifier, so no outer flavor is implied or required. The entry
-    // name carries the ':', so the bare inner name resolves nowhere outside.
-    // Instances splice into the OUTER's host list, ordinary classes there.
-    // (A plain listless nested class stays as-is — it rides the flavor clone,
-    // tmpl_class.sl Kit:Sub. A flavor clone's copy of this nested template
-    // re-registers per instance through the member divert, for inside use.)
-    for (auto& m : node.children) {
-        if (!m || m->type_params.empty()) continue;
-        // A nested ALIAS TEMPLATE hoists the same way — a kAlias sub-pattern
-        // under "Outer:Inner"; the pattern builds lazily at the first use
-        // (ensureAliasTemplatePattern), markers from its OWN list, so the
-        // self-contained rule holds: an unlisted outer param in the target
-        // is an unknown type. (The flavor clone's copy still registers the
-        // bare name per instance, for inside use, via the member divert.)
-        if (m->kind == parse::Kind::kAliasDecl) {
-            parse::Entry ae;
-            ae.kind = parse::EntryKind::kAlias;
-            ae.name = node.name + ":" + m->name;
-            ae.slids_type = m->return_type;   // provisional
-            ae.file_id = m->file_id;
-            ae.tok = m->name_tok;
-            m->resolved_entry_id = parse::addEntry(tree, std::move(ae));
-            registerAliasTemplate(tree, *m);
-            continue;
-        }
-        if (m->kind != parse::Kind::kClassDef) continue;
-        parse::Entry se;
-        se.kind = parse::EntryKind::kClass;
-        se.name = node.name + ":" + m->name;
-        se.is_template = true;
-        se.defined = true;
-        se.file_id = m->file_id;
-        se.tok = m->name_tok;
-        m->resolved_entry_id = parse::addEntry(tree, std::move(se));
-        parse::TemplateInfo sti;
-        sti.def = m.get();
-        sti.host_list = host_list;
-        sti.cls_open = m->is_incomplete;
-        tree.templates[m->resolved_entry_id] = std::move(sti);
-    }
+    // A NESTED (hoisted) template registers NO file-scope sub-pattern: every
+    // nested member is PER FLAVOR. The flavor clone re-registers each nested
+    // class/alias template per instance through the ordinary member diverts,
+    // where the flavor's own list is bound — so a nested pattern's body uses
+    // the outer parameters through the qualifier's binding, and its instances
+    // are distinct types per outer flavor. A pattern qualifier with no list
+    // is an error (resolveNamespaceSegments); the members with no dependency
+    // on the list are reachable through the LISTLESS flavor (`TClass<>`).
 }
 
 void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
@@ -7777,6 +7743,132 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
 // aliased — it resolves to the template entry and the tmpl_self_stack redirects
 // it to the instance. An alias would shadow the template and break a recursive
 // `Node<T>` use inside the body, which must reach the kTmplUse machinery.)
+// ---- The LISTLESS flavor (`TClass<>`) ----------------------------------------
+
+// True when `name` appears as a whole identifier inside `s` (a base spelling or
+// an absorbed qualifier segment like "Kit<T>") — bounded by non-identifier
+// characters, so `T` matches in "Kit<T>" but not in "Tail".
+bool spellingMentions(std::string const& s, std::string const& name) {
+    auto isIdent = [](char ch) {
+        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+            || (ch >= '0' && ch <= '9') || ch == '_' || ch == '$';
+    };
+    for (std::size_t p = s.find(name); p != std::string::npos;
+         p = s.find(name, p + 1)) {
+        bool lb = p == 0 || !isIdent(s[p - 1]);
+        bool rb = p + name.size() >= s.size() || !isIdent(s[p + name.size()]);
+        if (lb && rb) return true;
+    }
+    return false;
+}
+
+// Does this member's subtree reach any of `names` — a type leaf, an identifier
+// use, a qualifier segment, a nested class's base spelling? A subtree that
+// RE-LISTS a name in its own template list SHADOWS it (the innermost binding
+// wins), so the name drops for that subtree. NAME-BASED and so conservative:
+// a coincidental re-use of a stripped name reads as a dependency (the member
+// strips, and its uses get the listless remedy — never a definition-site error).
+bool memberDependsOn(parse::Node const& n, std::vector<std::string> const& names) {
+    std::vector<std::string> active;
+    for (auto const& nm : names) {
+        bool shadowed = false;
+        for (auto const& own : n.type_params) if (own == nm) shadowed = true;
+        if (!shadowed) active.push_back(nm);
+    }
+    if (active.empty()) return false;
+    if (n.return_type != widen::kNoType
+        && !findUnknownLeafNamed(n.return_type, active).empty()) return true;
+    for (auto t : n.tmpl_args)
+        if (t != widen::kNoType && !findUnknownLeafNamed(t, active).empty())
+            return true;
+    for (auto const& nm : active) {
+        if (n.name == nm) return true;
+        if (n.kind == parse::Kind::kClassDef && spellingMentions(n.text, nm))
+            return true;   // the base spelling (`VW<S> : HV<S>`)
+        for (auto const& q : n.qualifier)
+            if (spellingMentions(q, nm)) return true;
+    }
+    for (auto const& ch : n.children)
+        if (ch && memberDependsOn(*ch, active)) return true;
+    for (auto const& p : n.params)
+        if (p && memberDependsOn(*p, active)) return true;
+    return false;
+}
+
+// Strip a LISTLESS clone down to the members with no dependency on the unbound
+// list. Fields, hooks, methods, and the base go UNCONDITIONALLY — no object of
+// `TClass<>` can ever exist, so nothing can receive them — which also removes
+// every body that reads a field. The remaining member kinds (aliases, alias
+// templates, nested classes and templates, enums, consts, globals) strip by
+// DEPENDENCY, iterated to a fixpoint so a member reaching a stripped sibling
+// strips with it. Every stripped name is recorded for the use-site diagnostic.
+void stripListlessClone(parse::Node& c,
+                        std::vector<std::string> const& tparams,
+                        std::set<std::string>& stripped) {
+    std::vector<std::string> names(tparams);
+    for (auto& p : c.params) {
+        if (p && p->name.compare(0, 2, "_$") != 0) {
+            stripped.insert(p->name);
+            names.push_back(p->name);   // an initializer naming a field depends
+        }
+    }
+    c.params.clear();   // fields, incl. the `_$base`/`_$vptr` slots
+    c.text.clear();     // the base name — nothing lays out or constructs
+    for (auto& m : c.children) {
+        if (!m) continue;
+        if (m->kind == parse::Kind::kFunctionDef
+            || m->kind == parse::Kind::kFunctionDecl) {
+            if (m->name != "_$ctor" && m->name != "_$dtor") {
+                stripped.insert(m->name);
+                names.push_back(m->name);
+            }
+            m.reset();
+        }
+    }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& m : c.children) {
+            if (!m) continue;
+            if (memberDependsOn(*m, names)) {
+                stripped.insert(m->name);
+                names.push_back(m->name);
+                m.reset();
+                changed = true;
+            }
+        }
+    }
+    c.children.erase(std::remove(c.children.begin(), c.children.end(), nullptr),
+                     c.children.end());
+}
+
+// Per-flavor NESTED CLASS-TEMPLATE patterns bind the OUTER list from THIS
+// flavor — but their snapshot normally lands in the BODY phase (the drain),
+// and a use can instantiate them BEFORE the drain, where the outer parameter
+// would be unresolvable. Snapshot each one NOW, while the flavor's T-alias
+// frame and self-redirect are live (snapshot_taken keeps the body-phase call
+// single). Recurses through PLAIN nested classes — their frame opened as the
+// body phase would — so a depth-2 pattern (`P` holding `E<U>`) captures its
+// chain too. A nested TEMPLATE's own nested patterns register only at ITS
+// instantiation, which runs this walk again at that level.
+void snapshotNestedClassPatterns(parse::Tree& tree, parse::Node& node) {
+    for (auto& m : node.children) {
+        if (!m || m->kind != parse::Kind::kClassDef) continue;
+        if (!m->type_params.empty()) {
+            if (m->resolved_entry_id < 0) continue;
+            auto it = tree.templates.find(m->resolved_entry_id);
+            if (it != tree.templates.end() && !it->second.snapshot_taken)
+                snapshotTemplate(tree, *m);
+            continue;
+        }
+        if (m->resolved_entry_id < 0) continue;
+        tree.open_ns_frames.push_back(
+            tree.entries[m->resolved_entry_id].ns_frame_id);
+        snapshotNestedClassPatterns(tree, *m);
+        tree.open_ns_frames.pop_back();
+    }
+}
+
 static void bindInstanceAliases(parse::Tree& tree, int tmpl_entry_id,
                                 std::vector<widen::TypeRef> const& args) {
     parse::Node* def = tree.templates.at(tmpl_entry_id).def;
@@ -7995,6 +8087,15 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             clones.push_back(std::move(c));
         }
     }
+    // The LISTLESS flavor (`TClass<>`): no argument binds, so the clones strip
+    // to the members with no dependency on the list — the qualifier-only
+    // pseudo-flavor. The stripped names feed the use-site diagnostic.
+    bool listless = args.empty();
+    std::set<std::string> stripped;
+    if (listless) {
+        for (auto& c : clones)
+            stripListlessClone(*c, def->type_params, stripped);
+    }
     // The convention of convenience for the flavor's METHODS: flag each param
     // the pattern spelled as a bare `T` of the class's own list. A member
     // TEMPLATE's params stamp at ITS instantiation (which also sees the outer
@@ -8031,6 +8132,11 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // Memo BEFORE the member phases, so a recursive `Vec<T>^` field lands here.
     tree.templates.at(tmpl_entry_id).instances[args] = iid;
     tree.entries[iid].tmpl_args = args;
+    if (listless) {
+        tree.entries[iid].listless = true;
+        tree.listless_stripped[tree.entries[iid].ns_frame_id] =
+            {def->name, std::move(stripped)};
+    }
 
     // NAME (members, opening by opening — a re-open clone finds the primary
     // clone in this frame and merges) -> TYPES per opening (registerClassBody
@@ -8055,6 +8161,14 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // and its synthesized transfer ops emitted twice (invalid IR at llc).
     tree.entries[iid].owner_ns_frame = tree.entries[tmpl_entry_id].owner_ns_frame;
     for (auto& c : clones) resolveScopeTypes(tree, *c, /*isClass=*/true, diag);
+    // Eager sub-pattern snapshots: a nested class template's outer parameters
+    // bind from THIS flavor's live T-alias frame — captured now, because a use
+    // may instantiate the sub-pattern before the drain's body phase gets there.
+    for (auto& c : clones) {
+        tree.open_ns_frames.push_back(tree.entries[iid].ns_frame_id);
+        snapshotNestedClassPatterns(tree, *c);
+        tree.open_ns_frames.pop_back();
+    }
     // registerClassBody stamped linkage off the clone's HEADER file_id
     // (kDeclare here, a pure consumer) — an INLINE-local flavor is this TU's
     // own class: internal, bodies emitted here, nobody else names it.

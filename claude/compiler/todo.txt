@@ -31,22 +31,6 @@ BUGS
   *   T Shape:Corner:dist() { ... }        // ✗ the out-of-line qualifier walks ONE
                                        //   level — no Outer:Inner:m depth
 
-  * i think the no-list syntax for a class hoisted from a template class is causing issues.
-    probably want to ban it.
-    TClass<T>(T t) {
-        Hoisted<H>(H h) { }
-    }
-    TClass:Hoisted<int> obj;
-    maybe allow an empty list when the hoisted class doesn't care about the host type list.
-    TClass<>:Hoisted<int> obj;
-    otherwise we force the author to use a placeholder type for all hoisted instances.
-
-    A:H<int> and A<int>:H<int> mint two distinct classes — the file-level and per-instance
-    sub-patterns memoize separately, so A:H<int>^ p = ^a2 is a cast error between what the
-    self-contained design says is one class. I recorded it in readme.txt's deferred list and
-    plan.txt, and pinned nothing either way — say the word if you want them unified
-    (or a todo entry).
-
 
 UNBLOCKED FEATURES
 
@@ -294,6 +278,19 @@ REACH GOALS
     5. Local-type instance with the template source missing — "needs its template
     source (the .sl beside its header)"; aggregation-only modules remain fine.
 
+  * revisit restrictions on cross-tu templates.
+    including no nested templates.
+
+  * should templates types be the alias type or the underlying type?
+    ie are these the same or different template instantiations?
+        alias I = int; alias II = int;
+        TClass<T>(T t_) { }
+        TClass<int> a; TClass<I> b; TClass<II> c;
+
+  * this doesn't currently compile:
+    TClass<T>() { global T gt = 0; }
+    we don't know we need to add a global until the type is instantiated.
+
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 
@@ -414,3 +411,7 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
 
   * the instantiated .sli file kinda sorta looks like slids code but isn't compilable.
     Explicit instantiation as compilable source (the .sli spelling, ungrammared) — tooling, not semantics.
+
+  * does a template type in the type list need to be viable when used as a qualifier to access a
+    template member?
+    TClass<NotViableType>:IndependentHoistedClass obj;

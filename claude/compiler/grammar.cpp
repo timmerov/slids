@@ -372,16 +372,22 @@ struct Parser {
             if (peek().kind == token::Kind::kLt) {
                 advance();   // <
                 type += "<";
-                while (true) {
-                    std::string arg = parseType(nullptr, TopDim::Consume, nullptr);
-                    if (arg.empty()) return "";
-                    type += arg;
-                    if (peek().kind == token::Kind::kComma) {
-                        advance();   // ,
-                        type += ", ";
-                        continue;
+                // The EMPTY group `<>` — the listless-flavor spelling; resolve
+                // rejects it anywhere but a qualifier position. As a NESTED
+                // argument its closer max-munches (`Vec<K<>>`) — split first.
+                if (peek().kind == token::Kind::kRShift) splitRShift();
+                if (peek().kind != token::Kind::kGt) {
+                    while (true) {
+                        std::string arg = parseType(nullptr, TopDim::Consume, nullptr);
+                        if (arg.empty()) return "";
+                        type += arg;
+                        if (peek().kind == token::Kind::kComma) {
+                            advance();   // ,
+                            type += ", ";
+                            continue;
+                        }
+                        break;
                     }
-                    break;
                 }
                 if (peek().kind == token::Kind::kRShift) splitRShift();
                 if (!expect(token::Kind::kGt, ">")) return "";
@@ -684,7 +690,9 @@ struct Parser {
     // From offset `o` at a `<`, skip a TEMPLATE-ALIAS USE's type-arg group — type-
     // vocabulary tokens up to the matching depth-0 `>` — returning the offset just
     // past it; returns `o` unchanged when the tokens don't form one (a comparison
-    // never reads as a type). A NESTED use's `<` raises the angle depth; its
+    // never reads as a type). The EMPTY group `<>` is a group: the listless
+    // qualifier (`TClass<>:member`); no expression puts `>` right after `<`.
+    // A NESTED use's `<` raises the angle depth; its
     // closers are `>` (one level) or the max-munched `>>` (two — the second half
     // may be the group's own closer). A `>>` with no nested group open never
     // reads as a type, so `a < b >> c` stays an expression. Consumes nothing.
@@ -694,14 +702,13 @@ struct Parser {
         int q = o + 1;
         int depth = 0;      // ( ) and [ ] nesting inside an argument
         int angle = 0;      // NESTED `<...>` groups inside an argument
-        bool any = false;
         for (int guard = 64; guard > 0; guard--) {
             token::Kind k = peekKind(q);
             if (k == token::Kind::kGt && depth == 0) {
-                if (angle == 0) return any ? q + 1 : o;
+                if (angle == 0) return q + 1;
                 angle--;
             } else if (k == token::Kind::kRShift && depth == 0 && angle > 0) {
-                if (angle == 1) return any ? q + 1 : o;   // inner + the group itself
+                if (angle == 1) return q + 1;   // inner + the group itself
                 angle -= 2;
             } else if (k == token::Kind::kLt) {
                 angle++;
@@ -718,7 +725,6 @@ struct Parser {
             } else {
                 return o;
             }
-            any = true;
             q++;
         }
         return o;
@@ -891,16 +897,21 @@ struct Parser {
         if (after <= 0 || peekKind(after) != token::Kind::kColon) return true;
         advance();   // <
         seg += "<";
-        while (true) {
-            std::string arg = parseType(nullptr, TopDim::Consume, nullptr);
-            if (arg.empty()) return false;
-            seg += arg;
-            if (peek().kind == token::Kind::kComma) {
-                advance();   // ,
-                seg += ", ";
-                continue;
+        // The EMPTY group — the LISTLESS qualifier (`TClass<>:member`). A
+        // nested empty group's closer max-munches — split first.
+        if (peek().kind == token::Kind::kRShift) splitRShift();
+        if (peek().kind != token::Kind::kGt) {
+            while (true) {
+                std::string arg = parseType(nullptr, TopDim::Consume, nullptr);
+                if (arg.empty()) return false;
+                seg += arg;
+                if (peek().kind == token::Kind::kComma) {
+                    advance();   // ,
+                    seg += ", ";
+                    continue;
+                }
+                break;
             }
-            break;
         }
         if (peek().kind == token::Kind::kRShift) splitRShift();
         if (!expect(token::Kind::kGt, ">")) return false;
@@ -2486,15 +2497,16 @@ struct Parser {
         o++;   // past the `<`
         int depth = 0;      // ( ) and [ ] nesting inside a type
         int angle = 0;      // NESTED `<...>` groups inside an argument
-        bool any = false;
         for (int guard = 64; guard > 0; guard--) {
             token::Kind k = peekKind(o);
             if (k == token::Kind::kGt && depth == 0) {
-                if (angle == 0) return any && peekKind(o + 1) == token::Kind::kLParen;
+                // The EMPTY list `<>(` parses too — resolve rejects the use
+                // with the real rule (a construction needs a non-empty list).
+                if (angle == 0) return peekKind(o + 1) == token::Kind::kLParen;
                 angle--;
             } else if (k == token::Kind::kRShift && depth == 0 && angle > 0) {
                 // the max-munched `>>`: inner closer + possibly the list's own
-                if (angle == 1) return any && peekKind(o + 1) == token::Kind::kLParen;
+                if (angle == 1) return peekKind(o + 1) == token::Kind::kLParen;
                 angle -= 2;
             } else if (k == token::Kind::kLt) {
                 angle++;
@@ -2515,7 +2527,6 @@ struct Parser {
             } else {
                 return false;
             }
-            any = true;
             o++;
         }
         return false;
@@ -2526,17 +2537,22 @@ struct Parser {
     // real type parser; resolve later resolves them in scope.
     bool parseTemplateCallArgs(parse::Node& node) {
         advance();   // <
-        while (true) {
-            int t_tok = pos;
-            Declarator d;
-            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
-                                 /*allow_qualified=*/false, nullptr, d)) {
-                return false;
+        // The EMPTY list `<>` parses to zero args; resolve applies the rule
+        // (a construction requires a non-empty list; a call falls to inference).
+        if (peek().kind == token::Kind::kRShift) splitRShift();
+        if (peek().kind != token::Kind::kGt) {
+            while (true) {
+                int t_tok = pos;
+                Declarator d;
+                if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                     /*allow_qualified=*/false, nullptr, d)) {
+                    return false;
+                }
+                node.tmpl_args.push_back(widen::internOrNone(d.type));
+                node.tmpl_arg_toks.push_back(t_tok);
+                if (peek().kind == token::Kind::kComma) { advance(); continue; }
+                break;
             }
-            node.tmpl_args.push_back(widen::internOrNone(d.type));
-            node.tmpl_arg_toks.push_back(t_tok);
-            if (peek().kind == token::Kind::kComma) { advance(); continue; }
-            break;
         }
         if (peek().kind == token::Kind::kRShift) splitRShift();   // nested use's `>>`
         return expect(token::Kind::kGt, ">");

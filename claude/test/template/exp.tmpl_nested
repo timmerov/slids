@@ -58,7 +58,7 @@ Pair<Vector<int>, int8>
 q5 = 4
 q6 = true
 r1 = 11
-TClass:Ref<int>
+TClass<>:Ref<int>
 r2 = 300
 r3 = 7
 r4 = 9
@@ -70,5 +70,20 @@ r9 = 3
 r10 = 7
 r11 = 101
 r12 = 9
+w1 = 4
+w2 = 1.5
+w3 = 9
+w4 = 7
+w5 = 1
+w6 = 5
+w7 = 5
+w8 = 3
+w9 = 7
+w10 = 21 42 63
+TClass<>:HoistI
+TClass<int>:HoistI
+w12 = 6
+w13 = 40
+w14 = 40
 sub dtor 7
 sub dtor 10

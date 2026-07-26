@@ -1274,34 +1274,56 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     classify with no self-redirect and dies on "requires a type-argument
     list". Per-flavor patterns + memos, the name-ownership collision rule,
     re-open contributions, block scope, and mangling all rode as-is.
-  - a HOISTED CLASS TEMPLATE inside a class template: registration mints a
-    SUB-PATTERN entry NAMED the qualified spelling itself ("TClass:SClass")
-    — the outer pattern owns no frame, and the ':' in the entry name keeps
-    the bare inner name unspellable outside. The inner's template list is
-    SELF-CONTAINED: it re-lists any outer param it uses (`UClass<U, T>`; an
-    unlisted outer param is simply unknown in its bodies), so an instance
-    keys on ONE arg list, implies no outer flavor, and splices into the
-    outer's host list as an ordinary class. Reached by two diverts trying
-    the composed spelling before the namespace walk — lookupAliasTemplateEntry
-    (the type use) and resolveQualifiedRef (the construction EXPRESSION) —
-    plus a kSlid fallback matching tmpl_self by the pattern's spelled NAME
-    (the receiver `SClass^` misses by entry id; the entry name carries the
-    ':'). Sub-patterns snapshot with their outer — same definition-point
-    state; the file-scope snapshot pass reaches them through tree.templates.
-    A nested ALIAS template hoists the same way — a kAlias sub-pattern
-    ("TClass:Ref"), registerAliasTemplate, pattern built lazily from its
-    OWN markers at first use, so the self-contained rule holds free; the
-    composed-name divert accepts kClass OR kAlias. An UNLISTED outer param
-    in the target gets a focused CHAIN (2026-07-25; was a bare "Unknown
-    type" careted at the definition): primary at the USE site — the bare
-    form binds only the alias's own list; instance-qualify the host, or
-    re-list the param (both remedies verified) — with a note careting the
-    target. ensureAliasTemplatePattern carries the use anchors (threaded
-    from the kTmplUse arm); unlistedOuterParam matches the host pattern's
-    params, minus the alias's own list, against unknown kSlid leaves of
-    the built pattern; every other build failure keeps the
-    requireKnownType fallback. Negatives: tmpl_nested.sl (BadAl, TU-local)
-    + tmpl_test.sl (the cross-TU flavor).
+  - a HOISTED CLASS or ALIAS TEMPLATE inside a class template is PER FLAVOR
+    (the 2026-07-26 repeal of the file-scope sub-pattern design): the
+    pattern registers NOTHING at file scope — the flavor clone re-registers
+    each nested class/alias template per instance through the ordinary
+    member diverts (registerClassTemplate with the flavor frame as owner;
+    the alias arm + registerAliasTemplate), so the QUALIFIER is the outer
+    parameters' whole binding surface. The inner list binds only the
+    member's own params; re-using an outer's name there SHADOWS it
+    (innermost wins); an UNLISTED outer param arrives from the qualifier's
+    binding (`Outc<int>:UsesT<float>` binds T=int) — for a nested class via
+    the pattern's snapshot, for a nested alias because validateAliasTemplate
+    builds the pattern in the flavor's TYPES phase, T-frame live. ONE new
+    mechanism: snapshotNestedClassPatterns — instantiateClassTemplate
+    snapshots each nested class pattern EAGERLY, right after the TYPES
+    phase (T-alias frame + self-redirect live), because a use can
+    instantiate the sub-pattern before the drain's body phase (the
+    body-phase snapshotTemplate call stays, snapshot_taken keeps it
+    single); it recurses through PLAIN nested classes (their frame pushed)
+    so depth-2 patterns capture their chain. Distinct qualifiers mint
+    DISTINCT TYPES (each flavor's members are its own entries/classes,
+    even list-independent ones), and a flavor's enums, consts, and GLOBALS
+    are per-flavor — a global is distinct STORAGE per qualifier. The bare
+    inner name inside its own bodies still rides the tmpl_self spelled-name
+    fallback; it resolves nowhere outside. A bare pattern qualifier
+    (`TClass:member`, any depth) is a compile error naming both remedies
+    (patternRejects in the chain walker).
+  - the LISTLESS FLAVOR `TClass<>` (same landing): the one spelling for
+    members with NO dependency on the list. Grammar accepts the empty
+    group at the four `<...>` sites (an immediately-following max-munched
+    `>>` splits first); widen already interned `Name<>` as kTmplUse with
+    zero slots. The kTmplUse arm routes empty args to
+    instantiateClassTemplate (memo key: the empty vector; header-owned
+    templates reject `<>` — no cross-TU story), where stripListlessClone
+    drops fields, hooks, methods, and the base UNCONDITIONALLY (no
+    `TClass<>` object can exist) and then strips the remaining members by
+    NAME-BASED dependency (memberDependsOn: type leaves via
+    findUnknownLeafNamed, ident uses, qualifier segments, base spellings;
+    a subtree re-listing the name in its own type_params shadows it) to a
+    FIXPOINT — conservative by design: a coincidental re-use of a stripped
+    name strips its user, erring toward the use-site remedy, never a
+    definition-site error. The stripped names land in
+    tree.listless_stripped (keyed by the flavor's frame); the three
+    qualified-lookup failure sites consult it (reportListlessStripped) so
+    a stripped member's use names the dependency rule + the real-list
+    remedy. Entry.listless marks the instance: resolveDeclType rejects it
+    as a storage type (reachesListlessFlavor — leaf, pointee, slot), the
+    kTmplUse arg loop rejects it as a template argument, and
+    resolveScopeBodies skips transfer-op synthesis for it. `<>` composes
+    at depth (`Host2<int>:H<>:kH` — a nested pattern's own listless
+    flavor rides the same machinery).
   - NESTED TEMPLATE TYPES (`Vec<Vec<int>>`): grammar-only. The two lookahead
     gates (skipTypeArgGroup / looksLikeTemplateCallArgs) count ANGLE depth —
     `>>` at angle >= 1 closes two levels; at angle 0 it never reads as a
@@ -1327,10 +1349,11 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   declaration-only and an inner pattern's instances aren't knowable to
   --instantiate, no delivery channel — with focused messages; a nested
   ALIAS template is ALLOWED (2026-07-25): type-level, the header delivers
-  the sub-pattern whole and the .sli records no demand, so the objection
-  never applies — bare-host, instance-qualified, and the outer-T target
-  bound by the flavor's qualifier all work from any consumer (canon
-  tmpl_lib.slh Vector:Ptr/Duo). Nested template TYPES cross the seam for
+  it whole and the .sli records no demand, so the objection never applies
+  — since the 2026-07-26 repeal the INSTANCE-QUALIFIED spelling is the
+  one route from a consumer (bare-host is out of the syntax everywhere,
+  and `<>` is rejected on header-owned templates — no cross-TU story for
+  a listless flavor). Nested template TYPES cross the seam for
   free (the .sli spellings ride the same splitters) — pinned end-to-end
   2026-07-25: `Box<Vector<int>>` demanded by BOTH consumers dedups to one
   aggregated body; `Box<Box<int>>`; the function demand
@@ -1363,16 +1386,17 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   memo-hit fallback for an instance base name), so alias-spelled args
   match. An instance qualifier is never a REGISTRATION target
   (relocateOutOfLineMembers rejects the definition kinds focused). A
-  hoisted nested template under an instance qualifier
-  (`TClass<int>:SClass<float>`) resolves through the per-instance
-  sub-pattern as fallout — and chains to ANY DEPTH
-  (`A<int>:H<int>:D<int>`): a per-flavor sub-pattern entry is NAMED by
-  its host clone's spelling, so each level's instantiation names the
-  next. A MIXED chain (`A:H<int>:D<int>`) rides patternDefers — a
-  segment naming a frameless PATTERN defers when the next segment
-  carries the list (the pair is one spelling); a LISTLESS pattern
-  qualifier is focused ("requires a type-argument list to reach its
-  members"). Member lookup falls back to the DECLARED set anywhere
+  hoisted nested template under a qualifier
+  (`TClass<int>:SClass<float>`, `TClass<>:SClass<int>`) resolves through
+  the per-flavor sub-pattern — since the 2026-07-26 repeal the ONLY
+  route — and chains to ANY DEPTH (`A<int>:H<int>:D<int>`,
+  `A<>:H<int>:D<int>`): each level's flavor owns the next level's
+  pattern, so each instantiation names the next. A pattern segment
+  with NO list (`A:H<int>`, `TClass:member` — any position) is a
+  compile error (patternRejects): only a flavor has members, and the
+  message names both remedies ("requires a type-argument list to
+  reach its members"; `<>` for the list-independent ones). Member
+  lookup falls back to the DECLARED set anywhere
   INSIDE an instance (findMemberLiveOrInstance + frameInsideInstance,
   walking class owners — a flavor's members' liveness dies with the
   scope that first minted it, and the fallback also serves a plain

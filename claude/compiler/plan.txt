@@ -2464,6 +2464,60 @@ Phase 9 — templates
     (the cross-TU flavor).
     Suite: import + template, all positives and negatives green.
 
+  * PER-FLAVOR NESTED MEMBERS + THE LISTLESS FLAVOR       LANDED 2026-07-26
+    (The canon repeal, tmpl_nested.sl top comment: the self-contained
+    hoisted-list design and the bare-host qualifier are OUT.) Every
+    nested member of a class template is PER FLAVOR: the file-scope
+    "Outer:Inner" sub-pattern registration was REMOVED (with its two
+    composed-name diverts and the unlistedOuterParam chain diagnostic) —
+    the flavor clone's member diverts were already registering nested
+    class/alias templates per instance, so the qualifier became the outer
+    params' whole binding surface: an UNLISTED outer param arrives from
+    the qualifier's binding (`Outc<int>:UsesT<float>` binds T=int);
+    re-listing SHADOWS (innermost wins). ONE new mechanism:
+    snapshotNestedClassPatterns — the sub-pattern's snapshot is taken
+    EAGERLY at flavor minting (T-alias frame + self-redirect live),
+    because a pre-drain use instantiates it before the body-phase
+    snapshot exists (the probe failure that proved it: "Unknown type 'T'"
+    at the pattern's own signature). Nested alias templates needed
+    nothing: validateAliasTemplate builds their pattern in the flavor's
+    TYPES phase, T live. DISTINCT qualifiers mint DISTINCT TYPES (pinned:
+    `TClass<>:HoistI` never assigns into `TClass<int>:HoistI`), and
+    per-flavor enums/consts/GLOBALS rode the flavor clone for free —
+    a global is distinct STORAGE per qualifier (pinned: three qualifiers,
+    three variables).
+    THE LISTLESS FLAVOR `TClass<>`: the empty-list qualifier reaches the
+    members with NO list dependency. Grammar accepts the empty group at
+    the four `<...>` sites (with a `>>`-split for the nested-closer
+    max-munch); the kTmplUse arm routes empty args to
+    instantiateClassTemplate (memo key: the empty vector; header-owned
+    templates reject `<>`); stripListlessClone drops fields, hooks,
+    methods, and the base UNCONDITIONALLY (no such object can exist) and
+    strips the rest by NAME-BASED dependency to a fixpoint (conservative:
+    a re-used stripped name reads as dependent — always a use-site
+    remedy, never a definition-site error). Entry.listless +
+    tree.listless_stripped drive the walls: not a storage type
+    (resolveDeclType), not a template argument (the kTmplUse arg loop),
+    no transfer-op synthesis; the three qualified-lookup failure sites
+    report the dependency rule + real-list remedy
+    (reportListlessStripped). A bare pattern qualifier (`TClass:member`,
+    any depth, patternRejects) errors naming both remedies. `<>`
+    composes at depth (`Host2<int>:H<>:kH`).
+    Suite: template positives + negatives green (tmpl_nested.sl reworked
+    to the new canon: repealed re-list idioms rewritten, BadU/BadAl
+    repealed into positives, the new negatives — dependent-through-<>,
+    bare qualifier, storage/argument walls, the distinct-type wall).
+    KNOWN FALLOUT in out-of-scope files (stale pins of the old
+    behavior): tmpl_class.sl:643 + tmpl_alias.sl:211 (`X<>` was a parse
+    error, now the listless rules answer), tmpl_method.sl:345
+    (`j.scaled<>(1)` was a parse error, now empty-explicit-list =
+    inference and it compiles), import/tmpl_test.sl:70+:155 (bare-host
+    header-alias spelling repealed; the chain diagnostic it pinned is
+    gone). NOT TOUCHED here: a T-typed GLOBAL in a class template
+    (`global T gt_ = 0;`) still rejects at the pattern ("Cannot
+    implicitly convert 'int' to 'T'") — pre-existing, the global
+    initializer validates at file scope before any flavor exists.
+
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
   Types were std::string spellings everywhere; now every type is a structured

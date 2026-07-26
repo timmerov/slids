@@ -639,8 +639,9 @@ int32 main() {
     //-EXPECT-ERROR: is not a template
     //Wrap<int> nw; int q5 = nw.wsum(); __println("q5 = " + q5);
 
-    /* an empty type-list is no type at all — the decl gate rejects it. */
-    //-EXPECT-ERROR: Expected
+    /* an empty type-list names the LISTLESS flavor — a qualifier only,
+       never a storage type (the per-flavor repeal, tmpl_nested.sl). */
+    //-EXPECT-ERROR: does not name a usable type
     //Vec<> ev; int q6 = ev.sum(); __println("q6 = " + q6);
 
     /* a void type argument fails the field default's fit-check. */

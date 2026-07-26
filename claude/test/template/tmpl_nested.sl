@@ -26,6 +26,51 @@ template method inside template class.
         }
     }
 
+generally, you must use fully qualified type list to access members
+of a template class.
+however, some members of a template class have no dependency on any
+type in the list.
+they may use empty list qualifier syntax.
+
+    TClass<T>(T t_) {
+        alias Integer = int;
+        alias RefT = T^;
+        alias Type<S> = S;
+        HoistT(T t_) { }
+        HoistS<S>(S s_) { }
+        HoistI(int i_) { }
+    }
+
+    TClass<>:Integer i;
+    TClass<RandomType>:Integer i;
+    TClass<int>:RefT ref;
+    TClass<>:Type<float> x;
+    TClass<RandomType>:Type<float> x;
+
+    TClass<int>:HoistT a;
+    TClass<>:HoistS<float> b;
+    TClass<RandomType>:HoistS<float> c;
+    TClass<>:HoistI d;
+    TClass<RandomType>:HoistI e;
+
+note: these are different types:
+
+    TClass<>:HoistI a;
+    TClass<int>:HoistI a;
+    TClass<float>:HoistI a;
+    TClass<RandomType>:HoistI a;
+
+note: this applies to everything that can be declared inside a template
+class - including: enums and globals.
+
+reach goal not specific to nesting: these are different types.
+
+    alias Float = float;
+    TClass<float> a;
+    TClass<Float> a;
+
+previous canon being repealed:
+
 hoisted template class inside template class.
 the hoisted class template list is independent of the host
 class template list.
@@ -59,42 +104,68 @@ patterns are independent; instances memoize per flavor per binding. the plain
 rules re-fire per flavor: a template method owns its name, virtual is
 rejected, a re-open opening's template method lands with the merge.
 
-a HOISTED (nested) class template registers a SUB-PATTERN under the
-qualified spelling itself — "TClass:SClass" is the entry name, found whole
-by the template-use lookup before any namespace walk. its template list is
-SELF-CONTAINED: the inner lists every parameter it uses (re-listing an
-outer's name if wanted — the binding surface is the inner list alone), so
-an instance is keyed by one arg list, needs no outer flavor, and splices
-into the outer's host list as an ordinary class. the outer contributes
-the name qualifier: the bare host (`TClass:`) is canonical, and since the
-instance-qualified landing (2026-07-24) `TClass<int>:SClass<float>` also
-resolves — the instance qualifier walks to the flavor's per-instance
-sub-pattern. inside its own bodies the bare inner name means the
-instance (matched by the pattern's spelled name — the entry name carries
-the ':'). the bare inner name resolves nowhere outside.
+EVERY nested member is PER FLAVOR (the 2026-07-26 repeal): a nested class
+or alias template registers NO file-scope sub-pattern — the flavor clone
+re-registers it per instance through the ordinary member diverts, where the
+flavor's own list is bound. so the QUALIFIER is the outer parameters' whole
+binding surface: the inner list binds only the member's own params (re-using
+an outer's name there SHADOWS it — innermost wins), and an unlisted outer
+param simply arrives from the qualifier (`Outc<int>:UsesT<float>` binds T=int
+with no re-listing). the sub-pattern's snapshot is taken EAGERLY at flavor
+minting — the T-alias frame and self-redirect are live there — because a use
+may instantiate it before the drain's body phase. distinct qualifiers mint
+DISTINCT TYPES, even for members with no list dependency, and a flavor's
+enums, consts, and GLOBALS are per-flavor too — a global is distinct STORAGE
+per qualifier. inside its own bodies the bare inner name still means the
+instance (the tmpl_self spelled-name redirect); it resolves nowhere outside.
 
-still rejected: a template method in a HEADER-owned class template (the
-cross-TU bundle), nested anything in a header-owned template, and the
-out-of-line form targeting a template.
+the LISTLESS flavor `TClass<>` is the one spelling for members with no
+dependency on the list. its clone strips fields, hooks, methods, and the
+base UNCONDITIONALLY (no `TClass<>` object can exist, so nothing could ever
+receive them), then strips the remaining members by NAME-BASED dependency,
+iterated to a fixpoint (conservative: a coincidental re-use of a stripped
+name reads as dependent). `TClass<>` never declares storage, never binds a
+template argument, never constructs; a stripped member's use gets the
+dependency rule and the real-list remedy; a bare pattern qualifier
+(`TClass:member`) is a compile error naming both remedies. `<>` composes at
+depth (`Host2<int>:H<>:kH`) — a nested pattern's listless flavor rides the
+same machinery.
+
+still rejected: `<>` on a header-declared template, a template method in a
+HEADER-owned class template (the cross-TU bundle), nested anything in a
+header-owned template, and the out-of-line form targeting a template.
 */
 
-/* the canon workhorse: a template method mixing the outer T and its own S,
-   and the two canon HOISTED class templates — SClass's list is its own alone;
-   UClass re-lists the outer's T in its own list (the only way to use it). */
+/* the canon workhorse: a template method mixing the outer T and its own S;
+   the two canon HOISTED class templates — SClass's list is its own alone,
+   UClass uses the outer T UNLISTED (the qualifier binds it); and the canon
+   <> member set (aliases, an alias template, plain nested classes, an enum,
+   a const, a global). */
 TClass<T>(T t_) {
     S smethod<S>(S s) {
         __println("t=" + t_ + " s=" + s);
         return s;
     }
     SClass<S>(S s_) { }
-    UClass<U, T>(U u_, T t_) { }
+    UClass<U>(U u_, T t_) { }
     /* arity-only overloading inside a class-template flavor. */
     S choose<S>(S s) { return s; }
     S choose<S>(S a, S b) { return a + b; }
-    /* hoisted ALIAS templates ride the same sub-pattern rules: own list,
-       bare-host qualifier, re-list an outer param to use it. */
+    /* hoisted ALIAS templates: own list binds its own params; an unlisted
+       outer param in the target arrives from the qualifier's binding. */
     alias Ref<S> = S^;
-    alias Wide<S, T> = T;
+    alias Wide<S> = T;
+    /* the canon <> member set: list-independent members reachable through
+       the LISTLESS flavor; the dependent ones (RefT, HoistT) are not. */
+    alias Integer = int;
+    alias RefT = T^;
+    alias Type<S> = S;
+    HoistT(T h_ = 0) { }
+    HoistS<S>(S s_ = 0) { }
+    HoistI(int i_ = 0) { }
+    enum Color ( kRed, kGreen );
+    const int kTc = 7;
+    global int g_ = 0;
 }
 
 /* an alias template inside a template FUNCTION body, and inside a template
@@ -135,10 +206,10 @@ Meth2<M>(M m_ = 0) {
     }
 }
 
-/* a hoisted template with METHODS: its own bare name is the receiver type,
-   and both its params (own P + re-listed T) bind from its one list. */
+/* a hoisted template with METHODS: its own bare name is the receiver type;
+   its own P binds from its list, the outer T from the qualifier's binding. */
 Host<T>(T h_ = 0) {
-    Pack<P, T>(P p_ = 0, T q_ = 0) {
+    Pack<P>(P p_ = 0, T q_ = 0) {
         P total(T extra) { P r = p_ + q_ + extra; return r; }
         P dbl() { return p_ + p_; }
     }
@@ -158,16 +229,17 @@ Depth<T>(T d_ = 0) {
     int both<S>(S s, T t) { return s.c_ + t.c_; }
 }
 
-/* lifecycle hooks in a hoisted template; a hoisted instance as a plain
-   class's FIELD, filled by the qualified construction EXPRESSION. */
+/* lifecycle hooks in a hoisted template (the outer T unlisted); a hoisted
+   instance as a plain class's FIELD, filled by the qualified construction
+   EXPRESSION. */
 Ho<T>(T unused_ = 0) {
-    Sub<S, T>(S s_ = 0, T t_ = 0) {
+    Sub<S>(S s_ = 0, T t_ = 0) {
         _() { __println("sub ctor " + s_); }
         ~() { __println("sub dtor " + s_); }
         S sum() { return s_ + t_; }
     }
 }
-Wrap(Ho:Sub<int, int8> f_) { }
+Wrap(Ho<int8>:Sub<int> f_) { }
 
 /* a template method self-recursing inside a flavor (memo seeded first). */
 Rec<T>(T r_ = 0) {
@@ -212,10 +284,11 @@ CoexF<T>(T f_ = 0) {
     U m<U>(U v) { return v; }
 }
 
-/* HOISTED templates with BASES — a file-scope base and an instance base of
-   the hoisted class's OWN list (self-contained: `VW<S>` binds S from HV's
-   list) — and DEPTH-2 nesting: a template inside a hoisted template, and a
-   template inside a PLAIN nested class. */
+/* HOISTED templates with BASES — a file-scope base and an instance base
+   bound from the hoisted class's OWN list (`VW<S>` binds S from HV's list)
+   — and DEPTH-2 nesting: a template inside a hoisted template, and a
+   template inside a PLAIN nested class (P depends on the outer T; H does
+   not, so H is <>-reachable and P is not). */
 HBase(int hb_ = 1) {
     int bump() { return hb_ + 10; }
 }
@@ -256,31 +329,50 @@ Spc3 {
 //-EXPECT-ERROR: Unknown type
 //int bads() { SClass<int> s; s; return 0; }
 
-/* the bare-host qualifier stays canonical; the INSTANCE-qualified spelling
-   (`TClass<int>:SClass<float>`) also resolves since the instance-qualified
-   landing (2026-07-24) — pinned as a positive in main. */
-
-/* a LISTLESS pattern qualifier names no flavor — there is nothing to look
-   inside (`Host2:H:D<int>` — H needs its list). */
+/* a LISTLESS pattern qualifier is out of the syntax (the repeal): only a
+   flavor has members, so the message names both remedies — a real list,
+   or `<>` for the list-independent members. At any depth. */
 //-EXPECT-ERROR: requires a type-argument list
 //int badh() { Host2:H:D<int> x(1); return x.dv(); }
 
-/* a PLAIN nested class depends on the outer flavor — the bare-pattern
-   qualifier cannot reach it (`Host2<int>:P:E<int>` is the spelling). */
+/* ...the same rejection where a PLAIN nested class rides the chain
+   (`Host2<int>:P:E<int>` is the spelling — P needs the outer flavor). */
 //-EXPECT-ERROR: requires a type-argument list
 //int badp() { Host2:P:E<int> x(1); return x.ev(); }
+
+/* ...and on a direct member access. */
+//-EXPECT-ERROR: requires a type-argument list
+//int badq() { TClass:Integer i = 0; i; return 0; }
 
 /* an unknown member at depth carets the deep prefix. */
 //-EXPECT-ERROR: is not a type in
 //int badn() { Host2<int>:H<int>:NoSuch x; x; return 0; }
 
-/* a hoisted template's list is SELF-CONTAINED: an outer param it does not
-   re-list is simply not in scope. */
-//-EXPECT-ERROR: Unknown type
-//Outc<T>(T t_ = 0) {
-//    BadU<S>(S s_ = 0, T oops_ = 0) { }
-//}
-//int badu() { Outc:BadU<int> b; b; return 0; }
+/* a DEPENDENT member is outside the <> flavor — the use gets the rule and
+   the real-list remedy. The nested-class form... */
+//-EXPECT-ERROR: does not bind
+//int badu() { TClass<>:HoistT h(1); h; return 0; }
+
+/* ...the alias form... */
+//-EXPECT-ERROR: does not bind
+//int badal() { TClass<>:RefT p = nullptr; p; return 0; }
+
+/* ...and the plain-nested-through-a-chain form. */
+//-EXPECT-ERROR: does not bind
+//int badpe() { Host2<>:P:E<int> x(1); return x.ev(); }
+
+/* `TClass<>` is a qualifier, not a type: it declares no storage... */
+//-EXPECT-ERROR: does not name a usable type
+//int badv() { TClass<> v; v; return 0; }
+
+/* ...and never binds a template-argument slot. */
+//-EXPECT-ERROR: cannot be a template argument
+//int badg() { Vector<TClass<>> vv; vv; return 0; }
+
+/* DISTINCT TYPES per qualifier: byte-identical members of two flavors
+   still never transfer into each other. */
+//-EXPECT-ERROR: Cannot implicitly convert
+//int badx() { TClass<>:HoistI a; TClass<int>:HoistI b(2); a = b; a; return 0; }
 
 /* a nested template method checks its explicit arity like any template. */
 //-EXPECT-ERROR: Wrong number of template arguments
@@ -289,15 +381,6 @@ Spc3 {
 /* the arithmetic convenience reaches template bindings: T=float + X=int
    inside viaT's body now converts (was the 'T=float'/'X=int' negative; the
    alias label=target message is pinned by expression/mixed.sl's comparison). */
-
-/* an alias target may not use an UNLISTED outer param — the hoisted list is
-   self-contained for aliases too; the chain names the rule and both
-   remedies, anchored at the use. */
-//-EXPECT-ERROR: only an instance-qualified use
-//BadAl<T>(T t_ = 0) {
-//    alias Leak<S> = T^;
-//}
-//int badal() { BadAl:Leak<int> p = nullptr; p; return 0; }
 
 int32 main() {
 
@@ -351,35 +434,37 @@ int32 main() {
     /* a construction-temp receiver. */
     int k2 = TClass<int>(4).smethod(1); __println("k2 = " + k2);
 
-    /* the canon hoisted templates: SClass's own list; UClass re-lists T. */
-    TClass:SClass<int> sobj(7); __println("n1 = " + sobj.s_);
-    TClass:UClass<int, float> uobj(3, 1.5);
+    /* the canon hoisted templates: SClass's own list, reached through the
+       LISTLESS qualifier; UClass's unlisted T bound by the REAL qualifier. */
+    TClass<>:SClass<int> sobj(7); __println("n1 = " + sobj.s_);
+    TClass<float>:UClass<int> uobj(3, 1.5);
     __println("n2 = " + uobj.u_ + " " + uobj.t_);
 
     /* a second flavor of the same hoisted template — independent memo. */
-    TClass:SClass<float> sf(2.5); __println("n3 = " + sf.s_);
+    TClass<>:SClass<float> sf(2.5); __println("n3 = " + sf.s_);
 
-    /* the INSTANCE-qualified spelling of a hoisted template (legal since the
-       instance-qualified landing): the qualifier mints TClass<int> and the
-       walk reaches its per-flavor sub-pattern. */
+    /* the INSTANCE-qualified spelling: the qualifier mints TClass<int> and
+       the walk reaches ITS per-flavor sub-pattern — sq's type is distinct
+       from sf's (`TClass<>:SClass<float>`), the per-qualifier rule. */
     TClass<int>:SClass<float> sq(4.5); __println("nq = " + sq.s_);
 
     /* hoisted templates with bases: the file-scope base, and the own-list
-       instance base with dispatch landing most-derived. */
-    Host2:HD<int> hd(1, 9);
+       instance base with dispatch landing most-derived — both hoisted
+       classes are T-independent, so <> reaches them. */
+    Host2<>:HD<int> hd(1, 9);
     int hx1 = hd.gv(); __println("hx1 = " + hx1);
-    Host2:HV<int> hv(3, 2);
+    Host2<>:HV<int> hv(3, 2);
     VW<int>^ wp = ^hv;
     int hx2 = wp^.tagv(); __println("hx2 = " + hx2);
 
-    /* DEPTH-2 chains, every qualifier mix: bare host, bare-host-then-
-       instance, and the full instance chain (whose H<int> flavor was minted
-       in warmH — the cross-function lookup); plus a template inside a
-       PLAIN nested class. */
+    /* DEPTH-2 chains, every qualifier mix: the listless host, listless-
+       then-instance, and the full instance chain (whose H<int> flavor was
+       minted in warmH — the cross-function memo); plus a template inside a
+       PLAIN nested class (P needs the real flavor). */
     warmH();
-    Host2:H<int> hh(8);
+    Host2<>:H<int> hh(8);
     int hx3 = hh.hv(); __println("hx3 = " + hx3);
-    Host2:H<int>:D<int> dd1(4);
+    Host2<>:H<int>:D<int> dd1(4);
     int hx4 = dd1.dv(); __println("hx4 = " + hx4);
     Host2<int>:H<int>:D<int> dd2(5);
     int hx5 = dd2.dv(); __println("hx5 = " + hx5);
@@ -404,17 +489,17 @@ int32 main() {
     Spc3:B<int8>:C<float> scf(1.5);
     __println("hx12 = " + scf.cv());
 
-    /* methods on a hoisted instance: the bare receiver name, both params
-       from the one self-contained list. */
-    Host:Pack<int, int> pk(10, 20);
+    /* methods on a hoisted instance: the bare receiver name; own P from its
+       list, the outer T from the qualifier. */
+    Host<int>:Pack<int> pk(10, 20);
     int n4 = pk.total(3); __println("n4 = " + n4);
     int n5 = pk.dbl(); __println("n5 = " + n5);
 
     /* a block-scope host: the sub-pattern lives and dies with the scope. */
     Halo<T>(T unused_ = 0) {
-        Duo<D, T>(D d_ = 0, T e_ = 0) { }
+        Duo<D>(D d_ = 0, T e_ = 0) { }
     }
-    Halo:Duo<int, int8> duo(4, 5);
+    Halo<int8>:Duo<int> duo(4, 5);
     int n6 = duo.d_ + duo.e_; __println("n6 = " + n6);
 
     /* the inner list re-using the outer's name: the call's binding wins
@@ -423,11 +508,11 @@ int32 main() {
     int p1 = sh.same(300); __println("p1 = " + p1);
 
     /* hoisted lifecycle: hooks fire per instance object, reverse order. */
-    Ho:Sub<int, int8> hs(10, 3);
+    Ho<int8>:Sub<int> hs(10, 3);
     int p2 = hs.sum(); __println("p2 = " + p2);
 
     /* the qualified construction EXPRESSION fills a plain class's field. */
-    Wrap w(Ho:Sub<int, int8>(7, 1));
+    Wrap w(Ho<int8>:Sub<int>(7, 1));
     int p3 = w.f_.sum(); __println("p3 = " + p3);
 
     /* template-method self-recursion inside a flavor. */
@@ -469,14 +554,16 @@ int32 main() {
     int q5 = sy >> sx; __println("q5 = " + q5);
     bool q6 = sx < sy; __println("q6 = " + q6);
 
-    /* hoisted ALIAS templates: own list; ##type keeps the use as written. */
+    /* hoisted ALIAS templates: own list, T-independent, so <> reaches it;
+       ##type keeps the use as written. */
     int rz = 11;
-    TClass:Ref<int> rp = ^rz;
+    TClass<>:Ref<int> rp = ^rz;
     int r1 = rp^; __println("r1 = " + r1);
     __println(##type(rp));
 
-    /* an alias re-listing the outer's param: its own second slot binds it. */
-    TClass:Wide<int8, int> wv = 300; __println("r2 = " + wv);
+    /* an alias target using the outer param UNLISTED: the qualifier binds
+       it (T=int; the alias's own slot is free). */
+    TClass<int>:Wide<int8> wv = 300; __println("r2 = " + wv);
 
     /* alias templates inside a template FUNCTION and METHOD body. */
     int r3 = viaAlias(7); __println("r3 = " + r3);
@@ -505,6 +592,44 @@ int32 main() {
     int r11 = cfx.m(1); __println("r11 = " + r11);
     int64 rbig = 9;
     int64 r12 = cfx.m(rbig); __println("r12 = " + r12);
+
+    /* --- the per-flavor member set and the LISTLESS qualifier. --- */
+
+    /* <> reaches the list-independent members: a plain alias, an alias
+       template, a plain nested class, a const, an enum (type and member). */
+    TClass<>:Integer w1 = 4; __println("w1 = " + w1);
+    TClass<>:Type<float> w2 = 1.5; __println("w2 = " + w2);
+    TClass<>:HoistI w3(9); __println("w3 = " + w3.i_);
+    int w4 = TClass<>:kTc; __println("w4 = " + w4);
+    TClass<>:Color w5 = TClass<>:Color:kGreen;
+    int w5v = w5; __println("w5 = " + w5v);
+
+    /* a REAL flavor reaches the same members — and the dependent ones. */
+    TClass<int>:Integer w6 = 5; __println("w6 = " + w6);
+    TClass<int>:RefT w7 = ^w6; __println("w7 = " + w7^);
+    TClass<int>:HoistT w8(3); __println("w8 = " + w8.h_);
+    int w9 = TClass<float>:kTc; __println("w9 = " + w9);
+
+    /* a flavor's GLOBAL is distinct STORAGE per qualifier: three
+       qualifiers, three variables. */
+    TClass<>:g_ = 21;
+    TClass<int>:g_ = 42;
+    TClass<float>:g_ = 63;
+    __println("w10 = " + TClass<>:g_ + " " + TClass<int>:g_
+              + " " + TClass<float>:g_);
+
+    /* DISTINCT TYPES per qualifier, even with no list dependency —
+       ##type spells each side. */
+    __println(##type(w3));
+    TClass<int>:HoistI w11(1);
+    __println(##type(w11));
+
+    /* a construction EXPRESSION through the <> qualifier. */
+    int w12 = TClass<>:HoistS<int>(6).s_; __println("w12 = " + w12);
+
+    /* <> composes at depth: a NESTED pattern's own listless flavor. */
+    int w13 = Host2<int>:H<>:kH; __println("w13 = " + w13);
+    int w14 = Host2<>:H<>:kH; __println("w14 = " + w14);
 
     return 0;
 }

@@ -342,9 +342,9 @@ int32 main() {
     //-EXPECT-ERROR: Cannot infer template parameter
     //int nb = j.fresh(); __println("nb = " + nb);
 
-    /* an empty type-list is no template call — the gate falls to a comparison. */
-    //-EXPECT-ERROR: Expected expression
-    //int em = j.scaled<>(1); __println("em = " + em);
+    /* an EMPTY explicit type-list parses (the per-flavor repeal made `<>`
+       a spelling) and binds nothing — the call falls to inference. */
+    int em = j.scaled<>(1); __println("em = " + em);
 
     return 0;
 }

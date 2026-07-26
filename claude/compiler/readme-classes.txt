@@ -81,10 +81,10 @@ declared in the header exists only in the module's own flavors; a consumer
 may neither define nor re-open a header template ("defined by its module's
 source"); a header-owned class template may not contain a NESTED class or a
 TEMPLATE METHOD (no body-delivery channel for either — rejected), but MAY
-carry a nested ALIAS template: type-level, the header delivers the
-sub-pattern whole, nothing to aggregate — bare-host, instance-qualified,
-and an outer-T target bound by the flavor's qualifier all work from any
-consumer (readme.txt TEMPLATES). Canon
+carry a nested ALIAS template: type-level, the header delivers it whole,
+nothing to aggregate — reached INSTANCE-QUALIFIED from any consumer (the
+bare-host spelling is out of the syntax since the 2026-07-26 repeal, and
+`<>` is rejected on header-owned templates) (readme.txt TEMPLATES). Canon
 test/import/tmpl_test.sl + tmpl_test2.sl + tmpl_lib.slh/.sl.
 RESTRICTIONS: a class template owns its name against a LISTLESS opening or a
 plain class. An instance's members ARE nameable from outside
@@ -98,13 +98,16 @@ REGISTRATION target ("Cannot add a member to a template instance").
 NESTED TEMPLATES
 landed TU-local (readme.txt TEMPLATES; canon tmpl_nested.sl): a TEMPLATE
 METHOD inside a class template (per-flavor patterns; the snapshot carries
-the flavor's self-redirect), a HOISTED class OR alias template
-(`TClass:SClass<int>`, `TClass:Ref<int>` — the sub-pattern owns the
-qualified spelling; its template list is SELF-CONTAINED, re-listing any
-outer param it uses; the bare host name is the canonical qualifier, and
-the instance-qualified `TClass<int>:SClass<float>` also resolves — the
-per-instance sub-pattern; NOTE the two spellings currently mint DISTINCT
-classes, readme.txt TEMPLATES deferred), nested template TYPES
+the flavor's self-redirect), a HOISTED class OR alias template — PER
+FLAVOR since the 2026-07-26 repeal: the qualifier binds the outer params
+(`TClass<int>:UClass<float>` — an unlisted outer T arrives from the
+flavor; re-listing shadows, innermost wins), a bare pattern qualifier is
+a compile error, the LISTLESS flavor `TClass<>` reaches the members with
+no list dependency (fields/methods/base stripped, the rest by dependency
+fixpoint; qualifier-only: never storage, never an argument, never
+constructed), and DISTINCT qualifiers mint DISTINCT types — including
+per-flavor enums, consts, and globals (a global is distinct STORAGE per
+qualifier) — nested template TYPES
 (`Vec<Vec<int>>`, the `>>` closer split), and class/function/alias
 templates in a template function's or method's BODY (block-scope
 registration as-is). Nesting composes to ANY DEPTH

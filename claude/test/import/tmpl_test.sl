@@ -65,9 +65,10 @@ int32 main() {
     int64 y3 = Vector<int64>:kTag; __println("y3 = " + y3);
 
     /* nested ALIAS TEMPLATES of a header class template — type-level, no
-       demand recorded: bare-host, instance-qualified, and the outer-T
-       target bound by the flavor. */
-    Vector:Ptr<int> ya = ^fs; __println("ya = " + ya^);
+       demand recorded; INSTANCE-QUALIFIED is the one route (bare-host is
+       out of the syntax; `<>` is rejected on header templates), and the
+       outer-T target binds from the flavor. */
+    Vector<int>:Ptr<int> ya = ^fs; __println("ya = " + ya^);
     Vector<int>:Ptr<int8> yb = ^f8; __println("yb = " + yb^);
     Vector<int>:Duo<int8> yd = (40, 5);
     int yd0 = yd[0];
@@ -149,13 +150,19 @@ int32 main() {
     //Loc^ rb = tbias(^ra);
     //__println("rb = " + rb^.lv());
 
-    /* a BARE-host use of the outer-T alias: nothing binds T — the chain
-       names the rule, the instance-qualified spelling, and the re-list
-       remedy, anchored at this use site. */
-    //-EXPECT-ERROR: only an instance-qualified use
+    /* a BARE-host use of a header template's nested alias: a pattern
+       qualifier needs its list (bare-host is out of the syntax since the
+       per-flavor repeal — instance-qualified is the route). */
+    //-EXPECT-ERROR: requires a type-argument list
     //Vector:Duo<int8> nad = (1, 2);
     //int na0 = nad[0];
     //__println("na0 = " + na0);
+
+    /* the LISTLESS flavor is TU-local machinery — rejected on a template
+       declared in a header (no cross-TU story for `<>`). */
+    //-EXPECT-ERROR: not available for a template declared in a header
+    //Vector<>:Ptr<int> np = nullptr;
+    //np;
 
     /* THE CARVE-OUT: a local-type instance of an imported class's template
        method emits `define internal` HERE — the one sanctioned exception to

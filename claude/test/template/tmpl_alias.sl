@@ -207,8 +207,9 @@ int32 main() {
     //-EXPECT-ERROR: needs a type-argument list
     //Deep:RT qb = ^a; __println("qb = " + qb^);
 
-    /* an empty argument list is no type at all — the decl gate rejects it. */
-    //-EXPECT-ERROR: Expected '='
+    /* an empty argument list on an ALIAS template: `<>` names a CLASS
+       template's listless flavor — an alias use still needs its arguments. */
+    //-EXPECT-ERROR: Wrong number of template arguments
     //Ref<> re = ^a; __println("re = " + re^);
 
     /* arguments on a NAMESPACE name. */

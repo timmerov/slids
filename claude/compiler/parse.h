@@ -471,6 +471,11 @@ struct Entry {
                                   // the ONE sanctioned exception to the owner-linkage
                                   // rule when its owner class is declare-only (desugar
                                   // liftMember).
+    bool listless = false;        // kClass: the LISTLESS flavor (`TClass<>`) — a
+                                  // qualifier-only pseudo-flavor exposing the members
+                                  // with no dependency on the template list. Never a
+                                  // storage type (resolveDeclType rejects it), never
+                                  // constructed, no transfer ops synthesized.
     bool tmpl_ref_param = false;  // kLocalVar: a template instance's BARE-T parameter
                                   // that munged to `(const T)^` (tmpl_value_param, class/
                                   // tuple binding). classify's ident arm auto-derefs
@@ -672,6 +677,12 @@ struct Tree {
     // flavors by classify (where those instances mint). A leftover errors.
     struct InstDemand { std::string spelling; bool consumed = false; };
     std::vector<InstDemand> inst_demands;
+    // A LISTLESS flavor's DROPPED members, keyed by the flavor's ns_frame_id:
+    // {the template's name, the names stripped from the clone (fields, methods,
+    // and every member depending on the unbound list)}. The qualified-lookup
+    // failure sites consult this so `TClass<>:HoistT` gets the dependency rule
+    // and the real-list remedy, not a generic "no member".
+    std::map<int, std::pair<std::string, std::set<std::string>>> listless_stripped;
     // While a CLASS-template instance's phases run, the template's bare name
     // means THE INSTANCE — the receiver (`Vec^`), a self-typed member, a
     // self-construction. Needed as a stack (an instance body may demand another
