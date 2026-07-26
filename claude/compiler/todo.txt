@@ -9,9 +9,6 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
-  *   T Shape:Corner:dist() { ... }        // ✗ the out-of-line qualifier walks ONE
-                                       //   level — no Outer:Inner:m depth
-
 
 UNBLOCKED FEATURES
 
@@ -44,11 +41,11 @@ UNBLOCKED FEATURES
     are consumer-private, so the source's --instantiate pass can never know which flavors to emit.
     (This session's guard; negative in tmpl_lib.slh.)
 
-  *  Nested class inside a header-owned class template — same shape, same reason ("may not contain
+  * Nested class inside a header-owned class template — same shape, same reason ("may not contain
     a nested class"), from the cross-TU landing. Asymmetry noted in the docs: a source re-open's
     nested class compiles in the sibling but rejects in every consumer.
 
-  * Out-of-line template method targeting a class-template owner (T Vec:m<X>() — the plain-class
+  * Out-of-line template method targeting a class-template owner (T Vec<T>:m<X>() — the plain-class
     and namespace owners landed with cross-TU).
 
   * this error is detectable at compile time. so we could get a nice diagnostic instead of a

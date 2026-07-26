@@ -174,6 +174,18 @@ Host() {                                      // re-open Host again: re-open the
    class that was itself introduced in a RE-OPEN of Host (searched across openings). */
 int Host:Nested:nm3() { return nm() + 100; }
 
+/* STAGE B — DEPTH 3: the out-of-line walk crosses any number of segments —
+   a method AND the ctor/dtor HOOKS land on a class nested two levels down. */
+Host() {                                      // re-open: give Nested its own nested class
+    Nested() {
+        Tip(int t_) {
+        }
+    }
+}
+int Host:Nested:Tip:tm(int n) { return t_ + n; }
+Host:Nested:Tip:_() { __println("tip ctor " + t_); }
+Host:Nested:Tip:~() { __println("tip dtor " + t_); }
+
 /* STAGE B — `Class:Namespace { }`: a NAMESPACE member added to a class by the
    external form. Its const/function are reached via the full qualified path. */
 Ns(int x_) {
@@ -398,6 +410,10 @@ int32 main() {
     __println("nst.nm = " + nst.nm());        // 7 (primary nested method)
     __println("nst.nm2 = " + nst.nm2());      // 8 (nested RE-OPEN method calls primary nested)
     __println("nst.nm3 = " + nst.nm3());      // 107 (MULTI-SEGMENT out-of-line method)
+    {
+        Host:Nested:Tip tip = (40);           // out-of-line hook: tip ctor 40
+        __println("tip.tm = " + tip.tm(2));   // 42 (DEPTH-3 out-of-line method)
+    }                                         // out-of-line hook: tip dtor 40
 
     __println("ns.kN = " + Ns:Space:kN);      // 42  (Class:Namespace const)
     __println("ns.f = " + Ns:Space:f());      // 43  (Class:Namespace function)
