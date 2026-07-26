@@ -5535,6 +5535,8 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         e.alias_label = p->alias_label;   // alias/enum spelling captured in pass 1
         e.file_id = p->file_id;
         e.tok = p->name_tok;
+        e.is_param = true;   // the const-lvalue wall skips param const facets
+                             // (the munge's const; enforcement deferred)
         p->resolved_entry_id = parse::addEntry(tree, std::move(e));
         tree.initialized_locals.insert(p->resolved_entry_id);
         // An ARRAY param arrives initialized too — seed the monotonic may-set so a

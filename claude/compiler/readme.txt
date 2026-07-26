@@ -74,8 +74,20 @@ TYPE REPRESENTATION (the carrier; not a stage)
     TRANSPARENT for matching (strip / deepStrip / classify / isKnownType /
     typeByteSize see through it; deepStrip ERASES it, so `(const T)^` == `T^` for
     equality) but VISIBLE in spell() (`const T`, and a const child under a `^`/`[]`/
-    `[N]` suffix parenthesizes to `(const T)^`). NO enforcement yet — const is a
-    representation-only qualifier (Phase 6 enforces). Placement encodes deep vs
+    `[N]` suffix parenthesizes to `(const T)^`). ENFORCEMENT: the const-LVALUE
+    WRITE WALL is landed (2026-07-26, classify — see the wall block at the top
+    of classify.cpp; canon assign/lvalue.sl): a const value cannot be the
+    target of `=` / the augmented family / `++ --` / a move's TARGET, walked
+    over the chain's DECLARED types (constAwareLvalueType — the stamped caches
+    strip const; a const aggregate freezes its parts, a const pointee the
+    deref; a pointer's stored value is the address alone, so a shallow
+    `(const T)^` reseats). DELETE and a MOVE'S SOURCE are exempt BY CANON
+    (the lifecycle rule: the compiler's null afterward is a tombstone, not a
+    mutation — uniform, no carve-out). Still deferred from Phase 6: PARAM
+    enforcement (Entry.is_param hides a parameter's const facets from the
+    wall — the munge stays decorative), the const->mutable FLOW rule, SWAP,
+    and const METHODS (a method call on a const class lvalue is the known
+    unchecked hole). Placement encodes deep vs
     shallow: an OUTER kConst is `const T^` (the whole pointer + its data are const);
     a kConst on the pointee is `(const T)^` (mutable pointer, const data). intern()
     peels a leading `const ` FIRST so the prefix binds loosest (deep); the

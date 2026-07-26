@@ -2518,6 +2518,39 @@ Phase 9 — templates
     implicitly convert 'int' to 'T'") — pre-existing, the global
     initializer validates at file scope before any flavor exists.
 
+  * THE CONST-LVALUE WRITE WALL (Phase 6, first slice)     LANDED 2026-07-26
+    (Canon assign/lvalue.sl: "a const value cannot be the target of a
+    write". USER'S RULINGS: land const lvalues alone; params, the
+    const->mutable flow, swap, and const methods stay deferred; DELETE
+    and a MOVE'S SOURCE are exempt — the LIFECYCLE rule, uniform, no
+    whole-variable carve-out: const constrains a live value, delete and
+    move-from end the value's life, the compiler's null afterward is a
+    tombstone. Precedent that decided it: a const object's dtor already
+    runs at scope end.) MECHANISM (classify): constInStoredValue — const
+    facets at the VALUE layer (itself / array elems / tuple slots; a
+    POINTER's stored value is the address alone, so a pointee const
+    never freezes the pointer variable and a shallow `(const T)^`
+    reseats) — and constAwareLvalueType, a chain walk over DECLARED
+    types (the stamped caches strip const): ident -> entry type, deref
+    -> pointee, index -> element / literal tuple slot, field -> the
+    field's declared type, a step through const re-wrapping what it
+    yields. The wall (rejectConstWrite, ONE message "Cannot write to a
+    const value") fires at kAssignStmt (bare-name), kStoreStmt,
+    kAugAssignStmt (both forms — also catches the ++/-- rewrite),
+    kPre/kPostIncExpr, and kMoveStmt's TARGET; destructure rides its
+    per-slot lowering. PARAMS EXEMPT: Entry.is_param (stamped at
+    resolveFunctionBody's param registration) makes the ident arm
+    removeConst — the munge's `(const T)^` stays decorative, or every
+    write-through-param in the language would have broken (lvalue.sl's
+    own tick() was the first casualty in the probe).
+    Canon: lvalue.sl — 3 positive blocks (const reads + shallow reseat;
+    delete-const-pointer tombstone; move-from a const pointer AND a
+    const aggregate SLOT, both nulling — the no-carve-out pin) + 13
+    negatives (elem/slot/partial-tuple-slot/field/deep-reseat/deep-
+    deref/shallow-deref/iterator-elem/whole-aggregate/whole-class ×
+    = += ++ and the move TARGET); mutable.sl's phase-6 write flipped
+    to a negative (its comment predicted this day). Suite green.
+
   * OUT-OF-LINE TEMPLATE MEMBERS — THE BINDER-LIST HEAD    LANDED 2026-07-26
     (The deferred "out-of-line template method targeting a class-template
     owner"; canon rulings from bug.sl's eight shapes.) THE RULE: the

@@ -69,11 +69,20 @@ implemented (syntax only — const correctness is NOT enforced yet):
     instead. at a NON-RUNTIME scope (file / namespace / class body) a non-scalar
     const is a GLOBAL — not yet built (phase 8) — and is reported as such.
 
-deferred to phase 6 (when const becomes enforceable):
-  - enforcement (the assignment relation: mutable->const ok, const->mutable
-    rejected, no write through a const reference). until then a const->mutable
-    assignment WITHOUT a `<mutable>` cast is also silently accepted.
-  - const methods (a const receiver).
+phase 6 status (2026-07-26): the const-LVALUE WRITE WALL is LANDED — a
+const value cannot be the target of a write (=, augmented, ++/--, a move's
+TARGET); DELETE and a move's SOURCE are exempt by canon (the lifecycle
+rule). assign/lvalue.sl owns the wall's canon; the negative below pins it
+here. still deferred:
+  - PARAMETER enforcement (a param's const facets are invisible to the
+    wall — the munge stays decorative; writing through a `T^` param is
+    still accepted).
+  - the const->mutable FLOW rule (a const->mutable assignment WITHOUT a
+    `<mutable>` cast is still silently accepted — so the wall is escapable
+    through ^ into a mutable pointer).
+  - SWAP on const operands (its questions outrank it).
+  - const methods (a const receiver) — a method call on a const class
+    lvalue is the known unchecked hole until this lands.
 
 caveats:
   - a leading `const` at a statement/decl start needs an initializer. on a
@@ -266,11 +275,10 @@ int32 main() {
     // a const variable passed BY REF to a function (auto-ref of a const lvalue).
     show_ctup(^ctup);                     // 4
 
-    // WRITE through a const variable: accepted today (const is UNENFORCED — phase 6
-    // flips this to an error, which will trip this case).
+    // WRITE through a const variable: REJECTED since the const-lvalue wall
+    // landed (the negative below; assign/lvalue.sl owns the write canon).
     const int cw[2] = (1, 2);
-    cw[0] = 9;
-    __println(cw[0]);                     // 9
+    __println(cw[0]);                     // 1
 
     // move (`<--`) and swap (`<-->`) involving a const variable.
     (int, int) mv = (3, 4);
@@ -297,6 +305,15 @@ int32 main() {
 negative cases. each block below is disabled; the negative-test runner enables
 one at a time and asserts the marked error substring.
 */
+
+// the const-lvalue WALL (landed; assign/lvalue.sl owns the full canon): a
+// write through a const variable rejects.
+//-EXPECT-ERROR: Cannot write to a const value
+//int neg_const_write() {
+//    const int cwn[2] = (1, 2);
+//    cwn[0] = 9;
+//    return cwn[0];
+//}
 
 //-EXPECT-ERROR: applies only to a pointer
 //void neg_mut_value(mutable int x) { }

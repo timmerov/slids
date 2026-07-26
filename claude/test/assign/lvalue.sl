@@ -1,6 +1,8 @@
 /*
 test complex expression on the lhs of an assignment.
 
+test const correctness.
+a const value cannot be the target of a write.
 */
 
 /*
@@ -12,6 +14,23 @@ deref-then-field, iterator element). operations: =, the augmented-assign
 family (+= -= *= /= %= <<= >>= &= |= ^= and logical &&= ||= ^^=), ++/--,
 <-- (move), <--> (swap). plus address-once (a side-effecting index is
 evaluated exactly once) and negatives for the rejected leaf cases.
+
+THE CONST-LVALUE WALL (landed 2026-07-26): a const value cannot be the
+target of a write — `=`, the augmented family, `++`/`--`, and a move's
+TARGET all reject, through every lvalue form (element, slot, field,
+deref, whole aggregate, whole class). classify walks the chain's DECLARED
+types (constAwareLvalueType — the stamped caches strip const): a const
+aggregate freezes its parts, a const pointee freezes the deref; a SHALLOW
+pointer (`(const int)^`) still reseats — the pointer's value is the
+address alone. EXEMPT BY CANON (the lifecycle rule, uniformly — no
+whole-variable carve-out): DELETE and a MOVE'S SOURCE — const constrains
+a live value, delete/move-from end the value's life, and the compiler's
+null afterward is a tombstone, not a mutation. DEFERRED: parameter
+enforcement (a param's const facets are invisible to the wall —
+Entry.is_param; the munge stays decorative), the const->mutable FLOW rule
+(so the wall is escapable via ^ into a mutable pointer — documented),
+SWAP (its questions outrank it), and const METHODS (a method call on a
+const class lvalue is unchecked — the known hole until const methods).
 */
 
 Simple(int x_, int y_) {
@@ -182,6 +201,44 @@ int32 main() {
         __println("tick c=" + c + " sa1=" + sa[1]);                // tick c=2 sa1=9
     }
 
+    /* --- the const-lvalue wall: the exempt operations first. --- */
+
+    /* reads from const are free; a SHALLOW pointer reseats (its value is
+       the address alone — only the pointee is frozen). */
+    {
+        const int carr[2] = (10, 20);
+        int rsum = carr[0] + carr[1];
+        int other = 7;
+        (const int)^ sq = ^carr[0];
+        int before = sq^;
+        sq = ^other;
+        __println("const-read: sum=" + rsum + " b=" + before + " q=" + sq^);
+    }
+
+    /* DELETE on a const pointer: allowed, and the tombstone null lands —
+       the lifecycle exemption (destruction ends the value; the null is the
+       compiler's own bookkeeping). */
+    {
+        const Simple^ cp = new Simple(3, 4);
+        int rx = cp^.x_;
+        delete cp;
+        __println("const-delete: x=" + rx + " null=" + (cp == nullptr));
+    }
+
+    /* a MOVE'S SOURCE is exempt the same way — moving from a const pointer
+       nulls it, and from a const SLOT of an aggregate too (uniform: no
+       whole-variable carve-out). */
+    {
+        int v = 9;
+        const int^ cp2 = ^v;
+        (const int)^ dst <-- cp2;
+        int w = 4;
+        (const (int^), int) ctp = (^w, 1);
+        int^ e2 <-- ctp[0];
+        __println("const-movefrom: d=" + dst^ + " pnull=" + (cp2 == nullptr)
+                  + " e=" + e2^ + " snull=" + (ctp[0] == nullptr));
+    }
+
     /* augmented assign on a reference leaf is rejected. */
     //-EXPECT-ERROR: Arithmetic is not allowed on a reference
     //{
@@ -262,6 +319,119 @@ int32 main() {
     //    int a[2]; int i = 0; a[0] = 1; a[1] = 2;
     //    a[i++] <--> a[i++];
     //    __println("" + a[0]);
+    //}
+
+    /* --- the const-lvalue wall: every form, every write family. --- */
+
+    /* a const array element: plain assign... */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const int ca[2] = (1, 2);
+    //    ca[0] = 9;
+    //    __println("" + ca[0]);
+    //}
+
+    /* ...the augmented family... */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const int ca[2] = (1, 2);
+    //    ca[0] += 9;
+    //    __println("" + ca[0]);
+    //}
+
+    /* ...and the bump. */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const int ca[2] = (1, 2);
+    //    ca[0]++;
+    //    __println("" + ca[0]);
+    //}
+
+    /* a const tuple slot. */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const (int, int) ct = (3, 4);
+    //    ct[0] = 9;
+    //    __println("" + ct[0]);
+    //}
+
+    /* a PARTIALLY const tuple: the const slot walls... */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    (const int, int) pt = (3, 4);
+    //    pt[0] = 9;
+    //    __println("" + pt[0]);
+    //}
+
+    /* a const class field. */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const Simple cs(3, 4);
+    //    cs.x_ = 9;
+    //    __println("" + cs.x_);
+    //}
+
+    /* a DEEP const pointer: the reseat... */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    int x = 1; int y = 2;
+    //    const int^ dp = ^x;
+    //    dp = ^y;
+    //    __println("" + dp^);
+    //}
+
+    /* ...and the write through it. */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    int x = 1;
+    //    const int^ dp = ^x;
+    //    dp^ = 9;
+    //    __println("" + dp^);
+    //}
+
+    /* a SHALLOW pointer's pointee (the reseat is the positive above). */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    int x = 1;
+    //    (const int)^ sp = ^x;
+    //    sp^ = 9;
+    //    __println("" + sp^);
+    //}
+
+    /* a const iterator element. */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const int ca[2] = (1, 2);
+    //    (const int)[] ci = ^ca[0];
+    //    ci[1] = 9;
+    //    __println("" + ci[1]);
+    //}
+
+    /* the WHOLE const aggregate (its stored value carries const slots)... */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const int ca[2] = (1, 2);
+    //    int src[2] = (8, 9);
+    //    ca = src;
+    //    __println("" + ca[0]);
+    //}
+
+    /* ...and the whole const class (no op= dispatch — the wall is first). */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const Simple cs(3, 4);
+    //    Simple s2(5, 6);
+    //    cs = s2;
+    //    __println("" + cs.x_);
+    //}
+
+    /* a MOVE'S TARGET is an author write (only its SOURCE is exempt). */
+    //-EXPECT-ERROR: Cannot write to a const value
+    //{
+    //    const int ca[2] = (1, 2);
+    //    int y = 5;
+    //    ca[0] <-- y;
+    //    __println("" + ca[0]);
     //}
 
     return 0;

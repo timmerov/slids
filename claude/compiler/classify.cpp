@@ -64,6 +64,155 @@ bool isConstantInit(parse::Node const& e) {
     return true;
 }
 
+// ---- THE CONST-LVALUE WALL ----------------------------------------------------
+// The write half of const enforcement: a const value cannot be the target of a
+// write (canon assign/lvalue.sl). Landed alone — parameter-munge enforcement,
+// the const->mutable FLOW rule, swap, and const methods stay deferred, and
+// DELETE + a MOVE'S SOURCE are exempt BY CANON (the lifecycle rule: const
+// constrains a live value; delete and move-from end the value's life, and the
+// compiler's null/empty afterward is a tombstone, not a mutation — uniformly,
+// no whole-variable carve-out).
+
+// Does writing this VALUE overwrite const storage? const facets at the value
+// layer: the type itself, an array's elements, a tuple's slots. A POINTER's
+// value is the address alone — a const POINTEE does not freeze the pointer
+// variable (`(const int)^ q; q = ^x;` reseats fine) — so the walk stops there.
+bool constInStoredValue(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    while (t != widen::kNoType && widen::form(t) == F::kAlias)
+        t = widen::get(t).underlying;
+    if (t == widen::kNoType) return false;
+    switch (widen::form(t)) {
+        case F::kConst: return true;
+        case F::kArray: return constInStoredValue(widen::get(t).elem);
+        case F::kTuple:
+            for (auto s : widen::get(t).slots)
+                if (constInStoredValue(s)) return true;
+            return false;
+        case F::kAlias:   // peeled above — unreachable, listed for -Wswitch-enum
+        case F::kPointer:
+        case F::kIterator:
+        case F::kSlid:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+        case F::kNone:
+        case F::kTmplUse:
+            return false;
+    }
+    return false;
+}
+
+// The CONST-PRESERVING type of an lvalue chain — the stamped caches strip
+// const, so the wall re-walks the chain's declared types structurally:
+// ident -> the entry's type; deref -> the pointee; index -> the element (a
+// tuple by its literal slot); field -> the field's declared type. A step
+// through a CONST aggregate / pointee freezes what it yields (the kConst
+// re-wrap). kNoType = not a recognized lvalue chain — the wall stays quiet
+// (the ordinary lvalue diagnostics own malformed targets).
+widen::TypeRef constAwareLvalueType(parse::Tree& tree, parse::Node const& n) {
+    using F = widen::Type::Form;
+    auto peel = [](widen::TypeRef t, bool& frozen) {
+        while (t != widen::kNoType) {
+            F f = widen::form(t);
+            if (f == F::kAlias) { t = widen::get(t).underlying; continue; }
+            if (f == F::kConst) { frozen = true; t = widen::get(t).underlying; continue; }
+            break;
+        }
+        return t;
+    };
+    if (n.kind == parse::Kind::kIdentExpr) {
+        if (n.resolved_entry_id < 0) return widen::kNoType;
+        parse::Entry const& e = tree.entries[n.resolved_entry_id];
+        // A PARAMETER's const facets are invisible to the wall: the munge
+        // makes every reference pointee const behind the author's spelling,
+        // and PARAM enforcement is deferred — writing through a param stays
+        // legal until that lands.
+        if (e.is_param) return widen::removeConst(e.slids_type);
+        return e.slids_type;
+    }
+    if (n.kind == parse::Kind::kDerefExpr) {
+        if (n.children.empty() || !n.children[0]) return widen::kNoType;
+        bool frozen = false;
+        widen::TypeRef b =
+            peel(constAwareLvalueType(tree, *n.children[0]), frozen);
+        if (b == widen::kNoType) return b;
+        F f = widen::form(b);
+        if (f != F::kPointer && f != F::kIterator) return widen::kNoType;
+        return widen::get(b).pointee;   // pointee carries its own const
+    }
+    if (n.kind == parse::Kind::kIndexExpr) {
+            if (n.children.empty() || !n.children[0]) return widen::kNoType;
+            bool frozen = false;
+            widen::TypeRef b =
+                peel(constAwareLvalueType(tree, *n.children[0]), frozen);
+            if (b == widen::kNoType) return b;
+            widen::TypeRef out = widen::kNoType;
+            switch (widen::form(b)) {
+                case F::kArray:    out = widen::get(b).elem;    break;
+                case F::kIterator: out = widen::get(b).pointee; break;
+                case F::kTuple: {
+                    // A tuple index is a folded literal by the time classify
+                    // runs; an unreadable one falls back to "any slot const".
+                    std::vector<widen::TypeRef> slots = widen::get(b).slots;
+                    long k = -1;
+                    if (n.children.size() > 1 && n.children[1]
+                        && isLiteralKind(n.children[1]->kind)) {
+                        k = std::atol(n.children[1]->text.c_str());
+                    }
+                    if (k >= 0 && k < (long)slots.size()) {
+                        out = slots[k];
+                    } else {
+                        for (auto s : slots)
+                            if (constInStoredValue(s)) frozen = true;
+                        out = slots.empty() ? widen::kNoType : slots[0];
+                    }
+                    break;
+                }
+                case F::kPointer:
+                case F::kConst:
+                case F::kAlias:
+                case F::kSlid:
+                case F::kPrimitive:
+                case F::kVoid:
+                case F::kAnyptr:
+                case F::kNone:
+                case F::kTmplUse:
+                    return widen::kNoType;
+            }
+            if (out != widen::kNoType && frozen) out = widen::internConst(out);
+            return out;
+    }
+    if (n.kind == parse::Kind::kFieldExpr) {
+        if (n.children.empty() || !n.children[0]) return widen::kNoType;
+        bool frozen = false;
+        widen::TypeRef b =
+            peel(constAwareLvalueType(tree, *n.children[0]), frozen);
+        if (b == widen::kNoType || widen::form(b) != F::kSlid)
+            return widen::kNoType;
+        auto ci = tree.classes.find(widen::strip(b));
+        if (ci == tree.classes.end()) return widen::kNoType;
+        int fi = ci->second.fieldIndex(n.name);
+        if (fi < 0) return widen::kNoType;
+        widen::TypeRef out = ci->second.field_types[fi];
+        if (out != widen::kNoType && frozen) out = widen::internConst(out);
+        return out;
+    }
+    return widen::kNoType;
+}
+
+// The wall itself: report + true when this write target is const. The
+// message is ONE spelling for every write family (=, augmented, the ++/--
+// rewrite, a move's TARGET; swap deferred).
+bool rejectConstWrite(parse::Tree& tree, parse::Node const& target,
+                      int file_id, int tok, diagnostic::Sink& diag) {
+    widen::TypeRef t = constAwareLvalueType(tree, target);
+    if (t == widen::kNoType || !constInStoredValue(t)) return false;
+    diagnostic::report(diag, {file_id, tok,
+        "Cannot write to a const value.", {}});
+    return true;
+}
+
 // A BARE LVALUE expression: one that names an existing storage location (an
 // address), as opposed to a computed rvalue (a call / op / construction / literal).
 // The distinction drives the copy-vs-elide and spread-vs-spill decisions: a bare
@@ -2047,6 +2196,11 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // everything else are rejected until their phases wire the step.
             parse::Node& operand = *e.children[0];
             inferExpr(tree, operand, widen::kNoType, diag);
+            // THE CONST WALL — a bump is a write to its operand.
+            if (rejectConstWrite(tree, operand, e.file_id, e.tok, diag)) {
+                e.inferred_type = operand.inferred_type;
+                return;
+            }
             std::string ot = widen::spellOrEmpty(operand.inferred_type);
             if (isReference(operand.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
@@ -6512,6 +6666,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 lref = parse::entryType(tree, s.resolved_entry_id);
                 lvalue_type = widen::spellOrEmpty(lref);
             }
+            // THE CONST WALL — a bare-name target whose stored value carries
+            // const (a deep-const local, a const-slotted aggregate) rejects
+            // before any dispatch.
+            if (s.resolved_entry_id >= 0 && constInStoredValue(lref)) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Cannot write to a const value.", {}});
+                return;
+            }
             // NO pre-inference interception here. The rhs is inferred FIRST, bottom-up:
             // `a = b + c` evaluates `b + c` on its own terms (dispatching on the LHS
             // OPERAND's class — see tryLowerClassBinary) into a temp, and only THEN is the
@@ -6553,6 +6715,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // read it exactly like the bare-name entry type.
                 parse::Node& lv = *s.children[0];
                 inferExpr(tree, lv, widen::kNoType, diag);
+                // THE CONST WALL — the augmented family (and the ++/-- rewrite
+                // that lands here) through a const lvalue chain.
+                if (rejectConstWrite(tree, lv, s.file_id, s.tok, diag)) return;
                 s.return_type = lv.inferred_type;
                 rhs_ptr = s.children[1].get();
             } else {
@@ -6563,6 +6728,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // in place. For an ordinary local this is the value resolve cached.
                 if (s.resolved_entry_id >= 0) {
                     s.return_type = parse::entryType(tree, s.resolved_entry_id);
+                    // THE CONST WALL — the bare-name augmented target.
+                    if (constInStoredValue(s.return_type)) {
+                        diagnostic::report(diag, {s.file_id, s.tok,
+                            "Cannot write to a const value.", {}});
+                        return;
+                    }
                 }
                 rhs_ptr = s.children[0].get();
             }
@@ -6735,6 +6906,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& lvalue = *s.children[0];
             inferExpr(tree, lvalue, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
+            // THE CONST WALL — a complex lvalue whose chain lands on const.
+            if (rejectConstWrite(tree, lvalue, s.file_id, s.tok, diag)) return;
             // A class store target with a matching user `op=` dispatches to it — the same
             // rule kAssignStmt applies to a bare-name target, now for a complex lvalue
             // (`obj.f = x` / `p^ = x` / `arr[i] = x`). Mirrors kMoveStmt / kSwapStmt.
@@ -6761,6 +6934,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             parse::Node& lhs = *s.children[0];
             inferExpr(tree, lhs, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lhs.inferred_type, diag);
+            // THE CONST WALL — the move's TARGET only. The SOURCE is exempt by
+            // canon: move-from ends the value's life, and the compiler's
+            // empty-the-source write is a tombstone, not a mutation —
+            // uniformly, sub-objects included (no carve-out).
+            if (rejectConstWrite(tree, lhs, s.file_id, s.tok, diag)) return;
             // A self-move would null the source it just copied from — reject it.
             if (isSameLvalue(lhs, *s.children[1])) {
                 diagnostic::report(diag, {s.file_id, s.tok,

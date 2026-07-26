@@ -479,6 +479,11 @@ struct Entry {
                                   // with no dependency on the template list. Never a
                                   // storage type (resolveDeclType rejects it), never
                                   // constructed, no transfer ops synthesized.
+    bool is_param = false;        // kLocalVar: a function PARAMETER (registered by
+                                  // resolveFunctionBody). The const-lvalue wall
+                                  // ignores a parameter's const facets — the param
+                                  // munge makes every reference pointee const, and
+                                  // PARAM enforcement is deferred (todo Phase 6).
     bool tmpl_ref_param = false;  // kLocalVar: a template instance's BARE-T parameter
                                   // that munged to `(const T)^` (tmpl_value_param, class/
                                   // tuple binding). classify's ident arm auto-derefs
