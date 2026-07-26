@@ -9,10 +9,6 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
-  * - Function-param call defaults assert (int f(int a = five()) dies in classify's inferExpr)
-    — pre-existing, distinct from the field bug: param defaults are captured as literal text
-    (fillDefaults), so they were always de-facto constants-only, just unenforced.
-
   *   T Shape:Corner:dist() { ... }        // ✗ the out-of-line qualifier walks ONE
                                        //   level — no Outer:Inner:m depth
 

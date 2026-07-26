@@ -2542,6 +2542,34 @@ Phase 9 — templates
     file-scope negatives re-pinned from "Unresolved identifier" to the
     rule. bug.sl (the repro) now rejects.
 
+  * A PARAMETER DEFAULT IS DATA                            LANDED 2026-07-26
+    (todo BUGS #2: `int f(int a = five())` asserted in classify's
+    inferExpr — USER'S DESIGN: param defaults ride the SAME machinery as
+    global and field defaults.) The old private mechanism gated on bare
+    isLiteralKind and FLATTENED the default to text+kind on the entry;
+    a rejected default left the kProgram sentinel, and a call omitting
+    the argument had fillDefaults materialize the sentinel into a node
+    inferExpr asserts on — a core dump BEFORE the queued diagnostic
+    printed (the enforcement half already existed; the crash preempted
+    it). NOW: the signature pre-pass gates on isConstantInit (the one
+    predicate for globals + fields + params: constants, string
+    literals, nullptr, constant aggregates — moot for params, which
+    can't be by-value aggregates), messages in the data-rule family
+    ("a parameter default is data — pass the value at the call site"),
+    and the validated default is kept as a NODE (Entry.param_defaults,
+    the field_params model) that fillDefaults CLONES per call site
+    (parse::cloneNode — resolve's template cloneDeep PROMOTED to
+    parse::, one deep-copy for both consumers), restamped to the call
+    site (stampCallSite — mixed def/call file:tok pairs would caret
+    garbage). A rejected slot stays null and never fills: the assert
+    class is dead by construction, and the call site's compile fails on
+    the real diagnostic. A GLOBAL-READ default is rejected by the same
+    predicate — the globals policy verbatim (looks like data, behaves
+    like code). Canon test/function/param.sl: string-literal default
+    positive (lead), the crash shape (neg_const_call + the omitting
+    call), the global-read negative; neg_const's marker moved to the
+    new wording. Suite green across every directory.
+
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
   Types were std::string spellings everywhere; now every type is a structured

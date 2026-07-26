@@ -2476,15 +2476,29 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
 
 // Append literal arg nodes for omitted trailing OPTIONAL params, from the
 // function entry's captured constant defaults.
+// Restamp a filled default's locations onto the CALL SITE, recursively — a
+// downstream diagnostic on the filled value carets the call that omitted the
+// argument, not the definition it was cloned from (mixed file/tok pairs would
+// caret garbage).
+void stampCallSite(parse::Node& n, int file_id, int tok) {
+    n.file_id = file_id;
+    n.tok = tok;
+    n.name_tok = tok;
+    for (auto& c : n.children) if (c) stampCallSite(*c, file_id, tok);
+    for (auto& p : n.params) if (p) stampCallSite(*p, file_id, tok);
+    for (auto& d : n.dim_exprs) if (d) stampCallSite(*d, file_id, tok);
+}
+
 void fillDefaults(parse::Node& s, parse::Entry const& e) {
     for (std::size_t i = s.children.size();
-         i < e.param_types.size() && i < e.param_default_kind.size(); i++) {
-        auto lit = std::make_unique<parse::Node>();
-        lit->kind = e.param_default_kind[i];
-        lit->text = e.param_default_text[i];
-        lit->file_id = s.file_id;
-        lit->tok = s.tok;
-        s.children.push_back(std::move(lit));
+         i < e.param_types.size() && i < e.param_defaults.size(); i++) {
+        // A null slot is a required param (arity was checked) or a REJECTED
+        // default (diagnosed at the definition — the error is already queued;
+        // filling nothing keeps the sentinel-node crash class dead).
+        if (!e.param_defaults[i]) break;
+        auto def = parse::cloneNode(*e.param_defaults[i]);
+        stampCallSite(*def, s.file_id, s.tok);
+        s.children.push_back(std::move(def));
     }
 }
 
@@ -7541,17 +7555,23 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
             }
         }
     }
-    e.param_default_text.assign(e.param_types.size(), "");
-    e.param_default_kind.assign(e.param_types.size(), parse::Kind::kProgram);
+    e.param_defaults.assign(e.param_types.size(), nullptr);
     for (std::size_t i = 0;
          i < fn.params.size() && i < e.param_types.size(); i++) {
         parse::Node& p = *fn.params[i];
         if (p.children.empty() || !p.children[0]) continue;   // required
         parse::Node& def = *p.children[0];
         inferExpr(tree, def, p.return_type, diag);
-        if (!isLiteralKind(def.kind)) {
+        // A PARAMETER DEFAULT IS DATA — the globals/fields rule, the same
+        // predicate: a foldable constant or an aggregate of constants
+        // (constfold already folded a constant EXPRESSION spelling); a
+        // construction or a call is code in the fill path and is rejected.
+        // The slot stays null — a rejected default never fills.
+        if (!isConstantInit(def)) {
             diagnostic::report(diag, {def.file_id, def.tok,
-                "A parameter default must be a constant expression.", {}});
+                "Default for parameter '" + p.name + "' is not a constant "
+                "expression; a parameter default is data — pass the value at "
+                "the call site instead.", {}});
             continue;
         }
         if (p.return_type == widen::kNoType) {
@@ -7566,13 +7586,15 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
             if (p.resolved_entry_id >= 0) {
                 tree.entries[p.resolved_entry_id].slids_type = t;
             }
-        } else if (!literalFitsContext(def, p.return_type)) {
+        } else if (isLiteralKind(def.kind)
+                   && !literalFitsContext(def, p.return_type)) {
+            // The scalar fit-check as before; a non-scalar constant (a string,
+            // an aggregate) is typed at the call site like any filled arg.
             diagnostic::report(diag, {def.file_id, def.tok,
                 "Default value does not fit parameter type '"
                     + widen::spellOrEmpty(p.return_type) + "'.", {}});
         }
-        e.param_default_text[i] = def.text;
-        e.param_default_kind[i] = def.kind;
+        e.param_defaults[i] = &def;
     }
     // num_required = the count of LEADING params with no default (a method's
     // `_$recv` at [0] has none, so it counts as required). Free functions also have

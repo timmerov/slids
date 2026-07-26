@@ -179,4 +179,80 @@ std::unique_ptr<Node> makeReceiverParam(widen::TypeRef type, int file_id, int to
     return n;
 }
 
+// Deep copy of a subtree — every field a parse node carries, the unique_ptr
+// vectors recursing with null slots preserved (a switch default's absent
+// label, an empty construction slot). Serves template instantiation (resolve)
+// and the param-default fill (classify clones the validated default node at
+// each call site). MUST enumerate every Node field — keep in sync with Node.
+std::unique_ptr<Node> cloneNode(Node const& n) {
+    auto c = std::make_unique<Node>();
+    c->kind = n.kind;
+    c->name = n.name;
+    c->text = n.text;
+    c->return_type = n.return_type;
+    c->return_type_seg_toks = n.return_type_seg_toks;
+    c->nominal_type = n.nominal_type;
+    c->inferred_type = n.inferred_type;
+    c->op_type = n.op_type;
+    c->alias_label = n.alias_label;
+    c->strong_type = n.strong_type;
+    c->file_id = n.file_id;
+    c->tok = n.tok;
+    c->name_tok = n.name_tok;
+    c->resolved_entry_id = n.resolved_entry_id;
+    c->range_dotdot_tok = n.range_dotdot_tok;
+    c->label = n.label;
+    c->loop_levels = n.loop_levels;
+    c->is_const = n.is_const;
+    c->const_method = n.const_method;
+    c->is_global = n.is_global;
+    c->global_group_id = n.global_group_id;
+    c->is_reopen = n.is_reopen;
+    c->is_incomplete = n.is_incomplete;
+    c->is_construction = n.is_construction;
+    c->is_temp_init = n.is_temp_init;
+    c->ctor_no_args = n.ctor_no_args;
+    c->class_op_chain = n.class_op_chain;
+    c->op_collapse_head = n.op_collapse_head;
+    c->op_bin_eid = n.op_bin_eid;
+    c->op_un_eid = n.op_un_eid;
+    c->op_aug_eid = n.op_aug_eid;
+    c->op_eq_lhs_eid = n.op_eq_lhs_eid;
+    c->op_eq_rhs_eid = n.op_eq_rhs_eid;
+    c->op_move_eid = n.op_move_eid;
+    c->parenless = n.parenless;
+    c->class_conversion = n.class_conversion;
+    c->agg_conv_spill = n.agg_conv_spill;
+    c->is_mutable = n.is_mutable;
+    c->tmpl_value_param = n.tmpl_value_param;
+    c->is_virtual = n.is_virtual;
+    c->is_pure = n.is_pure;
+    c->is_foreign = n.is_foreign;
+    c->bypass_virtual = n.bypass_virtual;
+    c->default_move_init = n.default_move_init;
+    c->default_swap_init = n.default_swap_init;
+    c->construction_init = n.construction_init;
+    c->quiet_diag = n.quiet_diag;
+    c->require_homogeneous = n.require_homogeneous;
+    c->non_completing = n.non_completing;
+    c->qualifier = n.qualifier;
+    c->qualifier_toks = n.qualifier_toks;
+    c->global_qualified = n.global_qualified;
+    c->type_params = n.type_params;
+    c->type_param_toks = n.type_param_toks;
+    c->tmpl_args = n.tmpl_args;
+    c->tmpl_arg_toks = n.tmpl_arg_toks;
+    c->param_types = n.param_types;
+    c->captures = n.captures;
+    c->capture_types = n.capture_types;
+    c->self_entry_id = n.self_entry_id;
+    for (auto const& d : n.dim_exprs)
+        c->dim_exprs.push_back(d ? cloneNode(*d) : nullptr);
+    for (auto const& ch : n.children)
+        c->children.push_back(ch ? cloneNode(*ch) : nullptr);
+    for (auto const& p : n.params)
+        c->params.push_back(p ? cloneNode(*p) : nullptr);
+    return c;
+}
+
 }  // namespace parse

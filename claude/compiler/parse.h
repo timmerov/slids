@@ -423,12 +423,15 @@ struct Entry {
     std::vector<widen::TypeRef> param_types;  // Function only
     // Function only — default parameters. num_required = count of leading params
     // without a default (required); params [num_required..param_types.size()) are
-    // optional. param_default_text/kind (parallel to param_types) carry each
-    // optional param's folded constant default — captured by classify's
-    // signature pre-pass; required slots are empty / kProgram.
+    // optional. param_defaults (parallel to param_types) points at each optional
+    // param's FOLDED CONSTANT default node (the def node's params[i].children[0],
+    // stable across stages — the same live-node model as ClassInfo::field_params);
+    // classify's signature pre-pass validates it (A DEFAULT IS DATA, the
+    // globals/fields isConstantInit rule) and stamps the slot; fillDefaults
+    // CLONES it per call site. null = required, or a REJECTED default
+    // (diagnosed at the definition; never filled).
     int num_required = 0;
-    std::vector<std::string> param_default_text;
-    std::vector<Kind> param_default_kind;
+    std::vector<Node*> param_defaults;
     std::vector<int> captures;    // kFunction (nested): captured host entry ids
     int parent_frame_id = -1;
     int file_id = -1;
@@ -901,6 +904,10 @@ char const* implicitMemberNoun(std::string const& name);
 // the in-class method form and the ctor/dtor form (grammar) and the out-of-line
 // relocation (resolve) all splice this same node in at params[0].
 std::unique_ptr<Node> makeReceiverParam(widen::TypeRef type, int file_id, int tok);
+
+// Deep copy of a subtree (every Node field, null slots preserved). Template
+// instantiation (resolve) and the param-default call-site fill (classify).
+std::unique_ptr<Node> cloneNode(Node const& n);
 
 // THE canonical walk over a class and its HOISTED descendants (a class's hoisted
 // classes are exactly its kClassDef-kind children, recursively). One place owns

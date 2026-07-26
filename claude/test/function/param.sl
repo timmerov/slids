@@ -32,8 +32,15 @@ claude says:
 
 - a param is required (explicit type, no default) or optional (has a default);
   a typeless param infers its type from the default; required precede optional.
-- the default is a constant expression (folded); an omitted trailing arg at a
-  call site is filled with it. Arity is the range [required, total].
+- A PARAMETER DEFAULT IS DATA (2026-07-26 — the globals/fields rule, the same
+  isConstantInit predicate): a foldable constant, a string literal, nullptr.
+  A call, a construction, or a global read in a default is code in the fill
+  path — rejected at the definition ("pass the value at the call site").
+  The validated default is kept as a NODE on the entry (the field_params
+  model, no more text flattening) and CLONED per call site by fillDefaults,
+  restamped to the call's location; a rejected default's slot stays null and
+  never fills (this killed the inferExpr assert the old sentinel hit when a
+  call omitted a rejected default). Arity is the range [required, total].
 */
 
 int one() {
@@ -60,6 +67,12 @@ int code(ch = 'z') {
     return ch;
 }
 
+/* a STRING-LITERAL default — const char[N] storage, data through and through
+   (the isConstantInit string arm, shared with fields). */
+int lead(char[] s = "hi") {
+    return s[0];
+}
+
 /* class as parameter */
 Class(int x_) {
 }
@@ -79,6 +92,8 @@ int32 main() {
     announce();                                     // n=42
     announce(7);                                    // n=7
     __println("code() = " + code());                // 122
+    __println("lead() = " + lead());                // 104 ('h')
+    __println("lead(\"za\") = " + lead("za"));      // 122 ('z')
 
     Class cls(42);
     classparam(^cls);
@@ -106,10 +121,31 @@ int32 main() {
 //    return b;
 //}
 
-/* a non-constant default (a function call). */
-//-EXPECT-ERROR: A parameter default must be a constant expression.
+/* a non-constant default (a function call): a default is DATA — the
+   globals/fields rule, one predicate. */
+//-EXPECT-ERROR: is not a constant expression
 //int neg_const(int a, b = one()) {
 //    return a + b;
+//}
+
+/* ...and a CALL SITE that OMITS the rejected default (was the inferExpr
+   ASSERT: the old text-capture left a sentinel that fillDefaults happily
+   materialized — the compiler core-dumped before the real diagnostic
+   printed; the slot now stays null and never fills). */
+//-EXPECT-ERROR: is not a constant expression
+//int neg_const_call(int a = one()) {
+//    return a;
+//}
+//int neg_const_use() {
+//    return neg_const_call();
+//}
+
+/* a default that reads a GLOBAL is code in the fill path, not data — the
+   same policy that governs a global initializer reading another global. */
+//-EXPECT-ERROR: is not a constant expression
+//global int g_neg = 3;
+//int neg_global(int a = g_neg) {
+//    return a;
 //}
 
 /* a non-primitive VALUE parameter is rejected: primitives pass by value, everything

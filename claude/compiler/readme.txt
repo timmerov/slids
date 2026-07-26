@@ -2201,6 +2201,20 @@ STAGE FILES (.h / .cpp pairs)
             imported operator — so a user operator declared in a `.slh` was invisible to its
             importers (fell through to construction-by-initializer or "cannot convert"). Canon
             test/import (Counter's op=(int) / op[] / op+ across the seam).
+            A PARAMETER DEFAULT IS DATA (2026-07-26 — the globals/fields rule,
+            the SAME predicate isConstantInit): a foldable constant, a string
+            literal, nullptr — a call, a construction, or a global read is
+            code in the fill path, rejected at the definition ("pass the
+            value at the call site"). The signature pre-pass validates the
+            (constfold-folded) default and stores its NODE on the entry
+            (Entry.param_defaults — the ClassInfo::field_params live-node
+            model; the old text+kind flattening is gone), and fillDefaults
+            CLONES it per call site (parse::cloneNode, promoted from
+            resolve's template cloner), restamped to the call's location. A
+            REJECTED default's slot stays null and never fills — which
+            retired the inferExpr assert the old kProgram sentinel caused
+            when a call omitted a rejected default (the compiler died before
+            the queued diagnostic printed). Canon test/function/param.sl.
             THE OVERLOAD SET ITSELF IS CHECKED AT ITS DECLARATION —
             checkOverloadDefaultCollisions, run right after the signature pre-pass (the
             point where every param type, incl. one INFERRED from its default, and every
