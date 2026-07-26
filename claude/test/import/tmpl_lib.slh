@@ -23,6 +23,12 @@ every demanded flavor once.
 Vector<T>(T data_ = 0, T extra_ = 0) {
     const int kTag = 7;
     alias Elem = T;
+    /* nested ALIAS TEMPLATES: type-level, whole in the header — no bodies to
+       deliver, so a header class template may carry them (unlike a nested
+       class or template method). `Duo`'s target uses the OUTER T: only an
+       instance-qualified use binds it. */
+    alias Ptr<U> = U^;
+    alias Duo<U> = (T, U);
     void push(T v);
     T sum();
 }

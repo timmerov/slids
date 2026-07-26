@@ -1,23 +1,6 @@
 
 agenda:
 
-Deferred / unbuilt:
-  - Out-of-line template method targeting a class-template owner (T Vec:m<X>() — the plain-class and namespace owners landed with cross-TU).
-  - Source redirection (@impl-style — the source must share the header's base name).
-  - Author-side up-front private-name checking (consumer side is covered; the author finds out when a consumer does).
-  - Explicit instantiation as compilable source (the .sli spelling, ungrammared) — tooling, not semantics.
-
-  Believed working but unpinned — flagging honestly:
-  - Nested template TYPES across the seam (Vector<Vector<int>> of a header template): I stated it rides free because the .sli spellings round-trip through widen's depth-counting splitters —
-  that reasoning is solid but no test/import case pins a nested-arg aggregation end-to-end.
-  - Hoisted alias template in a header-owned class template (TClass:Ref<...> where TClass comes from a header): my header guard rejects nested classes and template methods but says nothing
-  about a nested alias template — and unlike those two, an alias is type-level (no bodies to deliver), so it plausibly just works... or plausibly does something unexamined. This is the one
-  genuinely uninspected corner this session created.
-
-  Finding awaiting your call
-  A:H<int> and A<int>:H<int> mint two distinct classes — the file-level and per-instance sub-patterns memoize separately, so A:H<int>^ p = ^a2 is a cast error between what the self-contained
-  design says is one class. I recorded it in readme.txt's deferred list and plan.txt, and pinned nothing either way — say the word if you want them unified (or a todo entry).
-
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.
 check for frame scope violations/shortcuts and stored canonical names.

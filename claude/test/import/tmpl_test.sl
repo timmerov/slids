@@ -64,6 +64,16 @@ int32 main() {
     Vector<int>:Elem ye = 5; __println("y2 = " + ye);
     int64 y3 = Vector<int64>:kTag; __println("y3 = " + y3);
 
+    /* nested ALIAS TEMPLATES of a header class template — type-level, no
+       demand recorded: bare-host, instance-qualified, and the outer-T
+       target bound by the flavor. */
+    Vector:Ptr<int> ya = ^fs; __println("ya = " + ya^);
+    Vector<int>:Ptr<int8> yb = ^f8; __println("yb = " + yb^);
+    Vector<int>:Duo<int8> yd = (40, 5);
+    int yd0 = yd[0];
+    int8 yd1 = yd[1];
+    __println("yd = " + yd0 + " " + yd1);
+
     /* the header-declared INCOMPLETE template (`Grow<T>(...)`): the source's
        completing re-open supplied the fields, so the flavor has the FULL
        layout here — methods work and sizeof folds. */
@@ -84,6 +94,23 @@ int32 main() {
        carries `import library;` so tmpl_lib.sl's instantiation can spell it. */
     Box<Bird> bb;
     __println("bb = " + bb.has());
+
+    /* NESTED template-instance ARGUMENTS across the seam: the demand
+       spellings round-trip through the .sli and aggregate like any flavor —
+       one level (`Box<Vector<int>>`), two (`Box<Box<int>>`), and a function
+       demand carrying a pointer to a nested instance (`tpick<Vector<int>^>`). */
+    Vector<int> nv(2, 3);
+    Box<Vector<int>> nxb;
+    __println("nx1 = " + nxb.has());
+    nxb.p_ = ^nv;
+    __println("nx2 = " + nxb.p_^.sum());
+    Box<int> ni;
+    Box<Box<int>> nbb;
+    nbb.p_ = ^ni;
+    __println("nx3 = " + nbb.has() + " " + nbb.p_^.has());
+    Vector<int> nv2(4, 4);
+    Vector<int>^ npk = tpick(^nv, ^nv2);
+    __println("nx4 = " + npk^.sum());
 
     /* a LOCAL class instantiates an imported template INLINE: this TU loaded
        the template source's bodies and emits the flavor internal — it is the
@@ -121,6 +148,14 @@ int32 main() {
     //Loc ra(1);
     //Loc^ rb = tbias(^ra);
     //__println("rb = " + rb^.lv());
+
+    /* a BARE-host use of the outer-T alias: nothing binds T — the chain
+       names the rule, the instance-qualified spelling, and the re-list
+       remedy, anchored at this use site. */
+    //-EXPECT-ERROR: only an instance-qualified use
+    //Vector:Duo<int8> nad = (1, 2);
+    //int na0 = nad[0];
+    //__println("na0 = " + na0);
 
     /* THE CARVE-OUT: a local-type instance of an imported class's template
        method emits `define internal` HERE — the one sanctioned exception to

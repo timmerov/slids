@@ -80,7 +80,11 @@ canonical copy emit internal with their class. A source-side member not
 declared in the header exists only in the module's own flavors; a consumer
 may neither define nor re-open a header template ("defined by its module's
 source"); a header-owned class template may not contain a NESTED class or a
-TEMPLATE METHOD (no body-delivery channel for either — rejected). Canon
+TEMPLATE METHOD (no body-delivery channel for either — rejected), but MAY
+carry a nested ALIAS template: type-level, the header delivers the
+sub-pattern whole, nothing to aggregate — bare-host, instance-qualified,
+and an outer-T target bound by the flavor's qualifier all work from any
+consumer (readme.txt TEMPLATES). Canon
 test/import/tmpl_test.sl + tmpl_test2.sl + tmpl_lib.slh/.sl.
 RESTRICTIONS: a class template owns its name against a LISTLESS opening or a
 plain class. An instance's members ARE nameable from outside

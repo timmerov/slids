@@ -2428,6 +2428,41 @@ Phase 9 — templates
     self-contained inner-list design says one class. Recorded in
     readme.txt's deferred list; not pinned either way.
     Suite: all positives and negatives green.
+  * CROSS-TU COVERAGE ROUND (the flagged corners)         LANDED 2026-07-25
+    Three items from the prior session's honesty flags; ONE compiler
+    change total.
+    NESTED TEMPLATE ARGS ACROSS THE SEAM, pinned end-to-end (were
+    believed working, untested): canon tmpl_test.sl — `Box<Vector<int>>`
+    (demanded by BOTH consumers; the .sli union dedups to ONE aggregated
+    external body), `Box<Box<int>>`, and the function demand
+    `tpick<Vector<int>^>` — + tmpl_test2.sl — the comma-carrying
+    `Box<TPair<int, int8>>`: the depth-counting splitter must not split
+    the demand at an inner comma (it survives into the mangled symbol).
+    The machinery held; zero compiler changes.
+    A HEADER CLASS TEMPLATE MAY CARRY NESTED ALIAS TEMPLATES (was the
+    uninspected corner — the header guard rejects nested classes and
+    template methods and says nothing about aliases): allowed BY DESIGN,
+    now inspected and pinned — an alias is type-level, the header
+    delivers the sub-pattern whole and the .sli records no demand, so
+    the no-delivery-channel objection never applies. tmpl_lib.slh's
+    Vector grew `Ptr<U>`/`Duo<U>`; pinned from both consumers:
+    bare-host, instance-qualified, and the outer-T target bound by the
+    flavor's qualifier (`Vector<int>:Duo<int8>`).
+    THE UNLISTED-OUTER-PARAM CHAIN (the compiler change): a bare-host
+    use of a hoisted alias whose target uses an outer param the
+    self-contained inner list doesn't re-list died with "Unknown type
+    '(T, U)'" careted at a header line the consumer never wrote. Now
+    ensureAliasTemplatePattern carries USE anchors (threaded from the
+    kTmplUse arm) and unlistedOuterParam (the host pattern's params,
+    minus the alias's own list, matched against unknown kSlid leaves of
+    the built pattern) fires the chain: primary at the use site naming
+    the rule and BOTH remedies — instance-qualify the host / re-list
+    the param, each verified by probe before the wording shipped — plus
+    a note careting the target. Every other pattern-build failure keeps
+    the requireKnownType fallback. Negatives: tmpl_nested.sl BadAl (the
+    TU-local pin, marker updated from "Unknown type") + tmpl_test.sl
+    (the cross-TU flavor).
+    Suite: import + template, all positives and negatives green.
 
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)

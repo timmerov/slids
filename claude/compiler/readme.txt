@@ -1290,9 +1290,18 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     state; the file-scope snapshot pass reaches them through tree.templates.
     A nested ALIAS template hoists the same way — a kAlias sub-pattern
     ("TClass:Ref"), registerAliasTemplate, pattern built lazily from its
-    OWN markers at first use, so the self-contained rule holds free (an
-    unlisted outer param in the target is an unknown type); the composed-
-    name divert accepts kClass OR kAlias.
+    OWN markers at first use, so the self-contained rule holds free; the
+    composed-name divert accepts kClass OR kAlias. An UNLISTED outer param
+    in the target gets a focused CHAIN (2026-07-25; was a bare "Unknown
+    type" careted at the definition): primary at the USE site — the bare
+    form binds only the alias's own list; instance-qualify the host, or
+    re-list the param (both remedies verified) — with a note careting the
+    target. ensureAliasTemplatePattern carries the use anchors (threaded
+    from the kTmplUse arm); unlistedOuterParam matches the host pattern's
+    params, minus the alias's own list, against unknown kSlid leaves of
+    the built pattern; every other build failure keeps the
+    requireKnownType fallback. Negatives: tmpl_nested.sl (BadAl, TU-local)
+    + tmpl_test.sl (the cross-TU flavor).
   - NESTED TEMPLATE TYPES (`Vec<Vec<int>>`): grammar-only. The two lookahead
     gates (skipTypeArgGroup / looksLikeTemplateCallArgs) count ANGLE depth —
     `>>` at angle >= 1 closes two levels; at angle 0 it never reads as a
@@ -1313,11 +1322,21 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   pinned in tmpl_nested.sl, zero compiler changes. Every form of the canon
   nesting list (alias/method/type/class/function × class/function/method
   hosts) is landed TU-local.
-  Cross-TU: the nested DECLARATION forms stay rejected in a HEADER-owned
-  template — an aggregated flavor is declaration-only and an inner pattern's
-  instances aren't knowable to --instantiate, no delivery channel — with
-  focused messages; nested template TYPES cross the seam for free (the .sli
-  spellings ride the same splitters). Diagnostic: a commonType failure
+  Cross-TU: the nested BODY-CARRYING forms (nested class, template method)
+  stay rejected in a HEADER-owned template — an aggregated flavor is
+  declaration-only and an inner pattern's instances aren't knowable to
+  --instantiate, no delivery channel — with focused messages; a nested
+  ALIAS template is ALLOWED (2026-07-25): type-level, the header delivers
+  the sub-pattern whole and the .sli records no demand, so the objection
+  never applies — bare-host, instance-qualified, and the outer-T target
+  bound by the flavor's qualifier all work from any consumer (canon
+  tmpl_lib.slh Vector:Ptr/Duo). Nested template TYPES cross the seam for
+  free (the .sli spellings ride the same splitters) — pinned end-to-end
+  2026-07-25: `Box<Vector<int>>` demanded by BOTH consumers dedups to one
+  aggregated body; `Box<Box<int>>`; the function demand
+  `tpick<Vector<int>^>`; and the comma-carrying `Box<TPair<int, int8>>`
+  round-trips the .sli (an inner comma must not split the demand — it
+  survives into the mangled symbol). Diagnostic: a commonType failure
   spells an ALIAS operand as label=target ('T=float', 'Integer=int') — the
   bound types were unreadable through bare template-param labels.
 

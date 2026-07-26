@@ -291,8 +291,9 @@ Spc3 {
    alias label=target message is pinned by expression/mixed.sl's comparison). */
 
 /* an alias target may not use an UNLISTED outer param — the hoisted list is
-   self-contained for aliases too. */
-//-EXPECT-ERROR: Unknown type
+   self-contained for aliases too; the chain names the rule and both
+   remedies, anchored at the use. */
+//-EXPECT-ERROR: only an instance-qualified use
 //BadAl<T>(T t_ = 0) {
 //    alias Leak<S> = T^;
 //}

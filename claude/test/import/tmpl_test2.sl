@@ -87,6 +87,13 @@ int32 main() {
     /* the instance-qualified const through an already-demanded flavor. */
     int y4 = Vector<int16>:kTag; __println("y4 = " + y4);
 
+    /* the header's nested alias template from the SECOND consumer — the
+       outer T bound by a different flavor here (type-level, no demand). */
+    Vector<int16>:Duo<int> y5 = (6, 700);
+    int16 y50 = y5[0];
+    int y51 = y5[1];
+    __println("y5 = " + y50 + " " + y51);
+
     /* the SECOND consumer's flavors of the header-incomplete template: the
        shared flavor dedups across the seam; a fresh one demands its own. */
     Grow<int> g2;
@@ -105,6 +112,17 @@ int32 main() {
     Bird b2(3, 4);
     Bird^ pb = tpick(^b1, ^b2);
     pb^.chirp();
+
+    /* NESTED arguments from the SECOND consumer: the shared flavor
+       (`Box<Vector<int>>`) dedups across the union; the fresh one carries an
+       inner COMMA (`Box<TPair<int, int8>>`) — the depth-counting splitter
+       must not split at the nested list's comma. */
+    Box<Vector<int>> nb2;
+    nb2.p_ = ^a;
+    __println("nz1 = " + nb2.p_^.sum());
+    Box<TPair<int, int8>> nbt;
+    nbt.p_ = ^tp;
+    __println("nz2 = " + nbt.p_^.kk() + " " + nbt.p_^.vv());
 
     /* the namespace-member template, qualified. */
     int nq = Spc2:nsq(5); __println("nq = " + nq);

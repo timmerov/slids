@@ -254,7 +254,8 @@ std::string memberQualifiedName(parse::Tree const& tree, int entry_id) {
 // recursion: an expansion may need a pattern not yet built).
 widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
                                           std::set<std::string>& visiting,
-                                          bool& reported, diagnostic::Sink& diag);
+                                          bool& reported, diagnostic::Sink& diag,
+                                          int use_file_id = -1, int use_tok = -1);
 // The entry a template-alias use names — bare (scope-aware) or qualified
 // (`Deep:RT<int>`). -1 when absent (the caller reports).
 int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
@@ -389,7 +390,8 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 a = resolveTypeRef(tree, a, visiting, reported, file_id, tok, diag);
             visiting.insert(name);
             widen::TypeRef pat =
-                ensureAliasTemplatePattern(tree, id, visiting, reported, diag);
+                ensureAliasTemplatePattern(tree, id, visiting, reported, diag,
+                                           file_id, tok);
             visiting.erase(name);
             if (pat == widen::kNoType) return t;
             return widen::internAlias(label,
@@ -1193,9 +1195,67 @@ void bindTypeParamMarkers(parse::Tree& tree, parse::Node const& node) {
     }
 }
 
+// Does `t` still carry one of `names` as an unknown kSlid leaf? Returns the
+// first one found, or "". (The walk only reads — nothing interns.)
+std::string findUnknownLeafNamed(widen::TypeRef t,
+                                 std::vector<std::string> const& names) {
+    using F = widen::Type::Form;
+    widen::Type const& ty = widen::get(t);
+    switch (ty.form) {
+        case F::kPointer:
+        case F::kIterator: return findUnknownLeafNamed(ty.pointee, names);
+        case F::kArray:    return findUnknownLeafNamed(ty.elem, names);
+        case F::kAlias:
+        case F::kConst:    return findUnknownLeafNamed(ty.underlying, names);
+        case F::kTuple:
+        case F::kTmplUse:
+            for (auto s : ty.slots) {
+                std::string f = findUnknownLeafNamed(s, names);
+                if (!f.empty()) return f;
+            }
+            return "";
+        case F::kSlid:
+            for (auto const& n : names) if (ty.name == n) return n;
+            return "";
+        case F::kNone:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+            return "";
+    }
+    return "";
+}
+
+// The one PREDICTABLE pattern-build failure of a HOISTED alias sub-pattern
+// ("Host:Alias"): the target names an outer (host) parameter the SELF-CONTAINED
+// inner list doesn't re-list — legal instance-qualified (the flavor binds it),
+// unresolvable bare. Returns that parameter's name, or "" when this isn't that.
+std::string unlistedOuterParam(parse::Tree& tree, std::string const& alias_name,
+                               parse::Node const& node, widen::TypeRef pat) {
+    std::size_t colon = alias_name.rfind(':');
+    if (colon == std::string::npos) return "";
+    std::string host = alias_name.substr(0, colon);
+    parse::Node const* hdef = nullptr;
+    for (auto const& [eid, hti] : tree.templates) {
+        if (tree.entries[eid].name == host
+            && tree.entries[eid].kind == parse::EntryKind::kClass
+            && tree.entries[eid].is_template) { hdef = hti.def; break; }
+    }
+    if (!hdef) return "";
+    std::vector<std::string> unlisted;
+    for (auto const& p : hdef->type_params) {
+        bool listed = false;
+        for (auto const& own : node.type_params) if (own == p) listed = true;
+        if (!listed) unlisted.push_back(p);
+    }
+    if (unlisted.empty()) return "";
+    return findUnknownLeafNamed(pat, unlisted);
+}
+
 widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
                                           std::set<std::string>& visiting,
-                                          bool& reported, diagnostic::Sink& diag) {
+                                          bool& reported, diagnostic::Sink& diag,
+                                          int use_file_id, int use_tok) {
     auto it = tree.templates.find(entry_id);
     if (it == tree.templates.end()) return widen::kNoType;
     parse::TemplateInfo& ti = it->second;
@@ -1218,7 +1278,31 @@ widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
                                         node.file_id, node.name_tok, diag);
     parse::popFrame(tree);
     if (inserted) visiting.erase(alias_name);
-    if (!reported) requireKnownType(tree, pat, node.file_id, node.name_tok, diag);
+    if (!reported) {
+        // The hoisted-sub-pattern failure gets the RULE, anchored at the USE
+        // when one is on hand, not the definition-site "Unknown type" fallback.
+        std::string outer = unlistedOuterParam(tree, alias_name, node, pat);
+        if (!outer.empty()) {
+            reported = true;
+            std::size_t colon = alias_name.rfind(':');
+            std::string host = alias_name.substr(0, colon);
+            std::string self = alias_name.substr(colon + 1);
+            diagnostic::Record r{
+                use_file_id >= 0 ? use_file_id : node.file_id,
+                use_file_id >= 0 ? use_tok : node.name_tok,
+                "Cannot expand '" + alias_name + "' bare: its target uses '"
+                + outer + "', a parameter of the enclosing class template — "
+                "only an instance-qualified use ('" + host + "<...>:" + self
+                + "<...>') binds it. Re-list '" + outer + "' in the alias's "
+                "own template list to allow the bare form.", {}};
+            if (use_file_id >= 0)
+                r.notes.push_back({node.file_id, node.name_tok,
+                                   "the target uses '" + outer + "' here"});
+            diagnostic::report(diag, r);
+        } else {
+            requireKnownType(tree, pat, node.file_id, node.name_tok, diag);
+        }
+    }
     tree.entries[entry_id].slids_type = pat;
     return pat;
 }

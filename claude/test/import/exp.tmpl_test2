@@ -21,12 +21,15 @@ r1 = 7
 r2 = 104
 r2b = 9
 y4 = 7
+y5 = 6 700
 y6 = 3 400
 r3 = 300
 r4 = 5
 Bird:ctor: 1 2
 Bird:ctor: 3 4
 Bird:chirp: 3 4
+nz1 = 3
+nz2 = 300 5
 nq = 25
 va = 11
 w2 = 42

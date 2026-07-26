@@ -31,6 +31,22 @@ BUGS
   *   T Shape:Corner:dist() { ... }        // ✗ the out-of-line qualifier walks ONE
                                        //   level — no Outer:Inner:m depth
 
+  * i think the no-list syntax for a class hoisted from a template class is causing issues.
+    probably want to ban it.
+    TClass<T>(T t) {
+        Hoisted<H>(H h) { }
+    }
+    TClass:Hoisted<int> obj;
+    maybe allow an empty list when the hoisted class doesn't care about the host type list.
+    TClass<>:Hoisted<int> obj;
+    otherwise we force the author to use a placeholder type for all hoisted instances.
+
+    A:H<int> and A<int>:H<int> mint two distinct classes — the file-level and per-instance
+    sub-patterns memoize separately, so A:H<int>^ p = ^a2 is a cast error between what the
+    self-contained design says is one class. I recorded it in readme.txt's deferred list and
+    plan.txt, and pinned nothing either way — say the word if you want them unified
+    (or a todo entry).
+
 
 UNBLOCKED FEATURES
 
@@ -66,6 +82,9 @@ UNBLOCKED FEATURES
   *  Nested class inside a header-owned class template — same shape, same reason ("may not contain
     a nested class"), from the cross-TU landing. Asymmetry noted in the docs: a source re-open's
     nested class compiles in the sibling but rejects in every consumer.
+
+  * Out-of-line template method targeting a class-template owner (T Vec:m<X>() — the plain-class
+    and namespace owners landed with cross-TU).
 
   * this error is detectable at compile time. so we could get a nice diagnostic instead of a
     random link error.
@@ -387,3 +406,11 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     `int arr[1] = 2` / `int m[1][1] = 7` now works — checkValueAssign wraps the bare
     scalar in dims-deep 1-tuples.) Needs a non-collapsing 1-tuple spelling, which
     touches grouping parens globally (none planned).
+
+  * "warn" a library author when they use private functions that the library won't be able to be
+    used with a private class defined by the consumer.
+    Author-side up-front private-name checking (consumer side is covered; the author finds out when
+    a consumer does).
+
+  * the instantiated .sli file kinda sorta looks like slids code but isn't compilable.
+    Explicit instantiation as compilable source (the .sli spelling, ungrammared) — tooling, not semantics.
