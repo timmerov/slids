@@ -9,21 +9,6 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
-  * SWAP WITH AN INC/DEC OPERAND — `x++ <--> y++` (and `--`) now parses, but the swap
-    rejects it with "a swap operand must be an lvalue": the operand is the incremented
-    form, not a plain one. Store / assignment targets already handle this — the bump lifts
-    to the phrase edge and the residual lvalue is what's written — so the fix is to give
-    both swap operands that same target lowering. Small, parallels the landed store path.
-
-  * AN UNRELATED CLASS QUALIFIER ON A METHOD CALL IS SILENTLY DROPPED — inside a
-    method, `OtherClass:method()` where OtherClass is NOT in the self chain loses
-    its qualifier to the bare-method rewrite and rebinds as a dispatched
-    `self.method()` whenever the current class has a method of that name (wrong
-    target, no diagnostic; e.g. `VB<int8>:tagv()` inside a class derived from
-    `VB<int>`). Outside a class it errors ("Unresolved identifier '_$recv'").
-    The rewrite should probably reject an unrelated class qualifier instead of
-    dropping it. Found while landing instance-qualified spellings.
-
   * - Function-param call defaults assert (int f(int a = five()) dies in classify's inferExpr)
     — pre-existing, distinct from the field bug: param defaults are captured as literal text
     (fillDefaults), so they were always de-facto constants-only, just unenforced.
@@ -74,6 +59,12 @@ UNBLOCKED FEATURES
     random link error.
     Local-type instance with the template source absent — focused error; structurally impossible
     rather than unbuilt (nobody else can emit the flavor).
+
+  * SWAP WITH AN INC/DEC OPERAND — `x++ <--> y++` (and `--`) now parses, but the swap
+    rejects it with "a swap operand must be an lvalue": the operand is the incremented
+    form, not a plain one. Store / assignment targets already handle this — the bump lifts
+    to the phrase edge and the residual lvalue is what's written — so the fix is to give
+    both swap operands that same target lowering. Small, parallels the landed store path.
 
 
 BLOCKED FEATURES

@@ -2915,6 +2915,23 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             && parse::classEntryForFrame(tree, callee.owner_ns_frame) >= 0
             && !callee.is_foreign) {   // a class-scoped FOREIGN import is a namespace-style
                                        // member (no `self`), not a method — a plain call
+            // A QUALIFIED spelling reaching here names a class OUTSIDE the self
+            // chain (`A:fm()` from an unrelated class, an instance-qualified
+            // `VB<int8>:tagv()` from a `VB<int>` derived, file scope): the
+            // self-chain bypass already claimed `Self:`/`Base:`, and a method
+            // has no receiver here. The rewrite below would DROP the qualifier
+            // and rebind against the CURRENT class — a silent wrong target.
+            if (isQualified(s)) {
+                int cid = parse::classEntryForFrame(tree, callee.owner_ns_frame);
+                std::string cls = tree.entries[cid].name;
+                diagnostic::report(diag, {s.file_id, s.name_tok,
+                    "Cannot call method '" + s.name + "' of class '" + cls
+                    + "' without an instance: '" + cls + "' is not the current "
+                    "class or one of its bases. Call it through an object "
+                    "('obj." + s.name + "(...)').",
+                    {{callee.file_id, callee.tok, "declared here"}}});
+                return;
+            }
             s.children.insert(s.children.begin(), buildRecvDeref(s.file_id, s.tok));
             s.kind = parse::Kind::kMethodCallStmt;
             s.resolved_entry_id = -1;   // classify re-binds via class-member lookup

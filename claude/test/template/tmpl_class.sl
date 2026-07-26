@@ -688,13 +688,14 @@ int32 main() {
     //-EXPECT-ERROR: is not a type in
     //Kit<int>:NoSuch nsx; __println("ns = " + nsx.sv());
 
-    /* an instance-qualified METHOD still needs a receiver object. */
-    //-EXPECT-ERROR: Unresolved identifier
+    /* an instance-qualified METHOD still needs a receiver object (was the
+       leaked "Unresolved identifier '_$recv'" — now the rule). */
+    //-EXPECT-ERROR: without an instance
     //Kit<int>:total();
 
     /* a flavor that is NOT a base is no bypass — outside any class the
        qualified method call has no receiver to bind. */
-    //-EXPECT-ERROR: Unresolved identifier
+    //-EXPECT-ERROR: without an instance
     //VB<int8>:tagv();
 
     return 0;

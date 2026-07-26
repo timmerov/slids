@@ -1337,6 +1337,16 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   unrelated -> defer), and is_method walks classAndBaseFrames so a qualifier naming a class
   that only INHERITS the method still bypasses (to the nearest impl) and `X:m()` agrees with
   `X:self.m()`. Only an unqualified `self.m()` dispatches.
+  An UNRELATED class qualifier on a method call is REJECTED (2026-07-26; was silently
+  dropped): a qualified call reaching resolveUserCall's bare-method rewrite can only name a
+  class outside the self chain (the bypass claimed `Self:`/`Base:`), and the rewrite would
+  discard the qualifier and rebind against the CURRENT class — the silent wrong target. The
+  guard fires for `A:fm()` from an unrelated class, the expression form, file scope (was the
+  leaked "Unresolved identifier '_$recv'"), and an instance-qualified unrelated FLAVOR
+  (`VB<int8>:tagv()` inside a `VB<int>`-derived): "Cannot call method ... without an
+  instance", note at the declaration. STATICS through the same spelling (a const, an alias,
+  an enum) are untouched — they defer to the qualified-name lookup before the rewrite. Canon
+  method.sl (QOut/QBad) + tmpl_class.sl (the two file-scope negatives).
 
   GOTCHA. A virtual method's DEFAULT ARGUMENT binds from the STATIC receiver type (a call-site
   rewrite) while the body is chosen dynamically — a base pointer uses the base's default even

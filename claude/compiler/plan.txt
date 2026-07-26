@@ -2518,6 +2518,30 @@ Phase 9 — templates
     implicitly convert 'int' to 'T'") — pre-existing, the global
     initializer validates at file scope before any flavor exists.
 
+  * UNRELATED-QUALIFIER METHOD CALL REJECTED               FIXED 2026-07-26
+    (todo BUGS #1: the qualifier was silently DROPPED.) `A:fm()` inside an
+    unrelated class resolved A's method, then resolveUserCall's bare-method
+    rewrite discarded the stamped target, prepended the CURRENT method's
+    `_$recv`, and classify re-bound BY NAME against the current class — the
+    caller's own same-named `fm` silently received the call. Other shapes
+    of the same hole: no same-named method -> off-target member error;
+    file scope -> the leaked "Unresolved identifier '_$recv'"; an
+    instance-qualified unrelated FLAVOR (`VB<int8>:tagv()` inside a
+    `VB<int>`-derived) rode the identical path. THE FIX IS ONE GUARD at
+    the rewrite (the single choke point, both call forms): a call still
+    QUALIFIED there can only name a class outside the self chain — the
+    bypass already claimed `Self:`/`Base:` — so report ("Cannot call
+    method 'fm' of class 'A' without an instance ... Call it through an
+    object", note at the declaration) instead of rewriting. Untouched by
+    construction: the unqualified sibling rewrite, class-scoped foreign
+    imports (is_foreign excluded), namespace functions (owner not a class
+    frame), and STATICS through a class qualifier (consts/aliases/enums
+    defer to the qualified-name lookup before the rewrite — pinned
+    positive QIn:viaConst). Canon method.sl: QOut/QBad/QBad2 +
+    neg_qual_file + the QVB flavor negative; tmpl_class.sl's two
+    file-scope negatives re-pinned from "Unresolved identifier" to the
+    rule. bug.sl (the repro) now rejects.
+
 
 CROSS-CUTTING — TYPE REPRESENTATION MIGRATION (DONE, behavior-identical)
   Types were std::string spellings everywhere; now every type is a structured

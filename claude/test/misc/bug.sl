@@ -10,15 +10,7 @@ claude is forbidden to mention this file unless the user specifically
 puts it in scope.
 */
 
-TClass<T>() {
-    Hoisted(int a) { }
-}
-
-//T TClass<T>:method(T t) { return t; }
-
 int32 main() {
-
-    TClass<int>:Hoisted obj; obj;
 
     return 0;
 }

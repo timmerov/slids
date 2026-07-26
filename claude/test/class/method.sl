@@ -226,6 +226,20 @@ ArrayFieldAccessBug(int a_[2]) {
     }
 }
 
+/* the UNRELATED-QUALIFIER wall (the silently-dropped-qualifier bug): a
+   method of a class OUTSIDE the self chain has no receiver, so `QOut:fm()`
+   from elsewhere is rejected — never rebound to the current class's
+   same-named method. STATICS through the same spelling stay legal (they
+   defer to the normal qualified-name lookup). */
+QOut(int q_ = 0) {
+    void fm() { }
+    int gv() { return q_; }
+    const int kQ = 30;
+}
+QIn(int i_ = 0) {
+    int viaConst() { return QOut:kQ + i_; }
+}
+
 int32 main() {
 
     Method method1(76);
@@ -337,10 +351,51 @@ int32 main() {
     afab.set(65);
     __println("afab = " + afab.a_[0] + " " + afab.a_[1]);   // 65 0
 
+    // an unrelated class qualifier still reaches STATICS (the wall below is
+    // method calls only): QOut:kQ read from another class's method body.
+    QIn qi(4);
+    __println("QIn:viaConst = " + qi.viaConst());     // 34
+
     return 0;
 }
 
 /* compiler errors. */
+
+/* a method of an UNRELATED class cannot be called through its class name —
+   and the qualifier is NEVER dropped: the caller has its own `fm`, which
+   must not silently receive the call (the silent-wrong-target shape). */
+//-EXPECT-ERROR: without an instance
+//QBad(int b_ = 0) {
+//    void fn() { QOut:fm(); }
+//    void fm() { }
+//}
+
+/* ...the EXPRESSION form: the target is stamped, then rejected — never
+   rebound against the current class. */
+//-EXPECT-ERROR: without an instance
+//QBad2(int b_ = 0) {
+//    int fn() { return QOut:gv(); }
+//}
+
+/* ...and at FILE SCOPE, where there is no receiver at all (was the
+   incomprehensible "Unresolved identifier '_$recv'"). */
+//-EXPECT-ERROR: without an instance
+//int32 neg_qual_file() {
+//    QOut:fm();
+//    return 0;
+//}
+
+/* an instance-qualified UNRELATED FLAVOR hits the same wall: inside a class
+   derived from QVB<int>, `QVB<int8>` is a different class entirely (the
+   real base bypass spells `QVB<int>:tagv()`). */
+//-EXPECT-ERROR: without an instance
+//QVB<T>(T t_ = 0) {
+//    virtual T tagv() { return t_; }
+//}
+//QVB<int> : QDV(int e_ = 5) {
+//    virtual int tagv() { return 100; }
+//    int probe() { return QVB<int8>:tagv(); }
+//}
 
 /* a method that the class does not declare. */
 //-EXPECT-ERROR: has no method 'nope'
