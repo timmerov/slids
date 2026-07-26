@@ -16,8 +16,11 @@ hooks (a ctor in one opening, the dtor in another), member sets, and the
 virtual re-open rules land per instance exactly as a plain class's openings
 do. the open/close (`...`) state machine runs at the PATTERN level, so
 "cannot add fields" / "already complete" fire at the declaration whether or
-not anyone instantiates. external members (`T Ext:gete()`, `const int
-Ext:kk`) relocate into the pattern before registration and ride every clone.
+not anyone instantiates. an external METHOD spells the owner's list
+(`T Ext<T>:gete()` — the binder surface, positional; bare `Ext:` is out of
+the syntax since the out-of-line-template landing) and relocates into the
+pattern before registration, riding every clone; a template's consts,
+aliases, and enums are added by a RE-OPEN.
 
 a never-completed incomplete class template is a compile error: a plain
 class left open completes in another translation unit via a header, but
@@ -63,16 +66,19 @@ Tr<T>(T u_ = 1) {
     ~() { __println("td " + t_ + " " + u_); }
 }
 
-/* external members of a template: a method (T in its signature), a const,
-   an alias, and an enum — each used by an in-body method. */
+/* external members of a template: an out-of-line METHOD spelling the
+   owner's list (T in its signature), and the const/alias/enum contributed
+   by a RE-OPEN — each used by an in-body method. */
 Ext<T>(T e_ = 3) {
     int viak() { return kk + gete(); }
     int viae() { EA q = EE:ee1; return q + 1; }
 }
-T Ext:gete() { return e_; }
-const int Ext:kk = 40;
-alias Ext:EA = int;
-enum int Ext:EE ( ee1 = 7, ee2 );
+T Ext<T>:gete() { return e_; }
+Ext<T>() {
+    const int kk = 40;
+    alias EA = int;
+    enum int EE ( ee1 = 7, ee2 );
+}
 
 /* a user transfer operator contributed by a RE-OPEN — must be called, never
    blitted (the +1 skew shows). */
@@ -137,7 +143,7 @@ Hk<T>() {
 /* an external member relocated while the template was still OPEN. */
 Og<T>(T g1_ = 1, ...) {
 }
-int Og:extm() { return 21; }
+int Og<T>:extm() { return 21; }
 Og<T>(T g2_ = 2) {
 }
 
@@ -157,9 +163,10 @@ alias Integer = int;
 //-EXPECT-ERROR: already complete
 //Vec2<T>(...) { }
 
-/* a re-open's template list must match the primary's. */
+/* a re-open's template list must match the primary's COUNT — the names are
+   the opening's own choice (positional re-spelling, tmpl_class.sl). */
 //-EXPECT-ERROR: template list must match
-//Grow<U>() {
+//Grow<U, W>() {
 //    U bad() { return 1; }
 //}
 

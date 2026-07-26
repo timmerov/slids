@@ -1049,23 +1049,42 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   methods inside reject at registration.
 
   A template may be INCOMPLETE, RE-OPENED, and COMPLETED, like a plain class.
-  Every opening repeats the template list (it must MATCH the primary's, names
-  and order — one T-binding then serves every opening's clone); the openings
+  Every opening repeats the template list, matched by COUNT — the names are
+  the opening's own choice since 2026-07-26: a re-open spelling the list
+  under different names is POSITIONALLY re-spelled to the primary's
+  (renameTypeParams over the opening's subtree, one simultaneous map — a
+  multi-param re-spelling may swap; node.type_params then set to the
+  primary's so one T-binding serves every opening's clone). The openings
   are recorded pristine in TemplateInfo (def + reopens), and the `...` state
   machine runs at the PATTERN level in registerClassTemplate — open + fields
   appends, closed + fields / closed + `...` reject — so those errors fire at
   the declaration whether or not anyone instantiates. A NEVER-COMPLETED
   incomplete template is an error (at a use, or the end-of-resolve sweep;
-  open_reported dedupes): a plain class left open completes in another TU via
-  its header, but cross-TU templates have not landed, so the dangling `...`
-  gets a focused diagnostic instead of a silent half-class. EXTERNAL members
-  (`T Ext:gete() { }`, `const int Ext:kk = 40;`, external alias / enum)
-  relocate into the pattern's children BEFORE registration reads them, so they
-  ride every instance with no template-specific relocation code (the member-
-  TEMPLATE flavor still rejects). One edge falls out of the relocation
-  disambiguator: `Ext:Zub() { }` with no member `Zub` reinterprets as
-  inheritance from the bare template name and errors "requires a
-  type-argument list".
+  open_reported dedupes).
+  OUT-OF-LINE MEMBERS OF A TEMPLATE (2026-07-26 — the todo item, landed):
+  the owner SPELLS its template list — the definition's binder surface
+  ("how do we know what T is") — for methods, method templates, hooks, and
+  operators alike: `T Vec<T>:m(...)`, `T Vec<T>:mt<S>(...)`, `Oolh<T>:_()`.
+  Grammar: the fn-def head's qualifier segments absorb an identifier-only
+  `<binder-list>` when its closer is followed by ':' (absorbOwnerList — a
+  concrete type there is "Expected a type-parameter name"), and the no-
+  return-type lead reinterpretation counts absorbed-list tokens. resolve:
+  relocateOutOfLineMembers splits each segment into base + binders
+  (splitBinderSegment), walks by BASE name, and per level checks a
+  template target — a BARE owner errors naming both remedies (spell the
+  list / use a re-open), a list on a non-template errors, arity must
+  match — collecting a positional rename map applied to the member before
+  it joins the pattern (renameTypeParams: type spellings re-intern through
+  renamed spellings, idents, qualifier segments, base text; a subtree
+  re-listing a name in its own template list shadows it — innermost wins).
+  From there the member is ordinary: it rides every instance clone through
+  the landed per-flavor machinery. A template's CONSTS, ALIASES, and ENUMS
+  are added by a RE-OPEN (`Ext<T>() { const ... }`) — the bare external
+  leaf forms were repealed with the bare qualifier. One edge stays from
+  the relocation disambiguator: `Ext:Zub() { }` with no member `Zub`
+  reinterprets as inheritance from the bare template name and errors
+  "requires a type-argument list" (segment 0's template check defers to
+  the ambiguity block for exactly this shape).
 
   A USE instantiates in resolveTypeRef's kTmplUse arm — the same arm that
   expands alias templates, now branching on the entry's kind — plus the
@@ -1429,14 +1448,11 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   does not have), explicit instantiation
   as COMPILABLE source (the .sli block spelling, ungrammared), the .sli
   demand DIAGNOSTICS unpinned (the negative harness cannot plant a crafted
-  .sli + --instantiate),
-  the out-of-line template METHOD form
-  targeting a CLASS TEMPLATE owner, static-bypass beyond what falls out
-  free, UNIFYING the bare-host and instance-qualified spellings of ONE
-  hoisted flavor (`A:H<int>` and `A<int>:H<int>` currently mint DISTINCT
-  classes — the file-level and per-instance sub-patterns memoize
-  separately, so their pointers don't interconvert; the self-contained
-  inner-list design says they should be one class). Canon
+  .sli + --instantiate), static-bypass beyond what falls out free.
+  (Two former items retired: the out-of-line template-method form LANDED
+  2026-07-26 — the binder-list head, above; the bare-host/instance-
+  qualified UNIFICATION question dissolved with the 2026-07-26 per-flavor
+  repeal — the bare-host spelling no longer exists.) Canon
   test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl +
   tmpl_class.sl + tmpl_complete.sl + tmpl_nested.sl; cross-TU canon
   test/import/tmpl_test.sl +

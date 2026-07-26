@@ -117,9 +117,14 @@ SIBLING, a file-scope class, or a template INSTANCE (spelled with the
 outer T, virtual + dispatchable); a hoisted template may derive from a
 file-scope class or an instance of its OWN list; hooks and user
 transfer operators in nested classes fire per flavor — canon
-tmpl_class.sl (Spec) + tmpl_nested.sl (Host2). The out-of-line template
-METHOD form targeting a CLASS TEMPLATE owner stays deferred (the
-plain-class and namespace flavors are landed — readme.txt TEMPLATES).
+tmpl_class.sl (Spec) + tmpl_nested.sl (Host2). OUT-OF-LINE members of a
+class template LANDED 2026-07-26: the owner SPELLS its template list —
+the definition's binder surface, positional (a definition or a RE-OPEN
+may RENAME the params; the subtree re-spells to the pattern's names) —
+for methods, method templates, hooks, and operators; a BARE template
+owner is a compile error, and a template's consts/aliases/enums are
+added by a re-open (readme.txt TEMPLATES; canon tmpl_class.sl ool block
++ tmpl_complete.sl Ext).
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)

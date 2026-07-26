@@ -132,8 +132,9 @@ depth (`Host2<int>:H<>:kH`) — a nested pattern's listless flavor rides the
 same machinery.
 
 still rejected: `<>` on a header-declared template, a template method in a
-HEADER-owned class template (the cross-TU bundle), nested anything in a
-header-owned template, and the out-of-line form targeting a template.
+HEADER-owned class template (the cross-TU bundle), and nested anything in a
+header-owned template. (The out-of-line form targeting a template LANDED
+2026-07-26 — the binder-list head, tmpl_class.sl.)
 */
 
 /* the canon workhorse: a template method mixing the outer T and its own S;

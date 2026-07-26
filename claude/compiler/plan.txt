@@ -2518,6 +2518,43 @@ Phase 9 — templates
     implicitly convert 'int' to 'T'") — pre-existing, the global
     initializer validates at file scope before any flavor exists.
 
+  * OUT-OF-LINE TEMPLATE MEMBERS — THE BINDER-LIST HEAD    LANDED 2026-07-26
+    (The deferred "out-of-line template method targeting a class-template
+    owner"; canon rulings from bug.sl's eight shapes.) THE RULE: the
+    owner SPELLS its template list — the definition's binder surface
+    ("how do we know what T is") — and the names are the definition's
+    OWN CHOICE, bound BY POSITION (`U Vec<U>:m(U v)` renames T; a
+    multi-param re-spelling may SWAP names). A BARE template owner
+    (`T Vec:m()`) is a compile error naming both remedies — this REPEALS
+    the previously-landed bare external forms wholesale: a template's
+    consts/aliases/enums are now added by a RE-OPEN (tmpl_complete.sl's
+    Ext block rewritten). The RE-OPEN list rule relaxed the same way:
+    match by COUNT, names re-spell positionally (the "must match" exact-
+    name check now fires only on arity).
+    MECHANISM: grammar's fn-def head absorbs an identifier-only
+    `<binder-list>` into a qualifier segment when its closer is followed
+    by ':' (absorbOwnerList; the no-return-type lead reinterpretation
+    counts absorbed tokens); relocateOutOfLineMembers splits base+binders
+    per segment (splitBinderSegment), walks by base, checks each template
+    level (bare -> error; non-template with list -> error; arity), and
+    applies ONE simultaneous positional rename map to the member before
+    it joins the pattern (renameTypeParams — type spellings re-intern
+    through renamed spellings, safe on pristine parse state; a subtree
+    re-listing a name shadows it, innermost wins). The single-segment
+    `A:B(){}` inheritance ambiguity keeps its reinterpretation (segment
+    0's check defers to the ambiguity block). Everything downstream is
+    the landed per-flavor machinery — methods, method templates
+    (explicit + inferred calls), HOOKS, and OPERATORS on template owners
+    all rode free (probed end-to-end before pinning).
+    Canon tmpl_class.sl (the ool block: plain/renamed/template-method
+    forms, the renamed re-open, the swap re-spelling pinning position-
+    beats-name, hooks+operator balanced; four negatives: bare owner,
+    arity, list-on-non-template, concrete-type-in-list) +
+    tmpl_complete.sl (Ext rewritten to the re-open form; the re-open
+    "must match" negative repointed at arity). Suite green everywhere;
+    bug.sl (the repro) now compiles its yes-shapes and rejects its
+    no-shapes.
+
   * UNRELATED-QUALIFIER METHOD CALL REJECTED               FIXED 2026-07-26
     (todo BUGS #1: the qualifier was silently DROPPED.) `A:fm()` inside an
     unrelated class resolved A's method, then resolveUserCall's bare-method

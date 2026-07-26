@@ -114,3 +114,13 @@ iq20 = 12
 iq21 = 4
 iq22 = 6
 iqt: Kit<int>:Sub
+oo1 = 15
+oo2 = 7
+oo3 = 17
+oo4 = 18
+oo5 = 400
+oo6 = 5
+oo7 = 7
+oolh ctor 5
+oo8 = 8
+oolh dtor 8

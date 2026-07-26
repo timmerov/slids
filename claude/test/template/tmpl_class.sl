@@ -19,6 +19,14 @@ template class objects may be instantiated anywhere a non-template class
 object may be instantiated.
 template class objects may be initialized every way a non-template class
 object may be initialized.
+
+the type list is a binder list - they shadow concrete types of the same name.
+    T(int t) { }        TClass<T>(T t) { }
+    ^-- this T is not this T --^.
+    this T -----------------------^ is
+    this T --------------------^.
+    this T --------------------^ shadows
+    ^-- this T.
 */
 
 /*
@@ -37,9 +45,20 @@ virtuals, inheritance (both directions), for-class, arrays, and `new` ride
 existing machinery; ##type reports the use as written.
 
 the type-list is required (no inference from construction arguments). a
-template owns its name (no overloads, no re-open); incomplete (`...`) and
-external members (`T Vec:m()`) were rejected this landing (both landed
-later — completion via re-open, external members into the pattern);
+template owns its name (a plain-class duplicate rejects).
+
+OUT-OF-LINE members of a template (2026-07-26): the owner SPELLS its
+template list — the definition's binder surface, "how do we know what T
+is" — for methods, method templates, hooks, and operators alike
+(`T Vec<T>:m(...)`, `Oolh<T>:_()`). the names are the definition's own
+choice, bound BY POSITION: `U Vec<U>:m(U v)` renames T to U, and the
+subtree re-spells to the pattern's names at relocation (one simultaneous
+map — a multi-param re-spelling may SWAP names). a BARE template owner
+(`T Vec:m()`) is a compile error naming both remedies; a template's
+consts, aliases, and enums are added by a RE-OPEN (tmpl_complete.sl).
+a re-open's list matches by COUNT and re-spells positionally too — the
+same rule (`Pair<A, B>() { ... }`).
+
 template methods inside a template class landed later (tmpl_nested.sl);
 nested uses (`Pair<Vec<int>>`) landed with the `>>` closer split
 (tmpl_nested.sl tier 3).
@@ -203,6 +222,32 @@ Kit<T>(T k_ = 2) {
     T viaFree(T x) { return thru(x) + k_; }
 }
 
+/* OUT-OF-LINE members of a template: the owner spells its list (the binder
+   surface); the plain, RENAMED (U is this definition's name for T), and
+   method-template forms. */
+T Vec<T>:oolPlain(T v) { return x_ + v; }
+U Vec<U>:oolRen(U v) { return y_ + v; }
+T Vec<T>:oolTm<S>(S s) { return x_ + s; }
+
+/* the re-open twin: an opening re-spells the list under its own names —
+   positional, the out-of-line rule shared. */
+Pair<A, B>() {
+    A pfirst() { return k_; }
+    B psecond() { return v_; }
+}
+
+/* a multi-param out-of-line SWAP re-spelling: this definition's K names
+   slot 1 (the pattern's V) — positions win, never names. */
+K Pair<V, K>:pcross(K b) { return v_ + b; }
+
+/* out-of-line HOOKS and an OPERATOR on a template owner. */
+Oolh<T>(T h_ = 1) {
+    T hv() { return h_; }
+}
+Oolh<T>:_() { __println("oolh ctor " + h_); }
+Oolh<T>:~() { __println("oolh dtor " + h_); }
+Oolh<T>:op+=(T b) { h_ += b; }
+
 /* an instance-qualified nested class in a SIGNATURE position. */
 int useSub(Kit<int>:Sub^ p) { return p^.sv(); }
 
@@ -296,9 +341,26 @@ Spec<T>(T t_ = 2) {
     }
 }
 
-/* a template owns its name: no plain-class duplicate, no re-open. */
+/* a template owns its name: no plain-class duplicate. */
 //-EXPECT-ERROR: owns its name
 //Vec(int dup_ = 0) { }
+
+/* an out-of-line member may not spell a BARE template owner — the list is
+   the definition's binder surface ("how do we know what T is"). */
+//-EXPECT-ERROR: spells its template list
+//int Vec:oolBad(int v) { return v; }
+
+/* ...the spelled list must match the pattern's COUNT. */
+//-EXPECT-ERROR: must match class template
+//T Vec<T, U>:oolBad2(T v) { return v; }
+
+/* ...a list on a NON-template owner is meaningless. */
+//-EXPECT-ERROR: is not a class template
+//int Wrap<T>:oolBad3(int v) { return v; }
+
+/* ...and a concrete type is no binder name. */
+//-EXPECT-ERROR: Expected a type-parameter name
+//int Vec<int>:oolBad4(int v) { return v; }
 
 int32 main() {
 
@@ -614,6 +676,25 @@ int32 main() {
     int iq21 = sh.hv(); __println("iq21 = " + iq21);
     int iq22 = gsub.sv(); __println("iq22 = " + iq22);
     __println("iqt: " + ##type(ks));
+
+    /* --- out-of-line members of a template (the binder-list head). --- */
+    int oo1 = a.oolPlain(2); __println("oo1 = " + oo1);
+    int oo2 = a.oolRen(3); __println("oo2 = " + oo2);
+    int oo3 = a.oolTm<int32>(4); __println("oo3 = " + oo3);
+    int oo4 = a.oolTm(5); __println("oo4 = " + oo4);
+
+    /* the renamed re-open, and the swap re-spelling: pcross's K bound
+       slot 1 (int8), not slot 0 — position beats the name. */
+    int oo5 = p1.pfirst(); __println("oo5 = " + oo5);
+    int8 oo6 = p1.psecond(); __println("oo6 = " + oo6);
+    int8 oo7 = p1.pcross(2); __println("oo7 = " + oo7);
+
+    /* out-of-line hooks + operator on a template owner, balanced. */
+    {
+        Oolh<int> oh(5);
+        oh += 3;
+        __println("oo8 = " + oh.hv());
+    }
 
     /* the type-list is required. */
     //-EXPECT-ERROR: requires a type-argument list

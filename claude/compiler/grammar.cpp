@@ -4362,6 +4362,43 @@ struct Parser {
         std::vector<std::string> qualifier;
         std::vector<int> qualifier_toks;
         bool is_hook = false, hook_is_ctor = false;
+        // A `<binder-list>` between a qualifier segment and its ':' — the
+        // out-of-line TEMPLATE-OWNER head (`T Vec<T>:m<S>(...)`): the owner
+        // spells (and may positionally RENAME) its pattern's list. In a
+        // definition head the list is ALWAYS a binder — identifier names
+        // only, absorbed into the segment's spelling ("Vec<T>"), the
+        // instance-qualifier convention. A group NOT followed by ':' is the
+        // function's OWN list (parsed below). Returns false on a hard error.
+        auto absorbOwnerList = [&](std::string& seg) -> bool {
+            if (peek().kind != token::Kind::kLt) return true;
+            int after = skipTypeArgGroup(0);
+            if (after <= 0 || peekKind(after) != token::Kind::kColon) return true;
+            advance();   // <
+            seg += "<";
+            std::vector<std::string> seen;
+            while (true) {
+                if (peek().kind != token::Kind::kIdentifier) {
+                    error("Expected a type-parameter name in the template list.");
+                    return false;
+                }
+                for (auto const& s0 : seen) {
+                    if (s0 == peek().text) {
+                        error("Duplicate type-parameter name '"
+                              + peek().text + "'.");
+                        return false;
+                    }
+                }
+                if (!seen.empty()) seg += ", ";
+                seen.push_back(peek().text);
+                seg += peek().text;
+                advance();
+                if (peek().kind == token::Kind::kComma) { advance(); continue; }
+                break;
+            }
+            if (!expect(token::Kind::kGt, ">")) return false;
+            seg += ">";
+            return true;
+        };
         // The "return type" may really be the QUALIFIER of an out-of-line member that has
         // NO return type — `Class:op+=(…)`, `Class:_()`, and their CHAINED forms
         // `A:B:op+=(…)` / `A:B:~()`. parseDeclarator ate the qualified NAME where a return
@@ -4373,14 +4410,32 @@ struct Parser {
         // consumed exactly the colon chain and no type suffix, so segment -> token is exact.
         std::vector<std::string> lead_segs;
         if (lead_ident) lead_segs = splitQualifiedSpelling(ret_type);
+        // The expected token span of a pure qualifier chain: per segment its
+        // name plus an absorbed `<k names>` binder list (2k+1 tokens — the
+        // declarator's absorbInstanceArgs ate it for `Vec<T>:op+=` exactly as
+        // for `Vec<T>:`-qualified types), plus the ':' between segments — so
+        // the bare chain (2n-1) and the binder-carrying chain reinterpret
+        // through the same check, with exact per-segment token offsets.
+        int lead_tokens = 0;
+        std::vector<int> lead_offsets;
+        for (auto const& s0 : lead_segs) {
+            lead_offsets.push_back(lead_tokens);
+            int names = 0;
+            if (s0.find('<') != std::string::npos) {
+                names = 1;
+                for (char c0 : s0) if (c0 == ',') names++;
+            }
+            lead_tokens += 1 + (names ? 2 * names + 1 : 0) + 1;   // +1 = ':'
+        }
+        lead_tokens -= 1;   // no trailing ':'
         if (lead_ident && peek().kind == token::Kind::kColon
-            && pos - type_start == 2 * static_cast<int>(lead_segs.size()) - 1) {
+            && pos - type_start == lead_tokens) {
             for (std::size_t i = 0; i + 1 < lead_segs.size(); i++) {
                 qualifier.push_back(lead_segs[i]);
-                qualifier_toks.push_back(type_start + 2 * static_cast<int>(i));
+                qualifier_toks.push_back(type_start + lead_offsets[i]);
             }
             name = lead_segs.back();
-            name_tok = type_start + 2 * (static_cast<int>(lead_segs.size()) - 1);
+            name_tok = type_start + lead_offsets.back();
             ret_type.clear();
         } else if (peek().kind == token::Kind::kOp) {
             is_op = true;                       // `Ret op<sym>` — return type parsed above
@@ -4395,12 +4450,15 @@ struct Parser {
             name = peek().text;
             name_tok = pos;
             advance();
+            if (!absorbOwnerList(name)) return nullptr;
         }
         // A QUALIFIED head `Ret Class:method(...)` (or `A:B:m`) defines a member OUT OF
         // LINE: the leading segments are the qualifier (the target class / namespace),
-        // the last is the member name. resolve routes it into that frame — for a class
-        // target it becomes a method (receiver-injected). The return-type prefix
-        // distinguishes this from an inheritance head (`Base : Derived(...)`).
+        // the last is the member name — a segment may carry a BINDER list
+        // (`T Vec<T>:m(...)`, the template-owner form). resolve routes it into that
+        // frame — for a class target it becomes a method (receiver-injected). The
+        // return-type prefix distinguishes this from an inheritance head
+        // (`Base : Derived(...)`).
         while (peek().kind == token::Kind::kColon) {
             advance();   // :
             qualifier.push_back(std::move(name));
@@ -4428,6 +4486,7 @@ struct Parser {
                 name = peek().text;
                 name_tok = pos;
                 advance();
+                if (!absorbOwnerList(name)) return nullptr;
             } else {
                 error("Expected a member name after ':' in a qualified definition.");
                 return nullptr;

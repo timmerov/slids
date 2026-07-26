@@ -26,13 +26,6 @@ UNBLOCKED FEATURES
     requires a class type". Swap-init default-constructs the target and then re-dispatches
     as an ordinary swap statement, and only the construct half is class-only.
 
-  * UNINSTANTIATED TEMPLATE BODIES ARE UNCHECKED. A template's body is held in
-    parse state until a call binds its type-list, so a template nobody calls can
-    contain any nonsense that parses — undefined names, type errors — and the
-    file still compiles. Catching that would mean checking the body once against
-    the type-parameter patterns themselves (the C++-style two-phase split). The
-    current behavior is pinned by the nonsense template in tmpl_function.sl.
-
   * need to review diagnostic messages. some are littered with incomprehensible
     jargon. use opus not fable.
 
@@ -44,9 +37,6 @@ UNBLOCKED FEATURES
   * Nested class inside a header-owned class template — same shape, same reason ("may not contain
     a nested class"), from the cross-TU landing. Asymmetry noted in the docs: a source re-open's
     nested class compiles in the sibling but rejects in every consumer.
-
-  * Out-of-line template method targeting a class-template owner (T Vec<T>:m<X>() — the plain-class
-    and namespace owners landed with cross-TU).
 
   * this error is detectable at compile time. so we could get a nice diagnostic instead of a
     random link error.
@@ -274,6 +264,13 @@ REACH GOALS
   * this doesn't currently compile:
     TClass<T>() { global T gt = 0; }
     we don't know we need to add a global until the type is instantiated.
+
+  * UNINSTANTIATED TEMPLATE BODIES ARE UNCHECKED. A template's body is held in
+    parse state until a call binds its type-list, so a template nobody calls can
+    contain any nonsense that parses — undefined names, type errors — and the
+    file still compiles. Catching that would mean checking the body once against
+    the type-parameter patterns themselves (the C++-style two-phase split). The
+    current behavior is pinned by the nonsense template in tmpl_function.sl.
 
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)

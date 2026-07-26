@@ -26,6 +26,15 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                               std::vector<std::unique_ptr<parse::Node>>& children,
                               diagnostic::Sink& diag);
 
+// The POSITIONAL BINDER RENAME (out-of-line template members + re-opens
+// spelling the list under their own names). Defined with relocation at
+// resolve:: scope; forward-declared here for registerClassTemplate's
+// re-open arm.
+std::string renameIdentsInSpelling(std::string const& s,
+                                   std::map<std::string, std::string> const& m);
+void renameTypeParams(parse::Node& n,
+                      std::map<std::string, std::string> const& m0);
+
 // Synthesize a class's default copy/move/swap operators (op=/op<--/op<-->(Self^)) as real
 // methods. Defined at resolve:: scope, forward-declared here so the anon-namespace
 // resolveScopeBodies — the single per-class body choke point — can call it.
@@ -5766,12 +5775,27 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
                     {{ti.def->file_id, ti.def->name_tok, "declared here"}}});
                 return;
             }
-            if (node.type_params != ti.def->type_params) {
+            if (node.type_params.size() != ti.def->type_params.size()) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
                     "A re-open's template list must match class template '"
                     + node.name + "'s.",
                     {{ti.def->file_id, ti.def->name_tok, "first declared here"}}});
                 return;
+            }
+            // The re-open may spell the list under ITS OWN NAMES — binding is
+            // BY POSITION (the out-of-line member rule's twin): re-spell the
+            // opening to the primary's names, then it merges as before.
+            if (node.type_params != ti.def->type_params) {
+                std::map<std::string, std::string> m;
+                for (std::size_t i = 0; i < node.type_params.size(); i++)
+                    if (node.type_params[i] != ti.def->type_params[i])
+                        m[node.type_params[i]] = ti.def->type_params[i];
+                // Not renameTypeParams(node): the node's OWN type_params are
+                // the map's keys, which its shadow rule would erase.
+                node.text = renameIdentsInSpelling(node.text, m);
+                for (auto& c : node.children) if (c) renameTypeParams(*c, m);
+                for (auto& p : node.params) if (p) renameTypeParams(*p, m);
+                node.type_params = ti.def->type_params;
             }
             bool has_fields = false;
             for (auto& p : node.params)
@@ -6896,6 +6920,86 @@ void registerQualifiedLeaf(parse::Tree& tree, parse::Node& s, int frame,
     for (auto& init : s.children) if (init) resolveExpr(tree, *init, diag);
 }
 
+// Rename whole-identifier occurrences inside a SPELLING, simultaneously (a
+// positional re-spelling may SWAP names) and ident-bounded, so `T` renames in
+// "Kit<T>" but never inside "Tail".
+std::string renameIdentsInSpelling(std::string const& s,
+                                   std::map<std::string, std::string> const& m) {
+    auto isIdent = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+            || (c >= '0' && c <= '9') || c == '_' || c == '$';
+    };
+    std::string out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        if (isIdent(s[i])) {
+            std::size_t j = i;
+            while (j < s.size() && isIdent(s[j])) j++;
+            std::string word = s.substr(i, j - i);
+            auto it = m.find(word);
+            out += (it != m.end()) ? it->second : word;
+            i = j;
+        } else {
+            out += s[i++];
+        }
+    }
+    return out;
+}
+
+widen::TypeRef renameSpelledType(widen::TypeRef t,
+                                 std::map<std::string, std::string> const& m) {
+    if (t == widen::kNoType) return t;
+    std::string s = widen::spell(t);
+    std::string r = renameIdentsInSpelling(s, m);
+    return r == s ? t : widen::intern(r);
+}
+
+// POSITIONAL BINDER RENAME over a pristine subtree: an out-of-line template
+// member (`U Vec<U>:m(U s)`) or a re-open (`Vec<U>() { ... }`) may spell the
+// pattern's list under its own names — binding is BY POSITION, so the subtree
+// re-spells to the pattern's names before it joins the pattern. Simultaneous
+// (one map, one walk — a re-spelling may swap two names) and shadow-aware: a
+// subtree RE-LISTING a mapped name in its own template list keeps it (the
+// innermost binding wins, the language-wide rule). Touches every place a bare
+// type-param name lives pre-resolve: type spellings (return_type, tmpl_args —
+// renamed via spell/intern round-trip, safe on pristine parse-state types),
+// identifier names, qualifier segments, and a class node's base spelling
+// (text; other kinds keep text — a string literal's content is not a name).
+void renameTypeParams(parse::Node& n,
+                      std::map<std::string, std::string> const& m0) {
+    std::map<std::string, std::string> m = m0;
+    for (auto const& own : n.type_params) m.erase(own);   // innermost wins
+    if (m.empty()) return;
+    auto it = m.find(n.name);
+    if (it != m.end()) n.name = it->second;
+    if (n.kind == parse::Kind::kClassDef)
+        n.text = renameIdentsInSpelling(n.text, m);
+    for (auto& q : n.qualifier) q = renameIdentsInSpelling(q, m);
+    n.return_type = renameSpelledType(n.return_type, m);
+    for (auto& t : n.tmpl_args) t = renameSpelledType(t, m);
+    for (auto& c : n.children) if (c) renameTypeParams(*c, m);
+    for (auto& p : n.params) if (p) renameTypeParams(*p, m);
+    for (auto& d : n.dim_exprs) if (d) renameTypeParams(*d, m);
+}
+
+// Split an out-of-line qualifier segment into its base name and BINDER names
+// ("Vec<T, U>" -> "Vec" + {T, U}; no '<' -> the base alone). Grammar vetted
+// the names (identifiers, no duplicates) for the function-definition head —
+// the only kind that reaches the binder path.
+void splitBinderSegment(std::string const& seg, std::string& base,
+                        std::vector<std::string>& names) {
+    std::size_t lt = seg.find('<');
+    if (lt == std::string::npos) { base = seg; return; }
+    base = seg.substr(0, lt);
+    std::string cur;
+    for (std::size_t i = lt + 1; i + 1 < seg.size(); i++) {
+        char c = seg[i];
+        if (c == ',') { names.push_back(cur); cur.clear(); }
+        else if (c != ' ') cur += c;
+    }
+    names.push_back(cur);
+}
+
 // OUT-OF-LINE MEMBER RELOCATION. A qualified definition — the external
 // re-open form — desugars to a member of the scope named by its qualifier path:
 //   `Ret Class:method(...)`  -> a method of Class      (`node->qualifier = [Class]`)
@@ -6935,15 +7039,18 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                          || ch->kind == parse::Kind::kClassDef);
         bool is_enum = (ch->kind == parse::Kind::kEnumDecl);
         bool is_const = (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const);
-        // A DEFINITION whose qualifier names a template INSTANCE
-        // (`int Kit<int>:kNew = 5;`) is never a registration target: a flavor's
-        // members come only from the template's own openings. Reject focused,
-        // before the sibling walk mis-blames the scope. Only definition kinds —
-        // a qualified CALL/ident statement rides the ordinary lookup.
-        if (is_fn || is_scope || is_enum
-            || (ch->kind == parse::Kind::kAliasDecl
-                && ch->return_type != widen::kNoType)
-            || ch->kind == parse::Kind::kVarDeclStmt) {
+        // A NON-FUNCTION definition whose qualifier carries a type-arg group
+        // (`int Kit<int>:kNew = 5;`) is never a registration target: a
+        // flavor's members come only from the template's own openings, and a
+        // template's consts / aliases / enums / nested classes are added by a
+        // RE-OPEN (`Kit<T>() { ... }`). Reject focused, before the sibling
+        // walk mis-blames the scope. A FUNCTION definition's group is the
+        // out-of-line BINDER list (`T Vec<T>:m(...)`) — handled in the walk.
+        if (!is_fn
+            && (is_scope || is_enum
+                || (ch->kind == parse::Kind::kAliasDecl
+                    && ch->return_type != widen::kNoType)
+                || ch->kind == parse::Kind::kVarDeclStmt)) {
             bool inst = false;
             for (auto const& q : ch->qualifier)
                 if (q.find('<') != std::string::npos) { inst = true; break; }
@@ -6973,19 +7080,84 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             continue;
         }
         if (!is_fn && !is_scope && !is_enum && !is_const && !is_alias) continue;
+        // Split each segment into base + BINDER names (`Vec<T>` -> Vec + {T});
+        // the walk matches openings by BASE name.
+        std::vector<std::string> bases(ch->qualifier.size());
+        std::vector<std::vector<std::string>> binders(ch->qualifier.size());
+        for (std::size_t i = 0; i < ch->qualifier.size(); i++)
+            splitBinderSegment(ch->qualifier[i], bases[i], binders[i]);
+        // A segment landing on a CLASS-TEMPLATE pattern must SPELL the
+        // pattern's list — the binder surface for the definition ("how do we
+        // know what T is"): bare-owner is out of the syntax. The names are
+        // the definition's own choice, bound BY POSITION — differing names
+        // join the rename map and the subtree re-spells to the pattern's
+        // (the re-open rule's twin). A list on a NON-template is an error.
+        std::map<std::string, std::string> rename;
+        auto checkSegment = [&](std::size_t i,
+                                std::vector<parse::Node*> const& lvl) -> bool {
+            parse::Node const* pat = nullptr;
+            for (parse::Node* p : lvl)
+                if (!p->type_params.empty()) { pat = p; break; }
+            if (!pat) {
+                if (!binders[i].empty()) {
+                    diagnostic::report(diag, {ch->file_id, ch->qualifier_toks[i],
+                        "'" + bases[i] + "' is not a class template; only a "
+                        "class template's out-of-line member spells a "
+                        "template list.", {}});
+                    return false;
+                }
+                return true;
+            }
+            if (binders[i].empty()) {
+                diagnostic::report(diag, {ch->file_id, ch->qualifier_toks[i],
+                    "'" + bases[i] + "' is a class template: an out-of-line "
+                    "member spells its template list ('" + bases[i]
+                    + "<...>:') to bind the parameter names — or a re-open "
+                    "('" + bases[i] + "<...>() { }') adds members.", {}});
+                return false;
+            }
+            if (binders[i].size() != pat->type_params.size()) {
+                diagnostic::report(diag, {ch->file_id, ch->qualifier_toks[i],
+                    "The out-of-line template list must match class template '"
+                    + bases[i] + "'s: " + std::to_string(pat->type_params.size())
+                    + " parameter(s) expected, got "
+                    + std::to_string(binders[i].size()) + ".", {}});
+                return false;
+            }
+            for (std::size_t j = 0; j < binders[i].size(); j++)
+                if (binders[i][j] != pat->type_params[j])
+                    rename[binders[i][j]] = pat->type_params[j];
+            return true;
+        };
         // Walk the qualifier path to the target scope. At each level the candidates
         // are the class/namespace nodes named seg among the children of the previous
         // level's openings; the target is the first opening of the final segment
         // (appending to any opening is equivalent — they share one frame).
         std::vector<parse::Node*> level;
-        collectScopeOpenings(children, ch->qualifier[0], level);
+        collectScopeOpenings(children, bases[0], level);
         std::size_t fail_i = 0;                 // segment index where the walk emptied
-        for (std::size_t i = 1; i < ch->qualifier.size() && !level.empty(); i++) {
+        bool seg_error = false;
+        // The single-segment `A:B() {}` shape defers segment 0's template
+        // check to the AMBIGUITY block below: with no member B it is
+        // INHERITANCE (`A : B`), where a bare template base gets its own
+        // "requires a type-argument list" downstream, not the member rule.
+        bool defer0 = (ch->kind == parse::Kind::kClassDef
+                       && ch->qualifier.size() == 1 && binders[0].empty());
+        if (!level.empty() && !defer0 && !checkSegment(0, level))
+            seg_error = true;
+        for (std::size_t i = 1;
+             i < ch->qualifier.size() && !level.empty() && !seg_error; i++) {
             std::vector<parse::Node*> next;
             for (parse::Node* p : level)
-                collectScopeOpenings(p->children, ch->qualifier[i], next);
+                collectScopeOpenings(p->children, bases[i], next);
             level = std::move(next);
             fail_i = i;
+            if (!level.empty() && !checkSegment(i, level)) seg_error = true;
+        }
+        if (seg_error) {
+            ch.reset();
+            moved = true;
+            continue;
         }
         if (level.empty()) {
             // A LEAF whose FIRST segment is not a local sibling may still target a
@@ -7058,18 +7230,26 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                 continue;
             }
         }
+        // The DEFERRED segment-0 template check (see defer0 above): B is a
+        // member of A, so this IS the external re-open route after all — a
+        // bare template qualifier gets the member rule here.
+        if (defer0 && !checkSegment(0, level)) {
+            ch.reset();
+            moved = true;
+            continue;
+        }
         parse::Node* target = level.front();
-        // An external member of a CLASS TEMPLATE (`int Vec:late() { }`,
-        // `const int Vec:kk = 40;`) relocates into the PATTERN's children —
-        // before registration reads them — and so rides every instance clone.
-        // (A member TEMPLATE targeting a class still rejects, below.)
+        // An external member of a CLASS TEMPLATE (`T Vec<T>:m() { }`, binder
+        // list spelled, checked + renamed above) relocates into the PATTERN's
+        // children — before registration reads them — and so rides every
+        // instance clone.
         // An out-of-line TEMPLATE definition relocates like any external member
         // — registration's member-template divert takes it from there. The
         // NAMESPACE flavor (`T Space:f<T>(v) { }`) is an external namespace
         // function that happens to be a template; the CLASS flavor
-        // (`T Gauge:scaled<T>(T v) { }`) is the sibling-side BODY of a header
-        // class's member-template declaration — the decl/def merge in
-        // registerTemplateFunction pairs them.
+        // (`T Gauge:scaled<T>(T v) { }`, a PLAIN class owner) is the
+        // sibling-side BODY of a header class's member-template declaration —
+        // the decl/def merge in registerTemplateFunction pairs them.
         // A ctor/dtor is CLASS-only. The bare form is rejected in the parser ("A
         // constructor or destructor may only appear in a class body"); the QUALIFIED
         // spelling must not be a way around that restriction — a namespace has no
@@ -7081,6 +7261,10 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                 "A constructor or destructor may only appear in a class body.", {}});
             continue;
         }
+        // The out-of-line head spelled the owner's list under its own names:
+        // re-spell the member to the pattern's names (positional binding)
+        // before it joins the pattern — from here it is an ordinary member.
+        if (!rename.empty()) renameTypeParams(*ch, rename);
         // A method (function whose immediate scope is a class) needs the implicit
         // receiver `_$recv` of type `Class^`. A namespace/class node, or a free
         // function in a namespace, has no receiver.
