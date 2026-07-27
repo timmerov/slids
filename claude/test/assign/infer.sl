@@ -4,6 +4,11 @@ test inferring types.
 includes: primitive types, enums, constants,
 iterators, references, classes, tuples, functions, etc.
 
+infer const types and pointer types.
+
+    const x = 5;        // const int
+    ref^ = ^x;          // (const int)^
+    const ref^ = ^x;    // const int^
 */
 
 /*

@@ -1,6 +1,5 @@
 
 agenda:
-const methods
 
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.

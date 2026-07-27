@@ -166,6 +166,11 @@ BLOCKED FEATURES
     the return type is mutable. the returned variable is const. no can do.
     i'm waiting for the good idea fairy.
 
+  * template specialization:
+    T fn<T>(T t) { return t; }
+    int fn<int>(int t) { return t; }
+    T fn<T=int>(T t) { return t; }
+
 
 REACH GOALS
 

@@ -1,7 +1,0 @@
-c = a ^^ b = 1
-hdl^^ as lvalue = 1
-hdl^^ rvalue = 0
-0
-hhh^^^ = 0
-qqq^^^^ = 0
-d e f = 1 0 0
