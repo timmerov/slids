@@ -657,11 +657,17 @@ FOR-CLASS — ITERATING A CLASS BY ITS PROTOCOL (landed; resolve understandForCl
     malformed set is not an error on its own; it just can't form the protocol, and a
     malformed set is IGNORED when the other protocol is usable.
   * SELECTION (option D): both protocols defined → the loop-var SHAPE picks — a VALUE
-    loop var selects size/op[], a REFERENCE selects begin/end/next. The explicit-type
-    demand fires only for a PRIMITIVE element (both shapes legal, a genuine tie); a
-    CLASS element has ONE legal shape — reference — so it is inferred, not asked.
+    loop var selects size/op[], a REFERENCE selects begin/end/next. An INFERRED head
+    defaults BY VALUE (the contained primitive, size/op[]); the infer-as-reference
+    head `for (ref^ : c)` (Node.infer_ref) selects the reference interpretation —
+    begin/end/next when both are defined, the by-ref shape of whichever protocol
+    exists otherwise. (The old "both sets need an explicit type" rejection is
+    REPEALED: the author spells `ref^` to get a reference, so bare = by value.) A
+    CLASS element has ONE legal shape — reference — so it is inferred either way.
     Exactly one defined → it is used. Neither → "not iterable". A typeless loop var is
-    inferred: a primitive element binds by value, a class element by reference.
+    inferred: a primitive element binds by value (or by `ref^`), a class element by
+    reference. `ref^` over a VALUE-returning begin/end/next rejects exactly like an
+    explicit `int^` ("return a value; ... cannot be a reference").
   * THE LOOP VARIABLE IS A PRIMITIVE OR A REFERENCE — never a class by value (that
     would be a whole-class copy per iteration). Enforced three ways: an explicit
     non-reference loop var over a class element rejects ("must be a reference

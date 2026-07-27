@@ -232,6 +232,7 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
     c->default_move_init = n.default_move_init;
     c->default_swap_init = n.default_swap_init;
     c->construction_init = n.construction_init;
+    c->infer_ref = n.infer_ref;
     c->quiet_diag = n.quiet_diag;
     c->require_homogeneous = n.require_homogeneous;
     c->non_completing = n.non_completing;

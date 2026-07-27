@@ -6542,6 +6542,22 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
     }
 }
 
+// An infer-as-reference decl's type (`name^ = rhs` / `const name^ = rhs`) from
+// its rhs: a reference stays itself, an iterator demotes to a reference to the
+// same pointee (`^arr[i]` is `T[]`; a const pointee rides), and anything else
+// has no address to bind — report and return kNoType.
+widen::TypeRef inferReferenceFrom(widen::TypeRef inferred, parse::Node const& s,
+                                  diagnostic::Sink& diag) {
+    widen::TypeRef st = widen::strip(inferred);
+    if (widen::form(st) == widen::Type::Form::kPointer) return st;
+    if (widen::form(st) == widen::Type::Form::kIterator)
+        return widen::internPointer(widen::get(st).pointee);
+    diagnostic::report(diag, {s.file_id, s.name_tok,
+        "Cannot infer a reference for '" + s.name + "': the initializer type '"
+        + widen::spellOrEmpty(inferred) + "' is not an address.", {}});
+    return widen::kNoType;
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr) {
@@ -6804,6 +6820,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         (isLiteralKind(rhs.kind) && rhs.strong_type != widen::kNoType)
                             ? rhs.strong_type
                             : rhs.inferred_type;
+                    // `name^ = rhs` — the decl infers a REFERENCE to the rhs's
+                    // pointee; a non-address rhs was reported by the helper.
+                    if (s.infer_ref && inferred != widen::kNoType) {
+                        inferred = inferReferenceFrom(inferred, s, diag);
+                        if (inferred == widen::kNoType) return;
+                    }
                     s.return_type = inferred;
                     tree.entries[s.resolved_entry_id].slids_type = inferred;
                     tree.entries[s.resolved_entry_id].alias_label = rhs.alias_label;
@@ -6824,11 +6846,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         return;
                 }
                 // A TYPELESS CONST that constfold could NOT fold (its entry
-                // slids_type is still unset) is resolved HERE: infer the rhs type;
-                // an AGGREGATE / pointer is a not-mutable VARIABLE (flip the entry
-                // to kLocalVar + deepConst, like a typed const variable — desugar's
-                // is_const-from-entry-kind then makes codegen allocate it); a
-                // leftover SCALAR is the genuine "not a constant expression".
+                // slids_type is still unset) is resolved HERE: infer the rhs type
+                // and make it a not-mutable VARIABLE (flip the entry to kLocalVar +
+                // deepConst, like a typed const variable — desugar's is_const-from-
+                // entry-kind then makes codegen allocate it). A SCALAR with a
+                // runtime rhs is a runtime const local like any aggregate —
+                // `const x = y` infers `const int`; only a FOLDABLE rhs substitutes
+                // (constfold already captured those, so they never reach here).
+                // `const name^ = rhs` infers a reference first, then deep-consts.
                 if (s.is_const && s.return_type == widen::kNoType
                     && s.resolved_entry_id >= 0
                     && tree.entries[s.resolved_entry_id].slids_type == widen::kNoType) {
@@ -6836,19 +6861,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     widen::TypeRef inferred =
                         (isLiteralKind(rhs.kind) && rhs.strong_type != widen::kNoType)
                             ? rhs.strong_type : rhs.inferred_type;
-                    if (inferred != widen::kNoType
-                        && widen::form(widen::strip(inferred))
-                               != widen::Type::Form::kPrimitive) {
+                    if (s.infer_ref && inferred != widen::kNoType) {
+                        inferred = inferReferenceFrom(inferred, s, diag);
+                        if (inferred == widen::kNoType) return;
+                    }
+                    if (inferred != widen::kNoType) {
                         widen::TypeRef ct = widen::deepConst(inferred);
                         s.return_type = ct;
                         parse::Entry& e = tree.entries[s.resolved_entry_id];
                         e.kind = parse::EntryKind::kLocalVar;
                         e.slids_type = ct;
                         e.alias_label = rhs.alias_label;
-                    } else if (inferred != widen::kNoType) {
-                        diagnostic::report(diag, {s.file_id, s.name_tok,
-                            "Initializer for '" + s.name
-                            + "' is not a constant expression.", {}});
                     }
                 }
                 // (The global constant-initializer rule is asked at the TOP of this arm,
@@ -7685,13 +7708,44 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     }
                 }
                 // A FRESH typeless loop var takes the element (slot 0) type — a
-                // non-primitive element FORCES a reference (`T^`). A reuse keeps its
-                // enclosing type (the binding coerces the slot).
+                // non-primitive element, or the `ref^` head, FORCES a reference
+                // (`T^`; a const element rides into the pointee). A reuse keeps
+                // its enclosing type (the binding coerces the slot).
                 if (var_decl.kind == parse::Kind::kVarDeclStmt
                     && var_decl.return_type == widen::kNoType
                     && var_decl.resolved_entry_id >= 0 && !slots.empty()) {
                     tree.entries[var_decl.resolved_entry_id].slids_type =
-                        elem_aggregate ? widen::internPointer(elem) : elem;
+                        (elem_aggregate || var_decl.infer_ref)
+                            ? widen::internPointer(elem) : elem;
+                }
+                // An infer-as-reference REUSE must reuse a compatible reference —
+                // `Elem^` or `(const Elem)^`, never a primitive or an iterator,
+                // and a const element keeps its const (the flow rule). Mirrors
+                // the for-array rule (enforced there at resolve; here the element
+                // type is only known now).
+                if (var_decl.infer_ref
+                    && var_decl.kind == parse::Kind::kAssignStmt
+                    && var_decl.resolved_entry_id >= 0 && !slots.empty()) {
+                    widen::TypeRef rt =
+                        parse::entryType(tree, var_decl.resolved_entry_id);
+                    widen::TypeRef rs = widen::strip(rt);
+                    widen::TypeRef elem0 = slots[0];
+                    bool ok = widen::form(rs) == widen::Type::Form::kPointer
+                        && widen::deepStrip(widen::get(rs).pointee)
+                               == widen::deepStrip(elem0)
+                        && (elem0 == widen::removeConst(elem0)
+                            || widen::get(rs).pointee
+                                   != widen::removeConst(widen::get(rs).pointee));
+                    if (!ok) {
+                        diagnostic::report(diag, {var_decl.file_id,
+                            var_decl.name_tok,
+                            "'" + var_decl.name + "' is declared '"
+                            + widen::spellOrEmpty(rt)
+                            + "'; an infer-as-reference loop variable must reuse "
+                              "a reference to the element type ('"
+                            + widen::spell(widen::internPointer(elem0)) + "').",
+                            {}});
+                    }
                 }
             } else if (it_ref.inferred_type != widen::kNoType) {
                 // An unknown-typed iterable the dispatcher routed here on faith (a

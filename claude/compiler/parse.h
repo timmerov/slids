@@ -341,6 +341,11 @@ struct Node {
                                  // lower the args to a kTupleExpr, so this flag is the only
                                  // thing that tells `Class c(1,2,3)` (field-list) from
                                  // `Class c = (1,2,3)` (tries a tuple op= first).
+    bool infer_ref = false;      // kVarDeclStmt: an infer-as-REFERENCE typeless decl —
+                                 // `name^ = rhs` / `const name^ = rhs` / `for (name^ : it)`.
+                                 // The inferred type is a reference: to the rhs's pointee
+                                 // (a decl init must be an address), or to the iterated
+                                 // element (the loop var binds each element's address).
     bool quiet_diag = false;     // kStringifyType inside a `#x` desugar: the same
                                  // operand is also resolved by the sibling `^x`, so
                                  // suppress THIS arm's undefined-operand diagnostic

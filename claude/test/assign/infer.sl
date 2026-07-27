@@ -4,11 +4,14 @@ test inferring types.
 includes: primitive types, enums, constants,
 iterators, references, classes, tuples, functions, etc.
 
-infer const types and pointer types.
+infer const types and reference types.
 
-    const x = 5;        // const int
-    ref^ = ^x;          // (const int)^
-    const ref^ = ^x;    // const int^
+    int array[3] = (1,2,3);
+    int y = array[0];
+
+    const x = y;            // const int
+    ref^ = ^array[x];       // int^
+    const ref^ = ^array[y]; // const int^
 */
 
 /*
@@ -32,11 +35,24 @@ covered here:
     -> float64 cd): the substituted literal carries the const's strong_type, and the
     typeless-decl inference uses it (classify.cpp).
   - from an ENUM member (Color:kGreen -> the enum type Color, value 1, label rides).
+  - CONST inference: `const x = rhs` — a foldable rhs substitutes, a runtime rhs
+    becomes a runtime deep-const LOCAL (classify flips the entry) — and BOTH spell
+    const in ##type, as does a file-scope constant (kFive -> const int). Runtime
+    const arrays / tuples (`const arr2 = arr1`, `const tuple1 = (4,5,6)`).
+    A BARE inferred copy of a constant stays MUTABLE (ci/cb/... above are int/int8,
+    not const) — const rides only when the decl spells it, or through an address.
+  - REFERENCE inference: bare from an array-element address -> the ITERATOR
+    (`p = ^array[2]` -> int[]); bare from a scalar address -> the reference
+    (`q = ^y` -> int^); the infer-as-reference spelling `ref^ = addr` -> int^
+    (an iterator rhs demotes to the element reference; writes flow back);
+    `const cref^ = addr` -> deep const, spelled like the explicit `const int^`
+    twin (`const (const int)^`).
   - negatives: a self-referential init (`h = h`, uninitialized); a type/namespace as
-    a value (`x = Color`, "not a value"); a no-common-type rhs (`x = uint64 + int8`).
+    a value (`x = Color`, "not a value"); a no-common-type rhs (`x = uint64 + int8`);
+    `ref^ = value` (not an address); a write to a runtime const; a write through a
+    const-inferred reference.
 
-deferred (not landed): inferring from iterators / references / classes / tuples /
-functions.
+deferred (not landed): inferring from classes / functions.
 */
 
 alias Integer = int;
@@ -153,6 +169,49 @@ int32 main() {
         __println(##type(tuple2) + " tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
     }
 
+    /* infer const SCALARS: a foldable init substitutes, a runtime init becomes a
+       runtime const local — both spell const (no seam between them). */
+    {
+        const cf = 6;
+        __println(##type(cf) + " cf = " + cf);
+        int rt = 7;
+        const cr = rt;
+        __println(##type(cr) + " cr = " + cr);
+    }
+
+    /* ##type of a file-scope constant is const-qualified too. */
+    __println(##type(kFive) + " kFive = " + kFive);
+
+    /* infer references and iterators from addresses (canon head examples). */
+    {
+        int array[3] = (1,2,3);
+        int x = 0;
+        int y = 1;
+
+        /* bare inference from an array-element address -> the ITERATOR int[]. */
+        p = ^array[2];
+        __println(##type(p) + " p^ = " + p^);
+
+        /* bare inference from a scalar address -> the reference int^. */
+        q = ^y;
+        __println(##type(q) + " q^ = " + q^);
+
+        /* infer-as-reference: `ref^ =` binds a reference; writes flow back. */
+        ref^ = ^array[x];
+        ref^ = 55;
+        __println(##type(ref) + " array[0] = " + array[0]);
+
+        /* a reference-typed rhs: the fresh reference aliases the same target. */
+        ref2^ = q;
+        ref2^ = 8;
+        __println(##type(ref2) + " y = " + y);
+
+        /* const + infer-as-reference -> deep const (the explicit `const int^`
+           twin's spelling); reading is fine, writing is a negative below. */
+        const cref^ = ^array[2];
+        __println(##type(cref) + " cref^ = " + cref^);
+    }
+
     return 0;
 }
 
@@ -183,5 +242,35 @@ negatives — one //-block uncommented per run.
 //    int8 q = 2;
 //    x = p + q;
 //    __println("x= " + x);
+//    return 0;
+//}
+
+/* `ref^ =` infers a reference, so the rhs must be an address; a plain value
+   has none. */
+//-EXPECT-ERROR: is not an address
+//int32 neg_ref_from_value() {
+//    int y = 5;
+//    ref^ = y;
+//    __println("" + ref^);
+//    return 0;
+//}
+
+/* a runtime-inferred const is still a constant — writes reject. */
+//-EXPECT-ERROR: Cannot assign to constant
+//int32 neg_runtime_const_write() {
+//    int y = 5;
+//    const x = y;
+//    x = 6;
+//    __println("" + x);
+//    return 0;
+//}
+
+/* writing through a const-inferred reference. */
+//-EXPECT-ERROR: Cannot write to a const value
+//int32 neg_const_ref_write() {
+//    int array[3] = (1,2,3);
+//    const cref^ = ^array[0];
+//    cref^ = 9;
+//    __println("" + array[0]);
 //    return 0;
 //}

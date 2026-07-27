@@ -10,8 +10,8 @@ in case of ambiguity, loop by value.
     int arr[5];
 
     /* iterate by reference */
-    for (int^ iter : arr) {
-        iter^ = 77;
+    for (int^ ref : arr) {
+        ref^ = 77;
     }
 
     /* iterate by value. */
@@ -19,9 +19,14 @@ in case of ambiguity, loop by value.
         __println("x = " + x);
     }
 
-    /* iterate by value. */
+    /* iterate by value with inference. */
     for (x : arr) {
         __println("x = " + x);
+    }
+
+    /* iterate by reference with inference. */
+    for (ref^ : arr) {
+        ref^ = 77;
     }
 
 the examples desugar to the following:
@@ -90,6 +95,15 @@ claude says:
   resolve for-iterable dispatch accepts a kGlobalVar (not just kLocalVar), and a
   global is exempt from the by-value use-before-init check (always initialized).
   Exercised: `garr` (scalar, by value + by ref), `gboxes` (class element).
+- INFER-AS-REFERENCE (`for (ref^ : arr)`): a typeless loop var with a trailing `^`
+  binds each element's ADDRESS — `Elem^` fresh, and it REUSES an enclosing var only
+  if that var IS `Elem^` or `(const Elem)^` (a compatible reuse reseats the binding;
+  a primitive / iterator / const-dropping reference of the same name is a compile
+  error, never a silent shadow). Works over 2-D rows (`sub2^`, and `v2^ : sub2^`
+  through the array-EXPRESSION path), class elements (same as the forced bare
+  reference), globals, and CONST arrays — typed or const-INFERRED — where the
+  element's const rides into the reference ((const int)^, read-only). A range or
+  an enum yields values, so `ref^ :` rejects there.
 */
 
 alias Cell = int;
@@ -262,6 +276,12 @@ int32 main() {
             __print(" " + ref^.x_);
         }
         __println(" ]");
+        /* the same forced reference spelled explicitly (`ref^ :`). */
+        __print("arr2=[");
+        for (ref2^ : arr) {
+            __print(" " + ref2^.x_);
+        }
+        __println(" ]");
     }
 
     /* GLOBAL array iteration — the loop TOUCHES the lazy global (constructs it on
@@ -278,6 +298,65 @@ int32 main() {
         __print(" " + ref^.b_);
     }
     __println(" ]");                       // 0 0 0
+
+    /* iterate by reference with INFERENCE (`ref^ :`) — fills like `int^ iter`. */
+    int iarr[5];
+    int m = 0;
+    for (iref^ : iarr) {
+        iref^ = m * 3;
+        m = m + 1;
+    }
+    __println("iarr[4]= " + iarr[4]);      // 12
+
+    /* `ref^ :` REUSES an enclosing var only if it IS a compatible reference —
+       observable after the loop: it holds the LAST element's address. */
+    int z0 = 0;
+    int^ rlast = ^z0;
+    for (rlast^ : iarr) {
+    }
+    __println("rlast^= " + rlast^);        // 12
+
+    /* a `(const Elem)^` enclosing var is a compatible reuse — the loop reseats
+       the binding; the const pointee makes the loop read-only. */
+    (const int)^ crd = ^z0;
+    int crsum = 0;
+    for (crd^ : iarr) {
+        crsum = crsum + crd^;
+    }
+    __println("crsum= " + crsum);          // 0+3+6+9+12 = 30
+
+    /* 2-D rows spelled with infer-as-reference (the forced reference, made
+       explicit); the inner loop derefs an array EXPRESSION (`sub2^`). */
+    int rsum2 = 0;
+    for (sub2^ : a3) {
+        for (v2^ : sub2^) {
+            rsum2 = rsum2 + v2^;
+        }
+    }
+    __println("rsum2= " + rsum2);          // 21
+
+    /* a CONST array iterates by inferred reference — the element's const rides
+       into the reference (`(const int)^`); reading is fine (a write is a
+       negative below). */
+    const int cfix[3] = (10, 20, 30);
+    int csum2 = 0;
+    for (cr^ : cfix) {
+        csum2 = csum2 + cr^;
+    }
+    __println("csum2= " + csum2);          // 60
+
+    /* a TYPELESS const array (runtime const INFERENCE) iterates the same way. */
+    int seed[3] = (4, 5, 6);
+    const cinf = seed;
+    int csum3 = 0;
+    for (cr2^ : cinf) {
+        csum3 = csum3 + cr2^;
+    }
+    __println("csum3= " + csum3);          // 15
+
+    /* a GLOBAL array by inferred reference. */
+    for (gr^ : garr) { gr^ = gr^ + 1; }
+    __println("garr2= " + garr[0] + " " + garr[3]);   // 4 10
 
     return 0;
 }
@@ -363,4 +442,65 @@ int32 main() {
 //    for (int x : arr) {
 //    }
 //    return arr[0];
+//}
+
+/* `ref^ :` must reuse a REFERENCE — a same-name PRIMITIVE is a compile error,
+   never a silent shadow or a store. */
+//-EXPECT-ERROR: must reuse a reference to the element type
+//void neg_ref_reuse_primitive() {
+//    int arr[3];
+//    int ref = 0;
+//    for (ref^ : arr) {
+//        ref^ = 1;
+//    }
+//    __println("ref= " + ref);
+//}
+
+/* ...and a same-name ITERATOR rejects too (a reference is not an iterator). */
+//-EXPECT-ERROR: must reuse a reference to the element type
+//void neg_ref_reuse_iterator() {
+//    int arr[3];
+//    arr[0] = 1;
+//    int[] it = <int[]> <mutable> ^arr[0];
+//    for (it^ : arr) {
+//        it^ = 9;
+//    }
+//    __println("it^= " + it^);
+//}
+
+/* reusing a PLAIN reference over CONST elements would drop the const. */
+//-EXPECT-ERROR: must reuse a reference to the element type
+//void neg_ref_reuse_const_drop() {
+//    const int carr[3] = (1,2,3);
+//    int z = 0;
+//    int^ p = ^z;
+//    for (p^ : carr) {
+//    }
+//    __println("p^= " + p^);
+//}
+
+/* writing through an inferred reference to CONST elements. */
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_ref_const_write() {
+//    const int carr[3] = (1,2,3);
+//    for (r^ : carr) {
+//        r^ = 9;
+//    }
+//}
+
+/* a range yields values — there is no element to reference. */
+//-EXPECT-ERROR: yields values; the for-loop variable cannot be a reference
+//void neg_ref_range() {
+//    for (r^ : 0..5) {
+//        __println("" + r^);
+//    }
+//}
+
+/* an enum yields member values — there is no storage to reference. */
+//-EXPECT-ERROR: yields values; the for-loop variable cannot be a reference
+//enum Dir ( kUp, kDown );
+//void neg_ref_enum() {
+//    for (r^ : Dir) {
+//        __println("" + r^);
+//    }
 //}

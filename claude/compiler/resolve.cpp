@@ -3179,6 +3179,41 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
         var_decl.return_type = widen::internPointer(elemRef);   // -> `^arr[i]`
         by_ref = true;
     }
+    // `ref^ :` — infer-as-reference over a primitive element (an aggregate element
+    // already forced the reference above). A visible same-name local may be REUSED
+    // only if it IS a compatible reference — `Elem^` or `(const Elem)^` (the binding
+    // reseats the reference, which a const POINTEE permits); a primitive or an
+    // iterator of the same name is a compile error, never a silent shadow. A
+    // const ELEMENT must keep its const through the reference (the flow rule).
+    if (var_decl.infer_ref && !by_ref) {
+        int prev = resolveName(tree, var_decl.name);
+        if (prev >= 0
+            && (tree.entries[prev].kind == parse::EntryKind::kLocalVar
+             || tree.entries[prev].kind == parse::EntryKind::kGlobalVar)) {
+            widen::TypeRef pt = widen::strip(parse::entryType(tree, prev));
+            bool ok = widen::form(pt) == widen::Type::Form::kPointer
+                && widen::deepStrip(widen::get(pt).pointee)
+                       == widen::deepStrip(elemRef)
+                && (elemRef == widen::removeConst(elemRef)
+                    || widen::get(pt).pointee
+                           != widen::removeConst(widen::get(pt).pointee));
+            if (!ok) {
+                diagnostic::report(diag, {vfile, vtok,
+                    "'" + var_decl.name + "' is declared '"
+                    + widen::spellOrEmpty(parse::entryType(tree, prev))
+                    + "'; an infer-as-reference loop variable must reuse a "
+                      "reference to the element type ('"
+                    + widen::spell(widen::internPointer(elemRef)) + "').",
+                    {{tree.entries[prev].file_id, tree.entries[prev].tok,
+                      "declared here"}}});
+                return Completion::Normal;
+            }
+        } else {
+            // Fresh: the loop var declares as `Elem^` (a const element rides).
+            var_decl.return_type = widen::internPointer(elemRef);
+        }
+        by_ref = true;
+    }
     // Stamp the ident (classify asserts resolve did) and apply the definite-
     // assignment side effects the desugared element binding used to carry:
     //  - by REFERENCE (`^arr[_$idx]`): the array is FILLED through element
@@ -3205,6 +3240,13 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     std::set<int> entry_set = tree.initialized_locals;   // S (possibly-zero body)
     // Bind the loop var through the shared registrar (typeless declares as the element).
     bindForVar(tree, var_decl, elemRef, diag);
+    // An infer-as-reference REUSE keeps the enclosing reference's own type
+    // (`(const Elem)^` stays const); stamp it on the decl node so desugar's
+    // by-ref test (node type = pointer-to-element) sees the reused reference.
+    if (var_decl.infer_ref && var_decl.kind == parse::Kind::kAssignStmt
+        && var_decl.resolved_entry_id >= 0) {
+        var_decl.return_type = parse::entryType(tree, var_decl.resolved_entry_id);
+    }
     // The loop var is (re)bound at the top of every iteration, so the body sees
     // it initialized; whether it is READ is left to the body (an unused loop var
     // is swept like any other).
@@ -3519,20 +3561,15 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
 
     // Select the protocol (option D): when both are defined the loop var's
     // SHAPE picks — a value picks size/op[], a reference picks begin/end/next.
-    // The tie is real only for a PRIMITIVE element (both shapes legal): a
-    // CLASS element can only bind by reference, so it is inferred, not asked.
+    // An INFERRED head defaults by value (a bare var is the contained primitive);
+    // the author spells `ref^` — or the element is a class, whose one legal
+    // shape is a reference — to select begin/end/next. (The old "both sets need
+    // an explicit type" rejection is repealed by the `ref^` spelling.)
     bool use_bnn;
     if (bnnGood && soiGood) {
         if (!has_type) {
-            if (!isPrim(elemOf(bnn)) && !isPrim(elemOf(soi))) {
-                use_bnn = true;   // class element: reference is the one shape
-            } else {
-                diagnostic::report(diag, {vfile, vtok, "Type '" + cname
-                    + "' defines both size/op[] and begin/end/next; the for-loop "
-                      "variable type must be written explicitly to select a protocol.",
-                    {}});
-                return Completion::Normal;
-            }
+            use_bnn = var_decl.infer_ref
+                   || (!isPrim(elemOf(bnn)) && !isPrim(elemOf(soi)));
         } else {
             use_bnn = lv_is_ref;
         }
@@ -3553,8 +3590,9 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
         if (isReferenceType(iter)) {
             widen::TypeRef elem = widen::get(widen::strip(iter)).pointee;
             if (!has_type) {
-                shape = isPrim(elem) ? 2 : 3;
-                var_decl.return_type = isPrim(elem) ? elem : iter;
+                bool as_ref = var_decl.infer_ref || !isPrim(elem);
+                shape = as_ref ? 3 : 2;
+                var_decl.return_type = as_ref ? iter : elem;
             } else {
                 if (!lv_is_ref && !isPrim(elem)) {
                     rejectClassByValue(elem);
@@ -3563,7 +3601,7 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
                 shape = lv_is_ref ? 3 : 2;
             }
         } else {
-            if (lv_is_ref) {
+            if (lv_is_ref || var_decl.infer_ref) {
                 diagnostic::report(diag, {vfile, vtok, "begin/end/next on type '"
                     + cname + "' return a value; the for-loop variable cannot be a "
                       "reference.", {}});
@@ -3579,8 +3617,9 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
         count_ty = tree.entries[op_id].param_types[1];
         widen::TypeRef elem = widen::get(widen::strip(soi.ret)).pointee;
         if (!has_type) {
-            shape = isPrim(elem) ? 4 : 5;
-            var_decl.return_type = isPrim(elem) ? elem : widen::internPointer(elem);
+            bool as_ref = var_decl.infer_ref || !isPrim(elem);
+            shape = as_ref ? 5 : 4;
+            var_decl.return_type = as_ref ? widen::internPointer(elem) : elem;
         } else {
             if (!lv_is_ref && !isPrim(elem)) {
                 rejectClassByValue(elem);
@@ -4169,7 +4208,44 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             }
             return Completion::Normal;
         }
-        case parse::Kind::kStoreStmt:
+        case parse::Kind::kStoreStmt: {
+            // `name^ = rhs` whose bare-name base is UNDECLARED (not a local, a
+            // global, a field, or any other entry): an infer-as-REFERENCE decl —
+            // the mirror of the kAssignStmt inferred-init promotion. Declare a
+            // fresh local (classify infers `T^` from the rhs, which must be an
+            // address) and flip the stmt to a kVarDeclStmt init. An in-scope name
+            // keeps today's meaning: a store THROUGH the reference.
+            parse::Node& lv0 = *s.children[0];
+            if (lv0.kind == parse::Kind::kDerefExpr
+                && lv0.children.size() == 1
+                && lv0.children[0]->kind == parse::Kind::kIdentExpr
+                && !isQualified(*lv0.children[0])
+                && resolveName(tree, lv0.children[0]->name) < 0) {
+                parse::Node& base = *lv0.children[0];
+                DeclInfo d;
+                d.name = base.name;
+                d.file_id = base.file_id;
+                d.name_tok = base.name_tok;
+                d.type = widen::kNoType;   // classify stamps `T^` from the rhs
+                bool reused = false;
+                int id = registerDeclarator(tree, d, BindMode::DeclareOrReuse,
+                                            reused, diag);
+                if (id < 0) return Completion::Normal;
+                std::string nm = base.name;
+                int nt = base.name_tok;
+                s.name = std::move(nm);
+                s.name_tok = nt;
+                s.resolved_entry_id = id;
+                s.infer_ref = true;
+                s.kind = parse::Kind::kVarDeclStmt;
+                s.children.erase(s.children.begin());   // drop the deref target
+                // rhs BEFORE marking initialized, so `p^ = ^p` reads p undeclared.
+                for (auto& ch : s.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
+                }
+                tree.initialized_locals.insert(id);
+                return Completion::Normal;
+            }
             // Store through an lvalue expression: `ref^ = rhs` or `arr[i] = rhs`.
             // children[0] = lvalue (kDerefExpr / kIndexExpr), [1] = rhs.
             resolveStoreTarget(tree, *s.children[0], diag);
@@ -4177,6 +4253,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 resolveExpr(tree, *s.children[1], diag);
             }
             return Completion::Normal;
+        }
         case parse::Kind::kMoveStmt:
             // `a <-- b;` — a is a WRITE destination (need not be pre-initialized);
             // b is a READ (the copy reads it; pointer leaves are then nulled but b
@@ -4594,6 +4671,15 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // the body is possibly-zero (after = S'), break/continue target here.
             assert(s.children.size() == 4
                 && "kForRangedStmt needs var+end+step+body");
+            // A range yields VALUES (there is no element to reference) — the
+            // infer-as-reference head (`ref^ :`) has nothing to bind.
+            if (s.children[0]->infer_ref) {
+                diagnostic::report(diag, {s.children[0]->file_id,
+                    s.children[0]->name_tok,
+                    "A for-loop over a range yields values; the for-loop "
+                    "variable cannot be a reference.", {}});
+                return Completion::Normal;
+            }
             parse::pushFrame(tree);                            // for-scope
             std::vector<int> saved_body_locals = std::move(tree.body_locals);
             tree.body_locals.clear();
@@ -4737,6 +4823,16 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 return understandForTuple(tree, s, widen::kNoType,
                                        /*is_literal=*/false, /*is_lvalue=*/true, diag);
             }
+            // A TYPELESS CONST (`const a = arr;`) is still kConst/kNoType at
+            // resolve — constfold may substitute it, or classify may flip it to a
+            // runtime const local (an aggregate / runtime rhs). Route it as a
+            // deferred tuple like a typeless local; classify errors if the
+            // inferred type isn't iterable.
+            if (tree.entries[enum_id].kind == parse::EntryKind::kConst
+                && tree.entries[enum_id].slids_type == widen::kNoType) {
+                return understandForTuple(tree, s, widen::kNoType,
+                                       /*is_literal=*/false, /*is_lvalue=*/true, diag);
+            }
             // Otherwise it must be an enum: a kNamespace carrying an underlying
             // type (transparent).
             if (tree.entries[enum_id].kind != parse::EntryKind::kNamespace
@@ -4745,6 +4841,15 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
                     "'" + enum_ref.name + "' is not an enum, array, or tuple.",
                     {{bad.file_id, bad.tok, "declared here"}}});
+                return Completion::Normal;
+            }
+            // An enum yields member VALUES (constants — no storage to reference),
+            // so the infer-as-reference head has nothing to bind.
+            if (s.children[0]->infer_ref) {
+                diagnostic::report(diag, {s.children[0]->file_id,
+                    s.children[0]->name_tok,
+                    "A for-loop over an enum yields values; the for-loop "
+                    "variable cannot be a reference.", {}});
                 return Completion::Normal;
             }
             int member_frame = tree.entries[enum_id].ns_frame_id;

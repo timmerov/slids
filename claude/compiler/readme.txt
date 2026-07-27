@@ -183,9 +183,24 @@ TYPE REPRESENTATION (the carrier; not a stage)
     A TYPELESS const (`const x = rhs`, no declared type) is the SAME split but
     decided in CLASSIFY (the type is unknown at resolve): constfold DEFERS a typeless
     const it can't fold (slids_type still kNoType), then classify infers the rhs type
-    and flips a non-scalar one to a kLocalVar + deepConst; a leftover typeless SCALAR
-    is the genuine "not a constant expression" (a runtime-scalar const variable is a
-    todo).
+    and flips it to a kLocalVar + deepConst — ANY type, scalar included: `const x = y`
+    with a runtime rhs is a runtime const local (`const int`). Only a FOLDABLE rhs
+    substitutes, and the split is invisible in ##type: a substituted const's direct
+    ident read spells "const T" (the kStringifyType arm), the runtime local's type IS
+    deep-const — both say const. A BARE inferred copy of a const (`ci = kFive`) stays
+    MUTABLE; const rides only when the decl spells it, or through an address.
+    `const name^ = rhs` composes with infer-as-reference (below): infer the reference
+    first, then deepConst — the explicit `const int^` twin's type exactly.
+    INFER-AS-REFERENCE (`name^ = rhs`, statement position): a kStoreStmt whose deref
+    target's bare-name base is UNDECLARED is promoted at resolve into an inferred
+    reference DECL (the mirror of the kAssignStmt inferred-init promotion; an
+    in-scope name keeps the store-through meaning). Classify's inferred-decl arm
+    then requires an ADDRESS rhs — a reference stays itself, an iterator (`^arr[i]`
+    is T[]) demotes to `T^` (inferReferenceFrom, const pointee riding); a value rhs
+    is "not an address". Bare inference from an address needs no spelling: an
+    array-element address infers the ITERATOR (int[]), a scalar address the
+    reference (int^) — `^` on the NAME is the opt-in that turns the iterator form
+    into a reference.
   * Every type FIELD is a TypeRef: Node.return_type / inferred_type / op_type /
     nominal_type / strong_type and Entry.slids_type / const_strong_type /
     param_types / capture_types (both parse:: and ast::), plus codegen::VarInfo.
@@ -1974,12 +1989,23 @@ STAGE FILES (.h / .cpp pairs)
             an array/tuple local (or a tuple literal / `ref^` / call) is UNDERSTOOD
             here (understandForArray / understandForTuple register the loop var,
             resolve the body + DA, validate) and RETAGGED kForArrayStmt /
-            kForTupleStmt for desugar to lower; a CLASS iterable (a var, `ptr^`, a
+            kForTupleStmt for desugar to lower [a TYPELESS CONST iterable — still
+            kConst/kNoType at resolve — routes as a deferred tuple like a typeless
+            local; classify flips the const and validates]; a CLASS iterable (a var, `ptr^`, a
             construction, a call — any type that is a kSlid) is LOWERED HERE by
             understandForClass into a kForLongStmt over the class's protocol methods
             (size/op[] or begin/end/next) and re-resolved, so classify infers the
             synthesized method calls [a call minted in desugar is never classified —
-            hence lower-at-resolve, not retag-for-desugar]; a real enum (a kNamespace with an
+            hence lower-at-resolve, not retag-for-desugar]. The INFER-AS-REFERENCE
+            head `for (name^ : iter)` (Node.infer_ref, parsed as `IDENT ^ :`) makes
+            the typeless loop var bind each element's ADDRESS: for-array forces
+            by-ref `Elem^` (a const element rides into the pointee), and REUSE is
+            legal only for an enclosing `Elem^` / `(const Elem)^` — a primitive /
+            iterator / const-dropping reference of the same name rejects, never
+            silently shadows (for-array checks at resolve; for-tuple, whose element
+            type classify discovers, checks in the kForTupleStmt arm); for-class it
+            selects the reference interpretation (readme-classes.txt); a RANGE or
+            an ENUM yields values, so `ref^ :` rejects there. A real enum (a kNamespace with an
             underlying type) is rebuilt as a kForRangedStmt over the enum's
             first..last DEFINED members — find the first/last kConst members by id
             (definition) order in its ns_frame, build `for (var : Enum:first .. <=

@@ -15,8 +15,10 @@ the container class must implement all of begin/end/next
 or both of size/op[].
 begin/end/next must return the exact same type.
 begin/end/next must have arity 0/0/1.
-the loop variable type must be explicit if the class implements both sets
-of loop functions.
+the loop variable type is inferred to a primitive type when possible.
+the loop variable type is inferred to a reference when:
+the contained type is not primitive or when:
+infer-as-reference syntax is used (see below).
 if the loop variable is the contained primitive type then size/op[] is used.
 if the loop variable is a reference to the contained type then
 begin/end/next is used.
@@ -90,6 +92,11 @@ for-class desugars to:
         ref = container.op[]($count);
         body
     }
+
+the infer-as-reference syntax may be used to interpret the loop variable
+as a reference instead of as a primitive.
+
+    for (ref^ : container) { }
 
 note:
 loop code can be injected into the loop's body.
@@ -407,6 +414,48 @@ int32 main() {
     for (Pair^ e : bpc) {
         __println("  " + e^.x_ + "," + e^.y_);
     }
+    __println("bothpair ref^ -> begin/end/next (1 element):");
+    for (e2^ : bpc) {
+        __println("  " + e2^.x_ + "," + e2^.y_);
+    }
+
+    // ---- infer-as-reference (`ref^ :`) selects the reference interpretation ----
+    // Over BOTH protocols a bare var infers BY VALUE (size/op[]) and `ref^`
+    // selects begin/end/next — the author spells the reference to get one, so
+    // the old "must be written explicitly" rejection is repealed.
+    Both bi;
+    __println("both, bare inferred -> op[] (3 elements):");
+    for (x : bi) {
+        __println("  " + x);
+    }
+    __println("both, ref^ inferred -> begin/end/next (2 elements, +100):");
+    for (r^ : bi) {
+        r^ = r^ + 100;
+    }
+    for (x : bi) {
+        __println("  " + x);
+    }
+    __println("ref^ over size/op[] (x10):");
+    IdxVec rv;
+    for (r^ : rv) {
+        r^ = r^ * 10;
+    }
+    for (x : rv) {
+        __println("  " + x);
+    }
+    __println("ref^ over begin/end/next-ref (+7):");
+    Buf3 rb;
+    for (r^ : rb) {
+        r^ = r^ + 7;
+    }
+    for (x : rb) {
+        __println("  " + x);
+    }
+    __println("ref^ over class elements (same as bare):");
+    PairVec rpv;
+    for (e^ : rpv) {
+        __println("  " + e^.x_ + "," + e^.y_);
+    }
 
     // ---- a malformed protocol is ignored when another is usable ----
     __println("malformed-but-unused (uses begin/end/next):");
@@ -482,12 +531,17 @@ int32 main() {
     return 0;
 }
 
-// A class defining BOTH protocols requires an explicit loop-variable type.
-//-EXPECT-ERROR: must be written explicitly to select a protocol
-//int neg_both_inferred() {
-//    Both both;
-//    for (x : both) {
-//        return x^;
+// (The "both protocols need an explicit loop-variable type" rejection is
+// REPEALED: a bare var infers by value / size/op[], and `ref^` selects
+// begin/end/next — see the positives in main.)
+
+// The `ref^` head over a value-returning begin/end/next has no element
+// address to bind (the same rule as an explicit `int^`).
+//-EXPECT-ERROR: return a value; the for-loop variable cannot be a reference
+//int neg_infer_ref_over_value() {
+//    Count c;
+//    for (r^ : c) {
+//        return r^;
 //    }
 //    return 0;
 //}

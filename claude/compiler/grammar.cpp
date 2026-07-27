@@ -1892,6 +1892,28 @@ struct Parser {
             is_const = true;
             advance();
         }
+        // `const name^ = e` — an infer-as-REFERENCE typeless const. The `=` where a
+        // declared type would put a NAME discriminates (the typeSuffixesThenName
+        // gate): `const T^ name = e` has an identifier after the suffix run, this
+        // form has `=`. The name and the `^` are consumed here; the declarator
+        // below never runs for this shape.
+        if (is_const && peek().kind == token::Kind::kIdentifier
+            && peekKind(1) == token::Kind::kBitXor
+            && peekKind(2) == token::Kind::kEquals) {
+            auto node = newNodeAt(parse::Kind::kVarDeclStmt, stmt_file, stmt_tok);
+            node->name = peek().text;
+            node->name_tok = pos;
+            node->is_const = true;
+            node->infer_ref = true;
+            advance();   // name
+            advance();   // ^
+            advance();   // =
+            auto init = parseExpr();
+            if (!init) return nullptr;
+            node->children.push_back(std::move(init));
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            return node;
+        }
         // A typed-or-typeless declarator with a (possibly qualified) name:
         // `const int Space:kSix = 6;` is an inline namespace member; `const name = e`
         // is a typeless const (its type comes from the rhs). parseDeclarator detects
@@ -3324,24 +3346,44 @@ struct Parser {
             return finishLongFor(stmt_file, stmt_tok, {});
         }
         // First decl's `[type] name` (type optional — typeless infers / reuses).
+        // `name^ :` is the infer-as-REFERENCE loop var: typeless, and the loop
+        // variable binds each element's address (`^` then `:` discriminates —
+        // a declared `T^ name :` has an identifier after the suffix run).
         int v_file, v_tok, vname_tok;
         std::string vtype, vname;
         std::vector<std::unique_ptr<parse::Node>> v_dims;
-        if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok, v_dims)) {
+        bool v_infer_ref = false;
+        if (peek().kind == token::Kind::kIdentifier
+            && peekKind(1) == token::Kind::kBitXor
+            && peekKind(2) == token::Kind::kColon) {
+            v_file = peek().file_id;
+            v_tok = pos;
+            vname_tok = pos;
+            vname = peek().text;
+            v_infer_ref = true;
+            advance();   // name
+            advance();   // ^
+        } else if (!parseForVarHead(vtype, vname, v_file, v_tok, vname_tok,
+                                    v_dims)) {
             return nullptr;
         }
         if (peek().kind == token::Kind::kColon) {
             advance();   // :
             auto operand = parseUnary();   // start (range) or the enum name
             if (!operand) return nullptr;
+            std::unique_ptr<parse::Node> node;
             if (peek().kind == token::Kind::kDotDot) {
-                return parseRangeFor(stmt_file, stmt_tok, std::move(vtype),
+                node = parseRangeFor(stmt_file, stmt_tok, std::move(vtype),
                                      std::move(vname), v_file, v_tok, vname_tok,
                                      std::move(v_dims), std::move(operand));
+            } else {
+                node = parseEnumFor(stmt_file, stmt_tok, std::move(vtype),
+                                    std::move(vname), v_file, v_tok, vname_tok,
+                                    std::move(v_dims), std::move(operand));
             }
-            return parseEnumFor(stmt_file, stmt_tok, std::move(vtype),
-                                std::move(vname), v_file, v_tok, vname_tok,
-                                std::move(v_dims), std::move(operand));
+            // Both colon forms put the loop-var decl at children[0].
+            if (node && v_infer_ref) node->children[0]->infer_ref = true;
+            return node;
         }
         // Long form: varlist[0] is the decl just parsed; gather any more.
         std::vector<std::unique_ptr<parse::Node>> varlist;

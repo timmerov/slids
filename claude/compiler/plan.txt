@@ -2944,6 +2944,38 @@ CROSS-CUTTING — ONE-LEVEL OPERAND COERCION (v1 Phase-2, LANDED 2026-07-20;
   temp count). This is what unblocked test/progress/string.sl (`str += x` for an int64), so
   string_test now compiles, links, and runs end to end.
 
+INFERENCE: CONST + INFER-AS-REFERENCE (landed 2026-07-27). Two additions to the
+typeless-decl inference line, canon test/assign/infer.sl + test/flow/forarray.sl +
+test/flow/forclass.sl (the user's head comments):
+  - CONST SCALARS: `const x = y` with a runtime rhs is a runtime deep-const LOCAL
+    (const int) — classify's typeless-const arm now flips ANY inferred type, not
+    just aggregates; the "not a constant expression" leftover-scalar error is gone
+    (a foldable rhs still substitutes, and both spellings ##type as const — the
+    seam between substituted and allocated is invisible). A bare inferred copy of a
+    const stays MUTABLE (`ci = kFive` -> int); const rides only when spelled, or
+    through an address. The for-iterable dispatch defers a kConst/kNoType iterable
+    to the for-tuple path so `const a = arr; for (v : a)` iterates.
+  - INFER-AS-REFERENCE (`name^`): one spelling, three positions. Decl statement
+    `ref^ = addr` — an undeclared deref-target base promotes to an inferred
+    reference decl (kStoreStmt -> kVarDeclStmt at resolve, the mirror of the
+    bare-name promotion); classify demands an ADDRESS rhs (iterator demotes to
+    `T^`, inferReferenceFrom — bare inference from an element address stays the
+    ITERATOR int[], the `^` is the opt-in). `const ref^ = addr` composes (deepConst
+    after). For-head `for (ref^ : it)` — Node.infer_ref, parsed `IDENT ^ :`:
+    for-array/for-tuple force by-ref `Elem^` (const elements ride), REUSE only of
+    an enclosing `Elem^` / `(const Elem)^` (Q3 rule: a primitive / iterator /
+    const-dropping ref of the same name is a compile error, never a shadow; the
+    reused reference's own type is kept and stamped so desugar binds by-ref);
+    range/enum yield values -> reject. For-class: `ref^` selects the reference
+    interpretation — WITH BOTH protocols bare now infers BY VALUE via size/op[]
+    and `ref^` picks begin/end/next, REPEALING the "loop variable type must be
+    written explicitly" error (forclass.sl neg_both_inferred became positives);
+    `ref^` over a value-returning begin/end/next rejects like an explicit `int^`.
+  Detail: readme.txt (typeless-const paragraph + the kForEnumStmt carrier
+  paragraph), readme-classes.txt FOR-CLASS SELECTION. ##type spells the const-ref
+  decl exactly like its explicit twin: `const (const int)^` (the canon comment's
+  `const int^` shorthand denotes the same deep-const type).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

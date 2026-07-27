@@ -99,7 +99,6 @@ this one is not the place to duplicate them.
 - `compiler/plan.txt` — the main quest: what has landed, phase by phase, with the rationale. `plan-declarator.txt`, `plan-evaluate.txt` — the deep design records for those two landings.
 - `compiler/todo.txt` — everything OPEN: bugs, deferred items, reach goals. Landed items are removed.
 - `slids_reference.md` — the language: full syntax and semantics.
-- `v1/v1.md` — v1's designs. **v1 is a different compiler.** Nothing described there exists in v2 unless v2's own docs say so.
 
 **Three invariants are load-bearing.** Read readme-classes.txt before touching construction,
 assignment, or transfer code — the *declarator funnel* (every site that materializes a value

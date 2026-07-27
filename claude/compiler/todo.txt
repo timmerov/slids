@@ -174,15 +174,6 @@ BLOCKED FEATURES
 
 REACH GOALS
 
-  * inferred reference type.
-    int x = 100;
-    ref^ = x;
-    type of ref is int^.
-    actual use case:
-    for (ref^ : container) { }
-    the loop type is inferred from container.
-    but we specify we want to loop by reference, not value.
-
   * b = (obj < x) desugars to b = obj.op<(x) regardless of x.
     if x is not a class or obj.op<(x) is not defined then we could try transposing
     the comparison:
