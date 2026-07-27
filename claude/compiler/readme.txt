@@ -87,8 +87,8 @@ TYPE REPRESENTATION (the carrier; not a stage)
     day): the munge's const is REAL — a body writes through a reference /
     iterator / sized-array param only when it is `mutable`; the ONE
     exemption left on Entry.is_param is the RECEIVER `_$recv`/`self`
-    (const methods deferred, so field writes through the receiver stay
-    legal). The SIZED-ARRAY munge gap is CLOSED (canon ruling: `int a[3]`
+    of a PLAIN method (field writes through it stay legal — const on a
+    method is the author's option). The SIZED-ARRAY munge gap is CLOSED (canon ruling: `int a[3]`
     munges ELEMENT-WISE, deepConst — `((const int)[3])^` behind the
     by-pointer rewrite, multi-dim + alias-spelled included), and the
     wall's index step sees through the by-pointer AUTO-deref and consumes
@@ -97,8 +97,8 @@ TYPE REPRESENTATION (the carrier; not a stage)
     cannot flow into a parameter that declared it will WRITE — an
     un-const pointee only arises from `mutable` — checked in
     checkArgAssign, the ONE arg/param funnel (the receiver never routes
-    through it, so const-class method calls stay in the deferred
-    const-methods bucket). Sources caught: const-pointee pointer /
+    through it — method calls on a const receiver stay legal, the
+    const-methods rule below is a BODY contract). Sources caught: const-pointee pointer /
     iterator values, addressed const lvalues (kAddrOfExpr MINTS a const
     pointee off the wall's oracle), const arrays, string literals (the
     context-decay now KEEPS the pool's const instead of taking the
@@ -145,9 +145,24 @@ TYPE REPRESENTATION (the carrier; not a stage)
     pointee freezes what its slot POINTERS reach too — which is why a
     literal-built `#x` tuple flows into a dump param spelled with plain
     `char[]` slots (the author writes the natural slots; the param
-    contract supplies the recursive const). Still deferred from Phase 6:
-    SWAP, and const METHODS (a method call on a const class lvalue is
-    the known unchecked hole). Placement encodes deep vs
+    contract supplies the recursive const). CONST METHODS are landed
+    (same day): `Ret const name(args)` (node.const_method, parsed
+    between return type and name) munges the RECEIVER
+    `(const Class)^` — deep, like any const param — so the body faces
+    the write wall and the flow rule through self (the self entry
+    re-syncs to the munged pointee in mungeParamTypes; the wall's
+    oracle no longer exempts the receiver's declared type). Const is
+    NEVER REQUIRED: external receivers are ungated — a const-typed
+    lvalue may call a plain method (the author opts readers in; an
+    optimizer may exploit the promise). TRANSITIVE through SELF only:
+    inferMethodCall rejects a const method calling a non-const method
+    on a SELF-shaped receiver (bare sibling / self.m / operators on
+    self) — keying on general receiver-const would make const viral
+    through every munged param. Hooks reject focused (a ctor writes
+    the fields; a dtor tears the object down — a const object still
+    dies, the lifecycle canon), and a const FREE function rejects
+    ("only a method has a self to promise about"). Still deferred
+    from Phase 6: SWAP on const operands. Placement encodes deep vs
     shallow: an OUTER kConst is `const T^` (the whole pointer + its data are const);
     a kConst on the pointee is `(const T)^` (mutable pointer, const data). intern()
     peels a leading `const ` FIRST so the prefix binds loosest (deep); the

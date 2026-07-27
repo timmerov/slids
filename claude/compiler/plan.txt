@@ -2518,6 +2518,42 @@ Phase 9 — templates
     implicitly convert 'int' to 'T'") — pre-existing, the global
     initializer validates at file scope before any flavor exists.
 
+  * CONST METHODS (Phase 6, 7th slice)                     LANDED 2026-07-26
+    (USER'S RULINGS: the `Ret const name(args)` syntax already parsed
+    and "is exactly what it should be"; const is NEVER REQUIRED on a
+    method or operator — the author opts in, an optimizer may exploit
+    the promise — so external receivers are UNGATED (a const-typed
+    lvalue calls a plain method legally, pinned); "a const method
+    cannot call a not-const method. duh."; reject const ctor/dtor.)
+    A BODY-SIDE contract riding the existing machinery end to end:
+    Entry.is_const_method stamped at registerScopeNames; in
+    mungeParamTypes a const_method node's RECEIVER pointee munges
+    internPointer(internConst(deepConst(pointee))) — deep, exactly a
+    const param — and the SELF entry re-syncs to the munged pointee
+    (self registers PRE-munge at resolveFunctionBody); the wall's
+    oracle (constAwareLvalueType) dropped its receiver exemption, so
+    field writes, `^field` flow launders, and every write spelling
+    reject through const self via the SLICES ALREADY LANDED — zero
+    new wall code. TRANSITIVITY through SELF only: one gate in
+    inferMethodCall — a SELF-shaped receiver (bare sibling, self.m,
+    operators on self; kIdentExpr "self" or kDeref(_$recv)) that is
+    const requires a const target ("mark it 'const' if it does not
+    modify self", declared-here note). Self-shaped is the LINE:
+    keying on general receiver-const would make const viral through
+    every `(const T)^`-munged param — the opposite of "never
+    required". A const FREE FUNCTION rejects in the same munge walk
+    ("Only a method may be 'const' — a free function has no 'self'
+    to promise about"); const HOOKS reject at the grammar, both the
+    parseFunctionDef path and a focused `const _()` / `const ~()`
+    pre-check ahead of the decl parse (a ctor writes the fields; a
+    dtor tears the object down — a const object still dies, the
+    lifecycle canon). Const OPERATORS ride free: `(const int)^ const
+    op[](int)` works outside and on self, and a non-const operator
+    on const self trips the same gate. Canon: class/method.sl (QCm +
+    the QCm* negative family). Suite fallout: ZERO — nothing was
+    const-marked before, the point of opt-in. Phase 6 remaining:
+    SWAP on const operands only.
+
   * CONST IS RECURSIVE — THE DEEP MATERIALIZER (6th slice) LANDED 2026-07-26
     (USER'S CANON, written into mutable.sl's top comment after catching
     the miscommunication: const is a promise over the value AND anything

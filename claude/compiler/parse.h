@@ -479,6 +479,12 @@ struct Entry {
                                   // with no dependency on the template list. Never a
                                   // storage type (resolveDeclType rejects it), never
                                   // constructed, no transfer ops synthesized.
+    bool is_const_method = false; // kFunction: a CONST method (`Ret const m(...)`)
+                                  // — its receiver munges `(const Class)^`, so the
+                                  // body cannot write self; the promise is
+                                  // TRANSITIVE through self (a const method's
+                                  // self-calls require const targets). Never
+                                  // REQUIRED: external receivers are ungated.
     bool is_param = false;        // kLocalVar: a function PARAMETER (registered by
                                   // resolveFunctionBody). The const-lvalue wall
                                   // ignores a parameter's const facets — the param

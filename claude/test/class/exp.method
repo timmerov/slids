@@ -39,5 +39,8 @@ Forward:print: 0
 afab = 65 0
 QIn:viaConst = 34
 QPar = 9 9
+QCm = 21 42 21 121
+QCm-set = 5
+QCm-const = 14 7
 Sibs:dtor: 106
 Method:dtor: 80

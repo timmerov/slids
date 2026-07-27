@@ -1,4 +1,4 @@
-compiler — TODO (side quests)
+compiler — TODO list.
 
 Outstanding bugs, reach goals, anomalies, and deferred items — things we
 started but didn't finish, found but deferred, or want later but aren't on the

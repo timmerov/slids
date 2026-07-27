@@ -2852,6 +2852,15 @@ struct Parser {
     std::unique_ptr<parse::Node> parseDefinitionMember(bool in_class,
                                                        std::string const& recv_type) {
         token::Token const& t = peek();
+        // A `const` HOOK head (`const _()` / `const ~()`) is a contradiction
+        // — hooks write by nature (and a const object still dies: the
+        // lifecycle canon). Reject focused before the decl path mangles it.
+        if (t.kind == token::Kind::kConst && isHookHead(1)) {
+            error(peekKind(1) == token::Kind::kBitNot
+                ? "A destructor cannot be 'const' (destruction tears the object down)."
+                : "A constructor cannot be 'const' (construction writes the fields).");
+            return nullptr;
+        }
         // A `const` lead is a constant declaration — unless the shape past it
         // is a FUNCTION DEFINITION (`const int^ fn(...) { }`: a deep-const
         // return type, meaningful behind the pointer now that const flows are
@@ -4561,6 +4570,15 @@ struct Parser {
             return nullptr;
         }
 
+        // A ctor/dtor may not be const: hooks WRITE by nature — construction
+        // fills fields, destruction tears down (a const object still dies:
+        // the lifecycle canon) — so a const marker on one is a contradiction.
+        if (const_method && is_hook) {
+            errorAt(name_tok, hook_is_ctor
+                ? "A constructor cannot be 'const' (construction writes the fields)."
+                : "A destructor cannot be 'const' (destruction tears the object down).");
+            return nullptr;
+        }
         auto node = newNodeAt(parse::Kind::kFunctionDef, fn_file, fn_tok);
         node->name = std::move(name);
         node->name_tok = name_tok;

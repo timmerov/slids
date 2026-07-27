@@ -86,8 +86,9 @@ rule). assign/lvalue.sl owns the wall's canon. PARAM ENFORCEMENT is LANDED
 too (same day): the munge's const is REAL — a body writes through a
 reference / iterator param only when it is `mutable` (fill2/bump_ref the
 positives; the neg_write_* family the negatives). The ONE param exemption
-is the RECEIVER `_$recv`/`self` — const methods are deferred, so field
-writes through the receiver stay legal. the SIZED-ARRAY munge gap is
+is the RECEIVER `_$recv`/`self` of a PLAIN method — field writes through
+it stay legal (const on a method is the author's option, never required).
+the SIZED-ARRAY munge gap is
 CLOSED (same day): `int a[3]` munges ELEMENT-WISE to `(const int)[3]`
 behind the by-pointer rewrite (multi-dim + alias-spelled arrays included;
 `mutable` opts out), and the wall's index step sees through the
@@ -111,10 +112,14 @@ pointee deep-consts, so a `(char[], ...)^` param freezes what its slot
 pointers reach — a literal-built `#` tuple flows into a dump param with
 plain `char[]` slots (the author's natural spelling; the contract adds
 the recursive const — see take_pair's ##type).
+CONST METHODS are LANDED (same day; class/method.sl owns the canon):
+`Ret const name(args)` munges the receiver `(const Class)^` deep, so the
+body faces the wall and the flow rule through self; transitivity through
+SELF only (a const method cannot call a non-const method on self);
+external receivers stay UNGATED — const is never required; hooks and
+free functions reject focused.
 still deferred:
   - SWAP on const operands (its questions outrank it).
-  - const methods (a const receiver) — a method call on a const class
-    lvalue is the known unchecked hole until this lands.
 
 caveats:
   - a leading `const` at a statement/decl start needs an initializer. on a

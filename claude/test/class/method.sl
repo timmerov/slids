@@ -240,13 +240,28 @@ QIn(int i_ = 0) {
     int viaConst() { return QOut:kQ + i_; }
 }
 
-/* PARAM ENFORCEMENT in methods (2026-07-26): the RECEIVER is exempt — const
-   methods are deferred, so a field write stays legal — but an ordinary
-   pointer param needs `mutable` exactly like a free function's (the
-   negative below is the non-mutable twin). */
+/* PARAM ENFORCEMENT in methods (2026-07-26): the RECEIVER of a plain method
+   is exempt — a field write stays legal — but an ordinary pointer param
+   needs `mutable` exactly like a free function's (the negative below is the
+   non-mutable twin). */
 QPar(int q_ = 0) {
     void intoField(int v) { q_ = v; }               // receiver write — exempt
     void intoPtr(mutable int^ out) { out^ = q_; }   // param write — opted out
+}
+
+/* CONST METHODS (2026-07-26): `Ret const name(args)` munges the receiver
+   `(const QCm)^` (deep, like any const param), so the body faces the write
+   wall and the flow rule through self. TRANSITIVE through self only: a
+   const method calls const siblings bare and rejects non-const ones (the
+   negatives below). Const is NEVER REQUIRED: a non-const method call on a
+   const-typed receiver stays legal — the author opts in. */
+QCm(int q_ = 2) {
+    int  const gv() { return q_; }                  // field READ through const self
+    int  const dbl() { return gv() * 2; }           // const -> const sibling, bare
+    (const int)^ const op[](int i) { return ^q_; }  // a const OPERATOR
+    int  const via(int i) { return self[i] + 100; } // const op[] on self
+    int  rd() { return q_; }                        // plain reader, coexists
+    void setq(int v) { q_ = v; }                    // plain writer, coexists
 }
 
 int32 main() {
@@ -365,13 +380,24 @@ int32 main() {
     QIn qi(4);
     __println("QIn:viaConst = " + qi.viaConst());     // 34
 
-    // param enforcement in methods: the receiver writes freely (const
-    // methods deferred), the mutable param writes into the caller's local.
+    // param enforcement in methods: a plain method's receiver writes freely,
+    // the mutable param writes into the caller's local.
     QPar qp;
     qp.intoField(9);
     int sink = 0;
     qp.intoPtr(^sink);
     __println("QPar = " + qp.q_ + " " + sink);        // 9 9
+
+    // const methods: field reads, const->const sibling chaining, a const
+    // operator called from outside and on self.
+    QCm qc(21);
+    __println("QCm = " + qc.gv() + " " + qc.dbl() + " " + qc[0] + " " + qc.via(0));   // 21 42 21 121
+    qc.setq(5);                                       // the plain writer still writes
+    __println("QCm-set = " + qc.gv());                // 5
+    // const NEVER REQUIRED: a const-typed receiver may call a PLAIN method —
+    // marking readers const is the author's option, not a gate.
+    const QCm qk(7);
+    __println("QCm-const = " + qk.dbl() + " " + qk.rd());   // 14 7
 
     return 0;
 }
@@ -487,3 +513,41 @@ int32 main() {
 //    int v = m.get;
 //    return v;
 //}
+
+/* a const method's receiver is `(const QCm)^`: a field write hits the wall. */
+//-EXPECT-ERROR: Cannot write to a const value
+//QCmW(int q_ = 0) {
+//    void const w() { q_ = 5; }
+//}
+
+/* transitivity through self: a const method cannot call a non-const sibling
+   (the sibling's receiver would be a mutable window onto const self). */
+//-EXPECT-ERROR: cannot call the non-const method
+//QCmT(int q_ = 0) {
+//    void poke() { q_ = 1; }
+//    void const t() { poke(); }
+//}
+
+/* the flow rule through const self: `^q_` is `(const int)^` — returning it
+   as a mutable pointer would launder the const away. */
+//-EXPECT-ERROR: Cannot drop 'const'
+//QCmF(int q_ = 0) {
+//    int^ const leak() { return ^q_; }
+//}
+
+/* hooks cannot be const: construction writes the fields... */
+//-EXPECT-ERROR: A constructor cannot be 'const'
+//QCmC(int q_ = 0) {
+//    const _() { }
+//}
+
+/* ...and destruction tears the object down (a const object still dies —
+   the lifecycle canon). */
+//-EXPECT-ERROR: A destructor cannot be 'const'
+//QCmD(int q_ = 0) {
+//    const ~() { }
+//}
+
+/* const marks a promise about self — a free function has none to make. */
+//-EXPECT-ERROR: Only a method may be 'const'
+//int const neg_const_free(int v) { return v; }

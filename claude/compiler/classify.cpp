@@ -123,17 +123,12 @@ widen::TypeRef constAwareLvalueType(parse::Tree& tree, parse::Node const& n) {
     };
     if (n.kind == parse::Kind::kIdentExpr) {
         if (n.resolved_entry_id < 0) return widen::kNoType;
-        parse::Entry const& e = tree.entries[n.resolved_entry_id];
-        // PARAM ENFORCEMENT (landed 2026-07-26): a parameter's const facets
-        // — the munge's `(const T)^` behind the author's `T^`, and any
-        // author-spelled const — are REAL to the wall: a body writes through
-        // a reference / iterator param only when it is `mutable`. The ONE
-        // exemption left is the RECEIVER `_$recv` (and its `self` alias):
-        // const METHODS are deferred, so field writes through the receiver
-        // stay legal until they land.
-        if (e.is_param && (e.name == "_$recv" || e.name == "self"))
-            return widen::removeConst(e.slids_type);
-        return e.slids_type;
+        // Every entry's const facets are REAL to the wall — including the
+        // RECEIVER's since const METHODS landed (2026-07-26): a non-const
+        // method's `_$recv` is plain `Class^` (never munged), and a const
+        // method's is `(const Class)^`, so field writes through self hit
+        // the wall exactly when the author promised they would.
+        return tree.entries[n.resolved_entry_id].slids_type;
     }
     if (n.kind == parse::Kind::kDerefExpr) {
         if (n.children.empty() || !n.children[0]) return widen::kNoType;
@@ -5753,6 +5748,27 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     // trailing defaults at the natural index.
     s.resolved_entry_id = methodId;
     parse::Entry const& m = tree.entries[methodId];
+    // CONST-METHOD TRANSITIVITY (canon: "a const method cannot call a
+    // not-const method"): a SELF-shaped receiver that is const — only a
+    // const method's own receiver is — requires a const target. External
+    // receivers are UNGATED: const on a method is the author's option,
+    // never required (canon).
+    if (!m.is_const_method && !s.children.empty() && s.children[0]) {
+        parse::Node const& recv = *s.children[0];
+        bool self_shaped =
+            (recv.kind == parse::Kind::kIdentExpr && recv.name == "self")
+            || (recv.kind == parse::Kind::kDerefExpr && !recv.children.empty()
+                && recv.children[0]
+                && recv.children[0]->kind == parse::Kind::kIdentExpr
+                && recv.children[0]->name == "_$recv");
+        if (self_shaped && constInStoredValue(recv.inferred_type)) {
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "A const method cannot call the non-const method '" + s.name
+                + "'; mark it 'const' if it does not modify self.",
+                {{m.file_id, m.tok, "declared here"}}});
+            return;
+        }
+    }
     s.param_types = m.param_types;    // [self, user...] — emitCall arity check
     s.return_type = m.slids_type;     // emitCall reads return_type
     s.inferred_type = m.slids_type;

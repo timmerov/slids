@@ -6063,6 +6063,7 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             e.is_virtual = m->is_virtual;
             e.is_pure = m->is_pure;
             e.is_foreign = m->is_foreign;
+            e.is_const_method = m->const_method;
             if (e.defined) { e.def_file_id = m->file_id; e.def_tok = m->name_tok; }
             e.owner_ns_frame = frame;
             m->resolved_entry_id = parse::addEntry(tree, std::move(e));
@@ -6893,6 +6894,28 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
         for (auto& p : node.params) {
             if (p) mungeParamType(tree, *p, diag);
         }
+        // A CONST METHOD's receiver: `(const Class)^`, DEEP (the recursive
+        // promise) — the body then cannot write self through any chain (the
+        // wall), cannot leak a mutable field address (the flow rule), and
+        // its self-calls require const targets (classify's gate). A const
+        // marker with NO receiver is not a method — reject focused.
+        if (node.const_method) {
+            parse::Node* recv = nullptr;
+            for (auto& p : node.params)
+                if (p && p->name == "_$recv") { recv = p.get(); break; }
+            if (!recv) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "Only a method may be 'const' (a free function has no "
+                    "'self' to promise about).", {}});
+            } else {
+                widen::TypeRef st = widen::strip(recv->return_type);
+                if (widen::form(st) == widen::Type::Form::kPointer) {
+                    recv->return_type = widen::internPointer(
+                        widen::internConst(
+                            widen::deepConst(widen::get(st).pointee)));
+                }
+            }
+        }
         // Re-sync the function entry's param_types so call-site stamping at
         // classify sees the rewritten (pointer) types.
         if (node.resolved_entry_id >= 0
@@ -6916,6 +6939,20 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
                        == widen::Type::Form::kPointer) {
                     tree.entries[p->resolved_entry_id].tmpl_ref_param = true;
                 }
+            }
+        }
+        // `self` mirrors the receiver's pointee and was registered PRE-munge
+        // — re-sync it so a CONST method's `self` is `const Class` (writes
+        // through self.field then hit the wall like any const chain).
+        if (node.self_entry_id >= 0
+            && node.self_entry_id < static_cast<int>(tree.entries.size())) {
+            for (auto& p : node.params) {
+                if (!p || p->name != "_$recv") continue;
+                widen::TypeRef st2 = widen::strip(p->return_type);
+                if (widen::form(st2) == widen::Type::Form::kPointer)
+                    tree.entries[node.self_entry_id].slids_type =
+                        widen::get(st2).pointee;
+                break;
             }
         }
     }
