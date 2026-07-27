@@ -317,9 +317,9 @@ int32 main() {
        what the plain cannot; an explicit list forces the template. */
     Coex co;
     int z1 = co.m(1); __println("z1 = " + z1);
-    int cz = 5;
-    int^ czr = ^cz;
-    int^ z2 = co.m(czr); __println("z2 = " + z2^);
+    /* the template takes what the plain cannot — a FLOAT binding (a pointer
+       binding could not return through the bare-S identity, canon B). */
+    float z2 = co.m(2.5); __println("z2 = " + z2);
     int z3 = co.m<int>(4); __println("z3 = " + z3);
     int z4 = co.t2(1); __println("z4 = " + z4);
     int64 zbig = 8;

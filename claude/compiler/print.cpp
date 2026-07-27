@@ -159,7 +159,9 @@ bool tryEmitCall(ast::Node const& call, codegen::SymTab const& syms,
         IntDesc d;
         if (classifyInt(sty, d)) {
             std::string v = codegen::emitExpr(*seg, syms, pool, out, diag, sty);
-            if (sty == widen::intern("char")) {
+            // %c for a char HOWEVER qualified — a `(const char)^` deref (the
+            // read through a const-pointee iterator) is still a char.
+            if (widen::deepStrip(sty) == widen::intern("char")) {
                 fmt += "%c";
                 args.push_back({"i8", v});
                 continue;

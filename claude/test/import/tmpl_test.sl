@@ -99,7 +99,9 @@ int32 main() {
     /* NESTED template-instance ARGUMENTS across the seam: the demand
        spellings round-trip through the .sli and aggregate like any flavor —
        one level (`Box<Vector<int>>`), two (`Box<Box<int>>`), and a function
-       demand carrying a pointer to a nested instance (`tpick<Vector<int>^>`). */
+       demand carrying a pointer to a nested instance (`tdiff<Vector<int>^>`
+       — the read-only pointer-demand carrier; a bare-T body cannot RETURN
+       a pointer binding under const correctness, canon B). */
     Vector<int> nv(2, 3);
     Box<Vector<int>> nxb;
     __println("nx1 = " + nxb.has());
@@ -110,8 +112,8 @@ int32 main() {
     nbb.p_ = ^ni;
     __println("nx3 = " + nbb.has() + " " + nbb.p_^.has());
     Vector<int> nv2(4, 4);
-    Vector<int>^ npk = tpick(^nv, ^nv2);
-    __println("nx4 = " + npk^.sum());
+    bool npk = tdiff(^nv, ^nv2);
+    __println("nx4 = " + npk);
 
     /* a LOCAL class instantiates an imported template INLINE: this TU loaded
        the template source's bodies and emits the flavor internal — it is the
@@ -127,8 +129,8 @@ int32 main() {
     __println("bl2 = " + bl.has());
     __println("bl3 = " + bl.p_^.lv());
     Loc lc2(9);
-    Loc^ pl = tpick(^lc, ^lc2);
-    __println("pl = " + pl^.lv());
+    bool pl = tdiff(^lc, ^lc2);
+    __println("pl = " + pl);
     int pk = tpick(3, 4); __println("pk = " + pk);
     int po = tpock(3, 4); __println("po = " + po);
     int tb = tbias(5); __println("tb = " + tb);
@@ -166,16 +168,18 @@ int32 main() {
 
     /* THE CARVE-OUT: a local-type instance of an imported class's template
        method emits `define internal` HERE — the one sanctioned exception to
-       the owner-linkage rule (the flavor is unspellable anywhere else). */
+       the owner-linkage rule (the flavor is unspellable anywhere else).
+       CLASS bindings (the convention's value-copy form) since canon B: a
+       bare-T body cannot RETURN a pointer binding. */
     Loc ml(2);
     Loc ml2(6);
-    Loc^ mq = g.tsel(^ml, ^ml2);
-    __println("mq = " + mq^.lv());
+    Loc mq = g.tsel(ml, ml2);
+    __println("mq = " + mq.lv());
 
     /* a namespace-member template's local-type instance needs NO carve-out —
        a namespace member follows the file re-home, like a free function. */
-    Loc^ nn = Spc2:nid(^ml);
-    __println("nn = " + nn^.lv());
+    Loc nn = Spc2:nid(ml);
+    __println("nn = " + nn.lv());
 
     return 0;
 }

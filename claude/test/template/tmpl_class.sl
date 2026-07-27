@@ -462,9 +462,11 @@ int32 main() {
     }
     __println("acc = " + acc);
 
-    /* an instance through a function template's inference... */
-    Vec<int>^ tp = thru(^a);
-    int e23 = tp^.sum(); __println("e23 = " + e23);
+    /* an instance through a function template's inference (a CLASS binding —
+       the convention's value copy; a POINTER binding could not RETURN its
+       const-munged param, canon B 2026-07-26)... */
+    Vec<int> tp = thru(a);
+    int e23 = tp.sum(); __println("e23 = " + e23);
 
     /* ...a class template instantiated from a function template's body — a
        binding that exists nowhere else (int16 first appears here)... */

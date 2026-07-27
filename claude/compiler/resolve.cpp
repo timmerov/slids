@@ -578,6 +578,48 @@ bool fileIsSibling(parse::Tree const& tree, int file_id) {
         && tree.file_sibling[file_id];
 }
 
+// The recursive const materializer: walk a declared type and, at every kConst
+// node — outermost OR buried in a pointee / element / slot — replace it with
+// the DEEP form of its underlying (internConst ∘ deepConst). Idempotent, and
+// a const on a depthless leaf is unchanged. See the canon note at the call.
+widen::TypeRef materializeDeepConst(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    if (t == widen::kNoType) return t;
+    switch (widen::form(t)) {
+        case F::kConst:
+            return widen::internConst(widen::deepConst(widen::get(t).underlying));
+        case F::kAlias: {
+            std::string n = widen::get(t).name;
+            return widen::internAlias(
+                n, materializeDeepConst(widen::get(t).underlying));
+        }
+        case F::kPointer:
+            return widen::internPointer(
+                materializeDeepConst(widen::get(t).pointee));
+        case F::kIterator:
+            return widen::internIterator(
+                materializeDeepConst(widen::get(t).pointee));
+        case F::kArray: {
+            std::vector<int> dims = widen::get(t).dims;
+            return widen::internArray(
+                materializeDeepConst(widen::get(t).elem), dims);
+        }
+        case F::kTuple: {
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            for (auto& s : slots) s = materializeDeepConst(s);
+            return widen::internTuple(slots);
+        }
+        case F::kSlid:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+        case F::kNone:
+        case F::kTmplUse:
+            return t;
+    }
+    return t;
+}
+
 // Resolve a declared type IN PLACE to its structured form (alias leaves become
 // transparent kAlias), then require the result to be a known type. A cycle was
 // already reported, so skip the redundant "Unknown type" the broken chain emits.
@@ -589,6 +631,15 @@ void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
     type_ref = resolveTypeRef(tree, type_ref, visiting, reported,
                               file_id, tok, diag, seg_toks);
     if (!reported) requireKnownType(tree, type_ref, file_id, tok, diag);
+    // CONST IS A RECURSIVE PROMISE (canon, mutable.sl top comment): `const X`
+    // — WHEREVER it appears in a spelling, not only outermost — means you
+    // will not modify the value or anything it reaches, iteratively and
+    // recursively. intern() records only the facet; materialize the depth
+    // at EVERY buried const HERE, the one declared-type funnel, so
+    // `(const int^^^)^ b` and `const int^^^^ a` agree that `a^` and `b^`
+    // are the same type. The shallow `(const T)^` is a const LEAF —
+    // deepConst adds no depth to it — so that idiom is untouched.
+    type_ref = materializeDeepConst(type_ref);
     // A LISTLESS flavor (`TClass<>`) is a qualifier, not a type — it never
     // declares storage (no field, no local, no parameter, no pointee).
     if (!reported && reachesListlessFlavor(tree, type_ref)) {
@@ -6768,7 +6819,12 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
     bool already_const = (widen::form(p.return_type) == F::kConst);
     bool is_recv = (p.name == "_$recv");   // synthesized method receiver — const-method = Phase 6
 
-    // `mutable` is valid only on a pointer (reference / iterator) or array parameter.
+    // `mutable` is valid only on a pointer (reference / iterator) or array
+    // parameter. That includes a template's BARE-T param (canon ruling
+    // 2026-07-26): `mutable T` would mean something for SOME bindings and be
+    // invalid syntax for others (`fn<int>` -> `mutable int t`), breaking the
+    // one-spelling-serves-every-binding contract — an author who mutates
+    // spells the reference (`mutable T^ t`), which works for every binding.
     if (p.is_mutable && f != F::kPointer && f != F::kIterator && f != F::kArray) {
         diagnostic::report(diag, {p.file_id, p.tok,
             "The 'mutable' qualifier applies only to a pointer "
@@ -6777,11 +6833,13 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
     }
 
     if (f == F::kArray) {
-        // Array-by-pointer arm: rewrite `int[3]` to a pointer to the array. The
-        // array VALUE is const unless `mutable` (or already written const), so
-        // the default form is `(const int[3])^`.
+        // Array-by-pointer arm: rewrite `int[3]` to a pointer to the array.
+        // The ELEMENTS are const unless `mutable` (or already written const)
+        // — `int[3]` -> `((const int)[3])^`, element-wise like deepConst
+        // spells it (canon ruling 2026-07-26: `fn(int arr[3])` ->
+        // `fn((const int) arr[3])`), so the wall's element step sees it.
         widen::TypeRef arr = p.return_type;
-        if (!p.is_mutable && !already_const) arr = widen::internConst(arr);
+        if (!p.is_mutable && !already_const) arr = widen::deepConst(arr);
         p.return_type = widen::internPointer(arr);
         return;
     }
@@ -6794,7 +6852,8 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
         // auto-derefs its uses off Entry.tmpl_ref_param (synced below).
         if (conv) {
             widen::TypeRef v = p.return_type;
-            if (!p.is_mutable && !already_const) v = widen::internConst(v);
+            if (!p.is_mutable && !already_const)
+                v = widen::internConst(widen::deepConst(v));   // the recursive promise
             p.return_type = widen::internPointer(v);
             p.tmpl_value_param = true;   // OUT: the arm fired — uses auto-deref
             return;
@@ -6807,8 +6866,14 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
     if ((f == F::kPointer || f == F::kIterator)
         && !p.is_mutable && !already_const && !is_recv) {
         // Const the POINTEE (the caller's data), leaving the pointer itself
-        // writable: `T^` -> `(const T)^`, `T[]` -> `(const T)[]`.
-        widen::TypeRef cpointee = widen::internConst(widen::get(st).pointee);
+        // writable: `T^` -> `(const T)^`, `T[]` -> `(const T)[]`. DEEP —
+        // const is the RECURSIVE promise (canon): a tuple pointee's pointer
+        // slots freeze what THEY reach too, so `(char[], ...)^` munges to a
+        // pointee whose slots are effectively `(const char)[]` — which is
+        // what lets a literal-built `#x` tuple flow into a `dump` param
+        // spelled with plain `char[]` slots.
+        widen::TypeRef cpointee =
+            widen::internConst(widen::deepConst(widen::get(st).pointee));
         p.return_type = (f == F::kPointer) ? widen::internPointer(cpointee)
                                            : widen::internIterator(cpointee);
     }

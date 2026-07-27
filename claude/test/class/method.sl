@@ -240,6 +240,15 @@ QIn(int i_ = 0) {
     int viaConst() { return QOut:kQ + i_; }
 }
 
+/* PARAM ENFORCEMENT in methods (2026-07-26): the RECEIVER is exempt — const
+   methods are deferred, so a field write stays legal — but an ordinary
+   pointer param needs `mutable` exactly like a free function's (the
+   negative below is the non-mutable twin). */
+QPar(int q_ = 0) {
+    void intoField(int v) { q_ = v; }               // receiver write — exempt
+    void intoPtr(mutable int^ out) { out^ = q_; }   // param write — opted out
+}
+
 int32 main() {
 
     Method method1(76);
@@ -356,6 +365,14 @@ int32 main() {
     QIn qi(4);
     __println("QIn:viaConst = " + qi.viaConst());     // 34
 
+    // param enforcement in methods: the receiver writes freely (const
+    // methods deferred), the mutable param writes into the caller's local.
+    QPar qp;
+    qp.intoField(9);
+    int sink = 0;
+    qp.intoPtr(^sink);
+    __println("QPar = " + qp.q_ + " " + sink);        // 9 9
+
     return 0;
 }
 
@@ -395,6 +412,14 @@ int32 main() {
 //QVB<int> : QDV(int e_ = 5) {
 //    virtual int tagv() { return 100; }
 //    int probe() { return QVB<int8>:tagv(); }
+//}
+
+/* a METHOD may not write through its NON-mutable pointer param — the munge
+   is enforced in method bodies exactly as in free functions (only the
+   receiver is exempt, until const methods land). */
+//-EXPECT-ERROR: Cannot write to a const value
+//QBadW(int q_ = 0) {
+//    void w(int^ out) { out^ = q_; }
 //}
 
 /* a method that the class does not declare. */

@@ -186,14 +186,14 @@ regardless of whether it's used anywhere or not.
 //int64 mismatch_ret(int32 a) { return 0; }
 
 /* array by pointer. */
-void array_by_pointer(int a[3]) {
+void array_by_pointer(mutable int a[3]) {
     a[0] = 10;
     a[1] = 20;
     a[2] = 30;
 }
 
 /* tuple by pointer. */
-void tuple_by_pointer((int,int,int)^ t) {
+void tuple_by_pointer(mutable (int,int,int)^ t) {
     t^[0] = 40;
     t^[1] = 50;
     t^[2] = 60;
@@ -201,7 +201,7 @@ void tuple_by_pointer((int,int,int)^ t) {
 
 /* class by pointer. */
 Class(int field_ = 0) { }
-void class_by_pointer(Class^ cls) {
+void class_by_pointer(mutable Class^ cls) {
     cls^.field_ = 70;
 }
 
@@ -209,19 +209,19 @@ void class_by_pointer(Class^ cls) {
 alias Pair = (int, int);
 alias Vec2 = int[2];
 
-void mutate_pair(Pair^ p) {
+void mutate_pair(mutable Pair^ p) {
     p^[0] = 33;
     p^[1] = 44;
 }
 
-void mutate_vec(Vec2 v) {
+void mutate_vec(mutable Vec2 v) {
     v[0] = 11;
     v[1] = 22;
 }
 
 /* multi-dim array param: `int g[2][3]` is rewritten to `int[2][3]^`, indexed
    without an explicit deref through the whole chain. */
-void mutate_2d(int g[2][3]) {
+void mutate_2d(mutable int g[2][3]) {
     g[0][0] = 1;
     g[1][2] = 2;
 }
@@ -268,7 +268,7 @@ void echo_tpl((int,int,int)^ t) {
 /* multi-arg call mixing lvalue + rvalue: `a` is a caller lvalue (mutates in
    place), `b` is an rvalue tuple literal (materialized in a temp; the function
    reads it but the caller can't see the write). */
-void mix_call((int,int,int)^ a, (int,int,int)^ b) {
+void mix_call(mutable (int,int,int)^ a, (int,int,int)^ b) {
     __println("mix_b= " + b^[0] + " " + b^[1] + " " + b^[2]);
     a^[0] = 5;
 }

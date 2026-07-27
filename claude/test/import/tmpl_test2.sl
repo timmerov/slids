@@ -107,11 +107,13 @@ int32 main() {
     int r3 = tp.kk(); __println("r3 = " + r3);
     int8 r4 = tp.vv(); __println("r4 = " + r4);
 
-    /* a POINTER type argument in the demand (`tpick<Bird^>`). */
+    /* a POINTER type argument in the demand (`tdiff<Bird^>` — the read-only
+       carrier; canon B). */
     Bird b1(1, 2);
     Bird b2(3, 4);
-    Bird^ pb = tpick(^b1, ^b2);
-    pb^.chirp();
+    bool pb = tdiff(^b1, ^b2);
+    __println("pb = " + pb);
+    b2.chirp();
 
     /* NESTED arguments from the SECOND consumer: the shared flavor
        (`Box<Vector<int>>`) dedups across the union; the fresh one carries an

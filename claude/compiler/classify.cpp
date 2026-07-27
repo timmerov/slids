@@ -124,11 +124,15 @@ widen::TypeRef constAwareLvalueType(parse::Tree& tree, parse::Node const& n) {
     if (n.kind == parse::Kind::kIdentExpr) {
         if (n.resolved_entry_id < 0) return widen::kNoType;
         parse::Entry const& e = tree.entries[n.resolved_entry_id];
-        // A PARAMETER's const facets are invisible to the wall: the munge
-        // makes every reference pointee const behind the author's spelling,
-        // and PARAM enforcement is deferred — writing through a param stays
-        // legal until that lands.
-        if (e.is_param) return widen::removeConst(e.slids_type);
+        // PARAM ENFORCEMENT (landed 2026-07-26): a parameter's const facets
+        // — the munge's `(const T)^` behind the author's `T^`, and any
+        // author-spelled const — are REAL to the wall: a body writes through
+        // a reference / iterator param only when it is `mutable`. The ONE
+        // exemption left is the RECEIVER `_$recv` (and its `self` alias):
+        // const METHODS are deferred, so field writes through the receiver
+        // stay legal until they land.
+        if (e.is_param && (e.name == "_$recv" || e.name == "self"))
+            return widen::removeConst(e.slids_type);
         return e.slids_type;
     }
     if (n.kind == parse::Kind::kDerefExpr) {
@@ -147,9 +151,34 @@ widen::TypeRef constAwareLvalueType(parse::Tree& tree, parse::Node const& n) {
             widen::TypeRef b =
                 peel(constAwareLvalueType(tree, *n.children[0]), frozen);
             if (b == widen::kNoType) return b;
+            // An ARRAY parameter arrives as a pointer to the array (the
+            // munge's by-pointer rewrite) and indexes through an AUTO-deref —
+            // step through the pointer so the element's const is seen.
+            if (widen::form(b) == F::kPointer) {
+                widen::TypeRef pt = widen::get(b).pointee;
+                bool pfrozen = frozen;
+                pt = peel(pt, pfrozen);
+                if (pt != widen::kNoType && widen::form(pt) == F::kArray) {
+                    b = pt;
+                    frozen = pfrozen;
+                }
+            }
             widen::TypeRef out = widen::kNoType;
             switch (widen::form(b)) {
-                case F::kArray:    out = widen::get(b).elem;    break;
+                case F::kArray: {
+                    // A multi-dim array is ONE kArray with a dims vector —
+                    // one index consumes one dim, yielding the sub-array
+                    // (the element's const rides through either way).
+                    std::vector<int> dims = widen::get(b).dims;
+                    widen::TypeRef elem = widen::get(b).elem;
+                    if (dims.size() > 1) {
+                        dims.erase(dims.begin());
+                        out = widen::internArray(elem, dims);
+                    } else {
+                        out = elem;
+                    }
+                    break;
+                }
                 case F::kIterator: out = widen::get(b).pointee; break;
                 case F::kTuple: {
                     // A tuple index is a folded literal by the time classify
@@ -199,6 +228,103 @@ widen::TypeRef constAwareLvalueType(parse::Tree& tree, parse::Node const& n) {
         return out;
     }
     return widen::kNoType;
+}
+
+// Peel alias + const layers, recording whether a const was crossed.
+widen::TypeRef peelAliasConst(widen::TypeRef t, bool& had_const) {
+    using F = widen::Type::Form;
+    while (t != widen::kNoType) {
+        F f = widen::form(t);
+        if (f == F::kAlias) { t = widen::get(t).underlying; continue; }
+        if (f == F::kConst) { had_const = true; t = widen::get(t).underlying; continue; }
+        break;
+    }
+    return t;
+}
+
+// THE FLOW RULE (canon 2026-07-26): a value may flow into a slot that
+// PRESERVES or ADDS const, never one that DROPS it — at every position and
+// depth. TWO LAYERS, per the value-category rule ("a read is a mutable
+// copy"): the COPY layer is const-BLIND — `int y = const_x` copies a
+// value, and arrays / tuples copy element values — but the moment the walk
+// crosses a POINTEE it is on the WRITE layer: the destination could write
+// through what it received, and from there source-const must imply
+// dest-const at EVERY position (the positional lockstep catches
+// `(const int, int)^ -> (int, const int)^`; the depth recursion catches
+// `^^` drops). ADDING const is legal at any depth (the C++ deep-add
+// loophole is accepted by canon — `<mutable>` is the explicit spelling).
+// A shape mismatch (an upcast pointee — the relation proper owns shapes)
+// stops the walk as legal; so does kNoType.
+bool constWriteLayerOk(widen::TypeRef dest, widen::TypeRef src) {
+    using F = widen::Type::Form;
+    bool dc = false, sc = false;
+    dest = peelAliasConst(dest, dc);
+    src = peelAliasConst(src, sc);
+    if (dest == widen::kNoType || src == widen::kNoType) return true;
+    if (sc && !dc) return false;   // dropping const — rejected at every depth
+    if (widen::form(dest) != widen::form(src)) return true;
+    switch (widen::form(dest)) {
+        case F::kPointer:
+        case F::kIterator:
+            return constWriteLayerOk(widen::get(dest).pointee,
+                                     widen::get(src).pointee);
+        case F::kArray:
+            return constWriteLayerOk(widen::get(dest).elem,
+                                     widen::get(src).elem);
+        case F::kTuple: {
+            std::vector<widen::TypeRef> ds = widen::get(dest).slots;
+            std::vector<widen::TypeRef> ss = widen::get(src).slots;
+            if (ds.size() != ss.size()) return true;
+            for (std::size_t i = 0; i < ds.size(); i++)
+                if (!constWriteLayerOk(ds[i], ss[i])) return false;
+            return true;
+        }
+        case F::kAlias:
+        case F::kConst:
+        case F::kSlid:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+        case F::kNone:
+        case F::kTmplUse:
+            return true;
+    }
+    return true;
+}
+bool constCopyLayerOk(widen::TypeRef dest, widen::TypeRef src) {
+    using F = widen::Type::Form;
+    bool dc = false, sc = false;
+    dest = peelAliasConst(dest, dc);
+    src = peelAliasConst(src, sc);
+    if (dest == widen::kNoType || src == widen::kNoType) return true;
+    if (widen::form(dest) != widen::form(src)) return true;
+    switch (widen::form(dest)) {
+        case F::kPointer:
+        case F::kIterator:   // the pointee is where write-through starts
+            return constWriteLayerOk(widen::get(dest).pointee,
+                                     widen::get(src).pointee);
+        case F::kArray:
+            return constCopyLayerOk(widen::get(dest).elem,
+                                    widen::get(src).elem);
+        case F::kTuple: {
+            std::vector<widen::TypeRef> ds = widen::get(dest).slots;
+            std::vector<widen::TypeRef> ss = widen::get(src).slots;
+            if (ds.size() != ss.size()) return true;
+            for (std::size_t i = 0; i < ds.size(); i++)
+                if (!constCopyLayerOk(ds[i], ss[i])) return false;
+            return true;
+        }
+        case F::kAlias:
+        case F::kConst:
+        case F::kSlid:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+        case F::kNone:
+        case F::kTmplUse:
+            return true;
+    }
+    return true;
 }
 
 // The wall itself: report + true when this write target is const. The
@@ -1428,6 +1554,42 @@ std::unique_ptr<parse::Node> buildClassFromValue(parse::Tree& tree,
 // that path does not come through here.
 void checkArgAssign(parse::Tree& tree, widen::TypeRef param, parse::Node& arg,
                     diagnostic::Sink& diag) {
+    // CALLER-SIDE PARAM CONST (2026-07-26). An UN-const pointee behind a
+    // pointer / iterator / array-by-pointer parameter can only mean the
+    // param declared it will WRITE (`mutable` — the munge consts every
+    // other pointee; the receiver `_$recv` never routes through here), so
+    // a CONST argument may not flow into it: the callee would write frozen
+    // data. Sources checked: a const-pointee pointer/iterator value, a
+    // const lvalue riding the auto-ref, and const STORAGE itself (a string
+    // literal into `mutable char[]` would write the constant pool). The
+    // `<mutable>` cast is the sanctioned override (it erases the const, so
+    // the check never sees it).
+    {
+        widen::TypeRef ps = widen::strip(param);
+        widen::Type::Form pf = widen::form(ps);
+        if (pf == widen::Type::Form::kPointer
+            || pf == widen::Type::Form::kIterator) {
+            widen::TypeRef pp = widen::get(ps).pointee;
+            if (!constInStoredValue(pp)) {
+                widen::TypeRef srcp = widen::kNoType;
+                widen::TypeRef as = widen::strip(arg.inferred_type);
+                widen::Type::Form af = widen::form(as);
+                if (af == widen::Type::Form::kPointer
+                    || af == widen::Type::Form::kIterator) {
+                    srcp = widen::get(as).pointee;
+                } else {
+                    srcp = constAwareLvalueType(tree, arg);
+                    if (srcp == widen::kNoType) srcp = arg.inferred_type;
+                }
+                if (srcp != widen::kNoType && constInStoredValue(srcp)) {
+                    diagnostic::report(diag, {arg.file_id, arg.tok,
+                        "Cannot pass a const value to a 'mutable' parameter; "
+                        "cast '<mutable>' to override.", {}});
+                    return;
+                }
+            }
+        }
+    }
     widen::TypeRef byref = autoRefPointee(param, arg);
     if (byref == widen::kNoType) {
         checkValueAssign(tree, param, arg, diag);
@@ -1469,7 +1631,22 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 widen::TypeRef p = pointeeType(context);
                 if (p != widen::kNoType
                     && widen::deepStrip(p) == widen::deepStrip(widen::intern("char"))) {
-                    e.inferred_type = context;
+                    // The decayed type keeps a CONST pointee regardless of
+                    // the context's mutability — the pool is READ-ONLY, and
+                    // the caller-side check now enforces it (a literal into
+                    // a `mutable char[]` param rejects). A context whose
+                    // pointee is already const passes through verbatim.
+                    if (constInStoredValue(p)) {
+                        e.inferred_type = context;
+                    } else {
+                        widen::TypeRef cp =
+                            widen::internConst(widen::intern("char"));
+                        e.inferred_type =
+                            (widen::form(widen::strip(context))
+                                 == widen::Type::Form::kIterator)
+                                ? widen::internIterator(cp)
+                                : widen::internPointer(cp);
+                    }
                     return;
                 }
             }
@@ -1505,9 +1682,21 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             if (operand.inferred_type != widen::kNoType) {
                 bool indexed = (operand.kind == parse::Kind::kIndexExpr);
+                // The address of a CONST lvalue MINTS a const pointee
+                // (`^carr[0]` -> `(const int)^`) — the caller-side param
+                // check reads it; the stamped caches strip const, so the
+                // wall's oracle re-derives the operand's declared constness.
+                widen::TypeRef pt = operand.inferred_type;
+                widen::TypeRef ct = constAwareLvalueType(tree, operand);
+                if (ct != widen::kNoType && constInStoredValue(ct)
+                    && !constInStoredValue(pt)
+                    && widen::form(widen::strip(pt))
+                           != widen::Type::Form::kConst) {
+                    pt = widen::internConst(pt);
+                }
                 e.inferred_type = indexed                         // structural — keeps an
-                    ? widen::internIterator(operand.inferred_type)  // alias pointee intact
-                    : widen::internPointer(operand.inferred_type);
+                    ? widen::internIterator(pt)                     // alias pointee intact
+                    : widen::internPointer(pt);
             }
             return;
         }
@@ -4238,6 +4427,15 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
             inferExpr(tree, rhs, dest, diag);
         }
     }
+    // THE FLOW RULE — after the decay, so a const array's decayed element
+    // pointer carries its const. A `<mutable>` cast erased the const, so a
+    // cast source passes untouched.
+    if (!constCopyLayerOk(dest, rhs.inferred_type)) {
+        diagnostic::report(diag, {rhs.file_id, rhs.tok,
+            "Cannot drop 'const': the target could write through it; "
+            "cast '<mutable>' to override.", {}});
+        return;
+    }
     if (isScalarIntoUnitArray(dest, rhs)) {
         // `int arr[1] = 2` / `int m[1][1] = 2` — the 1-tuple==scalar collapse means
         // the sole element's initializer arrives bare. Wrap it in nested 1-element
@@ -5658,6 +5856,19 @@ bool coerceOperandToClass(parse::Tree& tree, widen::TypeRef cls,
     if (itc == tree.classes.end()) return false;
     // Already the class: nothing to build, and the ONE-level bound depends on this.
     if (widen::deepStrip(operand.inferred_type) == widen::deepStrip(cls)) return false;
+    // Already a REFERENCE to the class (modulo const): never coerce. The
+    // only mismatch that lands such an operand here is CONSTNESS (the
+    // caller-side param check), and building a temp would silently break
+    // the aliasing the author spelled — the callee would write a copy.
+    // Declining lets the retry re-report the real rejection.
+    {
+        widen::TypeRef os = widen::strip(operand.inferred_type);
+        widen::Type::Form of = widen::form(os);
+        if ((of == widen::Type::Form::kPointer
+             || of == widen::Type::Form::kIterator)
+            && widen::deepStrip(widen::get(os).pointee) == widen::deepStrip(cls))
+            return false;
+    }
     // Probe op= WITHOUT reporting — a miss is not an error here, it just means no coercion is
     // available and the caller falls to its own diagnostic. An AMBIGUOUS op= (-2) is left alone
     // for the same reason: this is a probe, and the caller owns what the author sees.

@@ -74,8 +74,8 @@ int32 main() {
     // ##date / ##time — the moment THIS file is compiled (not slidsc's build
     // time). Their values are the compile timestamp, so they are not pinned in
     // macros.exp; here we confirm only that each lowers to a usable char[].
-    char[] today = ##date;
-    char[] now   = ##time;
+    (const char)[] today = ##date;
+    (const char)[] now   = ##time;
     __println(##type(today));           // char[]
     __println(##type(now));             // char[]
 

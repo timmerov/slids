@@ -83,11 +83,71 @@ TYPE REPRESENTATION (the carrier; not a stage)
     deref; a pointer's stored value is the address alone, so a shallow
     `(const T)^` reseats). DELETE and a MOVE'S SOURCE are exempt BY CANON
     (the lifecycle rule: the compiler's null afterward is a tombstone, not a
-    mutation — uniform, no carve-out). Still deferred from Phase 6: PARAM
-    enforcement (Entry.is_param hides a parameter's const facets from the
-    wall — the munge stays decorative), the const->mutable FLOW rule, SWAP,
-    and const METHODS (a method call on a const class lvalue is the known
-    unchecked hole). Placement encodes deep vs
+    mutation — uniform, no carve-out). PARAM ENFORCEMENT is landed too (same
+    day): the munge's const is REAL — a body writes through a reference /
+    iterator / sized-array param only when it is `mutable`; the ONE
+    exemption left on Entry.is_param is the RECEIVER `_$recv`/`self`
+    (const methods deferred, so field writes through the receiver stay
+    legal). The SIZED-ARRAY munge gap is CLOSED (canon ruling: `int a[3]`
+    munges ELEMENT-WISE, deepConst — `((const int)[3])^` behind the
+    by-pointer rewrite, multi-dim + alias-spelled included), and the
+    wall's index step sees through the by-pointer AUTO-deref and consumes
+    ONE DIM per index (a multi-dim array is one kArray with a dims
+    vector). THE CALLER SIDE is landed too (same day): a const value
+    cannot flow into a parameter that declared it will WRITE — an
+    un-const pointee only arises from `mutable` — checked in
+    checkArgAssign, the ONE arg/param funnel (the receiver never routes
+    through it, so const-class method calls stay in the deferred
+    const-methods bucket). Sources caught: const-pointee pointer /
+    iterator values, addressed const lvalues (kAddrOfExpr MINTS a const
+    pointee off the wall's oracle), const arrays, string literals (the
+    context-decay now KEEPS the pool's const instead of taking the
+    context verbatim), and const classes into `mutable T^`.
+    `<mutable>` casts through. coerceOperandToClass DECLINES an operand
+    that is already a reference to the wanted class — the only mismatch
+    landing one there is constness, and the temp it would build silently
+    breaks the aliasing (the retry then re-reports the real rejection).
+    THE BARE-T CONVENTION is hard-const by canon: `mutable T` is
+    rejected on the value spelling (it would be invalid syntax for some
+    bindings); mutation spells the reference, `mutable T^`, uniform for
+    every binding; a POINTER binding's pointee munges const
+    (`fn<Cp^>` -> `(const Cp)^`) — and BY CANON B (2026-07-26) a bare-T
+    body therefore cannot RETURN a pointer binding (`T tpick<T>(T a,T b)
+    { return b; }` rejects for `tpick<Bird^>`: the munged param cannot
+    flow into the mutable return; read-only bodies carry pointer
+    demands, and value/class bindings return by copy).
+    THE FLOW RULE is landed (same day; canon mutable.sl): a value flows
+    into a slot that PRESERVES or ADDS const, never one that DROPS it —
+    at every position and depth (constWriteLayerOk, a positional
+    lockstep walk; adding const at depth accepts C++'s obscure deep-add
+    loophole by canon). TWO LAYERS per the value-category rule: the
+    COPY layer is const-blind (`int y = const_x`; a const array copies
+    into a mutable one — values, not aliases; constCopyLayerOk), and
+    the walk turns directional the moment it crosses a POINTEE. One arm
+    in checkValueAssign covers decl-init / assign / store / move /
+    return / field-init / destructure at once; `<mutable>` erases the
+    const so a cast passes untouched. STRING LITERALS are STRICT by
+    canon: `char[] s = "hi"` is the lying middle (a mutable alias to
+    the read-only pool) and rejects — spell `(const char)[]` / deep
+    `const char[]` for the alias, or the sized-array COPY `char s[3] =
+    "hi"` for writable storage; the literal's context decay keeps its
+    const, and print's %c sees a char through any qualifier. A LEADING
+    const MATERIALIZES DEEP — and RECURSIVELY (canon, mutable.sl top
+    comment: const is a promise over the value AND anything it reaches,
+    iteratively and recursively). materializeDeepConst at resolveDeclType
+    (the one declared-type funnel) rewrites EVERY kConst node — leading
+    OR buried in a pointee / slot / element — to internConst∘deepConst,
+    so `const int^^^^ a` and `(const int^^^)^ b` agree that `a^` and
+    `b^` are ONE type (intern records only the facet; the const-led
+    function-def lookahead also lets deep-const RETURN types parse).
+    THE MUNGE IS TRANSITIVE for the same reason: a non-mutable pointee
+    munges internConst∘deepConst, so a `(char[], ...)^` param's tuple
+    pointee freezes what its slot POINTERS reach too — which is why a
+    literal-built `#x` tuple flows into a dump param spelled with plain
+    `char[]` slots (the author writes the natural slots; the param
+    contract supplies the recursive const). Still deferred from Phase 6:
+    SWAP, and const METHODS (a method call on a const class lvalue is
+    the known unchecked hole). Placement encodes deep vs
     shallow: an OUTER kConst is `const T^` (the whole pointer + its data are const);
     a kConst on the pointee is `(const T)^` (mutable pointer, const data). intern()
     peels a leading `const ` FIRST so the prefix binds loosest (deep); the

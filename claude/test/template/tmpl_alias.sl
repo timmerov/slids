@@ -54,9 +54,10 @@ Box(int b_ = 0) {
     int look(BR<int> p) { return p^ + b_; }
 }
 
-/* a use in a template's SIGNATURE and BODY; also (T, T) shape via the alias. */
+/* a use in a template's SIGNATURE and BODY; also (T, T) shape via the alias.
+   (The body's local spells the munged param's const — the flow rule.) */
 T second<T>( Pair2<T, T>^ p ) {
-    Pair2<T, T>^ q = p;
+    (const Pair2<T, T>)^ q = p;
     return q^[1];
 }
 
@@ -71,7 +72,7 @@ Ref<int64> gref = nullptr;
 
 /* template-alias uses in a signature: param and return type. */
 int deref_ip(IP q) { return q^; }
-Ref<int> pick(Ref<int> r) { return r; }
+Ref<int> pick(mutable Ref<int> r) { return r; }
 
 /* a class field typed by a template-alias use. */
 Holder(Ref<int> r_ = nullptr, int v_ = 0) { }
@@ -175,7 +176,7 @@ int32 main() {
     __println("kf = " + kf + " (" + ##type(kf) + ")");
 
     /* composite arguments. */
-    Pair2<int^, char[]> pc = (^a, "hi");
+    Pair2<int^, (const char)[]> pc = (^a, "hi");
     __println("pc = " + pc[0]^ + " " + pc[1]);
 
     /* a use in a template's signature and body; T binds through the expansion. */

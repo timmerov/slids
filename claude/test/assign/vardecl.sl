@@ -588,8 +588,9 @@ family / sign-change at the leaf, attributed to the rhs.
 //    return rs;
 //}
 
-/* narrowing through a call-site (caller passes wider than the param). */
-//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+/* narrowing through a call-site (caller passes wider than the param; the
+   munge deep-consts the pointee, so the message spells `const int8`). */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'const int8'
 //int call_narrow_helper(int8[3]^ a) { return a^[0]; }
 //int32 neg_agg_narrow_call() {
 //    int wide[3] = (1, 2, 3);

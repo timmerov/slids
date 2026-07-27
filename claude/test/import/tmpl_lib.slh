@@ -57,9 +57,14 @@ T tpair<T>(T a, T b);
 
 /* pointer-friendly twins: `tpick`'s body is self-contained (a local-type
    instance can inline it); `tpock`'s body leans on a tmpl_lib-PRIVATE helper,
-   so only tmpl_lib's own TU can emit its flavors. */
+   so only tmpl_lib's own TU can emit its flavors. Under const correctness
+   (canon B, 2026-07-26) a bare-T body cannot RETURN a pointer binding (the
+   munge consts the param's pointee; the return type stays mutable), so the
+   POINTER demands ride `tdiff` — a read-only comparison body, legal for
+   every binding. */
 T tpick<T>(T a, T b);
 T tpock<T>(T a, T b);
+bool tdiff<T>(T a, T b);
 
 /* like `tpock`, but the body READS a private name (a const) instead of
    calling one — the identifier flavor of the private-name diagnostic. */

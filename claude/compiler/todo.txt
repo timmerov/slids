@@ -52,16 +52,12 @@ UNBLOCKED FEATURES
 
 BLOCKED FEATURES
 
-  deferred features involving classes:
-
   * DUP-DEF / DUP-DECL NOTE CARET POSITION — the "first defined here" note carets
     the first DEFINITION (Entry.def_tok) and "first declared here" the first
     DECLARATION (Entry.tok); verified by manual probe only. The //-EXPECT-ERROR
     runner matches a message SUBSTRING, not caret line/col, so this attribution
     can't be locked by a .sl negative. Needs a caret-aware assertion the harness
     doesn't have.
-
-  blocked by const correctness
 
   * NON-SCALAR CONST AT FILE SCOPE — a file-scope `const` of array / tuple /
     class / pointer type is rejected ("requires global storage, which is not yet
@@ -91,20 +87,6 @@ BLOCKED FEATURES
     Gated on const enforcement (Phase 6) — decide the policy with that work.
 
   longer term features:
-
-  * CONST ENFORCEMENT (Phase 6) — const representation/syntax is in (qualifier,
-    param munge, `mutable`, the casts); ENFORCEMENT is not. const is unchecked
-    today, so a const->mutable drop is silently accepted. To do:
-      - lvalue carries const / rvalue read is mutable (the value-category model);
-      - const->mutable rejected at assign + call sites without an explicit `<mutable>`;
-      - no write through a const reference (every assign-family site);
-      - const-overload matcher (match-key strips const);
-      - method-level const + a const receiver `_$recv`;
-      - `mutable` REQUIRED on a move/swap operator param (`op<--`/`op<-->`) — the
-        operators parse + dispatch now; only the mutable-on-the-param REQUIREMENT
-        (enforcement) waits on this const-enforcement work.
-    cast.sl's const-correctness lines + the deep-const local forms in mutable.sl
-    stay syntax-only until this lands.
 
   * NAMED-CONST-TRUE LOOP NOT FLAGGED — the constant-true-loop special case
     (3B revisited: a constant-true loop with no break is non-completing — its
@@ -161,6 +143,28 @@ BLOCKED FEATURES
   * QUALIFIED-NAME COLLISIONS — DEFER ENTIRELY until a TRULY UNRESOLVABLE example
     surfaces. No case that normal
     scoping can't resolve deterministically has surfaced; revisit only when one does.
+
+  * the problem is:
+    T fn<T>(T t){ return T; } -->
+    int fn<int>(int t){ return t; } no problem
+    Class fn<Class>((const Class)^ t){ return t^; } there's a copy here so it works, right?
+    Class^ fn<Class^>((const Class)^ t){ return t; } which fails cause ##type of t is const
+    and return type is mutable.
+    these are valiant efforts:
+    const Class^ fn<const Class^>(const Class^ t) return t; }
+    (const Class)^ fn<(const Class)^>((const Class)^ t) return t; }
+    but they fail because the const is stripped from the template type at the same time
+    aliases are reduced to their base type.
+    so const Class^ and (const Class)^ both become Class^.
+
+  * claude doesn't like the fact that:
+    T fn<T>(T t) { return t; }
+    p = fn<int^>(p);
+    fails because the template type parameter is auto-munged to:
+    int^ fn<int^>(int^ t) { return t; } -->
+        int^ fn<int^>((const int)^ t) { return t; }
+    the return type is mutable. the returned variable is const. no can do.
+    i'm waiting for the good idea fairy.
 
 
 REACH GOALS

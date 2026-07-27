@@ -244,7 +244,7 @@ int ret_rhs() {
 
 // a POINTER-returning function: exercises the guard's kPointer arm (a class temp
 // arg to a call whose VALUE is a pointer is still seq-wrapped).
-int^ ptr_rhs(Class^ c, int^ p) {
+int^ ptr_rhs(Class^ c, mutable int^ p) {
     c^.inc();
     return p;
 }

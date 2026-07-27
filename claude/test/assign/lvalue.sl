@@ -25,20 +25,21 @@ pointer (`(const int)^`) still reseats — the pointer's value is the
 address alone. EXEMPT BY CANON (the lifecycle rule, uniformly — no
 whole-variable carve-out): DELETE and a MOVE'S SOURCE — const constrains
 a live value, delete/move-from end the value's life, and the compiler's
-null afterward is a tombstone, not a mutation. DEFERRED: parameter
-enforcement (a param's const facets are invisible to the wall —
-Entry.is_param; the munge stays decorative), the const->mutable FLOW rule
-(so the wall is escapable via ^ into a mutable pointer — documented),
-SWAP (its questions outrank it), and const METHODS (a method call on a
-const class lvalue is unchecked — the known hole until const methods).
+null afterward is a tombstone, not a mutation. The FLOW RULE closed the
+wall's escape (2026-07-26, mutable.sl owns its canon): dropping const
+rejects at every position and depth, so `int[] it = ^carr[0]` no longer
+launders; param enforcement landed the same day (`mutable` opts out — see
+tick above). DEFERRED: SWAP (its questions outrank it) and const METHODS
+(a method call on a const class lvalue is unchecked — the known hole).
 */
 
 Simple(int x_, int y_) {
 }
 
 /* a side effect (bumps its referent) used to prove a complex-lvalue index is
-   evaluated exactly once. */
-int tick(int^ c) {
+   evaluated exactly once. (`mutable`: param enforcement landed — a body
+   writes through a reference param only when it opts out of the munge.) */
+int tick(mutable int^ c) {
     c^ += 1;
     return 1;
 }
@@ -234,7 +235,10 @@ int32 main() {
         (const int)^ dst <-- cp2;
         int w = 4;
         (const (int^), int) ctp = (^w, 1);
-        int^ e2 <-- ctp[0];
+        (const int)^ e2 <-- ctp[0];   // const is RECURSIVE: the slot's const
+                                      // freezes the pointee too — the copy
+                                      // keeps it; only the source's ZEROING
+                                      // is the lifecycle exemption
         __println("const-movefrom: d=" + dst^ + " pnull=" + (cp2 == nullptr)
                   + " e=" + e2^ + " snull=" + (ctp[0] == nullptr));
     }

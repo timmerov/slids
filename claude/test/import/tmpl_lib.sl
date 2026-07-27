@@ -79,6 +79,11 @@ T tpair<T>(T a, T b) { return a + b + b; }
 /* self-contained body: a consumer's local-type instance can inline it. */
 T tpick<T>(T a, T b) { return b; }
 
+/* the POINTER-demand carrier: read-only, so a pointer binding's const-munged
+   params never flow into the mutable return (canon B — tpick serves VALUE
+   bindings only now). */
+bool tdiff<T>(T a, T b) { return a != b; }
+
 /* a body on a PRIVATE helper: aggregated flavors emit here and link `tick`
    internally; a consumer's local-type instance has no `tick` and errors. */
 T tpock<T>(T a, T b) { tick(); return b; }

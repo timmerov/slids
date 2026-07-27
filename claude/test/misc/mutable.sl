@@ -31,6 +31,16 @@ casting.
     constp = mut;
     constp = <const> mut;
     mut = <mutable> constp;
+
+the const qualifier is a promise that you will not modify the value
+or anything it points to iteratively and recursively.
+
+    const int^^^^^ a;
+    (const int^^^^)^ b;
+    a is an immutable pointer to constant data.
+    b is a mutable pointer to constant data.
+    a^ and b^ are exactly the same type. specifically:
+    const (const (const (const int)^)^)^)^
 */
 
 /*
@@ -72,14 +82,36 @@ implemented (syntax only — const correctness is NOT enforced yet):
 phase 6 status (2026-07-26): the const-LVALUE WRITE WALL is LANDED — a
 const value cannot be the target of a write (=, augmented, ++/--, a move's
 TARGET); DELETE and a move's SOURCE are exempt by canon (the lifecycle
-rule). assign/lvalue.sl owns the wall's canon; the negative below pins it
-here. still deferred:
-  - PARAMETER enforcement (a param's const facets are invisible to the
-    wall — the munge stays decorative; writing through a `T^` param is
-    still accepted).
-  - the const->mutable FLOW rule (a const->mutable assignment WITHOUT a
-    `<mutable>` cast is still silently accepted — so the wall is escapable
-    through ^ into a mutable pointer).
+rule). assign/lvalue.sl owns the wall's canon. PARAM ENFORCEMENT is LANDED
+too (same day): the munge's const is REAL — a body writes through a
+reference / iterator param only when it is `mutable` (fill2/bump_ref the
+positives; the neg_write_* family the negatives). The ONE param exemption
+is the RECEIVER `_$recv`/`self` — const methods are deferred, so field
+writes through the receiver stay legal. the SIZED-ARRAY munge gap is
+CLOSED (same day): `int a[3]` munges ELEMENT-WISE to `(const int)[3]`
+behind the by-pointer rewrite (multi-dim + alias-spelled arrays included;
+`mutable` opts out), and the wall's index step sees through the
+by-pointer auto-deref. THE CALLER SIDE is landed (same day): a const
+value cannot flow into a `mutable` parameter — const-pointee values,
+addressed const lvalues (addr-of MINTS a const pointee now), const
+arrays, string literals (the pool is read-only; the context decay keeps
+its const), and const classes into `mutable T^` all reject; `<mutable>`
+casts through (the positive above). THE FLOW RULE is landed (same day):
+a value flows into a slot that PRESERVES or ADDS const, never one that
+DROPS it — every position, every depth (the positional lockstep walk;
+copies stay const-blind per the value-category rule). STRING LITERALS
+are STRICT: `char[] s = "hi"` rejects (the lying middle); the blessed
+spellings are `const char[]` (deep alias), `(const char)[]` (shallow
+alias), and `char s[3] = "hi"` (the sized-array COPY — owned, writable).
+CONST IS RECURSIVE (the canon block above): every `const X` spelling —
+leading OR buried (`(const int^^^)^`) — materializes the DEEP form of X
+at type resolution, so `a^` and `b^` in the canon example are one type
+(pinned in main). THE MUNGE IS TRANSITIVE the same way: a non-mutable
+pointee deep-consts, so a `(char[], ...)^` param freezes what its slot
+pointers reach — a literal-built `#` tuple flows into a dump param with
+plain `char[]` slots (the author's natural spelling; the contract adds
+the recursive const — see take_pair's ##type).
+still deferred:
   - SWAP on const operands (its questions outrank it).
   - const methods (a const receiver) — a method call on a const class
     lvalue is the known unchecked hole until this lands.
@@ -100,14 +132,54 @@ void munge(mutable char[] dst, char[] src, int count) {
     __println(##type(count));   // int
 }
 
+// THE MUNGE IS ENFORCED (param enforcement, 2026-07-26): a body writes
+// through a reference / iterator param only when it is `mutable` — the
+// caller sees the writes; the non-mutable twins are the negatives below.
+void fill2(mutable int[] dst, int v) {
+    dst[0] = v;
+    dst[1] = v + 1;
+}
+void bump_ref(mutable int^ p) {
+    p^ += 1;
+}
+
+// a SIZED-ARRAY param munges ELEMENT-WISE (the gap closed 2026-07-26:
+// `int a[3]` -> `(const int)[3]` behind the by-pointer rewrite, multi-dim
+// included); `mutable` opts out like any reference.
+void show_arr(int a[3], mutable int m[3], int g[2][2]) {
+    __println(##type(a));       // (const int)[3]^
+    __println(##type(m));       // int[3]^
+    __println(##type(g));       // (const int)[2][2]^
+}
+void fill3(mutable int a[3], int v) {
+    a[0] = v;
+    a[1] = v + 1;
+    a[2] = v + 2;
+}
+
+// a DEEP-const return type (`const int^` — the leading const is deep by
+// canon, materialized at type resolution so the flow rule reads it right).
+const int^ deepret(int^ p) { return p; }
+
+// CALLER-SIDE param const (2026-07-26): a const value cannot flow into a
+// parameter that declared it will WRITE — an un-const pointee only arises
+// from `mutable` — and `<mutable>` casts through (the negatives below pin
+// each rejected source: a const-pointee value, an addressed const lvalue,
+// a const array, a string literal, a const class into `mutable T^`).
+void wchr(mutable char[] s) {
+    s[0] = 'x';
+}
+
 // a reference parameter to a tuple munges its whole pointee to const.
 void take_pair((int, int)^ p) {
-    __println(##type(p));       // (const (int, int))^
+    __println(##type(p));       // (const (const int, const int))^ — the munge is the RECURSIVE promise
 }
 
 // explicit const on a parameter: deep (outer, not re-munged) vs shallow.
 void const_forms(const int^ deep, (const int)^ shallow) {
-    __println(##type(deep));     // const int^
+    __println(##type(deep));     // const (const int)^ — the leading const is
+                                 // DEEP, materialized at type resolution
+                                 // (2026-07-26): pointer AND pointee const
     __println(##type(shallow));  // (const int)^
 }
 
@@ -142,11 +214,92 @@ Res(int id_) {
 }
 
 int32 main() {
-    char[] m = "abc";
+    // the mutable-dst arg is OWNED storage (the sized-array COPY form —
+    // `char[] m = "abc"` would alias the read-only pool, a const drop
+    // under the strict flow rule).
+    char m[4] = "abc";
     munge(m, "xyz", 3);
 
     (int, int) pr = (1, 2);
     take_pair(^pr);
+
+    // the ENFORCED munge, positive side: `mutable` params write and the
+    // caller sees it.
+    int fa[2];
+    fill2(^fa[0], 8);
+    __println(fa[0] + " " + fa[1]);   // 8 9
+    int bv = 5;
+    bump_ref(^bv);
+    __println(bv);                    // 6
+
+    // the array-param munge spellings, and a mutable array filled in place.
+    int sa[3] = (1, 2, 3);
+    int sm[3] = (4, 5, 6);
+    int sg[2][2];
+    sg[0][0] = 1;
+    sg[0][1] = 2;
+    sg[1][0] = 3;
+    sg[1][1] = 4;
+    show_arr(sa, sm, sg);
+    fill3(sm, 7);
+    __println(sm[0] + " " + sm[1] + " " + sm[2]);   // 7 8 9
+
+    // a mutable char iterator writes; the LITERAL twin is a negative (the
+    // pool is read-only).
+    char cbuf[3] = "ab";
+    wchr(^cbuf[0]);
+    __println(cbuf);                  // xb
+
+    // the caller side: addr-of a const lvalue MINTS a const pointee, and
+    // the `<mutable>` cast is the sanctioned override at a call.
+    const int cco[2] = (1, 2);
+    __println(##type(^cco[1]));       // (const int)^
+    bump_ref(<mutable> ^cco[0]);
+    __println(cco[0]);                // 2 (the cast overrode the wall)
+
+    // THE FLOW RULE (2026-07-26): adding const flows implicitly, at any
+    // depth; a value copy is const-blind (a const array copies into a
+    // mutable one — values, not aliases); `<mutable>` drops it explicitly.
+    int fv = 3;
+    int^ fm = ^fv;
+    (const int)^ fc = fm;             // add const: implicit
+    __println(fc^);                   // 3
+    int^ fback = <mutable> fc;        // drop via the cast: sanctioned
+    fback^ = 4;
+    __println(fv);                    // 4
+    int fcopy[2];
+    fcopy = cco;                      // const ARRAY -> mutable array: a COPY
+    fcopy[0] = 9;
+    __println(fcopy[0] + " " + cco[0]);   // 9 2 (cco untouched)
+
+    // the user's blessed const-string spellings: the deep-const alias to
+    // the pool, the shallow alias, and the sized-array COPY.
+    const char[] ds = "hi";
+    __println(ds[0]);                 // h
+    (const char)[] ss = "yo";
+    __println(ss[1]);                 // o
+    char ows[3] = "ab";
+    ows[0] = 'z';
+    __println(ows);                   // zb
+
+    // a DEEP-const return type parses and means what it says (the leading
+    // const materializes deep at type resolution).
+    const int^ dr = deepret(^fv);
+    __println(dr^);                   // 4
+
+    // CONST IS RECURSIVE (the canon block above): `const int^^^ a3` and
+    // `(const int^^)^ b3` agree that their derefs are ONE type — a buried
+    // const materializes exactly as deep as a leading one, so the two
+    // spellings cross-assign in both directions.
+    int v1o = 7;
+    int^ v1p = ^v1o;
+    int^^ v2p = ^v1p;
+    const int^^^ a3 = ^v2p;
+    (const int^^)^ b3 = ^v2p;
+    __println(##type(a3));            // const (const (const (const int)^)^)^
+    const int^^^ x3 = b3;
+    (const int^^)^ y3 = x3;
+    __println(y3^^^);                 // 7
 
     int n = 7;
     const_forms(^n, ^n);
@@ -164,7 +317,7 @@ int32 main() {
 
     // const in COMPLEX types: a complex-value ref param munge, then const at a
     // non-first slot, a nested tuple slot, and an array element (all via type).
-    show_pair(^ct);              // (const (const int, int))^
+    show_pair(^ct);              // (const (const int, const int))^ — deep through the munge
 
     (const int, const char[]) hetero;
     __println(##type(hetero));   // (const int, const char[])
@@ -313,6 +466,147 @@ one at a time and asserts the marked error substring.
 //    const int cwn[2] = (1, 2);
 //    cwn[0] = 9;
 //    return cwn[0];
+//}
+
+// PARAM ENFORCEMENT: the munge's const is real — a body may not write
+// through a NON-mutable reference param...
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_write_ref(int^ p) { p^ = 1; }
+
+// ...nor a non-mutable iterator's element...
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_write_iter(int[] it) { it[0] = 1; }
+
+// ...nor a munged class param's field...
+//-EXPECT-ERROR: Cannot write to a const value
+//Wbox(int w_ = 0) { }
+//void neg_write_class(Wbox^ b) { b^.w_ = 1; }
+
+// ...and an AUTHOR-spelled const pointee is the same wall.
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_write_shallow((const int)^ p) { p^ = 1; }
+
+// a SIZED-ARRAY param's element (the closed munge gap)...
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_write_arr(int a[3]) { a[0] = 1; }
+
+// ...a MULTI-DIM element...
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_write_grid(int g[2][2]) { g[1][1] = 1; }
+
+// ...and an ALIAS-spelled array param is the same munge.
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_write_alias_arr(A3 a) { a[2] = 1; }
+
+// CALLER-SIDE: an addressed const lvalue into a `mutable` reference...
+//-EXPECT-ERROR: Cannot pass a const value
+//int neg_pass_ref() {
+//    const int ca[2] = (1, 2);
+//    bump_ref(^ca[0]);
+//    return ca[0];
+//}
+
+// ...a const-elem iterator into a `mutable` iterator...
+//-EXPECT-ERROR: Cannot pass a const value
+//int neg_pass_iter() {
+//    const int ca[2] = (1, 2);
+//    fill2(^ca[0], 9);
+//    return ca[0];
+//}
+
+// ...a const array into a `mutable` array param...
+//-EXPECT-ERROR: Cannot pass a const value
+//int neg_pass_arr() {
+//    const int ca[3] = (1, 2, 3);
+//    fill3(ca, 9);
+//    return ca[0];
+//}
+
+// ...a const-pointee POINTER VALUE into a `mutable` reference...
+//-EXPECT-ERROR: Cannot pass a const value
+//int neg_pass_ptr() {
+//    int z = 1;
+//    (const int)^ cq = ^z;
+//    bump_ref(cq);
+//    return z;
+//}
+
+// ...and a STRING LITERAL into a `mutable char[]` — the pool is read-only.
+//-EXPECT-ERROR: Cannot pass a const value
+//void neg_pass_lit() {
+//    wchr("hi");
+//}
+
+// THE FLOW RULE's negatives: dropping const rejects at every position and
+// depth. A decl-init drop...
+//-EXPECT-ERROR: Cannot drop 'const'
+//int neg_flow_decl() {
+//    int z = 1;
+//    (const int)^ c = ^z;
+//    int^ m = c;
+//    return m^;
+//}
+
+// ...a plain-assign drop...
+//-EXPECT-ERROR: Cannot drop 'const'
+//int neg_flow_assign() {
+//    int z = 1;
+//    (const int)^ c = ^z;
+//    int^ m = ^z;
+//    m = c;
+//    return m^;
+//}
+
+// ...a MOVE's copy half...
+//-EXPECT-ERROR: Cannot drop 'const'
+//int neg_flow_move() {
+//    int z = 1;
+//    (const int)^ c = ^z;
+//    int^ m = ^z;
+//    m <-- c;
+//    return m^;
+//}
+
+// ...a RETURN drop...
+//-EXPECT-ERROR: Cannot drop 'const'
+//int^ neg_flow_ret((const int)^ c) { return c; }
+
+// ...the TUPLE-SLOT launder (a tuple COPY carries its pointer slots)...
+//-EXPECT-ERROR: Cannot drop 'const'
+//int neg_flow_tuple() {
+//    int z = 1;
+//    ((const int)^, int) ct = (^z, 2);
+//    (int^, int) mt = ct;
+//    return mt[0]^;
+//}
+
+// ...the POSITIONAL launder (const-bearing both sides, slot 0 swapped)...
+//-EXPECT-ERROR: Cannot drop 'const'
+//int neg_flow_pos() {
+//    int z = 1;
+//    ((const int)^, (int)^)^ a = nullptr;
+//    ((int)^, (const int)^)^ b = a;
+//    b;
+//    return z;
+//}
+
+// ...the DEPTH drop (`^^` — the inner pointee's const)...
+//-EXPECT-ERROR: Cannot drop 'const'
+//int neg_flow_deep() {
+//    int z = 1;
+//    (const int)^ c = ^z;
+//    (const int)^^ cc = ^c;
+//    int^^ mm = cc;
+//    return mm^^;
+//}
+
+// ...and the STRICT literal ruling: `char[] s = "hi"` is the lying middle —
+// a mutable alias to the read-only pool (spell `(const char)[]`, deep
+// `const char[]`, or the sized-array COPY `char s[3]`).
+//-EXPECT-ERROR: Cannot drop 'const'
+//int neg_flow_lit() {
+//    char[] s = "hi";
+//    return s[0];
 //}
 
 //-EXPECT-ERROR: applies only to a pointer

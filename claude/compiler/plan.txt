@@ -2518,6 +2518,163 @@ Phase 9 — templates
     implicitly convert 'int' to 'T'") — pre-existing, the global
     initializer validates at file scope before any flavor exists.
 
+  * CONST IS RECURSIVE — THE DEEP MATERIALIZER (6th slice) LANDED 2026-07-26
+    (USER'S CANON, written into mutable.sl's top comment after catching
+    the miscommunication: const is a promise over the value AND anything
+    it reaches, iteratively and recursively — `const int^^^^ a` and
+    `(const int^^^)^ b` must agree that `a^` and `b^` are ONE type. The
+    5th slice materialized only a LEADING const; a BURIED one kept
+    mutable inner levels.) materializeDeepConst at resolveDeclType now
+    rewrites EVERY kConst node — leading or buried in a pointee / slot /
+    element — to internConst∘deepConst, recursively and idempotently.
+    THE MUNGE BECAME TRANSITIVE with it (internConst∘deepConst on the
+    pointee; the conv arm too): a `(char[], ...)^` param's tuple pointee
+    freezes what its slot POINTERS reach — which REVERTED the 5th
+    slice's dump-tuple respellings (tmpl_alias's DumpTuple, macros' and
+    tmpl_function's dump params are back to plain `char[]` slots: the
+    author writes natural slots, the param contract supplies the
+    recursive const; the earlier "why isn't the munged (const Tuple)^
+    sufficient" answer was WRONG — it described the compiler's one-level
+    gap, not canon). test/progress/galaxy.sl's dump(#...) compiles again
+    with ZERO edits to the user's code — the point of the exercise.
+    Fallout kept: LOCALS aliasing literals stay honest ((const char)[]);
+    a `(const (int^))` tuple slot now freezes its pointee (lvalue.sl's
+    move-from pin re-typed); the whole-array-ref call-site narrow
+    message spells `const int8` (marker updated). Pinned in mutable.sl:
+    the canon block's own a/b example — ##type(a3) prints the full deep
+    spelling and the two spellings CROSS-ASSIGN both ways.
+
+  * THE FLOW RULE — DROPPING CONST REJECTS (5th slice)     LANDED 2026-07-26
+    (USER'S RULINGS: the honest positional walk; dropping rejects at
+    EVERY depth; strict on string literals — "the lying middle is a
+    compile error now that const correctness is landing... no runtime
+    faults"; canon B on the convention — a bare-T body cannot RETURN a
+    pointer binding.) ONE ARM in checkValueAssign covers every
+    assignment-family site at once. TWO LAYERS per the value-category
+    rule: constCopyLayerOk is const-BLIND (`int y = const_x`; a const
+    array copies into a mutable one — values, not aliases) and turns
+    into constWriteLayerOk — source-const implies dest-const,
+    positional lockstep (catches `(const int,int)^ -> (int,const int)^`)
+    and depth-recursive (`^^`) — the moment the walk crosses a POINTEE.
+    Adding const at depth is legal (the C++ deep-add loophole accepted
+    by canon; `<mutable>` is the explicit spelling and passes untouched
+    because the cast erased the const).
+    THREE REAL BUGS the rule flushed out:
+    - `const T^` NEVER MEANT DEEP: intern records only the outer facet
+      and deepConst ran only for const LOCALS, so a spelled deep return
+      type carried a MUTABLE pointee. Leading const now materializes
+      deep at resolveDeclType (the one declared-type funnel). Bonus:
+      the const-led FUNCTION-DEF lookahead — `const int^ fn(...) {}`
+      used to mis-commit to a constant declaration ("A type is not an
+      expression"); looksLikeFunctionDef learned the leading const and
+      both statement dispatches defer to it.
+    - PRINT'S %c keyed on the exact `char` handle — a `(const char)^`
+      deref printed 97, not 'a'. deepStrip at the one format branch.
+    - THE STRICT LITERAL RULING repealed the 2026-07-24 `char[] i_="a"`
+      blessing: the lying middle (a mutable alias to the read-only
+      pool) rejects; the blessed spellings are `const char[]` (deep),
+      `(const char)[]` (shallow), and `char s[3] = "hi"` (the sized
+      COPY — passes the copy layer untouched, owned writable storage).
+    CANON B FALLOUT (the convention): `tpick<Bird^>`-style bare-T
+    pass-throughs reject INSIDE the instance (munged param -> mutable
+    return) with no generic spelling — the cross-TU pointer demands
+    now ride `tdiff` (a read-only comparison body); tsel/nid (the
+    carve-out + ns-re-home linkage pins) switched to CLASS bindings
+    (the value-copy form — same locals, same linkage story);
+    plain-beats-template "the template takes the rest" cases moved
+    from pointer to FLOAT bindings; `same`/`idf` pointer identities
+    became the read-only deref pin + the cv_neg_ret negative.
+    Suite fallout beyond that: string-literal respellings (hello,
+    iterator incl. char-iterator locals, macros ##date/##time, lex,
+    tmpl_alias's DumpTuple + tmpl_function's dump tuples, mutable's
+    munge dst -> the sized COPY), evaluate's ptr_rhs + return_fn's
+    mkHolder took `mutable`, tmpl_alias's pick (alias-spelled pointer
+    param) took `mutable`, second<T>'s body local spells the munged
+    const. Canon: mutable.sl (flow block: add-const / cast-drop /
+    array-copy positives, the three blessed string spellings, the
+    deep-const return; 8 negatives: decl/assign/move/return drops, the
+    tuple-slot AND positional launders, the `^^` depth drop, the lying
+    middle) + tmpl_function.sl (deref1 + cv_neg_ret). lvalue.sl's
+    documented escape flipped to "closed". KNOWN: test/progress
+    (user's library, off-limits) has literal-tuple fallout
+    (galaxy.sl's dump) awaiting the user's pass.
+
+  * CALLER-SIDE PARAM CONST + THE CONVENTION RULING (4th)  LANDED 2026-07-26
+    (USER'S RULING mid-flight: NO `mutable T` on the bare-T value
+    spelling — it would mean something for some bindings and be invalid
+    syntax for others (`fn<int>` -> `mutable int t`), breaking
+    one-spelling-serves-every-binding; mutation spells the REFERENCE,
+    `mutable T^`, uniform for every binding. Probed: `fn<Cp^>` binds
+    arrive `(const Cp)^` exactly as the ruling's arrow assumed.)
+    THE CALLER SIDE: a const value cannot flow into a parameter that
+    declared it will WRITE — an un-const pointee only arises from
+    `mutable` — ONE check in checkArgAssign (the arg/param funnel; the
+    receiver never routes through it, keeping const-class method calls
+    in the deferred const-methods bucket). Enablers landed with it:
+    kAddrOfExpr MINTS a const pointee off the wall's oracle
+    (`^carr[0]` -> `(const int)^`, pinned by ##type); the string
+    literal's context decay KEEPS the pool's const instead of taking
+    the context verbatim (its old comment promised enforcement "when
+    const enforcement lands"); and coerceOperandToClass DECLINES an
+    operand already a REFERENCE to the wanted class — the one-level
+    coercion retry was EATING the rejection and silently passing a
+    TEMP (the callee wrote a copy; probed: cc stayed 3). Rejected
+    sources pinned: const-pointee values, addressed const lvalues,
+    const arrays, string literals into `mutable char[]`, const classes
+    into `mutable T^`; `<mutable>` casts through end-to-end.
+    Canon mutable.sl (the caller-side block + 5 neg_pass_* negatives)
+    + tmpl_function.sl (the CONVENTION block: cvread/cvshow/cvbump
+    positives — `const T` for a class binding's auto-deref'd ##type,
+    `(const CvP)^` for a pointer binding — and cv_neg_write /
+    cv_neg_mut / cv_neg_pass). STILL OPEN: the general flow rule at
+    non-call assigns (a const pointer copies into a mutable pointer
+    LOCAL unchecked — the wall's one remaining escape), swap, const
+    methods.
+
+  * THE SIZED-ARRAY MUNGE GAP CLOSED (Phase 6, third slice) LANDED 2026-07-26
+    (User's ruling: `fn(int arr[3])` -> `fn((const int) arr[3])`.) The
+    array-by-pointer munge arm now deepConsts the ELEMENTS —
+    `((const int)[3])^`, multi-dim and alias-spelled arrays included;
+    `mutable` opts out as everywhere. TWO oracle fixes rode along, both
+    found by the negatives: the wall's index step (a) steps THROUGH the
+    by-pointer rewrite's pointer (an array param indexes via auto-deref
+    — without the step the wall never saw array params at all, which is
+    why the "gap" originally read as a munge gap when the OLD munge was
+    in fact wrapping the whole array), and (b) consumes ONE DIM per
+    index — a multi-dim array is ONE kArray with a dims vector, so
+    `g[1]` yields the sub-array, not the element (the first cut lost
+    the const on `g[1][1]` and the grid negative caught it). Fallout:
+    array_by_pointer + mutate_vec (the alias-array writer) in call.sl
+    took `mutable`; bug.sl (the user's repro of exactly this gap) now
+    rejects. Canon mutable.sl: show_arr (##type pins all three munge
+    spellings) + fill3 (mutable array fill) + neg_write_arr / _grid /
+    _alias_arr. Suite green.
+
+  * PARAM-MUNGE ENFORCEMENT (Phase 6, second slice)        LANDED 2026-07-26
+    (Same day as the wall; user's go.) The munge's const is REAL: a body
+    writes through a reference / iterator parameter only when it is
+    `mutable` — the default contract (`T^` -> `(const T)^`) is now a
+    checked contract, and an author-spelled const pointee on a param is
+    the same wall. ONE EDIT: the wall's Entry.is_param exemption
+    narrowed to the RECEIVER (`_$recv`/`self`) alone — const METHODS
+    are deferred, so field writes through the receiver stay legal.
+    BLAST RADIUS: six functions in three files needed `mutable`
+    (lvalue.sl tick; call.sl tuple_by_pointer / class_by_pointer /
+    mutate_pair / mix_call; tmpl_function.sl bump) — the suite reads
+    params far more than it writes them. FREE CONSEQUENCE: the todo's
+    "mutable REQUIRED on op<--/op<--> params" enforces itself — a
+    transfer operator whose body writes its source now rejects unless
+    the param is spelled mutable (every existing operator already was).
+    KNOWN MUNGE GAP (flagged, not changed here): a SIZED-ARRAY param
+    (`int a[3]`) is never munged const, so it stays writable — closing
+    it is a munge decision, not an enforcement one. Still open: the
+    const->mutable FLOW rule (a const arg still flows into a `mutable`
+    param unchecked at the call site), swap, const methods.
+    Canon: mutable.sl (fill2/bump_ref positives + the neg_write_*
+    family: ref, iterator elem, class field, author-spelled shallow),
+    function/param.sl (bump10 + neg_write_param), class/method.sl
+    (QPar: receiver-exempt vs mutable-param contrast + QBadW).
+
   * THE CONST-LVALUE WRITE WALL (Phase 6, first slice)     LANDED 2026-07-26
     (Canon assign/lvalue.sl: "a const value cannot be the target of a
     write". USER'S RULINGS: land const lvalues alone; params, the

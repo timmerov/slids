@@ -113,8 +113,12 @@ Mix(
     int a_[2] = (4, 5),
     int^ r_ = nullptr,
     Pt k_ = K,
-    char[] i_ = "a",       // a string literal IS a constant (canon 2026-07-24)
-    char s_[6] = "hello"   // ...in the sized-array spelling too
+    (const char)[] i_ = "a",   // a string literal IS a constant (2024-07-24) —
+                               // and the SLOT must say so (the strict flow
+                               // rule, 2026-07-26: a mutable `char[]` slot
+                               // aliasing the read-only pool is a const drop)
+    char s_[6] = "hello"       // ...the sized-array spelling COPIES: owned,
+                               // writable storage, no const needed
 ) {
     int msum() { return n_ + e_ + a_[0] + a_[1] + k_.psum(); }
     bool nullr() { return r_ == nullptr; }

@@ -16,7 +16,7 @@ caret ^ before an indexed array variable is an iterator to the indexed object.
     iter = ^arr[3];
     int y = iter^;
 
-    char[] str = "Hello, World!";
+    (const char)[] str = "Hello, World!";
     char[] e = ^str[1];
     char[] r = e + 8;
     ++e;
@@ -82,10 +82,10 @@ int32 main() {
     __println("it>=it= " + (it >= it));    // true
 
     /* a char iterator from a string literal. */
-    char[] str = "Hello, World!";
-    char[] e = ^str[1];
+    (const char)[] str = "Hello, World!";
+    (const char)[] e = ^str[1];
     __println("e^= " + e^);                // e
-    char[] r = e + 8;
+    (const char)[] r = e + 8;
     __println("r^= " + r^);                // r  (index 9)
     ++e;
     --r;
@@ -117,7 +117,7 @@ int32 main() {
        destinations the decay has to satisfy. */
 
     /* to a REFERENCE (`char^`), not just an iterator. */
-    char^ cref = "abc";
+    (const char)^ cref = "abc";
     __println("cref^= " + cref^);          // a
 
     /* through a PARAMETER — the case every string-taking function depends on. A
@@ -127,9 +127,9 @@ int32 main() {
     __println("len= " + litLen("hello"));         // 5
 
     /* the decayed pointer is an ordinary iterator: arithmetic and comparison apply. */
-    char[] lit = "abcdef";
+    (const char)[] lit = "abcdef";
     __println("lit[3]= " + lit[3]);        // d
-    char[] lend = lit + 5;
+    (const char)[] lend = lit + 5;
     __println("lend^= " + lend^);          // f
     __println("litdiff= " + (lend - lit)); // 5
 
@@ -185,7 +185,7 @@ intptr litLen(char[] s) {
 //-EXPECT-ERROR: Pointer subtraction requires the same pointee type.
 //intptr neg_diff_pointee() {
 //    int arr[5];
-//    char[] s = "hi";
+//    (const char)[] s = "hi";
 //    int[] a = ^arr[0];
 //    intptr d = a - s;
 //    return d;

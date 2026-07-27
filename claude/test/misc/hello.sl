@@ -6,7 +6,7 @@ int32 main() {
 
     __println("Hello, World!");
 
-    char[] str = "Goodbye, World!";
+    (const char)[] str = "Goodbye, World!";
     __println(str);
 
     return 0;

@@ -255,7 +255,7 @@ Class bump(Class^ p) { Class r(p^.id_ + 1); return r; }  // for a nested inline 
 
 // a class with a POINTER leaf — exercises the construct path past a non-POD field.
 Holder(int^ p_) { _() { __println("hctor"); } ~() { __println("hdtor"); } }
-Holder mkHolder(int^ q) { Holder h(q); return h; }
+Holder mkHolder(mutable int^ q) { Holder h(q); return h; }
 
 // aggregate returns with a class leaf: array-of-class, mixed, and nested.
 Class[3] mkArrC() { Class a[3] = (10, 20, 30); return a; }

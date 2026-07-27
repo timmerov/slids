@@ -89,7 +89,7 @@ T addu<T, U>(T a, U b) {
 }
 
 /* T in a composite position: pointer to T. */
-void bump<T>(T^ p) {
+void bump<T>(mutable T^ p) {
     p^ = p^ + 1;
 }
 
@@ -220,8 +220,17 @@ T pad<T>(T a, T b = 3) {
     return a + b;
 }
 
-/* the identity shape: T binds a pointer type, or a (substituted) const. */
+/* the identity shape: value bindings, incl. a (substituted) const. A POINTER
+   binding cannot flow through it (canon B — the munge consts the param's
+   pointee, the return stays mutable); the read-only deref pins pointer
+   bindings instead, and cv_neg_ret pins the rejection. */
 T same<T>(T v) { return v; }
+int deref1<T>(T p) { return p^; }
+
+/* a bare-T body may not RETURN a pointer binding (the B ruling's negative). */
+//-EXPECT-ERROR: Cannot drop 'const'
+//S pident<S>(S v) { return v; }
+//int cv_neg_ret() { int z = 1; int^ zp = ^z; int^ r = pident(zp); return r^; }
 
 /* one argument binding T twice inside a composite: consistent bindings only. */
 T sumpair<T>( (T, T)^ p ) { return p^[0] + p^[1]; }
@@ -249,6 +258,31 @@ int plain(int v) { return v; }
 /* a file-scope function a block-scope template may SHADOW (collision is
    same-scope only; normal lexical shadowing across scopes). */
 int shade(int v) { return v; }
+
+/* THE BARE-T PARAM CONVENTION (canon 2026-07-26): a class / tuple binding
+   arrives `(const T)^` behind the value spelling — HARD-const, no opt-out
+   on the value form (an author who mutates spells the REFERENCE,
+   `mutable T^`, which works for every binding); a POINTER binding's
+   pointee munges const the same way (`fn<CvP^>` -> `(const CvP)^`). */
+CvP(int v_ = 0) { }
+int cvread<T>(T s) { return s.v_; }
+void cvshow<T>(T s) { __println(##type(s)); s; }
+void cvbump<T>(mutable T^ t) { t^.v_ = t^.v_ + 1; }
+
+/* a bare-T body may not WRITE its param — the convention is const. */
+//-EXPECT-ERROR: Cannot write to a const value
+//int cv_neg_write<S>(S s) { s.v_ = 9; return s.v_; }
+//int cv_neg_use() { CvP c(1); return cv_neg_write(c); }
+
+/* `mutable T` on the VALUE spelling is out: it would mean something for
+   some bindings and be invalid syntax for others (`mutable int t`). */
+//-EXPECT-ERROR: applies only to a pointer
+//void cv_neg_mut<S>(mutable S s) { s; }
+//void cv_neg_mut_use() { CvP c(1); cv_neg_mut(c); }
+
+/* the CALLER side: a const class cannot flow into `mutable T^`. */
+//-EXPECT-ERROR: Cannot pass a const value
+//void cv_neg_pass() { const CvP c(1); cvbump(^c); __println("" + c.v_); }
 
 /* duplicate type-parameter names. */
 //-EXPECT-ERROR: Duplicate type-parameter name
@@ -347,9 +381,12 @@ int32 main() {
     int pd = pad(7); __println("pd = " + pd);
     int pe = pad(7, 8); __println("pe = " + pe);
 
-    /* T bound to a pointer type; a substituted-const argument. */
+    /* T bound to a POINTER type — a READ-ONLY body (canon B, 2026-07-26: a
+       bare-T body cannot RETURN a pointer binding; the munge consts the
+       pointee while the return type stays mutable — cv_neg_ret below pins
+       the rejection); a substituted-const argument through the identity. */
     int^ pi = ^a;
-    int^ qi = same(pi); __println("qi = " + qi^);
+    int qi = deref1(pi); __println("qi = " + qi);
     const int ci = 5;
     int cv = same(ci); __println("cv = " + cv);
 
@@ -435,11 +472,11 @@ int32 main() {
     (int, int) tu = idf(tt);
     __println("tu = " + tu[0] + "," + tu[1]);
 
-    /* ...a primitive binds by value, and a REFERENCE is a primitive (the
-       pointer itself copies; no convention rewrite). */
+    /* ...a primitive binds by value; a REFERENCE binding reads through the
+       deref pin (canon B — the identity cannot return a pointer binding). */
     int iv = idf(9); __println("iv = " + iv);
     int zz = 4;
-    int^ zr = idf(^zz); __println("zr = " + zr^);
+    int zr = deref1(^zz); __println("zr = " + zr);
 
     /* ...`^param` composes: the addr-of of the auto-deref is the reference. */
     int pxr = viaAddr(p1); __println("pxr = " + pxr);
@@ -471,10 +508,23 @@ int32 main() {
     int cx1 = coex(1); __println("cx1 = " + cx1);
     int8 cs8 = 3;
     int cx2 = coex(cs8); __println("cx2 = " + cx2);
-    int z9 = 5;
-    int^ zr9 = ^z9;
-    int^ cx3 = coex(zr9); __println("cx3 = " + cx3^);
+    /* the template takes what the plain cannot — a FLOAT binding (a pointer
+       binding could not return through the bare-T identity, canon B). */
+    float cx3 = coex(2.5); __println("cx3 = " + cx3);
     int cx4 = coex<int>(2); __println("cx4 = " + cx4);
+
+    /* the bare-T convention: reads through the const ref. A CLASS binding
+       AUTO-derefs its uses, so ##type reads the pointee (`const T`); a
+       POINTER binding has no rewrite, so ##type shows the munged pointer
+       (`(const CvP)^` — the `fn<CvP^>` pin). The sanctioned mutation
+       spelling (`mutable T^`) reaches the caller. */
+    CvP cvo(4);
+    int cv1 = cvread(cvo); __println("cv1 = " + cv1);
+    cvshow(cvo);                                  // const T
+    CvP^ cvp = ^cvo;
+    cvshow(cvp);                                  // (const CvP)^
+    cvbump(^cvo);
+    __println("cv2 = " + cvo.v_);                 // 5
 
     return 0;
 }

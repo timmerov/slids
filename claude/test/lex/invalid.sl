@@ -20,7 +20,7 @@ ensure the lexer rejects invalid characters.
 int32 main() {
 
     /* valid string escapes. */
-    char[] str;
+    (const char)[] str;
     str = "Hello \0\t\n\\\" World!";
 
     //-EXPECT-ERROR: Unknown escape sequence: '\q'

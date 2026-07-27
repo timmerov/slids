@@ -2852,7 +2852,13 @@ struct Parser {
     std::unique_ptr<parse::Node> parseDefinitionMember(bool in_class,
                                                        std::string const& recv_type) {
         token::Token const& t = peek();
-        if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
+        // A `const` lead is a constant declaration — unless the shape past it
+        // is a FUNCTION DEFINITION (`const int^ fn(...) { }`: a deep-const
+        // return type, meaningful behind the pointer now that const flows are
+        // enforced). Function-shaped const leads FALL THROUGH to the ordinary
+        // method / function arms below, which own receivers and the rest.
+        if (t.kind == token::Kind::kConst && !looksLikeFunctionDef(in_class))
+            return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum)  return parseEnumDecl();
         if (t.kind == token::Kind::kGlobal) return parseGlobal();
@@ -3483,7 +3489,10 @@ struct Parser {
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kDelete) return parseDeleteStmt();
         if (t.kind == token::Kind::kNew) return parseNewStmt();
-        if (t.kind == token::Kind::kConst) return parseVarDeclStmt();
+        // A const-led FUNCTION shape (`const int^ fn(...) { }` — a deep-const
+        // return type) falls through to the function-def dispatch below.
+        if (t.kind == token::Kind::kConst && !looksLikeFunctionDef())
+            return parseVarDeclStmt();
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();
         if (t.kind == token::Kind::kGlobal) return parseGlobalStmt();
@@ -3827,6 +3836,11 @@ struct Parser {
         // type is present it is scanned exactly as for a named function, and the
         // name slot then holds `op<sym>` instead of an identifier.
         if (peekKind(o) != token::Kind::kOp) {
+            // A LEADING-const return type (`const int^ fn(...)` — deep const,
+            // meaningful behind the pointer now that const flows are
+            // enforced). The statement dispatch consults this shape before
+            // committing a `const` lead to a constant declaration.
+            if (peekKind(o) == token::Kind::kConst) o++;
             if (peekKind(o) == token::Kind::kLParen) {
                 // A GROUPED / tuple return type — `(const int)^ m(...)`, `(int, int) m(...)`.
                 // isTypeStart only knows primitive keywords, so skip the balanced `(...)`

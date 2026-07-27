@@ -83,6 +83,12 @@ void classparam(Class^ ref) {
     }
 }
 
+/* the munge is ENFORCED (2026-07-26): a body writes through a reference
+   param only when it is `mutable` — the caller sees the write. */
+void bump10(mutable int^ p) {
+    p^ += 10;
+}
+
 int32 main() {
     __println("sum3(1) = " + sum3(1));              // 111
     __println("sum3(1, 2) = " + sum3(1, 2));        // 103
@@ -99,6 +105,11 @@ int32 main() {
     classparam(^cls);
     cls.x_ = 37;
     classparam(cls);
+
+    /* the enforced munge: the mutable write reaches the caller. */
+    int bv = 5;
+    bump10(^bv);
+    __println("bump10 = " + bv);                    // 15
 
     return 0;
 }
@@ -159,5 +170,12 @@ int32 main() {
 //-EXPECT-ERROR: A non-primitive parameter must be a pointer
 //int neg_class_val( Class c ) {
 //    return c.x_;
+//}
+
+/* the munge is enforced: a body may not write through a NON-mutable
+   reference param (the default contract is reference-to-const). */
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_write_param(int^ p) {
+//    p^ = 1;
 //}
 

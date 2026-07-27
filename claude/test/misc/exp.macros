@@ -9,8 +9,8 @@ bool
 int
 n+1
 int
-char[]
-char[]
+(const char)[]
+(const char)[]
 Integer type = int
 Whole type = int
 Status type = int

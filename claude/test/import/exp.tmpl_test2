@@ -27,6 +27,7 @@ r3 = 300
 r4 = 5
 Bird:ctor: 1 2
 Bird:ctor: 3 4
+pb = true
 Bird:chirp: 3 4
 nz1 = 3
 nz2 = 300 5

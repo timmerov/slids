@@ -10,3 +10,4 @@ lead() = 104
 lead("za") = 122
 called nested function with class parameter: 42
 called nested function with class parameter: 37
+bump10 = 15
