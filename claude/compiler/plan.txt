@@ -1493,8 +1493,9 @@ Phase 7 — class advanced
     field, clear the qualifier); B-in-A -> re-open, A-a-namespace -> create nested. So an
     empty-field derived class is now spellable; creating a NEW nested class inside a class via
     the external empty-parens form is not (write a block). SAME-SCOPE for classes: the target
-    must be a local sibling, so re-opening a class merely VISIBLE from an enclosing scope
-    (refine) fails the walk and errors per-segment. NAMESPACES
+    must be a local sibling, so re-opening a class merely VISIBLE from an enclosing scope fails
+    the walk — an error per-segment OUTSIDE a run-time scope, a REFINEMENT inside one (below).
+    NAMESPACES
     open in any scope: a qualified LEAF whose first segment names an enclosing-scope namespace is
     registered into that frame IN PLACE (registerQualifiedLeaf, node left for constfold; the
     intermediate resolve passes skip a qualified leaf). A qualified MUTABLE var is rejected
@@ -1502,7 +1503,7 @@ Phase 7 — class advanced
     (`C1:Ns1:C2:Ns2:C3:m`) + external-ns merge both work. The cross-scope run-time variant is
     split into REFINEMENTS below. Canon test/class/reopen.sl (Stages A-F: block/method/
     namespace/hoisted-reopen/chained + const/alias/enum in file/namespace/class/function scope;
-    field-add / redefine / leak / bad-path / refine-reject negatives). [[project_reopen_classes]]
+    field-add / redefine / leak / bad-path negatives). [[project_reopen_classes]]
   * A CTOR/DTOR IS A METHOD WITH RESTRICTIONS — LANDED 2026-07-16. The governing rule (canon):
     a ctor/dtor is a method with restrictions, LIKE AN OPERATOR, so every syntax a method admits
     it admits too. The restrictions are only: no params, no return type, class-only, ctor never
@@ -1569,20 +1570,48 @@ Phase 7 — class advanced
     openings, typeless-no-default appended. Cross-file LANDED (Phase 8): a `.slh` incomplete
     class is OPAQUE to an importer — see OPAQUE CLASSES below. Canon test/class/
     incomplete.sl. [[project_incomplete_classes]] [[project_opaque_classes]]
-  * REFINEMENTS (run-time-scope re-open) — PLANNED (stub test/class/refine.sl). Re-opening
-    a class from a scope that ISN'T its own is an ILLUSION: it desugars to an anonymous
-    zero-field DERIVED class ($T : T) that USURPS the base's name within that lexical scope,
-    and existing base instances are cast into it (`(<T:$T^> ^x)^.m()`). Both the block form
-    (`Class(){ ... }`) and the external form (`void Class:method(){ }`) trigger it in a run-time
-    scope. SOUND because a re-open adds NO fields, so $T is layout-identical to T → the
-    base->derived cast is a free offset-0 no-op, and the whole thing rides the LANDED inheritance
-    (_$base slot 0, base-chain member lookup). Delivers the scoping asymmetry for free (the
-    original + sibling scopes can't name $T, so they never see the added members) and COMPOSES
-    WITH TEMPLATES: because the refinement is a real TYPE, `sort(^arr)` in the refining scope
-    instantiates `sort<$T>`, whose body finds the refined method — retroactive, scoped
-    conformance (slids's answer to a comparator / trait-impl, no orphan-rule problem). MOTIVATION:
-    `sort<T>(T^ c){ if (c[j].lessthan(c[i])) c[i] <--> c[j]; }` — refine the element type to
-    supply `lessthan` locally. Internal name for $T: the "usurper". [[project_refinements]]
+  * REFINEMENTS (run-time-scope re-open) — LANDED 2026-07-28. Re-opening a class from a scope
+    that ISN'T its own is an ILLUSION: it mints an anonymous zero-field DERIVED class ($T : T)
+    that USURPS the base's name within that lexical scope, and instances declared outside are
+    retargeted into it. Both the block form (`Class(){ ... }`) and the external form
+    (`void Class:method(){ }`) trigger it, and BOTH go through ONE find-or-create funnel
+    (mintUsurpers), so every opening in a scope merges into one usurper. Minting runs at the HEAD
+    of relocateOutOfLineMembers — gated by a new runtime_scope flag, true only at the
+    resolveStmtList / resolveFunctionBody call sites — so the external form finds its target as
+    an ordinary local sibling and the relocation walk needed no special case. SOUND because a
+    refinement adds NO fields, so $T is layout-identical to T → viewing a T instance as a $T is
+    a free offset-0 no-op, and the whole thing rides the LANDED inheritance (_$base slot 0,
+    base-chain member lookup: declaredMemberOverloads already stops at the most-derived frame
+    carrying the name, so SHADOWING cost nothing).
+    TWO NAMES: the ENTRY registers under the REFINED name (resolveName's innermost-first walk IS
+    the usurpation, free), but the class SPELLS `$T`, because only a kSlid carries a def_id and
+    sharing the name makes `$Data[5]` and `Data[5]` indistinguishable at the leaf — the retarget
+    would silently no-op. The base is therefore PRE-RESOLVED onto the `_$base` param (its
+    spelling would find the usurper itself); registerClassBody and pushBaseChain are guarded by
+    is_usurper, and a relocated method's `_$recv` spelling uses the usurped name.
+    THE RETARGET is Node::usurped_type, stamped by resolve (only it knows the scope) and read by
+    classify (only it knows types) through one helper, stampUsurp, at the read and assign-target
+    arms. It maps RECURSIVELY THROUGH THE TYPE CONSTRUCTORS (`T`, `T^`, `T[]`, `T[5]`, tuples) —
+    without that it reaches only bare class lvalues and a container declared outside the scope
+    never carries the refinement into a generic — and each scope's map is CHAIN-CLOSED so a
+    nested refinement wins in one lookup.
+    Delivers the scoping asymmetry for free (the original + sibling scopes can't name $T) and
+    COMPOSES WITH TEMPLATES with no mechanism at all: the refinement is a real TYPE, so
+    `bubblesort(array)` in the refining scope infers `T = $Data` and instantiates a second
+    flavor whose body finds the refined method — retroactive, scoped conformance (slids's answer
+    to a comparator / trait-impl, no orphan-rule problem). A PLAIN function is never
+    re-instantiated, so a generic is the only thing that crosses the scope boundary.
+    REJECTED (canon): a ctor/dtor and refining or adding a VIRTUAL method — checkUsurpers vets
+    before registration (else the lifecycle-pairing rules report first and bury the reason) and
+    marks the node, since relocation runs twice over a function body. Fields cannot be added:
+    there is no field-bearing refinement spelling, and a second opening that tries lands on the
+    ordinary re-open field rule. Refinement is RUN-TIME-scope only; a file / namespace / class
+    body still errors per-segment.
+    COST ELSEWHERE — two rules it leans on had to be made real: the derived->ancestor ITERATOR
+    demotion is now SAME-SIZE-gated (classChainSameSize; cast.sl stated the iff, ptrBaseUpcastOk
+    never enforced it), and explicit `obj.field` now walks the BASE CHAIN (an inherited field was
+    reachable only from inside the class; classify splices the `_$base` hops).
+    Canon test/class/refine.sl. [[project_refinements]]
   * incomplete-class semantics (`...`)  — LANDED (single-file above; cross-TU opaque in Phase 8)
   * inheritance contracts (`= default`, `= delete`)
   * `instantiation` statement / unnamed instances (`Type(args);`, `Type;`)

@@ -57,6 +57,8 @@ Sb:ctor 5
 syn = 5 6
 Sb:dtor 5
 fd shadow = 20 10
+ref demote = 3
+iter demote = 3 4
 sizeof G3 = 12
 A:ctor 8
 B:ctor 9

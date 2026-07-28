@@ -49,7 +49,9 @@ the external form may chain qualifiers.
     int Class1:Namespace1:Class2:Namespace2:Class3:method() { }
 
 note:
-global variables are not currently implemented.
+
+"re-opening" a class in a different runtime scope is a feature called refinement.
+see refine.sl.
 */
 
 /*
@@ -81,8 +83,10 @@ block. relocateOutOfLineMembers runs per-scope (file + registerScopeNames + reso
 / resolveFunctionBody) and MOVES the qualified node into its target — a LOCAL sibling
 opening — so the target's ordinary registration handles it, no special-casing. A CLASS is
 re-opened only in its OWN scope: a class merely VISIBLE from an enclosing scope is not a
-local sibling, so re-opening it there (REFINE) is rejected per-segment ('X' is not a class
-or namespace in scope). A NAMESPACE, by contrast, opens in ANY scope: a leaf
+local sibling. In a RUN-TIME scope that is not an error — it is a REFINEMENT, which mints
+a usurper and is refine.sl's subject, not this file's. In every other scope (file /
+namespace body / class body) a non-local target still errors per-segment ('X' is not a
+class or namespace in scope). A NAMESPACE, by contrast, opens in ANY scope: a leaf
 (const/alias/enum) whose first segment names an enclosing-scope namespace is registered
 into that namespace's frame IN PLACE (registerQualifiedLeaf), left for constfold. A
 qualified MUTABLE var is not a member; a bad qualifier errors per-segment.
@@ -540,18 +544,12 @@ int32 main() {
 //-EXPECT-ERROR: 'Inner' is not a class or namespace in scope
 //NestQ(int x_) { Inner:Deep { const int kD = 1; } }
 
-/* REFINE reject — re-opening a CLASS from a scope where it is only VISIBLE (not
-   declared) is out. An external CONST targeting a file-scope class from a function body
-   is not a local sibling, so it errors per-segment (a namespace would be allowed; a
-   class is same-scope only). */
+/* the same non-local target in a CLASS body is still an error — refinement is a
+   RUN-TIME-scope feature, so a class body has no usurper to mint. (NestR is declared
+   at file scope; Rfc is not a member of it.) */
 //-EXPECT-ERROR: 'Rfc' is not a class or namespace in scope
 //Rfc(int a_) { }
-//int32 refuse_c() { const int Rfc:k = 1; return 0; }
-
-/* REFINE reject — same for an external ENUM targeting a merely-visible class. */
-//-EXPECT-ERROR: 'Rfe' is not a class or namespace in scope
-//Rfe(int a_) { }
-//int32 refuse_e() { enum int Rfe:E ( kZ ); return 0; }
+//NestR(int x_) { const int Rfc:k = 1; }
 
 /* a forward-declared ctor that NO opening ever defines. The pair is declared, so this
    is a missing definition — not a pairing violation. */

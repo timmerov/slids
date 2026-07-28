@@ -242,6 +242,25 @@ struct Node {
                                  // — an INCOMPLETE class. A later same-scope re-open may
                                  // append fields until one CLOSES it (a re-open whose
                                  // field tuple omits the trailing `...`).
+    bool is_usurper = false;     // kClassDef: the anonymous zero-field DERIVED class a
+                                 // REFINEMENT desugars to — `Class : $Class()` minted in a
+                                 // run-time scope, registered under the REFINED class's own
+                                 // name so it shadows it for the whole scope. Its `_$base`
+                                 // param carries the refined class's ALREADY-RESOLVED handle
+                                 // (registerClassBody must not re-resolve the spelling — in
+                                 // this frame the name means the usurper itself).
+    bool usurper_vetted = false; // kClassDef[is_usurper]: checkUsurpers has already run
+                                 // over this node's members. Relocation runs TWICE over
+                                 // a function body (resolveFunctionBody, then
+                                 // resolveStmtList), and a rejection must be reported
+                                 // once.
+    widen::TypeRef usurped_type = widen::kNoType;
+                                 // kIdentExpr: an instance whose DECLARED type mentions a
+                                 // class refined in this scope, re-typed through the usurper
+                                 // (`Data[5]` -> `$Data[5]`). resolve stamps it — only
+                                 // resolve knows the scope; classify reads it instead of the
+                                 // entry's type, so the use finds the refined members while
+                                 // the declaration outside keeps its own type.
     bool is_construction = false; // kCallStmt/kCallExpr: a `Class(args)` nameless
                                  // class construction (target resolved to a kClass),
                                  // NOT a function call. resolve sets it; classify
@@ -777,6 +796,12 @@ struct Tree {
     // members are reachable unqualified at the current point (the open-namespace
     // chain plus any `alias Ns;` imports in scope).
     std::vector<int> open_ns_frames;
+    // Transient — valid during resolve's body walk. One entry per enclosing
+    // REFINE scope, innermost last: refined class type -> that scope's usurper
+    // type. Each map is CHAIN-CLOSED (every ancestor of the usurper maps to it),
+    // so an instance declared outside a doubly-refining nest still retargets in
+    // one lookup and the innermost scope wins.
+    std::vector<std::map<widen::TypeRef, widen::TypeRef>> usurp_stack;
     // Transient — valid during resolve's body walk. Entry ids of kLocalVar
     // entries that are definitely initialized at the current point (params +
     // any local that a decl-with-init or an assignment has written). Reading a

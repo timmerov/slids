@@ -15,10 +15,10 @@ we want to find a steady state where things balance.
 where the net inward/outward force on each ring is zero.
 
 we pick some arbitrary characteristic distance.
-say 100 lh.
+say 100 ly.
 there will be 10,000 rings.
-the ring will be approximated as point masses spaced
-approximate the characteristic distance around the ring.
+the ring will be approximated as point masses spaced at
+approximately the characteristic distance around the ring.
 the gravitational force will be calculated and summed
 for each piece of the ring.
 and summed over all rings.
@@ -59,7 +59,7 @@ const float64 kGalaxyDiameter = kGalaxyDiameterLY * kMetersPerLightyear;
 const float64 kGalaxyRadius = kGalaxyDiameter / 2.0;
 
 /* characteristic distance aka resolution. */
-const float64 kScaleLY = 3000.0; // 100.0;
+const float64 kScaleLY = 3_000.0; // 100.0;
 const float64 kScale = kScaleLY * kMetersPerLightyear;
 
 /* estimated mass central bulge: 1.5e40 to 4e40 kg */

@@ -25,8 +25,10 @@ assume these named references have these types.
 
     Base(int a) { }
     Base : Derived() { }
-    Base^ basep;
-    Derived^ derp;
+    Base^ base_ref;
+    Base[] base_iter;
+    Derived derived;
+    Derived derived_array[5];
 
 implicit casts are the widening rules of pointers.
 you may lose information.
@@ -57,10 +59,14 @@ so it's like a pointer.
     iter = arr;
     ref = arr;
 
-a pointer to a derived class may be demoted to a pointer to any
-of it base classes.
+a reference to a derived class may be demoted to a reference to any
+of its ancestor classes.
+an iterator to a derived class may be demoted to an iterator to any
+of its ancestor classes if and only if the derived class and the
+ancestor class are the same size.
 
-    basep = derp;
+    base_ref = ^derived;
+    base_iter = ^derived_array[0];
 
 implicit casts may be made explicit.
 
@@ -72,7 +78,8 @@ implicit casts may be made explicit.
     constp = <const Type^> mutp;
     iter = <Type[]> arr;
     ref = <Type^> arr;
-    basep = <Base^> derp;
+    base_ref = <Base^> ^derived;
+    base_iter = <Base[]> ^derived_array[0];
 
 you may cast a buffer-class pointer to a pointer of any type.
 you may cast a pointer of any type to a buffer-class pointer.
@@ -158,6 +165,15 @@ claude says:
   `int8^`, `uint8^`) or `intptr`, and reinterprets an iterator <-> a reference
   of the same pointee. two unrelated non-buffer pointers may not cast directly —
   chain through `void^`. only `intptr` bridges pointers and integers.
+- DERIVED -> ANCESTOR is implicit (the base is the slot-0 sub-object, so the address
+  is unchanged), but the two pointer kinds do not answer alike. a REFERENCE names ONE
+  object and always demotes. an ITERATOR STRIDES by its pointee, so `derived_iter + 1`
+  read as a base iterator would land mid-object whenever the derived is bigger — it
+  demotes only when the two are the SAME SIZE, which is the canon's iff above. a class
+  size is no compile-time constant here (it is the layout LLVM owns), so classify asks
+  the structural equivalent: same size iff every step from the derived down to the
+  ancestor adds NO fields of its own beyond the `_$base` slot (classChainSameSize).
+  the array->element decay rides the same gate, since it decays TO an iterator.
 - an ARRAY decays to a pointer (it is storage, addressed as `^arr[0]`): a bare
   array implicitly casts to the ELEMENT pointer `Type[]` / `Type^` (size dropped),
   and `<Type[]> arr` / `<Type^> arr` is the explicit form. classify rewrites the

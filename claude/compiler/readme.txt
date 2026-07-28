@@ -257,7 +257,13 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     uses), because the decay funnel re-infers and would otherwise re-stamp it as the
     array. A COMPARISON
     uses these same rules — ptrImplicitOk plus ptrBaseUpcastOk (derived->base, the
-    base at offset 0) — to settle on the type BOTH operands convert to, rather than
+    base at offset 0, but NOT for both pointer kinds alike: a REFERENCE names one
+    object and always demotes, while an ITERATOR strides by its pointee, so it
+    demotes only between SAME-SIZE classes. A class size is no compile-time constant
+    here, so classChainSameSize asks the structural equivalent — no step from the
+    derived down to the ancestor adds a field of its own beyond the `_$base` slot.
+    The array->element decay rides the same gate, since it decays TO an iterator)
+    — to settle on the type BOTH operands convert to, rather than
     demanding the two sides already match. So `Base^ == Derived^`, `intptr == ptr`,
     and `T^ == T[]` all compare, and a comparison can never disagree with a call
     about what a pointer implicitly becomes. Direction is forced, not chosen:
@@ -1915,7 +1921,13 @@ STAGE FILES (.h / .cpp pairs)
             NESTED FUNCTIONS ARE SCOPED, NOT TOP-LEVEL-ONLY. resolveStmtList runs
             THREE pre-passes per SCOPE, in this order: relocateOutOfLineMembers,
             registerLocalClasses, registerNestedFunctions — then the statements —
-            then resolveNestedFunctionBodies. So a nested function may be declared in
+            then resolveNestedFunctionBodies. (relocateOutOfLineMembers takes a
+            runtime_scope flag, true HERE and in resolveFunctionBody and nowhere
+            else: it is what turns a non-local target from a per-segment error into
+            a REFINEMENT — see readme-classes.txt. The scope's usurper map is pushed
+            between registerLocalClasses and registerNestedFunctions, and popped by
+            an RAII guard so the first-error return path cannot leak it.) So a nested
+            function may be declared in
             ANY scope of its host (the body's top level, a bare block, an if-arm, a
             loop body, a switch case). It lives in the frame it is WRITTEN in:
             visible there INCLUDING before its own definition (the signature

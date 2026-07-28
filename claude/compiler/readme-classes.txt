@@ -1144,10 +1144,8 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   trailing `...`), which lets later same-scope re-opens APPEND fields (see INCOMPLETE CLASSES
   below). Re-open is a SAME-SCOPE construct — all openings live in the
   scope where the class is declared. The CROSS-SCOPE / run-time-scope variant (re-opening a
-  class from a scope that isn't its own) is a SEPARATE, not-yet-landed feature — REFINEMENTS:
-  a scoped zero-field derived class ($T) that USURPS the base's name in the scope and only
-  LOOKS like re-opening (rides the landed inheritance + a free offset-0 cast; motivated by
-  giving a generic like `sort<T>` a method the element type lacks). Canon test/class/refine.sl.
+  class from a scope that isn't its own) is a SEPARATE feature — REFINEMENTS, landed; see
+  its own section below.
 
   INCOMPLETE CLASSES (landed; single-file). A class whose field tuple ends with a trailing
   `...` is INCOMPLETE (grammar sets Node.is_incomplete; parseParamList, class field lists
@@ -1261,8 +1259,12 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   class body (else `_$recv` doubles — Outer's from the parser, the target's from relocation).
 
   SAME-SCOPE for classes; namespaces open anywhere. A CLASS re-open is same-scope: the target
-  must be a local sibling opening in THIS `children`, so re-opening a class merely VISIBLE from
-  an enclosing scope (refine) fails the local walk and errors per-segment. A NAMESPACE opens in
+  must be a local sibling opening in THIS `children`. Re-opening a class merely VISIBLE from an
+  enclosing scope fails the local walk — and what happens then depends on the SCOPE KIND
+  (relocateOutOfLineMembers' `runtime_scope` flag, true only at the resolveStmtList /
+  resolveFunctionBody call sites): in a RUN-TIME scope it is a REFINEMENT and a usurper is
+  minted for it (below); in a file / namespace / class body it still errors per-segment. A
+  NAMESPACE opens in
   ANY scope, so a qualified LEAF (const/alias/enum) whose first segment names an enclosing-scope
   namespace is not physically movable — registerQualifiedLeaf registers it into that namespace's
   frame IN PLACE (node left for constfold; the intermediate resolve passes skip a qualified
@@ -1272,14 +1274,90 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
 
   DIAGNOSTICS. A missing path segment is careted at the SPECIFIC failing segment, named against
   its parent scope: `'Gone' is not a class or namespace in scope` (first segment) /
-  `'Onest' has no class or namespace member 'Gone'` (a later one). A refine attempt (external
-  member on a class merely visible from an enclosing scope) hits the same first-segment
-  message. (`Ns:Member()` of a non-existent NAMESPACE member silently creates a new empty
+  `'Onest' has no class or namespace member 'Gone'` (a later one). An external member on a
+  class merely visible from an enclosing scope hits the same first-segment message OUTSIDE a
+  run-time scope; inside one it is a refinement instead and no error is due.
+  (`Ns:Member()` of a non-existent NAMESPACE member silently creates a new empty
   class, consistent with the block field-less create-or-re-open rule; but `Class:New()` of a
   non-existent member of a CLASS is instead read as INHERITANCE — the empty-field derived
   `Class : New()` — see the empty-parens disambiguation above.) OUT OF SCOPE for
   re-open proper: `global` vars, `...` incomplete classes, and the cross-scope run-time variant
-  (REFINEMENTS, above). Canon test/class/reopen.sl.
+  (REFINEMENTS, below). Canon test/class/reopen.sl.
+
+
+REFINEMENTS (landed; spans resolve / classify; non-virtual)
+
+  Re-opening a class from a RUN-TIME scope that is not its own does not join the class. It
+  mints an anonymous zero-field DERIVED class in that scope — `$Class : Class` — whose members
+  SHADOW the base's, and the name `Class` means the usurper for the whole scope. Both spellings
+  trigger it, the block `Class() { }` and the external `void Class:m() { }`. SOUND because a
+  refinement adds no fields: the usurper is layout-identical, so viewing a Class instance as a
+  $Class is a free offset-0 no-op. Canon test/class/refine.sl.
+
+  ONE FUNNEL. mintUsurpers is find-or-create, keyed on the class the name resolves to, so every
+  opening in a scope merges into ONE usurper. It runs at the HEAD of relocateOutOfLineMembers
+  (gated on runtime_scope), which is what lets the external form need no special case: the
+  usurper is a real local sibling by the time the qualifier walk looks for one — collectScopeOpenings
+  answers the REFINED name for a usurper, though its own name is `$Class`. The block form is
+  folded in by the same pass, its members moved onto the usurper and the opening consumed. Two
+  guards mirror the re-open path exactly: an opening with a real FIELD is not a re-open in any
+  scope (it declares a new local class that merely shadows, and stays one), and the synthetic
+  `_$vptr` / `_$base` do not count as fields — a `virtual` member makes the parser add a
+  `_$vptr` the opening should not be judged by. A block opening must also EXCLUDE ITSELF from
+  the local-sibling test, or it disqualifies its own refinement.
+
+  TWO NAMES, AND WHY. The ENTRY registers under the REFINED name, so resolveName's
+  innermost-first walk finds it for the whole scope — that shadowing IS the usurpation and it
+  costs nothing. But the class's own SPELLING is `$Class`, because only a kSlid handle carries a
+  def_id: structKey keys a composite by its pointee's TypeRef, but two same-named classes in the
+  same interning generation are told apart only by that def_id, and sharing the refined name
+  makes `$Data[5]` and `Data[5]` indistinguishable at the leaf — the whole retarget silently
+  becomes a no-op. Consequences: `Class:` inside a refined member means the BASE
+  (current_base_name is the refined name, current_class_name is `$Class`), and diagnostics say
+  `$Class` when they mean the refinement.
+
+  THE BASE IS PRE-RESOLVED. The usurper is registered under the very name it derives from, so
+  resolving its base SPELLING finds the usurper itself — a cycle. Its `_$base` param carries the
+  refined class's already-resolved HANDLE instead, and the two places that would re-resolve it
+  are guarded by is_usurper: registerClassBody's field-type pass and pushBaseChain. The same
+  trap catches the RECEIVER: a relocated method's `_$recv` is built from a SPELLING, so a
+  usurper target must be spelled by the name it usurped (`Class^`, which resolves to it here) —
+  `$Class` is no entry name and resolves to nothing.
+
+  THE RETARGET. An instance declared OUTSIDE the scope keeps its own type, so resolve stamps
+  each USE with the usurper-mapped type (Node::usurped_type) and classify reads that instead of
+  the entry's — only resolve knows the scope, only classify knows types. Two properties are
+  load-bearing. The map is RECURSIVE THROUGH THE TYPE CONSTRUCTORS (`Data`, `Data^`, `Data[]`,
+  `Data[5]`, tuples), which is what carries a container declared outside the scope into a
+  template; without it the retarget reaches only bare class lvalues and the motivating case does
+  nothing. And each scope's map is CHAIN-CLOSED — every ancestor of the usurper maps to it — so
+  a nested refinement (whose usurper derives from the enclosing one) wins in ONE lookup for an
+  instance declared outside both. Stamping is one helper, stampUsurp, called from the read arm
+  and the assign-target arm, so a refined `op=` sees what a refined method sees.
+
+  TEMPLATES COMPOSE FOR FREE. `sort(array)` inside the scope infers `T = $Data` and instantiates
+  a SECOND flavor whose body finds the refined member; outside, `T = Data`. No mechanism — the
+  refinement is a real TYPE, so ordinary inference does the work. This is the motivation:
+  retroactive, scoped conformance with no orphan-rule problem, the answer to a comparator. A
+  PLAIN function is never re-instantiated, so a generic is the only thing that crosses the
+  boundary; everything else in the scope is lexical.
+
+  WHAT IT COST ELSEWHERE. Two rules the refinement leans on had to be made real. (1) An array of
+  the usurper passed to a `Class[]` param decays and demotes, so the derived->ancestor ITERATOR
+  rule had to be enforced rather than merely stated — see the same-size gate under RE-OPENING's
+  neighbour in readme.txt (classChainSameSize). (2) `rhs^.x_` where `x_` is a BASE field:
+  explicit `obj.field` never walked the base chain, so an inherited field was reachable only
+  from inside the class. classify's kFieldExpr now splices the `_$base` hops, the same chain a
+  bare field name lowers to in a method (resolve's buildBaseReceiver).
+
+  REJECTED. A ctor/dtor (the usurper's lifecycle would run for instances declared in the scope
+  but not for the ones retargeted into it) and a method the base declared VIRTUAL, or a new
+  `virtual` member (an override cannot reach an existing instance's vptr). checkUsurpers vets
+  each usurper BEFORE the caller registers it — a refined ctor otherwise trips the
+  lifecycle-pairing rules first and buries the real reason — and marks the node
+  (usurper_vetted), because relocation runs TWICE over a function body and an offence must be
+  reported once. Fields cannot be added at all: there is no field-bearing refinement spelling,
+  and a second opening that tries lands on the ordinary "a re-open cannot add fields".
 
 
 VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)

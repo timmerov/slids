@@ -558,13 +558,41 @@ bool isTransitiveBase(parse::Tree& tree, widen::TypeRef base, widen::TypeRef der
     return false;
 }
 
+// SAME SIZE, structurally. An ITERATOR strides by its pointee, so demoting a derived
+// iterator to an ancestor iterator is sound only when the two classes are the same
+// size — cast.sl states the rule as an iff. A class's byte size is no compile-time
+// constant here (it is the layout LLVM owns), but the question needs no arithmetic:
+// a derived class is the size of its base exactly when it adds NO fields of its own
+// beyond the slot-0 `_$base` sub-object, and that must hold at every step down the
+// chain. This is what makes a REFINEMENT's usurper interchangeable with the class it
+// refines — it adds no fields by construction.
+bool classChainSameSize(parse::Tree& tree, widen::TypeRef derived, widen::TypeRef base) {
+    derived = widen::strip(derived);
+    base = widen::strip(base);
+    int guard = static_cast<int>(tree.classes.size()) + 2;
+    for (widen::TypeRef c = derived; c != widen::kNoType && guard-- > 0; ) {
+        if (c == base) return true;
+        auto it = tree.classes.find(c);
+        if (it == tree.classes.end()) return false;
+        if (it->second.field_names.size() != 1
+            || it->second.field_names[0] != "_$base") return false;
+        c = widen::strip(parse::baseTypeOf(it->second));
+    }
+    return false;
+}
+
 // A derived->base pointer is an IMPLICIT upcast (the base is at offset 0, so the
 // pointer is unchanged): both pointer-ish, the target pointee a base of the source's.
+// A REFERENCE names one object and demotes unconditionally; an ITERATOR walks a
+// sequence, so it demotes only between same-size classes (classChainSameSize).
 bool ptrBaseUpcastOk(parse::Tree& tree, widen::TypeRef from, widen::TypeRef to) {
     if (!isPtrLikeType(from) || !isPtrLikeType(to)) return false;
     widen::TypeRef pf = castPointee(from), pt = castPointee(to);
     if (pf == widen::kNoType || pt == widen::kNoType) return false;
-    return isTransitiveBase(tree, pt, pf);
+    if (!isTransitiveBase(tree, pt, pf)) return false;
+    if (widen::form(widen::strip(to)) == widen::Type::Form::kIterator)
+        return classChainSameSize(tree, pf, pt);
+    return true;
 }
 
 // A base<->derived pointer cast is EXPLICITLY allowed (downcast or upcast); both at
@@ -1393,6 +1421,12 @@ int argConvertCost(parse::Tree& tree, parse::Node const& a, widen::TypeRef praw)
                 return 0;
             if (widen::deepStrip(pointee) == widen::deepStrip(arrayFirstElem(at)))
                 return 2;
+            // An array of a DERIVED class decays to an ANCESTOR iterator — the same
+            // implicit demotion the pointer arm grants below, and same-size-gated
+            // there, because the decayed iterator strides by the parameter's pointee.
+            if (ptrBaseUpcastOk(tree,
+                    widen::internIterator(arrayFirstElem(at)), param))
+                return 2;
         }
         return -1;
     }
@@ -1920,6 +1954,44 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             int idx = it->second.fieldIndex(e.name);
             if (idx < 0) {
+                // An INHERITED field. The base is the unnamed slot-0 sub-object, so
+                // `obj.field` of a base field IS `obj._$base….field` — splice the hops
+                // and re-infer, the same `_$base` chain a BARE field name lowers to
+                // inside a method (resolve's buildBaseReceiver). Without this a field
+                // was reachable through a derived instance only from inside the class.
+                int depth = 0;
+                int found = -1;
+                widen::TypeRef owner = widen::kNoType;
+                int guard = static_cast<int>(tree.classes.size()) + 2;
+                for (widen::TypeRef c = bt; guard-- > 0; ) {
+                    auto ci = tree.classes.find(c);
+                    if (ci == tree.classes.end()) break;
+                    widen::TypeRef b = widen::strip(parse::baseTypeOf(ci->second));
+                    if (b == widen::kNoType) break;
+                    auto bi = tree.classes.find(b);
+                    if (bi == tree.classes.end()) break;
+                    depth++;
+                    int fi = bi->second.fieldIndex(e.name);
+                    if (fi >= 0) { found = fi; owner = b; break; }
+                    c = b;
+                }
+                if (found >= 0) {
+                    std::unique_ptr<parse::Node> acc = std::move(e.children[0]);
+                    for (int h = 0; h < depth; h++) {
+                        auto hop = std::make_unique<parse::Node>();
+                        hop->kind = parse::Kind::kFieldExpr;
+                        hop->name = "_$base";
+                        hop->file_id = e.file_id;
+                        hop->tok = e.tok;
+                        hop->children.push_back(std::move(acc));
+                        acc = std::move(hop);
+                    }
+                    e.children.clear();
+                    e.children.push_back(std::move(acc));
+                    inferExpr(tree, *e.children[0], widen::kNoType, diag);
+                    e.inferred_type = tree.classes.at(owner).field_types[found];
+                    return;
+                }
                 // A bare method NAME with no `(args)` — `obj.method` — is not a
                 // value; the call is missing its parameter list. (`obj.method(args)`
                 // parses straight to a kMethodCallStmt and never reaches here.)
@@ -2310,7 +2382,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     pointeeType(e.children[0]->inferred_type);
                 return;
             }
-            e.inferred_type = parse::entryType(tree, e.resolved_entry_id);
+            // A REFINEMENT retargets an instance declared outside the refine scope:
+            // resolve stamped the usurper-mapped type (only it knows the scope), and
+            // the usurper is layout-identical to what it refines, so reading the same
+            // storage as the derived type is a free offset-0 view.
+            e.inferred_type = e.usurped_type != widen::kNoType
+                ? e.usurped_type
+                : parse::entryType(tree, e.resolved_entry_id);
             // The alias label is the type itself when it's a (scalar) alias —
             // drives binaryLabel's sticky-alias rule; the kAlias type is the
             // source of truth, this label is derived from it.
@@ -4413,9 +4491,19 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
     // does not rewrite and falls through to checkPtrAssign, which errors.
     if (isPtrLikeType(dest) && isArrayType(rhs.inferred_type)) {
         widen::TypeRef pointee = pointeeType(dest);
+        widen::TypeRef elem = arrayFirstElem(rhs.inferred_type);
+        // An array of a DERIVED class decays to an ANCESTOR pointer as well — the
+        // decayed pointer then demotes on the ordinary pointer path (checkPtrAssign),
+        // which same-size-gates the iterator case. Without this arm the decay never
+        // fires and the mismatch is reported as an aggregate-vs-scalar assignment.
+        bool base_decay =
+            pointee != widen::kNoType && elem != widen::kNoType
+            && ptrBaseUpcastOk(tree,
+                   widen::form(widen::strip(dest)) == widen::Type::Form::kIterator
+                       ? widen::internIterator(elem) : widen::internPointer(elem),
+                   dest);
         if (pointee != widen::kNoType
-            && widen::deepStrip(pointee)
-               == widen::deepStrip(arrayFirstElem(rhs.inferred_type))) {
+            && (widen::deepStrip(pointee) == widen::deepStrip(elem) || base_decay)) {
             wrapArrayAsElemAddr(rhs);
             inferExpr(tree, rhs, dest, diag);
         }

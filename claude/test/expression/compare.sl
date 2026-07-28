@@ -22,7 +22,12 @@ ranking), so a comparison and a call cannot drift apart on the answer:
   nullptr -> any pointer
   any pointer -> intptr           the one bridge between pointers and integers
   iterator -> reference           of the same pointee
-  derived -> base                 the base is the slot-0 sub-object: same address
+  derived -> base                 the base is the slot-0 sub-object: same address.
+                                  a REFERENCE names one object and always converts; an
+                                  ITERATOR strides by its pointee, so it converts only
+                                  between SAME-SIZE classes (cast.sl's iff) — a derived
+                                  that adds fields converts as a reference, not as an
+                                  iterator.
 
 DIRECTION IS NOT A CHOICE. pointer -> intptr is implicit while intptr -> pointer needs
 an explicit cast, so a mixed pair always settles on intptr. a derived/base pair settles
@@ -49,6 +54,10 @@ Base(int b_ = 1) {
 Base : Derived(int d_ = 2) {
     int dget() { return d_; }
 }
+
+/* a derived that adds NO fields, so it is the same size as its base — the only
+   shape whose ITERATOR demotes to the base implicitly (see cast.sl). */
+Base : Flat() { }
 
 /* unrelated to both, for the negatives: being a class is not what makes a pair
    compatible — inheritance is. */
@@ -124,11 +133,13 @@ int32 main() {
     println(String + "cls same= " + (rd == rdb));
     println(String + "cls ne  = " + (rd != rb));
 
-    /* the same edge through ITERATORS, which admit all six. */
-    Derived darr[2];
-    Derived[] pd0 = ^darr[0];
-    Derived[] pd1 = ^darr[1];
-    Base[]    pb0 = ^darr[0];
+    /* the same edge through ITERATORS, which admit all six. an iterator STRIDES by
+       its pointee, so this edge needs a derived that is the SAME SIZE as its base
+       (Flat adds no fields) — Derived, which adds one, converts only as a reference. */
+    Flat darr[2];
+    Flat[] pd0 = ^darr[0];
+    Flat[] pd1 = ^darr[1];
+    Base[] pb0 = ^darr[0];
     println(String + "cit eq  = " + (pb0 == pd0));
     println(String + "cit lt  = " + (pb0 <  pd1));
     println(String + "cit le  = " + (pb0 <= pd1));

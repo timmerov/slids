@@ -24,7 +24,25 @@ namespace resolve {
 // anon-namespace scope resolvers can call it.
 void relocateOutOfLineMembers(parse::Tree& tree,
                               std::vector<std::unique_ptr<parse::Node>>& children,
-                              diagnostic::Sink& diag);
+                              diagnostic::Sink& diag, bool runtime_scope = false);
+
+// REFINEMENTS. Re-opening a class from a RUN-TIME scope that isn't its own is an
+// illusion: it desugars to an anonymous zero-field DERIVED class ($Class : Class)
+// minted in that scope and registered under the refined class's OWN name, so the
+// name is usurped for the whole scope. Sound because a refinement adds no fields —
+// the usurper is layout-identical, so viewing a Class instance as a $Class is a
+// free offset-0 no-op. Defined at resolve:: scope with relocation; forward-declared
+// here for the two run-time-scope resolvers. `mintUsurpers` is the ONE find-or-create
+// funnel — both trigger forms (the block `Class(){ }` and the external
+// `void Class:m(){ }`) go through it, so every opening in a scope merges into one
+// usurper.
+void mintUsurpers(parse::Tree& tree,
+                  std::vector<std::unique_ptr<parse::Node>>& children);
+void checkUsurpers(parse::Tree& tree,
+                   std::vector<std::unique_ptr<parse::Node>>& children,
+                   diagnostic::Sink& diag);
+void pushUsurpScope(parse::Tree& tree,
+                    std::vector<std::unique_ptr<parse::Node>>& children);
 
 // The POSITIONAL BINDER RENAME (out-of-line template members + re-opens
 // spelling the list under their own names). Defined with relocation at
@@ -1553,7 +1571,10 @@ bool isScopeMember(parse::Node const& m) {
 int pushBaseChain(parse::Tree& tree, parse::Node const& node) {
     if (node.kind != parse::Kind::kClassDef || node.text.empty()) return 0;
     widen::TypeRef base_type = widen::kNoType;
-    int id = resolveName(tree, node.text);
+    // A USURPER is registered under the very name it derives from, so resolving the
+    // base SPELLING here would find the usurper itself — read the pre-resolved
+    // `_$base` handle instead (the else arm below).
+    int id = node.is_usurper ? -1 : resolveName(tree, node.text);
     if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kClass
         && !tree.entries[id].is_template) {
         base_type = tree.entries[id].slids_type;
@@ -2123,6 +2144,48 @@ void canonicalizeInstanceQualifier(parse::Tree& tree, std::string& q,
     out_type = t;
 }
 
+// THE RETARGET. Map a type through the enclosing refine scopes' usurpers, RECURSIVELY
+// through the type constructors — an instance declared outside the scope is reached as
+// `Data`, `Data^`, `Data[]` or `Data[5]`, and all four must read as the usurper's, or a
+// container declared outside never carries the refinement into a template. The map is
+// chain-closed, so the innermost scope's usurper wins in one lookup.
+widen::TypeRef usurpType(parse::Tree& tree, widen::TypeRef t) {
+    using F = widen::Type::Form;
+    if (t == widen::kNoType || tree.usurp_stack.empty()) return t;
+    for (auto it = tree.usurp_stack.rbegin(); it != tree.usurp_stack.rend(); ++it) {
+        if (it->empty()) continue;
+        auto hit = it->find(widen::strip(t));
+        if (hit != it->end()) return hit->second;
+        break;
+    }
+    F f = widen::form(t);
+    if (f == F::kPointer)
+        return widen::internPointer(usurpType(tree, widen::get(t).pointee));
+    if (f == F::kIterator)
+        return widen::internIterator(usurpType(tree, widen::get(t).pointee));
+    if (f == F::kArray)
+        return widen::internArray(usurpType(tree, widen::get(t).elem),
+                                  widen::get(t).dims);
+    if (f == F::kConst)
+        return widen::internConst(usurpType(tree, widen::get(t).underlying));
+    if (f == F::kTuple) {
+        std::vector<widen::TypeRef> slots = widen::get(t).slots;
+        for (auto& s : slots) s = usurpType(tree, s);
+        return widen::internTuple(slots);
+    }
+    return t;
+}
+
+// Stamp a variable reference with its retargeted type, if this scope refines its
+// class. The ONE place a use is re-typed — the read arm and the assign-target arm
+// both funnel here, so a refined `op=` sees the same type a refined method does.
+void stampUsurp(parse::Tree& tree, parse::Node& e, int id) {
+    if (tree.usurp_stack.empty() || id < 0) return;
+    widen::TypeRef declared = parse::entryType(tree, id);
+    widen::TypeRef mapped = usurpType(tree, declared);
+    if (mapped != declared) e.usurped_type = mapped;
+}
+
 bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
                              diagnostic::Sink& diag, bool unevaluated) {
     // Spelling `X:self.method(args)` — a method call whose receiver (children[0]) is the
@@ -2333,6 +2396,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             }
             noteCapture(tree, id);
             e.resolved_entry_id = id;
+            stampUsurp(tree, e, id);
             return;
         }
         case parse::Kind::kCallExpr: {
@@ -2763,6 +2827,7 @@ bool resolveAssignTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& di
     if (entry.kind == parse::EntryKind::kLocalVar)
         noteCapture(tree, id);   // an assigned host local is a (by-ref) capture
     s.resolved_entry_id = id;
+    stampUsurp(tree, s, id);
     return true;
 }
 
@@ -5508,8 +5573,17 @@ Completion resolveStmtList(parse::Tree& tree,
     // First relocate any external qualified defs (`int C:m(){}`, `C:Ns{}`, `C:R(){}`)
     // into their target — the external re-open form in a function body / nested block
     // — so the pre-pass registers them as members of that class/namespace.
-    relocateOutOfLineMembers(tree, stmts, diag);
+    relocateOutOfLineMembers(tree, stmts, diag, /*runtime_scope=*/true);
     registerLocalClasses(tree, stmts, diag);
+    // A REFINEMENT's usurper is registered now, so the scope's retarget map can be
+    // built. Pushed around EVERYTHING below — canon: a refinement applies to the
+    // entire scope, not just the statements after it, exactly as a class needs no
+    // forward declaration.
+    pushUsurpScope(tree, stmts);
+    struct UsurpPop {
+        parse::Tree& t;
+        ~UsurpPop() { t.usurp_stack.pop_back(); }
+    } usurp_pop{tree};
     // Nested-function SIGNATURES, after the classes (so a nested function may name a
     // scope-local class in its signature) and before any statement — so a call may precede
     // the definition.
@@ -5717,7 +5791,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     // skips a class already registered here — so these don't double-register.
     // Relocate external qualified defs first (so a `int C:m(){}` beside a body-local
     // `C` registers as C's method before this pre-pass runs).
-    relocateOutOfLineMembers(tree, fn.children, diag);
+    relocateOutOfLineMembers(tree, fn.children, diag, /*runtime_scope=*/true);
     registerLocalClasses(tree, fn.children, diag);
     // Forward-decl pre-pass for kConst: pre-create entries so const init
     // expressions can reference later-declared consts in the same body.
@@ -6181,9 +6255,13 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     int def_id = file_scope_def_id ? -1
                : member_of >= 0 ? member_of
                : (decl_frame == kGlobalFrame) ? -1 : decl_frame;
+    // A REFINEMENT's usurper is spelled `$Class` (a distinct type) but ENTERS the
+    // frame under the class it refines, so every later use of that name in the scope
+    // finds it first — the name usurpation canon calls an illusion.
+    std::string const& entry_name = node.is_usurper ? node.text : node.name;
     int prev_id = member_of >= 0
-        ? findMemberDeclared(tree, member_of, node.name)
-        : parse::findInFrame(tree, decl_frame, node.name);
+        ? findMemberDeclared(tree, member_of, entry_name)
+        : parse::findInFrame(tree, decl_frame, entry_name);
     if (prev_id >= 0) {
         parse::Entry const& prev = tree.entries[prev_id];
         // A same-name CLASS already declared in this frame is a RE-OPEN: the new
@@ -6265,7 +6343,7 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     int cls_frame = parse::allocFrameId(tree);
     parse::Entry e;
     e.kind = parse::EntryKind::kClass;
-    e.name = node.name;
+    e.name = entry_name;
     e.ns_frame_id = cls_frame;
     e.slids_type = type;
     e.owner_ns_frame = member_of;   // -1 lexical, else a member of the host frame
@@ -6327,7 +6405,9 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
                     "Field '" + p->name + "' needs an explicit type.", {}});
                 return;
             }
-        } else {
+        } else if (!(node.is_usurper && p->name == "_$base")) {
+            // A usurper's base slot already holds the refined class's HANDLE; the
+            // spelling would resolve back to the usurper (it owns the name here).
             resolveDeclType(tree, p->return_type, p->file_id, p->tok, diag);
         }
         info.field_names.push_back(p->name);
@@ -7051,10 +7131,16 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
 // openings of it) — a qualifier segment may be either a class or a namespace.
 void collectScopeOpenings(std::vector<std::unique_ptr<parse::Node>>& scope,
                           std::string const& name, std::vector<parse::Node*>& out) {
-    for (auto& n : scope)
-        if (n && (n->kind == parse::Kind::kClassDef
-                  || n->kind == parse::Kind::kNamespaceDecl) && n->name == name)
+    for (auto& n : scope) {
+        if (!n) continue;
+        if (n->kind != parse::Kind::kClassDef
+            && n->kind != parse::Kind::kNamespaceDecl) continue;
+        // A REFINEMENT's usurper answers to the name it refines (that is what it
+        // usurps), though its own spelling is `$Name` — so an external
+        // `void Class:m(){ }` in the scope relocates into it as an ordinary sibling.
+        if (n->name == name || (n->is_usurper && n->text == name))
             out.push_back(n.get());
+    }
 }
 
 // Join a qualified def's path (`qualifier[0]:…:name`) for diagnostics.
@@ -7187,6 +7273,213 @@ void splitBinderSegment(std::string const& seg, std::string& base,
     names.push_back(cur);
 }
 
+// REFINEMENTS — the usurper funnel. A class re-opened from a RUN-TIME scope that is
+// not its own is refined: the opening does not join the class, it mints an anonymous
+// zero-field DERIVED class in THIS scope, registered under the refined class's own
+// name so every later use of that name in the scope means the usurper. The refined
+// members SHADOW the base's through the ordinary most-derived-frame rule, and the
+// base is layout-identical, so an instance declared outside the scope can be viewed
+// as a usurper for free (see stampUsurp).
+
+// The class an opening in this run-time scope REFINES: `name` resolves to a plain
+// class that is not a real local sibling. -1 for an unknown name, a non-class, a
+// template, or an ordinary same-scope re-open (a local sibling opening exists).
+int refinedClassEntry(parse::Tree& tree,
+                      std::vector<std::unique_ptr<parse::Node>>& children,
+                      std::string const& name, parse::Node const* self = nullptr) {
+    std::vector<parse::Node*> local;
+    collectScopeOpenings(children, name, local);
+    for (parse::Node* n : local) {
+        // A BLOCK-form opening is itself a sibling of that name — it must not
+        // disqualify itself. Any OTHER real opening means the class is declared
+        // here after all, and this is an ordinary same-scope re-open.
+        if (n == self) continue;
+        if (!n->is_usurper) return -1;
+    }
+    int id = resolveName(tree, name);
+    if (id < 0) return -1;
+    parse::Entry const& e = tree.entries[id];
+    if (e.kind != parse::EntryKind::kClass || e.is_template) return -1;
+    if (e.slids_type == widen::kNoType) return -1;
+    return id;
+}
+
+// FIND-OR-CREATE, the one funnel both trigger forms share, so every opening in a
+// scope merges into ONE usurper. The `_$base` param carries the refined class's
+// ALREADY-RESOLVED handle: in this frame the spelling means the usurper itself, so
+// registerClassBody and pushBaseChain read the handle instead of re-resolving (both
+// guarded by is_usurper).
+parse::Node* usurperFor(parse::Tree& tree,
+                        std::vector<std::unique_ptr<parse::Node>>& children,
+                        std::vector<std::unique_ptr<parse::Node>>& minted,
+                        std::string const& name, int refined, int file_id, int tok) {
+    for (auto& n : children)
+        if (n && n->kind == parse::Kind::kClassDef && n->is_usurper && n->text == name)
+            return n.get();
+    for (auto& n : minted)
+        if (n->text == name) return n.get();
+    auto u = std::make_unique<parse::Node>();
+    u->kind = parse::Kind::kClassDef;
+    // The usurper's own name is `$Class` — a SPELLING distinct from the class it
+    // refines, because only a kSlid handle carries a def_id: every composite built
+    // over it (`Data[5]`, `Data^`, `Data[]`) interns by SPELLING alone, so sharing the
+    // refined name would make `$Data[5]` and `Data[5]` the same type and the whole
+    // retarget a no-op. Its ENTRY still registers under the refined name (see
+    // registerClassName) — that shadowing is what usurps the name for the scope.
+    u->name = "$" + name;
+    u->text = name;                 // the refined class: base spelling + entry name
+    u->is_usurper = true;
+    u->file_id = file_id;
+    u->tok = tok;
+    u->name_tok = tok;
+    auto bp = std::make_unique<parse::Node>();
+    bp->kind = parse::Kind::kParam;
+    bp->name = "_$base";
+    bp->file_id = file_id;
+    bp->tok = tok;
+    bp->name_tok = tok;
+    bp->return_type = tree.entries[refined].slids_type;   // pre-resolved; never re-looked-up
+    u->params.push_back(std::move(bp));
+    minted.push_back(std::move(u));
+    return minted.back().get();
+}
+
+// Mint this run-time scope's usurpers and fold the BLOCK form into them. Runs before
+// the relocation loop, so an external `void Class:m(){ }` finds the usurper as an
+// ordinary local sibling and relocates in with no special-casing. Idempotent: a
+// function body relocates twice (resolveFunctionBody then resolveStmtList), and by
+// the second pass the block openings are consumed and the usurpers already exist.
+void mintUsurpers(parse::Tree& tree,
+                  std::vector<std::unique_ptr<parse::Node>>& children) {
+    std::vector<std::unique_ptr<parse::Node>> minted;
+    // BLOCK form: `Class() { ... }` — an EMPTY field list, exactly as a same-scope
+    // re-open. A field-BEARING `Class(int y) { }` is not a re-open in any scope; it
+    // declares a new local class that happens to shadow, and stays one.
+    for (auto& ch : children) {
+        if (!ch || ch->kind != parse::Kind::kClassDef) continue;
+        if (ch->is_usurper || !ch->qualifier.empty()) continue;
+        if (!ch->type_params.empty()) continue;   // a local class template
+        // EMPTY field list, exactly as a same-scope re-open. The synthetic `_$vptr` /
+        // `_$base` are not user fields — an opening with a `virtual` member picks up a
+        // spurious `_$vptr` from the parser, which does not know yet that this is not
+        // a primary (the same filter the re-open path applies).
+        bool has_fields = false;
+        for (auto& p : ch->params)
+            if (p && p->name != "_$vptr" && p->name != "_$base") { has_fields = true; break; }
+        if (has_fields) continue;
+        int refined = refinedClassEntry(tree, children, ch->name, ch.get());
+        if (refined < 0) continue;
+        parse::Node* u = usurperFor(tree, children, minted, ch->name, refined,
+                                    ch->file_id, ch->name_tok);
+        // Merge this opening's members into the usurper and consume the node; two
+        // block openings in one scope therefore land in one class, as they would
+        // in the same-scope re-open they imitate.
+        for (auto& m : ch->children)
+            if (m) u->children.push_back(std::move(m));
+        ch.reset();
+    }
+    // EXTERNAL form: ensure the target exists before the relocation walk looks for it.
+    for (auto& ch : children) {
+        if (!ch || ch->qualifier.empty()) continue;
+        // Only the DEFINITION kinds relocation handles — a qualified EXPRESSION
+        // statement (`Host:Inner(90);`, a nameless construction) also carries a
+        // qualifier and must not be mistaken for an opening.
+        bool is_def = ch->kind == parse::Kind::kFunctionDef
+                   || ch->kind == parse::Kind::kFunctionDecl
+                   || ch->kind == parse::Kind::kNamespaceDecl
+                   || ch->kind == parse::Kind::kClassDef
+                   || ch->kind == parse::Kind::kEnumDecl
+                   || (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const)
+                   || (ch->kind == parse::Kind::kAliasDecl
+                       && ch->return_type != widen::kNoType);
+        if (!is_def) continue;
+        std::string base;
+        std::vector<std::string> binders;
+        splitBinderSegment(ch->qualifier[0], base, binders);
+        if (!binders.empty()) continue;          // a template binder list, not a refinement
+        int refined = refinedClassEntry(tree, children, base);
+        if (refined < 0) continue;
+        usurperFor(tree, children, minted, base, refined,
+                   ch->file_id, ch->qualifier_toks[0]);
+    }
+    for (auto& u : minted) children.push_back(std::move(u));
+}
+
+// The two things a refinement may not change (refine.sl canon): a ctor/dtor, and a
+// method that is VIRTUAL in the refined class. Both would break the illusion — the
+// usurper's lifecycle would run for instances declared in the scope but not for the
+// ones retargeted into it, and a virtual override cannot reach an existing instance's
+// vptr. Checked after relocation, when every opening's members have arrived.
+void checkUsurpers(parse::Tree& tree,
+                   std::vector<std::unique_ptr<parse::Node>>& children,
+                   diagnostic::Sink& diag) {
+    for (auto& u : children) {
+        if (!u || u->kind != parse::Kind::kClassDef || !u->is_usurper) continue;
+        if (u->usurper_vetted) continue;
+        u->usurper_vetted = true;
+        widen::TypeRef base = widen::kNoType;
+        for (auto& p : u->params)
+            if (p && p->name == "_$base") base = widen::strip(p->return_type);
+        for (auto& m : u->children) {
+            if (!m) continue;
+            if (parse::isImplicitMember(m->name)
+                && (m->name == "_$ctor" || m->name == "_$dtor")) {
+                diagnostic::report(diag, {m->file_id, m->name_tok >= 0 ? m->name_tok : m->tok,
+                    "A refinement cannot define " + std::string(
+                        parse::implicitMemberNoun(m->name)) + " for '" + u->text + "'.", {}});
+                continue;
+            }
+            if (m->is_virtual) {
+                diagnostic::report(diag, {m->file_id, m->name_tok >= 0 ? m->name_tok : m->tok,
+                    "A refinement cannot add a virtual method ('" + m->name + "').", {}});
+                continue;
+            }
+            if (m->kind != parse::Kind::kFunctionDef
+                && m->kind != parse::Kind::kFunctionDecl) continue;
+            // Refining a method the base declared VIRTUAL is an override that could
+            // never reach an instance created before the scope was entered.
+            for (int fr : parse::classAndBaseFrames(tree, base)) {
+                if (fr < 0) continue;
+                int prev = findMemberDeclared(tree, fr, m->name);
+                if (prev < 0) continue;
+                if (tree.entries[prev].is_virtual) {
+                    parse::Entry const& pe = tree.entries[prev];
+                    diagnostic::report(diag, {m->file_id,
+                        m->name_tok >= 0 ? m->name_tok : m->tok,
+                        "A refinement cannot refine the virtual method '" + m->name
+                        + "'.", {{pe.file_id, pe.tok, "declared virtual here"}}});
+                }
+                break;
+            }
+        }
+    }
+}
+
+// Build this scope's refined-class -> usurper map and push it. CHAIN-CLOSED: every
+// ancestor of the usurper maps to it, so a nested refinement retargets an instance
+// declared outside BOTH scopes in one lookup, and the innermost scope wins.
+void pushUsurpScope(parse::Tree& tree,
+                    std::vector<std::unique_ptr<parse::Node>>& children) {
+    std::map<widen::TypeRef, widen::TypeRef> m;
+    for (auto& u : children) {
+        if (!u || u->kind != parse::Kind::kClassDef || !u->is_usurper) continue;
+        widen::TypeRef ut = widen::strip(u->return_type);
+        if (ut == widen::kNoType) continue;
+        auto it = tree.classes.find(ut);
+        if (it == tree.classes.end()) continue;
+        int guard = static_cast<int>(tree.classes.size()) + 2;
+        for (widen::TypeRef b = parse::baseTypeOf(it->second);
+             b != widen::kNoType && guard-- > 0; ) {
+            b = widen::strip(b);
+            m[b] = ut;
+            auto bi = tree.classes.find(b);
+            if (bi == tree.classes.end()) break;
+            b = parse::baseTypeOf(bi->second);
+        }
+    }
+    tree.usurp_stack.push_back(std::move(m));
+}
+
 // OUT-OF-LINE MEMBER RELOCATION. A qualified definition — the external
 // re-open form — desugars to a member of the scope named by its qualifier path:
 //   `Ret Class:method(...)`  -> a method of Class      (`node->qualifier = [Class]`)
@@ -7215,7 +7508,12 @@ void splitBinderSegment(std::string const& seg, std::string& base,
 // place (registerQualifiedLeaf) rather than physically moved.
 void relocateOutOfLineMembers(parse::Tree& tree,
                               std::vector<std::unique_ptr<parse::Node>>& children,
-                              diagnostic::Sink& diag) {
+                              diagnostic::Sink& diag, bool runtime_scope) {
+    // In a RUN-TIME scope an opening that targets a merely-visible class is a
+    // REFINEMENT: mint the usurper first, so the walk below finds it as an ordinary
+    // local sibling. File / namespace / class scopes never refine — there a
+    // non-local target still errors per segment.
+    if (runtime_scope) mintUsurpers(tree, children);
     bool moved = false;
     for (auto& ch : children) {
         if (!ch) continue;
@@ -7456,8 +7754,13 @@ void relocateOutOfLineMembers(parse::Tree& tree,
         // receiver `_$recv` of type `Class^`. A namespace/class node, or a free
         // function in a namespace, has no receiver.
         if (is_fn && target->kind == parse::Kind::kClassDef) {
+            // The receiver is a SPELLING, resolved later by name — so a usurper must
+            // be spelled by the name it usurped (`Data^`, which resolves to it in this
+            // scope). Its own `$Data` is no entry name and would resolve to nothing.
+            std::string const& recv_name =
+                target->is_usurper ? target->text : target->name;
             ch->params.insert(ch->params.begin(),
-                parse::makeReceiverParam(widen::internOrNone(target->name + "^"),
+                parse::makeReceiverParam(widen::internOrNone(recv_name + "^"),
                                          ch->file_id, ch->name_tok));
         }
         ch->qualifier.clear();
@@ -7468,6 +7771,11 @@ void relocateOutOfLineMembers(parse::Tree& tree,
     if (moved)
         children.erase(std::remove(children.begin(), children.end(), nullptr),
                        children.end());
+    // Every opening has arrived — vet what the refinements contain, BEFORE the caller
+    // registers them (a refined ctor otherwise trips the lifecycle-pairing rules first
+    // and buries the real reason). Vetting marks each usurper, so the second relocation
+    // pass over a function body reports nothing twice.
+    if (runtime_scope) checkUsurpers(tree, children, diag);
 }
 
 // Does this subtree open the global scope itself (a `global;` at any depth, NOT

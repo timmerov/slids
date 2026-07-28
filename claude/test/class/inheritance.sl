@@ -167,6 +167,16 @@ Mb : Md(int r_) {
     _() { } ~() { }
 }
 
+/* COVERAGE — a derived that adds NO fields is the SAME SIZE as its base: the only
+   shape whose ITERATOR demotes to the base implicitly (cast.sl states it as an iff —
+   an iterator strides by its pointee, so a bigger derived would land mid-object). */
+Ib(int iv_) {
+    int ival() { return iv_; }
+}
+Ib : If() {
+    int idbl() { return ival() * 2; }
+}
+
 /* COVERAGE — SYNTHESIZED ctor/dtor: a derived that declares NEITHER _() nor ~() but
    whose base has them gets both synthesized to chain the base's. */
 Sb(int s_) {
@@ -262,6 +272,18 @@ int32 main() {
         println(String + "fd shadow = " + fd.fd_get() + " " + fd.base_get());   // 20 10
     }
 
+    // COVERAGE — the two pointer kinds answer the derived->base demotion differently
+    // (cast.sl's iff). A REFERENCE names one object and always demotes. An ITERATOR
+    // strides by its pointee, so it demotes only between SAME-SIZE classes: If adds no
+    // fields to Ib, so the base iterator walks the derived array correctly.
+    {
+        If farr[2] = (3, 4);
+        Ib^ fref = ^farr[0];                          // reference: always
+        println(String + "ref demote = " + fref^.ival());    // 3
+        Ib[] fit = ^farr[0];                          // iterator: same size, so implicit
+        println(String + "iter demote = " + fit[0].ival() + " " + fit[1].ival());   // 3 4
+    }
+
     // COVERAGE — sizeof a transitive chain, and a SINGLE heap derived (base ctor runs).
     println(String + "sizeof G3 = " + sizeof(G3));           // 12 (three int fields, flat)
     {
@@ -304,6 +326,18 @@ Base : Derived(Integer a_ = kSeven, int b_ = kEight) {
 //    A^ ap = ^b;
 //    B^ bp = ap;
 //    return bp^.y_;
+//}
+
+/* a derived ITERATOR demotes to the base only when the two are the SAME SIZE. Xd adds
+   a field, so a base iterator would stride past the wrong objects — rejected (the
+   REFERENCE form of the same edge stays implicit). */
+//-EXPECT-ERROR: Cannot implicitly cast 'Xd[]' to 'Xb[]'
+//Xb(int xb_) { }
+//Xb : Xd(int xd_) { }
+//int32 neg_iter_size() {
+//    Xd arr[2];
+//    Xb[] it = ^arr[0];
+//    return it[0].xb_;
 //}
 
 /* an inheritance CYCLE is an infinite-size by-value embedding (base = first field),
