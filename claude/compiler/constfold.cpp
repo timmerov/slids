@@ -435,7 +435,7 @@ parse::Kind promoteConstKind(parse::Kind base, std::string const& val) {
     using K = parse::Kind;
     bool neg = !val.empty() && val[0] == '-';
     if (base == K::kBoolLiteral && val != "0" && val != "1") base = K::kIntLiteral;
-    if (base == K::kCharLiteral && !widen::intLiteralFits(val, "char")) base = K::kIntLiteral;
+    if (base == K::kCharLiteral && !widen::charLiteralRangeOk(val)) base = K::kIntLiteral;
     if (base == K::kUintLiteral && neg) base = K::kIntLiteral;
     if (base == K::kIntLiteral && !widen::intLiteralFits(val, "int64")) base = K::kUintLiteral;
     return base;
@@ -765,10 +765,35 @@ std::unique_ptr<parse::Node> emitIntResult(parse::Node& node, parse::Node& lhs,
         widen::TypeRef lt = operandTypeRef(lhs), rt = operandTypeRef(rhs);
         if (lt == widen::kNoType || rt == widen::kNoType) return nullptr;   // unparseable
         // A weak operand flexes into the strong partner's type when its value fits.
-        if (!isStrongConstOperand(lhs) && widen::intLiteralFits(lhs.text, widen::spell(rt)))
+        // A CHAR partner uses the range check alone — the fold ABSORPTION is canon
+        // (`'A' + 1` stays char while the value fits; constfold/constant.sl), and
+        // intLiteralFits deliberately rejects char dests (an integer literal never
+        // MATCHES char — a directional rule for declarations and calls, not for
+        // absorbing a fitting literal into char arithmetic).
+        auto flexesInto = [](std::string const& text, widen::TypeRef partner) {
+            widen::TypeKind pk;
+            if (widen::classify(partner, pk)
+                && pk.cat == widen::Category::kChar)
+                return widen::charLiteralRangeOk(text);
+            return widen::intLiteralFits(text, widen::spell(partner));
+        };
+        if (!isStrongConstOperand(lhs) && flexesInto(lhs.text, rt))
             lt = rt;
-        else if (!isStrongConstOperand(rhs) && widen::intLiteralFits(rhs.text, widen::spell(lt)))
+        else if (!isStrongConstOperand(rhs) && flexesInto(rhs.text, lt))
             rt = lt;
+        // A strong BOOL beside a strong CHAR absorbs like a fitting literal —
+        // `true + 'A'` folds to char 'B' (canon constfold/constant.sl kBoolChar);
+        // commonType would otherwise yield uint8 (bool never matches char at
+        // RUNTIME — this absorption is fold-only, like the weak-literal one).
+        {
+            widen::TypeKind kl, kr;
+            if (widen::classify(lt, kl) && widen::classify(rt, kr)) {
+                if (kl.cat == widen::Category::kChar
+                    && kr.cat == widen::Category::kBool) rt = lt;
+                else if (kr.cat == widen::Category::kChar
+                         && kl.cat == widen::Category::kBool) lt = rt;
+            }
+        }
         // A strong operand is committed to the strong path — it does NOT fall back to
         // the weak no-width matrix. When the operands have no common type (a >64-bit
         // sign mix, e.g. int64 + uint64), REPORT it here (the strong types are in hand)
@@ -1106,12 +1131,20 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
 
     // Integer-class literal. Range check against the declared type, then
     // store verbatim with the literal's own kind. Bool's text was already
-    // canonicalized by numeric to "1"/"0".
+    // canonicalized by numeric to "1"/"0". A CHAR-kinded rhs (a char literal,
+    // or char arithmetic the fold absorbed — incl. an enum char member's
+    // auto-increment) range-checks as the 8-bit code point it is; the
+    // int-literal check must not see it (it rejects every char dest now that
+    // an integer never matches char — which is exactly what makes an INTEGER
+    // rhs against a `const char` decl fail here, per canon).
     std::string text_for_fit = rhs.text;
     if (rhs.kind == parse::Kind::kBoolLiteral) {
         // numeric canonicalizes bool to "1"/"0" already; pass through.
     }
-    if (!widen::intLiteralFits(text_for_fit, entry.slids_type)) {   // sees through alias
+    bool fits = (rhs.kind == parse::Kind::kCharLiteral)
+        ? widen::charLiteralRangeOk(text_for_fit)
+        : widen::intLiteralFits(text_for_fit, entry.slids_type);
+    if (!fits) {   // intLiteralFits sees through alias
         diagnostic::report(diag, {decl.file_id, decl.tok,
             "Constant '" + entry.name + "' value '" + rhs.text
             + "' does not fit " + type_word + " '" + declared + "'.", {}});

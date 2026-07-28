@@ -1378,10 +1378,17 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             // bit-truncation (the upper-bits case, e.g. ~0x0F nominal uint8 -> int64
             // as -16); the magnitude fit-check would wrongly reject its 0xFF..F0
             // value. A genuine overflow (nominal uint64 -> int64) does NOT widen, so
-            // it still reports here.
+            // it still reports here. A CHAR literal takes the char-aware check —
+            // char matches char, and widens out unsigned; the int-literal check
+            // rejects every char dest (an integer never matches char).
             if (!widen::nominalWidensTo(expr.nominal_type, dest_type)) {
-                widen::checkIntLiteralFits(expr.text, dest_type,
-                                           expr.file_id, expr.tok, diag);
+                if (expr.kind == ast::Kind::kCharLiteral) {
+                    widen::checkCharLiteralFits(dest_type, expr.file_id, expr.tok,
+                                                diag);
+                } else {
+                    widen::checkIntLiteralFits(expr.text, dest_type,
+                                               expr.file_id, expr.tok, diag);
+                }
             }
             return expr.text;
         }

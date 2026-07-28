@@ -255,7 +255,7 @@ int32 main() {
     __println("cf = " + cf);                                           // 1.5
     bool cb(true);
     __println("cb = " + cb);                                           // true
-    char cc(65);
+    char cc('A');
     __println("cc = " + cc);                                           // A
     int cpv = 9;
     int^ cpp(^cpv);                             // pointer target: element is a ref

@@ -8,7 +8,12 @@ namespace diagnostic { struct Sink; }
 
 namespace widen {
 
-enum class Category { kBool, kSignedInt, kUnsignedInt, kFloat };
+// kChar is its own category (not kUnsignedInt): canon (expression/widen.sl,
+// function/overload_fn.sl) — char widens to integer types, but integer types
+// never widen or match char; only char matches char. The distinction is
+// DIRECTIONAL, so it must live in the kind itself. For grading/conversion char
+// behaves as an 8-bit unsigned SOURCE (zext, same-sign-with-unsigned rungs).
+enum class Category { kBool, kChar, kSignedInt, kUnsignedInt, kFloat };
 
 struct TypeKind {
     Category cat;
@@ -296,6 +301,14 @@ bool nominalWidensTo(TypeRef nominal, TypeRef target);
 
 // Silent variants used by the binary-op literal-flex rule.
 bool intLiteralFits(std::string const& literal_text, std::string const& dest_type);
+// char's RANGE check alone (8-bit code point) — for constfold's char-arithmetic
+// absorption, where the operand IS a char; intLiteralFits deliberately rejects
+// char dests (an integer literal never matches char).
+bool charLiteralRangeOk(std::string const& literal_text);
+// Loud fit for a CHAR literal: exact against char, widens out as an 8-bit
+// unsigned; reports and returns false otherwise.
+bool checkCharLiteralFits(TypeRef dest, int file_id, int tok,
+                          diagnostic::Sink& diag);
 bool floatLiteralFits(std::string const& literal_text, std::string const& dest_type);
 // TypeRef overloads — classify the dest directly (sees through kAlias); kNoType fits.
 bool intLiteralFits(std::string const& literal_text, TypeRef dest);

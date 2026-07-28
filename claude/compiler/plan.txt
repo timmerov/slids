@@ -2976,6 +2976,53 @@ test/flow/forclass.sl (the user's head comments):
   decl exactly like its explicit twin: `const (const int)^` (the canon comment's
   `const int^` shorthand denotes the same deep-const type).
 
+CHAR IS ITS OWN KIND (landed 2026-07-27). Canon: expression/widen.sl +
+function/overload_fn.sl head comments — "char widens to integer types. but
+integer types do not widen or match char. only char matches char." The rule is
+DIRECTIONAL, so it lives in the kind itself: Category::kChar (widen.h), no
+longer {kUnsignedInt, 8} — which had made uint8 and char the SAME kind, so
+`(String = uint8)` ranked op=(char) as an exact-kind rung-3 match over the
+honest op=(uint64) promotion and printed a raw byte, plain overloads picked
+char for uint8 args, `char c = u8` compiled, and (kUnsignedInt,8) results
+SPELLED back as "char" (noWidthName).
+  - The RELATION does the direction: commonType remaps a char OPERAND to
+    unsigned-8 (result is the integer family type, never char; char+char
+    early-returns char), checkValueWiden/checkStrongConstAssign grew char
+    arms (source: any unsigned target, strictly-wider signed, "char to
+    same-width signed" otherwise; dest: reject), nominalWidensTo rejects a
+    char target, widen::convert maps a char source to unsigned (zext) and
+    asserts on a char dest, widenRung grades a char source as unsigned so a
+    char arg still prefers op=(uint64) over op=(int64).
+  - LITERALS: intLiteralFitsKind rejects char dests ("only char matches
+    char", loud arm in checkIntFitsCore); a CHAR literal takes its own loud
+    check (checkCharLiteralFits — exact vs char, widens out unsigned; codegen
+    emitExpr routes kCharLiteral there). A weak int literal in a CHAR TUPLE
+    SLOT rejects at classify (the tuple leaf emit converts materialized
+    values, so codegen's literal-fit never sees the pairing — it used to
+    reach widen::convert's missed-gate assert).
+  - THE ABSORPTION STAYS (user ruling: "'A'+1='B' is a char. no change to
+    const fold."): fold-side via charLiteralRangeOk (promoteConstKind's
+    demotion + emitIntResult's flexesInto, char partner = range check; a
+    strong BOOL beside a strong CHAR absorbs too — kBoolChar) — and the
+    RUNTIME mirror via classify::absorbLiteralIntoChar (flexBinaryOperands):
+    a weak int literal in char ARITHMETIC re-kinds to a char literal, so
+    `ch = ch + 1` and the desugared char-range/enum-for increment (a
+    char-kinded step literal in lowerForRanged) work; calls and decls stay
+    strict. classZeroValue mints a char field's zero as a CHAR-kinded "0".
+    Switch labels on a char scrutinee RANGE-check (charLiteralRangeOk): 'a'
+    and a fitting numeric constant compare as code points, the out-of-range
+    rejection keeps its wording.
+  - Fallout repaired in stale-canon tests (int literals in char storage):
+    constant.sl kCharNum -> 'A' (+ the kNoIntChar negative), switch.sl
+    `char hi = (char=255)`, typeconv.sl at_arr/ch_kc/src_kt -> char
+    literals, vardecl.sl `char cc('A')`, nonint.sl `char('A')`. New canon
+    coverage: widen.sl char section (widen-out matrix, absorption round-trip,
+    char+char stays char, mixing yields the integer family, six negatives),
+    overload_fn.sl chsel/chonly (uint8 and a literal pick uint64 over char,
+    char exact, char widens into a lone int64 overload, two negatives).
+    This unblocks the print-conversion sweep's uint8 blocker: `String + u8`
+    now coerces via op=(uint64) and prints the NUMBER.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

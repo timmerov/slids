@@ -402,7 +402,7 @@ int32 main() {
     __println("tf64= "  + float64(2.5));
     __println("tflt= "  + float(3.5));
     __println("tbool= " + bool(true));
-    __println("tchar= " + char(65));
+    __println("tchar= " + char('A'));
     float32 twf = 1.25;
     __println("twiden= " + float64(twf));   // float32 source widens into float64
 

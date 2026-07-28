@@ -304,6 +304,14 @@ int32 withdef(float32 a) {
 /* parameter mismatch */
 void intparam(int x) { }
 
+/* CHAR MATCHING (the canon block above): only char matches char; a char
+   argument widens OUT preferring the unsigned target; an integer — typed or
+   literal — never lands on a char param (negatives at the end). */
+char chsel(char c) { return c; }
+char chsel(uint64 x) { return 'U'; }
+char chsel_i(int64 x) { return 'I'; }
+char chonly(char c) { return c; }
+
 int32 main() {
     __println("area(5) = " + area(5));              // 25
     __println("area(3, 4) = " + area(3, 4));        // 12
@@ -377,8 +385,32 @@ int32 main() {
     //-EXPECT-ERROR: Cannot assign 'const char[14]' to 'int'
     //intparam("passed string");
 
+    /* char matching: char goes to char exactly; uint8 / an int literal go to
+       uint64 (never char); char widens into a lone integer overload. */
+    uint8 cu8 = 65;
+    char cch = 'Q';
+    __println("chsel(u8) = " + chsel(cu8));      // U (uint64 — an integer never matches char)
+    __println("chsel(ch) = " + chsel(cch));      // Q (char exact)
+    __println("chsel(65) = " + chsel(65));       // U (an int literal never matches char)
+    __println("chsel_i(ch) = " + chsel_i(cch));  // I (char widens out into int64)
+
     return 0;
 }
+
+/* an integer LITERAL cannot reach a char-only overload. */
+//-EXPECT-ERROR: only char matches char
+//int32 neg_char_only_lit() {
+//    __println("" + chonly(65));
+//    return 0;
+//}
+
+/* ...nor can a typed integer. */
+//-EXPECT-ERROR: Cannot implicitly convert 'uint8' to 'char'
+//int32 neg_char_only_u8() {
+//    uint8 nu = 65;
+//    __println("" + chonly(nu));
+//    return 0;
+//}
 
 /* two overloads a call is equally good for: `int` matches one arg exactly and
    widens same-sign to int64 on the other, mirror images — neither candidate is

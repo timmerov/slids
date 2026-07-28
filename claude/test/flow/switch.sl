@@ -585,7 +585,7 @@ int32 main() {
     __println("letter_switch(Letter:c) = " + letter_switch(Letter:c));  // 0
     __println("const_label(42) = " + const_label(42));              // 1
     __println("const_label(0) = " + const_label(0));                // 0
-    char hi = 255;
+    char hi = (char=255);   // an int literal never matches char; convert explicitly
     __println("char_max(255) = " + char_max(hi));                   // 1
     __println("last_continue(0) = " + last_continue(0));            // 1
     __println("last_continue(5) = " + last_continue(5));            // 9

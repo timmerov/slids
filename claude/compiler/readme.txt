@@ -324,16 +324,26 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
 
   INTEGER (the `widen` cell, integer family) -- per target, the source kinds
   accepted. Shorthand: N = the row's width, M = any valid width < N (signed widths
-  8/16/32/64; unsigned 1/8/16/32/64, where uint1 = bool, uint8 = char). intM / uintM
+  8/16/32/64; unsigned 1/8/16/32/64, where uint1 = bool). intM / uintM
   = the SET of signed / unsigned types narrower than N; intN / uintN = width N.
   flexK / uflexK = a literal whose single nominal type is intK / uintK. Folded:
-  char = uint8, int = signed 32, uint = unsigned 32, intptr = signed 64 (int64 ==
+  int = signed 32, uint = unsigned 32, intptr = signed 64 (int64 ==
   intptr). int = the intN row at N=32, uint = the uintN row at N=32.
+  CHAR IS ITS OWN KIND (Category::kChar, canon expression/widen.sl +
+  function/overload_fn.sl): the rule is DIRECTIONAL — as a SOURCE char widens
+  out like an 8-bit unsigned (the char cells in the intN/uintN rows); as a
+  TARGET it accepts ONLY char. No integer type, integer literal, bool, or
+  float ever implicitly converts to char — `(char=x)` is the explicit escape.
+  The ONE exception is char ARITHMETIC: a weak int literal beside a char
+  operand ABSORBS into char when its value fits 0..255 (`'A' + 1` is 'B',
+  fold and runtime alike; classify::absorbLiteralIntoChar re-kinds the node,
+  emitIntResult/charLiteralRangeOk are the fold half). char is excluded from
+  the int->float arithmetic convenience.
 
     target |  N      | accepted
     -------+---------+----------------------------------------------------
     bool   |  1      | bool, uflex1 ¹
-    char   |  8      | bool, char, uint8, uflex1, uflex8, flex8 (0..127) ²
+    char   |  8      | char ²
     int8   |  8      | bool, int8, uflex1, flex8
     intN   |  16..64 | bool, char, intM, intN, uintM, flexM, flexN, uflexM
     intptr |  64     | bool, char, intM, intN, uintM, flexM, flexN, uflexM
@@ -358,17 +368,19 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
 
   * uflex1 -- literal with nominal uint1 (value 0 or 1); the only literal that fits
     bool. On the wider rows it is just the smallest uflexM.
-  * flex8 (0..127) -- flex8 is signed int8 (-128..127); only its non-negative half
-    fits char (unsigned 8). A value-clip, not a width boundary.
+  * char accepts char alone — only char matches char. An integer literal against
+    a char TARGET rejects loudly ("only char matches char"); the fold/arithmetic
+    ABSORPTION above is the sole way a bare number becomes a char.
   * flex+ -- a signed-kind literal reaches an unsigned target only by VALUE (non-
     negative, in range): `uint x = 5` ok, `uint x = -1` errors. The nominal category
     cannot express it.
 
-  int8 stands apart from intN: at N=8 it accepts neither char (uint8 -> int8 is a
-  same-width unsigned -> signed, rejected) nor any narrower width -- only bool,
-  itself, flex8, and uflex1. Every intN with N>8 admits char outright. The width
-  cells compress into M<N; the three footnoted cells are the value/sign seams where
-  a nominal category stops lining up with a width boundary.
+  int8 stands apart from intN: at N=8 it accepts neither char (char -> int8 is a
+  same-width unsigned-like -> signed, rejected: "char to same-width signed") nor
+  any narrower width -- only bool, itself, flex8, and uflex1. Every intN with N>8
+  admits char outright. The width cells compress into M<N; the footnoted cells are
+  the value/sign seams where a nominal category stops lining up with a width
+  boundary.
 
   UPPER-BITS NOMINAL -- a uflexN's nominal width is the smallest width whose upper
   bits are uniform (all 0 or all 1), NOT the raw magnitude: constfold nominalForUint

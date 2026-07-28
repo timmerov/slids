@@ -493,8 +493,9 @@ int32 main() {
     const int64 kWideLit = 5;
     __println(##type(kWideLit) + " kWideLit = " + kWideLit);
 
-    /* a char const takes a numeric literal (the int literal flexes into char). */
-    const char kCharNum = 65;            // 'A'
+    /* a char const takes a CHAR literal — an int literal never matches char
+       (canon widen.sl/overload_fn.sl; the rejection is a negative below). */
+    const char kCharNum = 'A';
     __println(##type(kCharNum) + " kCharNum = " + kCharNum);
 
     /* boundary values fit their declared type exactly. */
@@ -553,3 +554,9 @@ int32 main() {
 
 //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
 //int32 neg_store() { int8 arr[2]; arr[0] = kFortyTwo; return arr[0]; }
+
+/* an integer literal never matches a char const — only char matches char
+   (canon widen.sl/overload_fn.sl; kCharNum above takes 'A'). The fold
+   ABSORPTION is unaffected: 'A' + 1 is still char 'B' (kBeta, kChFit). */
+//-EXPECT-ERROR: does not fit declared type 'char'
+//const char kNoIntChar = 65;

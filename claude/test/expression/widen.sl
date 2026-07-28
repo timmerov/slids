@@ -192,11 +192,14 @@ runtime value simply wraps.
 
 notes / corrections still pending:
 
-- char is now a first-class KIND (bool, char, integer, unsigned, float), not just
-  "uint8". var widening treats it inconsistently today: char+char -> char (kept),
-  char+int -> int (the no-width int), char+int8 -> int16 (char taken as a raw
-  uint8: u8+s8 -> s16). document the ACTUAL behavior; "char ... treated as ...
-  uint8" above is only half true.
+- LANDED 2026-07-27: char is a first-class KIND (Category::kChar — bool, char,
+  signed, unsigned, float). The DIRECTIONAL rule is in the relation now: char
+  widens OUT as an 8-bit unsigned SOURCE (char+char -> char kept; char+int ->
+  int; char+int8 -> int16, u8+s8 -> s16; char -> uint8..uint64 / int16..int64
+  assigns), and NOTHING widens IN (integer type, integer literal, bool, float
+  all reject; char -> int8 rejects as same-width signed). A weak int literal
+  still ABSORBS into char ARITHMETIC (runtime mirror of the fold's 'A'+1='B');
+  calls and decls stay strict. char is excluded from the float convenience.
 
 - line ~8: int is int32 (fixed), NOT int64. only char (uint8) and intptr (int64)
   are implementation-dependent; the "usually uint8 and int64" wording wrongly
@@ -462,6 +465,62 @@ int32 main() {
     //-EXPECT-ERROR: No common type for 'uint64' and 'int'; use an explicit type conversion.
     // bool bad_cmp = xu64 == -1;
     // __println("bad_cmp= " + bad_cmp);
+
+    // -- CHAR IS ITS OWN KIND (canon lines 14-15): char widens OUT to integer
+    //    types as an 8-bit unsigned source; nothing widens IN (negatives below). --
+    char wc = 'A';
+    uint64 ch_u64 = wc;   __println("ch_u64= " + ch_u64);    // 65
+    uint16 ch_u16 = wc;   __println("ch_u16= " + ch_u16);    // 65
+    uint8  ch_u8  = wc;   __println("ch_u8= "  + ch_u8);     // 65 (same-width unsigned)
+    int16  ch_i16 = wc;   __println("ch_i16= " + ch_i16);    // 65 (strictly wider signed)
+    int64  ch_i64 = wc;   __println("ch_i64= " + ch_i64);    // 65
+
+    // char + char stays char; a weak int literal ABSORBS into char arithmetic
+    // (the runtime mirror of the fold rule 'A'+1='B'), round-trip included.
+    char cinc = wc + 1;   __println("cinc= " + cinc);        // B
+    cinc = cinc + 1;      __println("cinc2= " + cinc);       // C
+    csame = wc + wc;
+    __println(##type(csame) + " csame= " + (int=csame));     // char 130
+
+    // char MIXED with an integer type participates as an 8-bit unsigned OPERAND;
+    // the result is the INTEGER family type — never char. (Fresh operands: the
+    // earlier sections mutate xu8/xi8.)
+    uint8 mu8 = 8;
+    int8 mi8 = 4;
+    int mint = 1;
+    mix_cu8 = wc + mu8;   __println(##type(mix_cu8) + " mix_cu8= " + mix_cu8);   // uint8 73
+    mix_ci8 = wc + mi8;   __println(##type(mix_ci8) + " mix_ci8= " + mix_ci8);   // int16 69
+    mix_ci  = wc + mint;  __println(##type(mix_ci)  + " mix_ci= "  + mix_ci);    // int 66
+
+    // -- negative: an integer TYPE never widens into char --
+    //-EXPECT-ERROR: Cannot implicitly convert 'uint8' to 'char'
+    // char bad_u8_char = xu8;
+    // __println("bad_u8_char= " + bad_u8_char);
+
+    // -- negative: an integer LITERAL never matches char --
+    //-EXPECT-ERROR: only char matches char
+    // char bad_lit_char = 65;
+    // __println("bad_lit_char= " + bad_lit_char);
+
+    // -- negative: char into a SAME-WIDTH SIGNED target (the uint8 rule) --
+    //-EXPECT-ERROR: char to same-width signed
+    // int8 bad_char_i8 = xc;
+    // __println("bad_char_i8= " + bad_char_i8);
+
+    // -- negative: char and float stay cross-family --
+    //-EXPECT-ERROR: Cannot implicitly convert 'char' to 'float32'
+    // float32 bad_char_f = xc;
+    // __println("bad_char_f= " + bad_char_f);
+
+    // -- negative: char is excluded from the arithmetic convenience --
+    //-EXPECT-ERROR: No common type for 'char' and 'float32'
+    // float32 bad_char_plus_f = xc + bf32;
+    // __println("bad_char_plus_f= " + bad_char_plus_f);
+
+    // -- negative: bool never converts to char --
+    //-EXPECT-ERROR: Cannot implicitly convert 'bool' to 'char'
+    // char bad_bool_char = xb;
+    // __println("bad_bool_char= " + bad_bool_char);
 
     return 0;
 }

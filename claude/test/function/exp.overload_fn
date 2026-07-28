@@ -27,3 +27,7 @@ np(null) = 9
 pk(base) = 1
 pk(super) = 3
 pk(void) = 2
+chsel(u8) = U
+chsel(ch) = Q
+chsel(65) = U
+chsel_i(ch) = I

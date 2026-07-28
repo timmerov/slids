@@ -21,7 +21,7 @@ namespace widen {
 
 bool classify(std::string const& t, TypeKind& out) {
     if (t == "bool")    { out = {Category::kBool, 1}; return true; }
-    if (t == "char")    { out = {Category::kUnsignedInt, 8}; return true; }
+    if (t == "char")    { out = {Category::kChar, 8}; return true; }
     if (t == "int8")    { out = {Category::kSignedInt, 8}; return true; }
     if (t == "int16")   { out = {Category::kSignedInt, 16}; return true; }
     if (t == "int" || t == "int32") { out = {Category::kSignedInt, 32}; return true; }
@@ -115,8 +115,10 @@ bool isNoWidth(std::string const& t) {
 }
 
 // The no-width spelling for a (category, bits), or "" when none exists.
+// (kUnsignedInt, 8) is uint8, NOT char — char is its own category now, so an
+// 8-bit-unsigned computation result never launders into char.
 std::string noWidthName(Category cat, int bits) {
-    if (cat == Category::kUnsignedInt && bits == 8)  return "char";
+    if (cat == Category::kChar        && bits == 8)  return "char";
     if (cat == Category::kSignedInt   && bits == 32) return "int";
     if (cat == Category::kUnsignedInt && bits == 32) return "uint";
     if (cat == Category::kFloat       && bits == 32) return "float";
@@ -187,6 +189,12 @@ bool checkIntFitsCore(std::string const& literal_text, TypeKind tk,
             + "'; use an explicit type conversion.", {}});
         return false;
     }
+    if (tk.cat == Category::kChar) {
+        diagnostic::report(diag, {file_id, tok,
+            "Cannot implicitly convert 'int' to 'char' (only char matches "
+            "char); use an explicit type conversion.", {}});
+        return false;
+    }
     if (tk.cat == Category::kBool) {
         if (!negative && (mag == 0 || mag == 1)) return true;
         reportIntFit(diag, literal_text, dest_s, file_id, tok);
@@ -241,6 +249,25 @@ bool checkIntLiteralFits(std::string const& literal_text,
     return checkIntFitsCore(literal_text, tk, dest_type, file_id, tok, diag);
 }
 
+// Loud check for a CHAR literal against a destination: char matches char
+// exactly; against anything else it widens as char does — an 8-bit unsigned
+// source (any unsigned target, or a strictly wider signed one). The int-literal
+// check must not see char literals: it rejects every char dest now that an
+// integer never matches char.
+bool checkCharLiteralFits(TypeRef dest, int file_id, int tok,
+                          diagnostic::Sink& diag) {
+    if (dest == kNoType) return true;
+    TypeKind tk;
+    if (!classify(dest, tk)) return true;   // non-numeric dest: not this check's call
+    if (tk.cat == Category::kChar) return true;
+    if (tk.cat == Category::kUnsignedInt && tk.bits >= 8) return true;
+    if (tk.cat == Category::kSignedInt && tk.bits > 8) return true;
+    diagnostic::report(diag, {file_id, tok,
+        "Cannot implicitly convert 'char' to '" + spell(dest)
+        + "'; use an explicit type conversion.", {}});
+    return false;
+}
+
 bool checkFloatLiteralFits(std::string const& literal_text,
                            std::string const& dest_type,
                            int file_id, int tok,
@@ -267,10 +294,22 @@ static bool intLiteralFitsKind(std::string const& literal_text, TypeKind tk) {
     uint64_t mag = 0;
     if (!parseSignedDigits(literal_text, negative, mag)) return false;
     if (tk.cat == Category::kFloat) return false;  // no silent int → float
+    if (tk.cat == Category::kChar) return false;   // an integer never matches char
     if (tk.cat == Category::kBool) return !negative && (mag == 0 || mag == 1);
     if (tk.cat == Category::kSignedInt) return intFitsSigned(mag, negative, tk.bits);
     if (tk.cat == Category::kUnsignedInt) return intFitsUnsigned(mag, negative, tk.bits);
     return false;
+}
+
+// The RANGE half alone — does this value fit char's 8-bit code-point range?
+// Used by constfold's char-arithmetic absorption (`'A' + 1` stays char while it
+// fits, demotes to int when it doesn't): the fold's operand IS a char, so the
+// "an integer never matches char" wall above does not apply to it.
+bool charLiteralRangeOk(std::string const& literal_text) {
+    bool negative = false;
+    uint64_t mag = 0;
+    if (!parseSignedDigits(literal_text, negative, mag)) return false;
+    return intFitsUnsigned(mag, negative, 8);
 }
 
 static bool floatLiteralFitsKind(std::string const& literal_text, TypeKind tk) {
@@ -289,6 +328,10 @@ bool nominalWidensTo(TypeRef nominal, TypeRef target) {
     TypeKind kn, kt;
     if (!classify(nominal, kn) || !classify(target, kt)) return false;
     if (kn.cat == Category::kFloat || kt.cat == Category::kFloat) return false;
+    // Nothing widens INTO char (only char matches char); a char nominal widens
+    // out as an 8-bit unsigned.
+    if (kt.cat == Category::kChar) return false;
+    if (kn.cat == Category::kChar) kn.cat = Category::kUnsignedInt;
     // A signed nominal never silently crosses to an unsigned target (a negative
     // literal like -1 must stay signed — canon: "-27 may be int8..int64", never
     // uintN). Unsigned->signed IS allowed: that is the upper-bits case (uint8 ~0x0F
@@ -373,6 +416,12 @@ std::string convert(std::string const& src_val,
     if (!classify(src_ref, src_tk) || !classify(dest_ref, dest_tk)) {
         return src_val;
     }
+
+    // A char SOURCE converts out as an 8-bit unsigned (zext; char -> uint8 is
+    // bit-identical). A char DEST is never an implicit target (classify's
+    // checkValueWiden rejects; only char matches char), so it keeps kChar here
+    // and lands in the asserts below if a gate is ever missed.
+    if (src_tk.cat == Category::kChar) src_tk.cat = Category::kUnsignedInt;
 
     if (src_tk.cat == dest_tk.cat && src_tk.bits == dest_tk.bits) return src_val;
 
@@ -608,6 +657,12 @@ bool commonType(TypeRef t1, TypeRef t2, TypeRef& out) {
 
     Category cat;
     int bits;
+    // char + char returned at the t1==t2 handle check above (char is ONE
+    // primitive). A char MIXED with an integer participates as an 8-bit
+    // unsigned OPERAND, and the result is the integer family type — never
+    // char (canon: char widens to integer types; nothing widens to char).
+    if (k1.cat == Category::kChar) k1.cat = Category::kUnsignedInt;
+    if (k2.cat == Category::kChar) k2.cat = Category::kUnsignedInt;
     if (k1.cat == k2.cat && k1.bits == k2.bits) {
         cat = k1.cat;
         bits = k1.bits;

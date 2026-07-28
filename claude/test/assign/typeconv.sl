@@ -332,7 +332,7 @@ int32 main() {
 
     /* a const-EXPRESSION dim baked into the conversion target. */
     const int kC = 3;
-    char ch_kc[kC] = (65, 66, 67);
+    char ch_kc[kC] = ('A', 'B', 'C');
     int int_kc[kC] = (int[kC] = ch_kc);
     __println("int_kc = " + int_kc[0] + " " + int_kc[1] + " " + int_kc[2]);  // 65 66 67
 
@@ -354,7 +354,7 @@ int32 main() {
 
     /* array-of-tuple — the symmetric direction to tuple-of-array. The codegen
        array arm peels one outer dim and recurses into the tuple elem. */
-    (char,char) at_arr[2] = ((65,66), (67,68));
+    (char,char) at_arr[2] = (('A','B'), ('C','D'));
     aoi = ((int,int)[2] = at_arr);
     __println("aoi = (" + aoi[0][0] + "," + aoi[0][1] + ") ("
               + aoi[1][0] + "," + aoi[1][1] + ")");                          // (65,66) (67,68)
@@ -394,7 +394,7 @@ int32 main() {
 
     /* const-EXPRESSION dim baked into a tuple SLOT type (the dim_sink flows
        through the tuple-slot recursion in parseType). */
-    (char[kC], char) src_kt = ((65,66,67), 90);
+    (char[kC], char) src_kt = (('A','B','C'), 'Z');
     tup_kt = ((int[kC], int) = src_kt);
     __println("tup_kt = (" + tup_kt[0][0] + " " + tup_kt[0][1] + " "
               + tup_kt[0][2] + ", " + tup_kt[1] + ")");                      // (65 66 67, 90)

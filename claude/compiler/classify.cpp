@@ -688,6 +688,11 @@ bool isIntegerClass(widen::TypeRef t) {
     return k.cat != widen::Category::kFloat;
 }
 
+bool isCharKind(widen::TypeRef t) {
+    widen::TypeKind k;
+    return widen::classify(t, k) && k.cat == widen::Category::kChar;
+}
+
 
 bool isNumericType(widen::TypeRef t) {
     widen::TypeKind k;
@@ -1288,14 +1293,34 @@ std::string binaryLabel(parse::Node const& lhs, parse::Node const& rhs) {
 // literal (carries strong_type) does NOT flex — it is a typed value, so it keeps its
 // declared type and widens via commonType like a variable of that type would (a
 // narrowing of the result back into a narrow partner then errors at the assignment).
+// A weak INT literal beside a CHAR partner in a BINARY absorbs into char when
+// its value fits the 8-bit code point — the runtime mirror of the fold's
+// absorption (`'A' + 1` is 'B'; canon constfold/constant.sl, ruled to stay).
+// The node RE-KINDS to a char literal so codegen's literal-fit sees char (an
+// un-absorbed int literal against char storage still rejects there — this is
+// an ARITHMETIC rule, not a matching rule; calls and decls stay strict).
+bool absorbLiteralIntoChar(parse::Node& lit, widen::TypeRef partner) {
+    widen::TypeKind pk;
+    if (!widen::classify(partner, pk)
+        || pk.cat != widen::Category::kChar) return false;
+    if (lit.kind != parse::Kind::kIntLiteral
+        && lit.kind != parse::Kind::kUintLiteral) return false;
+    if (!widen::charLiteralRangeOk(lit.text)) return false;
+    lit.kind = parse::Kind::kCharLiteral;
+    lit.inferred_type = widen::strip(partner);
+    return true;
+}
+
 void flexBinaryOperands(parse::Node& lhs, parse::Node& rhs) {
     bool lhs_lit = literalFlexes(lhs);
     bool rhs_lit = literalFlexes(rhs);
     if (lhs_lit && !rhs_lit && rhs.inferred_type != widen::kNoType) {
+        if (absorbLiteralIntoChar(lhs, rhs.inferred_type)) return;
         if (literalFitsContext(lhs, rhs.inferred_type)) {
             lhs.inferred_type = rhs.inferred_type;
         }
     } else if (rhs_lit && !lhs_lit && lhs.inferred_type != widen::kNoType) {
+        if (absorbLiteralIntoChar(rhs, lhs.inferred_type)) return;
         if (literalFitsContext(rhs, lhs.inferred_type)) {
             rhs.inferred_type = lhs.inferred_type;
         }
@@ -1385,6 +1410,9 @@ int widenRung(widen::TypeRef at, widen::TypeRef pt) {
     widen::TypeKind ka, kp;
     widen::classify(at, ka);
     widen::classify(pt, kp);
+    // A char SOURCE grades as unsigned (char widens out zero-extending), so a
+    // char argument still prefers an unsigned target over a signed one.
+    if (ka.cat == widen::Category::kChar) ka.cat = widen::Category::kUnsignedInt;
     bool same_sign = (ka.cat == kp.cat);
     int w = (kp.bits <= 16) ? 0 : (kp.bits <= 32) ? 1 : 2;
     return (same_sign ? 3 : 6) + w;
@@ -1888,6 +1916,21 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     e.children[i]->inferred_type = slot_ctx;
                 } else {
                     inferExpr(tree, *e.children[i], slot_ctx, diag);
+                    // A weak INT literal in a CHAR slot: an integer never
+                    // matches char — reject HERE. The tuple leaf emit converts
+                    // MATERIALIZED values (widen::convert), so codegen's
+                    // literal-fit never sees the slot pairing; without this
+                    // gate the mismatch reaches convert as int -> char and
+                    // trips its missed-gate assert.
+                    if (slot_ctx != widen::kNoType && isCharKind(slot_s)
+                        && (e.children[i]->kind == parse::Kind::kIntLiteral
+                         || e.children[i]->kind == parse::Kind::kUintLiteral)) {
+                        diagnostic::report(diag, {e.children[i]->file_id,
+                            e.children[i]->tok,
+                            "Cannot implicitly convert 'int' to 'char' (only "
+                            "char matches char); use an explicit type "
+                            "conversion.", {}});
+                    }
                 }
                 slots.push_back(e.children[i]->inferred_type);
             }
@@ -3597,6 +3640,13 @@ void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
             "Cannot implicitly convert '" + src + "' to '" + dest_s + "' (" + tail
             + "); use an explicit type conversion.", {}});
     };
+    // A strong CHAR value widens out as an 8-bit unsigned (char -> char was the
+    // same-type return above); nothing converts INTO char implicitly.
+    if (st.cat == C::kChar && dt.cat != C::kChar) st.cat = C::kUnsignedInt;
+    else if (dt.cat == C::kChar) {
+        convertErr("only char matches char");
+        return;
+    }
     if ((st.cat == C::kSignedInt   && dt.cat == C::kSignedInt)
      || (st.cat == C::kUnsignedInt && dt.cat == C::kUnsignedInt)
      || (st.cat == C::kFloat       && dt.cat == C::kFloat)) {
@@ -3641,8 +3691,26 @@ void checkValueWiden(widen::TypeRef dest, widen::TypeRef src,
             + "'; use an explicit type conversion.", {}});
     };
     if (st.cat == C::kBool) {
-        // bool widens to int family (zext); cross-family to float.
-        if (dt.cat == C::kFloat) convertErrPlain();
+        // bool widens to int family (zext); cross-family to float and char.
+        if (dt.cat == C::kFloat || dt.cat == C::kChar) convertErrPlain();
+        return;
+    }
+    // CHAR SOURCE: char widens to integer types as an 8-bit unsigned — any
+    // unsigned target holds it, a signed target must be strictly wider (the
+    // uint8 rule). float stays cross-family. (char -> char returned above.)
+    if (st.cat == C::kChar) {
+        if (dt.cat == C::kUnsignedInt) return;
+        if (dt.cat == C::kSignedInt) {
+            if (dt.bits <= st.bits) convertErr("char to same-width signed");
+            return;
+        }
+        convertErrPlain();
+        return;
+    }
+    // CHAR DEST: an integer / float value never implicitly converts to char —
+    // only char matches char (canon widen.sl / overload_fn.sl).
+    if (dt.cat == C::kChar) {
+        convertErrPlain();
         return;
     }
     if (st.cat == C::kSignedInt && dt.cat == C::kSignedInt) {
@@ -4351,7 +4419,15 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
             n->text = "0";
             return n;
         }
-        // signed / unsigned integer (incl. char) -> 0
+        if (t.cat == widen::Category::kChar) {
+            // A char field's zero is a CHAR-kinded literal ('\0') — an INT-kinded
+            // zero would trip codegen's literal-fit (an integer never matches
+            // char); the numeric text form matches what codegen emits (i8 0).
+            n->kind = parse::Kind::kCharLiteral;
+            n->text = "0";
+            return n;
+        }
+        // signed / unsigned integer -> 0
         n->kind = parse::Kind::kIntLiteral;
         n->text = "0";
         return n;
@@ -7829,10 +7905,18 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                                    && !isIntegerClass(label.inferred_type))) {
                         diagnostic::report(diag, {label.file_id, label.tok,
                             "A case label must be an integer constant.", {}});
-                    } else if (!st.empty() && !literalFitsContext(label, scrut.inferred_type)) {
+                    } else if (!st.empty()
+                               && !(isCharKind(scrut.inferred_type)
+                                    ? widen::charLiteralRangeOk(label.text)
+                                    : literalFitsContext(label,
+                                                         scrut.inferred_type))) {
                         // An out-of-range / sign-mismatched label can never match
                         // and would emit a truncated `iN <oob>` constant — reject
-                        // it here rather than emit invalid/misleading IR.
+                        // it here rather than emit invalid/misleading IR. A CHAR
+                        // scrutinee RANGE-checks its labels ('a' and a fitting
+                        // numeric constant both compare as code points — the
+                        // fold-absorption rule; literalFitsContext would reject
+                        // every label, char literals included).
                         diagnostic::report(diag, {label.file_id, label.tok,
                             "Case label '" + label.text
                                 + "' is out of range for switch type '" + st

@@ -855,12 +855,19 @@ std::unique_ptr<ast::Node> lowerForRanged(parse::Node const& p,
     cond->children.push_back(ident("_$end", end_id));
 
     // update block: `{ var = var op step }`; step = _$step ident or the literal 1.
+    // A CHAR loop var (a char range / a char-underlying enum) takes a CHAR-kinded
+    // step literal: the increment is char arithmetic (the fold-absorption rule),
+    // and codegen's literal-fit rejects an INT literal against char storage.
     std::unique_ptr<ast::Node> step_val;
     if (step_id >= 0) {
         step_val = ident("_$step", step_id);
     } else {
+        widen::TypeKind tk;
+        bool char_var = widen::classify(T, tk)
+            && tk.cat == widen::Category::kChar;
         step_val = std::make_unique<ast::Node>();
-        step_val->kind = ast::Kind::kIntLiteral;
+        step_val->kind = char_var ? ast::Kind::kCharLiteral
+                                  : ast::Kind::kIntLiteral;
         step_val->text = "1";
         step_val->inferred_type = T;
         step_val->file_id = file; step_val->tok = tok;
