@@ -19,6 +19,8 @@ instance errors — a body leaning on TU-private names is emittable only by
 its own TU.
 */
 
+import string;
+
 import tmpl_lib;
 import library;
 
@@ -32,48 +34,48 @@ int32 main() {
     Vector<int> vi;
     vi.push(5);
     vi.push(6);
-    __println("vi = " + vi.sum());
+    println(String + "vi = " + vi.sum());
     Vector<int8> v8(1, 2);
-    __println("v8 = " + v8.sum());
+    println(String + "v8 = " + v8.sum());
     Vector<int> vi2(10, 20);
-    __println("vi2 = " + vi2.sum());
+    println(String + "vi2 = " + vi2.sum());
 
     /* hooks defined across the seam fire per object. */
     {
         Traced<int> tt(3);
-        __println("mid");
+        println(String + "mid");
     }
 
     /* the function template: inferred and explicit. */
-    int fs = tsum(3, 4); __println("fs = " + fs);
-    int8 f8 = tsum<int8>(1, 2); __println("f8 = " + f8);
+    int fs = tsum(3, 4); println(String + "fs = " + fs);
+    int8 f8 = tsum<int8>(1, 2); println(String + "f8 = " + f8);
 
     /* the ARITY-overloaded pair across the seam: the argument count selects;
        one demand spelling (`tpair<int>`) emits BOTH aggregated flavors. */
-    int t1 = tpair(5); __println("t1 = " + t1);
-    int t2 = tpair(5, 6); __println("t2 = " + t2);
-    int t3 = tpair<int>(7); __println("t3 = " + t3);
+    int t1 = tpair(5); println(String + "t1 = " + t1);
+    int t2 = tpair(5, 6); println(String + "t2 = " + t2);
+    int t3 = tpair<int>(7); println(String + "t3 = " + t3);
 
     /* the alias template (type-level only — no demand recorded). */
-    TRef<int> tr = ^fs; __println("tr = " + tr^);
+    TRef<int> tr = ^fs; println(String + "tr = " + tr^);
 
     /* INSTANCE-QUALIFIED members of an aggregated flavor from a consumer:
        the header's const and member alias, and a flavor minted BY the
        qualifier alone (no other Vector<int64> use — the demand rides). */
-    int y1 = Vector<int>:kTag; __println("y1 = " + y1);
-    Vector<int>:Elem ye = 5; __println("y2 = " + ye);
-    int64 y3 = Vector<int64>:kTag; __println("y3 = " + y3);
+    int y1 = Vector<int>:kTag; println(String + "y1 = " + y1);
+    Vector<int>:Elem ye = 5; println(String + "y2 = " + ye);
+    int64 y3 = Vector<int64>:kTag; println(String + "y3 = " + y3);
 
     /* nested ALIAS TEMPLATES of a header class template — type-level, no
        demand recorded; INSTANCE-QUALIFIED is the one route (bare-host is
        out of the syntax; `<>` is rejected on header templates), and the
        outer-T target binds from the flavor. */
-    Vector<int>:Ptr<int> ya = ^fs; __println("ya = " + ya^);
-    Vector<int>:Ptr<int8> yb = ^f8; __println("yb = " + yb^);
+    Vector<int>:Ptr<int> ya = ^fs; println(String + "ya = " + ya^);
+    Vector<int>:Ptr<int8> yb = ^f8; println(String + "yb = " + yb^);
     Vector<int>:Duo<int8> yd = (40, 5);
     int yd0 = yd[0];
     int8 yd1 = yd[1];
-    __println("yd = " + yd0 + " " + yd1);
+    println(String + "yd = " + yd0 + " " + yd1);
 
     /* the header-declared INCOMPLETE template (`Grow<T>(...)`): the source's
        completing re-open supplied the fields, so the flavor has the FULL
@@ -81,20 +83,20 @@ int32 main() {
     Grow<int> gr;
     gr.add(5);
     gr.add(7);
-    __println("y4 = " + gr.total() + " " + gr.count());
+    println(String + "y4 = " + gr.total() + " " + gr.count());
     intptr y5 = sizeof(Grow<int64>) - 2 * sizeof(int64);
-    __println("y5 = " + y5);
+    println(String + "y5 = " + y5);
 
     /* the template METHOD across the seam, inferred and explicit. */
     Gauge g(7);
-    int ms = g.scaled(5); __println("ms = " + ms);
-    int mx = g.scaled<int>(8); __println("mx = " + mx);
-    int mb = g.base(); __println("mb = " + mb);
+    int ms = g.scaled(5); println(String + "ms = " + ms);
+    int mx = g.scaled<int>(8); println(String + "mx = " + mx);
+    int mb = g.base(); println(String + "mb = " + mb);
 
     /* an argument type from a DIFFERENT header (library's Bird): the .sli
        carries `import library;` so tmpl_lib.sl's instantiation can spell it. */
     Box<Bird> bb;
-    __println("bb = " + bb.has());
+    println(String + "bb = " + bb.has());
 
     /* NESTED template-instance ARGUMENTS across the seam: the demand
        spellings round-trip through the .sli and aggregate like any flavor —
@@ -104,16 +106,16 @@ int32 main() {
        a pointer binding under const correctness, canon B). */
     Vector<int> nv(2, 3);
     Box<Vector<int>> nxb;
-    __println("nx1 = " + nxb.has());
+    println(String + "nx1 = " + nxb.has());
     nxb.p_ = ^nv;
-    __println("nx2 = " + nxb.p_^.sum());
+    println(String + "nx2 = " + nxb.p_^.sum());
     Box<int> ni;
     Box<Box<int>> nbb;
     nbb.p_ = ^ni;
-    __println("nx3 = " + nbb.has() + " " + nbb.p_^.has());
+    println(String + "nx3 = " + nbb.has() + " " + nbb.p_^.has());
     Vector<int> nv2(4, 4);
     bool npk = tdiff(^nv, ^nv2);
-    __println("nx4 = " + npk);
+    println(String + "nx4 = " + npk);
 
     /* a LOCAL class instantiates an imported template INLINE: this TU loaded
        the template source's bodies and emits the flavor internal — it is the
@@ -123,17 +125,17 @@ int32 main() {
         int lv() { return l_ + 1; }
     }
     Box<Loc> bl;
-    __println("bl = " + bl.has());
+    println(String + "bl = " + bl.has());
     Loc lc(4);
     bl.p_ = ^lc;
-    __println("bl2 = " + bl.has());
-    __println("bl3 = " + bl.p_^.lv());
+    println(String + "bl2 = " + bl.has());
+    println(String + "bl3 = " + bl.p_^.lv());
     Loc lc2(9);
     bool pl = tdiff(^lc, ^lc2);
-    __println("pl = " + pl);
-    int pk = tpick(3, 4); __println("pk = " + pk);
-    int po = tpock(3, 4); __println("po = " + po);
-    int tb = tbias(5); __println("tb = " + tb);
+    println(String + "pl = " + pl);
+    int pk = tpick(3, 4); println(String + "pk = " + pk);
+    int po = tpock(3, 4); println(String + "po = " + po);
+    int tb = tbias(5); println(String + "tb = " + tb);
 
     /* a template body that uses the source's PRIVATE helper can only be
        emitted by the source's own TU — a local-type instance gets the full
@@ -143,14 +145,14 @@ int32 main() {
     //Loc na(1);
     //Loc nb(2);
     //Loc^ pb = tpock(^na, ^nb);
-    //__println("pb = " + pb^.lv());
+    //println(String + "pb = " + pb^.lv());
 
     /* the identifier flavor of the same chain: the body READS a private
        const — the note says "references 'kBias'". */
     //-EXPECT-ERROR: references 'kBias'
     //Loc ra(1);
     //Loc^ rb = tbias(^ra);
-    //__println("rb = " + rb^.lv());
+    //println(String + "rb = " + rb^.lv());
 
     /* a BARE-host use of a header template's nested alias: a pattern
        qualifier needs its list (bare-host is out of the syntax since the
@@ -158,7 +160,7 @@ int32 main() {
     //-EXPECT-ERROR: requires a type-argument list
     //Vector:Duo<int8> nad = (1, 2);
     //int na0 = nad[0];
-    //__println("na0 = " + na0);
+    //println(String + "na0 = " + na0);
 
     /* the LISTLESS flavor is TU-local machinery — rejected on a template
        declared in a header (no cross-TU story for `<>`). */
@@ -174,12 +176,12 @@ int32 main() {
     Loc ml(2);
     Loc ml2(6);
     Loc mq = g.tsel(ml, ml2);
-    __println("mq = " + mq.lv());
+    println(String + "mq = " + mq.lv());
 
     /* a namespace-member template's local-type instance needs NO carve-out —
        a namespace member follows the file re-home, like a free function. */
     Loc nn = Spc2:nid(ml);
-    __println("nn = " + nn.lv());
+    println(String + "nn = " + nn.lv());
 
     return 0;
 }

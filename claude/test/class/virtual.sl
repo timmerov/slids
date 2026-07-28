@@ -153,9 +153,9 @@ import string;
 
 Vc(int x_) {
     _() {}
-    virtual ~() { __println("Vc:dtor"); }
+    virtual ~() { println(String + "Vc:dtor"); }
     virtual int get() { return x_; }
-    virtual void show() { __println("Vc:show x=" + x_); }
+    virtual void show() { println(String + "Vc:show x=" + x_); }
 }
 
 /* STAGE 2 — a NON-virtual twin with the same field, to show the vptr's storage cost. */
@@ -169,7 +169,7 @@ Pc(int x_) {
 Shape(int id_) {
     _() {}
     virtual ~() {}
-    virtual void name() { __println("Shape"); }
+    virtual void name() { println(String + "Shape"); }
     virtual int area() { return 0; }
     virtual void describe() { self.name(); }        /* self-call DISPATCHES */
     /* overloaded virtual methods — each a distinct vtable slot */
@@ -180,7 +180,7 @@ Shape(int id_) {
 Shape : Square(int side_) {
     _() {}
     virtual ~() {}
-    virtual void name() { __println("Square"); }    /* override */
+    virtual void name() { println(String + "Square"); }    /* override */
     virtual int area() { return side_ * side_; }     /* override */
     virtual int scale(int k) { return side_ * k; }   /* override one overload only */
     virtual void viabase() { Shape:name(); }         /* STATIC bypass -> Shape */
@@ -189,19 +189,19 @@ Shape : Square(int side_) {
 /* STAGE 4 — virtual destructors that print, to observe dispatch + chaining order. */
 Animal(int a_) {
     _() {}
-    virtual ~() { __println("Animal:dtor"); }
-    virtual void speak() { __println("...(animal)"); }
+    virtual ~() { println(String + "Animal:dtor"); }
+    virtual void speak() { println(String + "...(animal)"); }
 }
 Animal : Dog(int d_) {
     _() {}
-    virtual ~() { __println("Dog:dtor"); }
-    virtual void speak() { __println("woof"); }
+    virtual ~() { println(String + "Dog:dtor"); }
+    virtual void speak() { println(String + "woof"); }
 }
 
 /* A mid-chain class with NO explicit destructor: destruction chains right past it. */
 Root3(int r_) {
     _() {}
-    virtual ~() { __println("Root3:dtor"); }
+    virtual ~() { println(String + "Root3:dtor"); }
     virtual int id() { return r_; }
 }
 Root3 : Mid3(int m_) {
@@ -209,7 +209,7 @@ Root3 : Mid3(int m_) {
 }
 Mid3 : Leaf3(int l_) {
     _() {}
-    virtual ~() { __println("Leaf3:dtor"); }
+    virtual ~() { println(String + "Leaf3:dtor"); }
     virtual int id() { return l_; }
 }
 
@@ -223,12 +223,12 @@ Widget(int id_) {
 Widget : Button(int price_) {
     _() {}
     virtual ~() {}
-    virtual void render() { __println("Button:render"); }   /* implements the pure slot */
+    virtual void render() { println(String + "Button:render"); }   /* implements the pure slot */
     virtual int cost() { return price_; }                    /* override */
 }
 /* A concrete class with NO explicit ctor/dtor — its vptr is stamped at construction. */
 Widget : Label(int w_) {
-    virtual void render() { __println("Label:render"); }
+    virtual void render() { println(String + "Label:render"); }
 }
 
 /* A virtual class held BY VALUE in an aggregate — a tuple slot / array element. The vptr
@@ -237,14 +237,14 @@ Widget : Label(int w_) {
    DISTINCT text so the golden pins the count and the order, not just that something ran.
    Vt is deliberately given a base, so a slot also exercises a real override. */
 Vt(int t_) {
-    _() { __println("Vt:ctor " + t_); }
-    virtual ~() { __println("Vt:dtor " + t_); }
-    virtual void tag() { __println("Vt:tag " + t_); }
+    _() { println(String + "Vt:ctor " + t_); }
+    virtual ~() { println(String + "Vt:dtor " + t_); }
+    virtual void tag() { println(String + "Vt:tag " + t_); }
 }
 Vt : Vd(int d_) {
-    _() { __println("Vd:ctor " + d_); }
-    virtual ~() { __println("Vd:dtor " + d_); }
-    virtual void tag() { __println("Vd:tag " + d_); }
+    _() { println(String + "Vd:ctor " + d_); }
+    virtual ~() { println(String + "Vd:dtor " + d_); }
+    virtual void tag() { println(String + "Vd:tag " + d_); }
 }
 
 /* A re-open may IMPLEMENT an inherited virtual slot (here, an inherited pure) — that is
@@ -275,10 +275,10 @@ Def : Ddef(int d_) {
 
 /* COVERAGE — a SYNTHESIZED complete-destructor (no user ctor/dtor on the derived) must
    still run field + base destruction. */
-Noisy(int n_) { _() {} ~() { __println("Noisy:dtor"); } }
+Noisy(int n_) { _() {} ~() { println(String + "Noisy:dtor"); } }
 SynBase(int x_) {
     _() {}
-    virtual ~() { __println("SynBase:dtor"); }
+    virtual ~() { println(String + "SynBase:dtor"); }
     virtual void m() {}
 }
 SynBase : SynDer(int y_, Noisy field_) {
@@ -290,7 +290,7 @@ SynBase : SynDer(int y_, Noisy field_) {
 Bp(int bx_) {
     _() {}
     virtual ~() {}
-    virtual void who() { __println("Bp:who"); }
+    virtual void who() { println(String + "Bp:who"); }
     virtual void frombase() {
         Bp:who();          /* own-class qualifier -> static Bp:who */
         Bp:self.who();     /* own-class self.     -> static Bp:who */
@@ -300,7 +300,7 @@ Bp(int bx_) {
 Bp : Dp(int dy_) {
     _() {}
     virtual ~() {}
-    virtual void who() { __println("Dp:who"); }
+    virtual void who() { println(String + "Dp:who"); }
     virtual void fromderived() {
         Bp:who();          /* base qualifier      -> static Bp:who */
         Bp:self.who();     /* base self.          -> static Bp:who */
@@ -328,12 +328,12 @@ Dp : Gp(int gz_) {
 Life(int x_) {
     _() { self.stage(); }              /* Life's ctor -> Life:stage (Grown not built yet) */
     virtual ~() { self.stage(); }      /* Life's dtor -> Life:stage (Grown already torn down) */
-    virtual void stage() { __println("Life:stage"); }
+    virtual void stage() { println(String + "Life:stage"); }
 }
 Life : Grown(int y_) {
     _() {}
     virtual ~() {}
-    virtual void stage() { __println("Grown:stage"); }
+    virtual void stage() { println(String + "Grown:stage"); }
 }
 
 /* COVERAGE — non-int returns dispatched through the vtable: float64, int64, and a class
@@ -365,13 +365,13 @@ Empty() {
    only). Its head is token-identical to the external re-open form `Base:Derived()`;
    resolve disambiguates (Base is a class, Plain is not a member of it -> inheritance). */
 Widget : Plain() {
-    virtual void render() { __println("Plain:render"); }   /* implements Widget's pure */
+    virtual void render() { println(String + "Plain:render"); }   /* implements Widget's pure */
 }
 
 int32 main() {
     {
         Vc v(7);
-        __println("get = " + v.get());     // 7
+        println(String + "get = " + v.get());     // 7
         v.show();                          // Vc:show x=7
 
         /* STAGE 2: the vptr occupies real storage at offset 0 — a virtual class carries a
@@ -379,8 +379,8 @@ int32 main() {
            (x_ still reads 7); only the layout grew. */
         int64 vsz = sizeof(Vc);            // vptr(8) + x_(4) + pad(4) = 16
         int64 psz = sizeof(Pc);            // x_(4) = 4
-        __println("sizeof Vc = " + vsz);
-        __println("sizeof Pc = " + psz);
+        println(String + "sizeof Vc = " + vsz);
+        println(String + "sizeof Pc = " + psz);
     }                                      // Vc:dtor at scope exit
 
     /* STAGE 3 — dynamic dispatch. */
@@ -390,15 +390,15 @@ int32 main() {
         sh.name();                         // Shape (own)
         sq.name();                         // Square (override)
         sq.describe();                     // inherited describe -> self.name() -> Square
-        __println("sq.area = " + sq.area());   // 25 (Square::area)
+        println(String + "sq.area = " + sq.area());   // 25 (Square::area)
 
         Shape^ sp = ^sq;                   // a base pointer to a derived object
         sp^.name();                        // Square (dispatch through base ptr)
-        __println("sp^.area = " + sp^.area()); // 25
+        println(String + "sp^.area = " + sp^.area()); // 25
 
         /* overloaded virtual dispatch: the slot is picked by signature, then dispatched. */
-        __println("scale(3) = " + sp^.scale(3));      // Square::scale(int)  -> 5*3 = 15
-        __println("scale(3,4) = " + sp^.scale(3, 4)); // inherited Shape::scale(int,int) -> 7
+        println(String + "scale(3) = " + sp^.scale(3));      // Square::scale(int)  -> 5*3 = 15
+        println(String + "scale(3,4) = " + sp^.scale(3, 4)); // inherited Shape::scale(int,int) -> 7
 
         sq.viabase();                      // STATIC bypass -> Shape
     }
@@ -411,14 +411,14 @@ int32 main() {
     }
     {
         Leaf3 lf(1, 2, 3);                 // flat: [r_=1, m_=2, l_=3]
-        __println("id = " + lf.id());      // 3 (Leaf3::id)
+        println(String + "id = " + lf.id());      // 3 (Leaf3::id)
     }                                      // Leaf3:dtor then Root3:dtor (Mid3 has none)
 
     /* STAGE 5 — pure/abstract + a synthesized (no-ctor/dtor) concrete class. */
     {
         Button b(1, 50);
         b.render();                        // Button:render (implements the pure)
-        __println("cost = " + b.cost());   // 50
+        println(String + "cost = " + b.cost());   // 50
 
         Widget^ wp = ^b;
         wp^.render();                      // dispatch through an abstract-base pointer
@@ -428,14 +428,14 @@ int32 main() {
         wl^.render();                      // Label:render (dispatch)
 
         Clock ck(1, 5);                    // Clock's pure `tick` was implemented in a re-open
-        __println("tick = " + ck.tick());  // 5 (dispatch to the re-opened impl)
+        println(String + "tick = " + ck.tick());  // 5 (dispatch to the re-opened impl)
     }
 
     /* COVERAGE — default parameters on a virtual method (static default, dynamic dispatch). */
     {
         Def^ dp = new Ddef(1, 2);
-        __println("f() = " + dp^.f());     // default 5 (from the Def^ static type) -> Ddef -> 10
-        __println("f(3) = " + dp^.f(3));   // Ddef::f(3) -> 6
+        println(String + "f() = " + dp^.f());     // default 5 (from the Def^ static type) -> Ddef -> 10
+        println(String + "f(3) = " + dp^.f(3));   // Ddef::f(3) -> 6
         delete dp;
     }
 
@@ -447,11 +447,11 @@ int32 main() {
     /* COVERAGE — multi-level dispatch + delete through a base pointer of a no-dtor mid. */
     {
         Root3^ rp = new Mid3(1, 2);        // Mid3 overrides id(), has NO dtor
-        __println("mid id = " + rp^.id()); // 2 (dispatch to Mid3::id through a Root3^)
+        println(String + "mid id = " + rp^.id()); // 2 (dispatch to Mid3::id through a Root3^)
         delete rp;                         // Root3:dtor (Mid3 has no dtor -> chains up)
 
         Root3^ rl = new Leaf3(1, 2, 3);
-        __println("leaf id = " + rl^.id());// 3 (dispatch to Leaf3::id through a Root3^)
+        println(String + "leaf id = " + rl^.id());// 3 (dispatch to Leaf3::id through a Root3^)
         delete rl;                         // Leaf3:dtor then Root3:dtor (Mid3 skipped)
     }
 
@@ -476,10 +476,10 @@ int32 main() {
     /* COVERAGE — non-int + class-by-value returns through the vtable. */
     {
         Ret^ rp = new Ret2(1, 2);
-        __println("fp = " + rp^.fp());     // 2.5
-        __println("big = " + rp^.big());   // 999
+        println(String + "fp = " + rp^.fp());     // 2.5
+        println(String + "big = " + rp^.big());   // 999
         Pair pr = rp^.make();              // sret through the indirect call -> Ret2's Pair(10,20)
-        __println("sum = " + pr.sum());    // 30
+        println(String + "sum = " + pr.sum());    // 30
         delete rp;
     }
 
@@ -493,9 +493,9 @@ int32 main() {
 
     /* COVERAGE — an empty virtual class: vptr only. */
     {
-        __println("empty sz = " + sizeof(Empty));   // 8
+        println(String + "empty sz = " + sizeof(Empty));   // 8
         Empty^ ep = new Empty();
-        __println("empty k = " + ep^.k());           // 42
+        println(String + "empty k = " + ep^.k());           // 42
         delete ep;
     }
 
@@ -503,7 +503,7 @@ int32 main() {
     {
         Plain pl(7);                       // inherits Widget's id_ field (7)
         pl.render();                       // Plain:render (implements the pure)
-        __println("plain cost = " + pl.cost());  // 7 (inherited Widget::cost)
+        println(String + "plain cost = " + pl.cost());  // 7 (inherited Widget::cost)
         Widget^ wpl = ^pl;
         wpl^.render();                     // Plain:render (dispatch through the abstract base)
     }
@@ -512,7 +512,7 @@ int32 main() {
        own ctor stamps its own vptr. Constructed in slot order, destroyed in REVERSE at
        the block's close. */
     {
-        __println("-- tuple of virtual --");
+        println(String + "-- tuple of virtual --");
         (Vt, Vt) tv = ((1), (2));          // Vt:ctor 1, Vt:ctor 2
         tv[0].tag();                       // Vt:tag 1
         tv[1].tag();                       // Vt:tag 2
@@ -520,7 +520,7 @@ int32 main() {
 
     /* COVERAGE — a virtual class BY VALUE in an ARRAY, same rules by element. */
     {
-        __println("-- array of virtual --");
+        println(String + "-- array of virtual --");
         Vt av[2] = ((3), (4));             // Vt:ctor 3, Vt:ctor 4
         av[0].tag();                       // Vt:tag 3
         av[1].tag();                       // Vt:tag 4
@@ -530,7 +530,7 @@ int32 main() {
        a call through the slot reaches the OVERRIDE. A by-value slot's dynamic type is its
        static type, so this pins the chain and the override, not runtime selection. */
     {
-        __println("-- tuple of derived virtual --");
+        println(String + "-- tuple of derived virtual --");
         (Vd, Vd) td = ((5, 6), (7, 8));    // Vt:ctor 5, Vd:ctor 6, Vt:ctor 7, Vd:ctor 8
         td[0].tag();                       // Vd:tag 6   (override, not Vt:tag)
         td[1].tag();                       // Vd:tag 8

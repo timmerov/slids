@@ -14,6 +14,9 @@ import string;
 stdc import {
     /* converts float to c string. */
     int32 strfromd(mutable char[] s, intptr n, char[] fmt, float64 fp);
+
+    /* print a string to stdout. */
+    int32 printf(char[] fmt, int32 len, char[] str);
 }
 
 /* block definitions. */
@@ -385,12 +388,14 @@ String (
 
 /* print the string. */
 void print(String^ s) {
-    __print(s^.storage_[0..s^.size_]);
+    len = (int32=s^.size_);
+    stdc:printf("%.*s", len, s^.storage_);
 }
 
 /** print the string on a line. */
 void println(String^ s) {
-    __println(s^.storage_[0..s^.size_]);
+    len = (int32=s^.size_);
+    stdc:printf("%.*s\n", len, s^.storage_);
 }
 
 /* helper functions. */

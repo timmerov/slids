@@ -134,9 +134,9 @@ import string;
 // parameter munge: `mutable char[]` opts out (-> char[]); plain `char[]`
 // defaults to a const element (-> (const char)[]); the primitive is by value.
 void munge(mutable char[] dst, char[] src, int count) {
-    __println(##type(dst));     // char[]
-    __println(##type(src));     // (const char)[]
-    __println(##type(count));   // int
+    println(String + ##type(dst));     // char[]
+    println(String + ##type(src));     // (const char)[]
+    println(String + ##type(count));   // int
 }
 
 // THE MUNGE IS ENFORCED (param enforcement, 2026-07-26): a body writes
@@ -154,9 +154,9 @@ void bump_ref(mutable int^ p) {
 // `int a[3]` -> `(const int)[3]` behind the by-pointer rewrite, multi-dim
 // included); `mutable` opts out like any reference.
 void show_arr(int a[3], mutable int m[3], int g[2][2]) {
-    __println(##type(a));       // (const int)[3]^
-    __println(##type(m));       // int[3]^
-    __println(##type(g));       // (const int)[2][2]^
+    println(String + ##type(a));       // (const int)[3]^
+    println(String + ##type(m));       // int[3]^
+    println(String + ##type(g));       // (const int)[2][2]^
 }
 void fill3(mutable int a[3], int v) {
     a[0] = v;
@@ -179,29 +179,29 @@ void wchr(mutable char[] s) {
 
 // a reference parameter to a tuple munges its whole pointee to const.
 void take_pair((int, int)^ p) {
-    __println(##type(p));       // (const (const int, const int))^ — the munge is the RECURSIVE promise
+    println(String + ##type(p));       // (const (const int, const int))^ — the munge is the RECURSIVE promise
 }
 
 // explicit const on a parameter: deep (outer, not re-munged) vs shallow.
 void const_forms(const int^ deep, (const int)^ shallow) {
-    __println(##type(deep));     // const (const int)^ — the leading const is
+    println(String + ##type(deep));     // const (const int)^ — the leading const is
                                  // DEEP, materialized at type resolution
                                  // (2026-07-26): pointer AND pointee const
-    __println(##type(shallow));  // (const int)^
+    println(String + ##type(shallow));  // (const int)^
 }
 
 // a reference parameter to a complex value munges the WHOLE pointee to const,
 // composing with an inner const slot the author already wrote.
 void show_pair((const int, int)^ p) {
-    __println(##type(p));        // (const (const int, int))^
+    println(String + ##type(p));        // (const (const int, int))^
 }
 
 // const on a CLASS reference: a class ref param munges its pointee to const,
 // and the explicit deep / shallow forms are accepted too.
 Box(int v_) { }
-void show_box(Box^ b)                 { __println(##type(b)); }  // (const Box)^
-void show_box_deep(const Box^ b)      { __println(##type(b)); }  // const Box^
-void show_box_shallow((const Box)^ b) { __println(##type(b)); }  // (const Box)^
+void show_box(Box^ b)                 { println(String + ##type(b)); }  // (const Box)^
+void show_box_deep(const Box^ b)      { println(String + ##type(b)); }  // const Box^
+void show_box_shallow((const Box)^ b) { println(String + ##type(b)); }  // (const Box)^
 
 // an alias whose underlying is a const type; the alias name still shows in ##type.
 alias CI = const int;
@@ -211,13 +211,13 @@ alias A3 = int[3];
 
 // a const tuple value passed BY REFERENCE into a function (auto-ref of a const
 // lvalue at the call site).
-void show_ctup((const int, const int)^ p) { __println(p^[0]); }   // 4
+void show_ctup((const int, const int)^ p) { println(String + p^[0]); }   // 4
 
 // a hook class (explicit ctor + dtor): a const variable of it runs the ctor once
 // at the decl and the dtor once at scope exit — through the const-variable path.
 Res(int id_) {
-    _() { __println("Res.ctor"); }
-    ~() { __println("Res.dtor"); }
+    _() { println(String + "Res.ctor"); }
+    ~() { println(String + "Res.dtor"); }
 }
 
 int32 main() {
@@ -234,10 +234,10 @@ int32 main() {
     // caller sees it.
     int fa[2];
     fill2(^fa[0], 8);
-    __println(fa[0] + " " + fa[1]);   // 8 9
+    println(String + fa[0] + " " + fa[1]);   // 8 9
     int bv = 5;
     bump_ref(^bv);
-    __println(bv);                    // 6
+    println(String + bv);                    // 6
 
     // the array-param munge spellings, and a mutable array filled in place.
     int sa[3] = (1, 2, 3);
@@ -249,20 +249,20 @@ int32 main() {
     sg[1][1] = 4;
     show_arr(sa, sm, sg);
     fill3(sm, 7);
-    __println(sm[0] + " " + sm[1] + " " + sm[2]);   // 7 8 9
+    println(String + sm[0] + " " + sm[1] + " " + sm[2]);   // 7 8 9
 
     // a mutable char iterator writes; the LITERAL twin is a negative (the
     // pool is read-only).
     char cbuf[3] = "ab";
     wchr(^cbuf[0]);
-    __println(cbuf);                  // xb
+    println(String + cbuf);                  // xb
 
     // the caller side: addr-of a const lvalue MINTS a const pointee, and
     // the `<mutable>` cast is the sanctioned override at a call.
     const int cco[2] = (1, 2);
-    __println(##type(^cco[1]));       // (const int)^
+    println(String + ##type(^cco[1]));       // (const int)^
     bump_ref(<mutable> ^cco[0]);
-    __println(cco[0]);                // 2 (the cast overrode the wall)
+    println(String + cco[0]);                // 2 (the cast overrode the wall)
 
     // THE FLOW RULE (2026-07-26): adding const flows implicitly, at any
     // depth; a value copy is const-blind (a const array copies into a
@@ -270,29 +270,29 @@ int32 main() {
     int fv = 3;
     int^ fm = ^fv;
     (const int)^ fc = fm;             // add const: implicit
-    __println(fc^);                   // 3
+    println(String + fc^);                   // 3
     int^ fback = <mutable> fc;        // drop via the cast: sanctioned
     fback^ = 4;
-    __println(fv);                    // 4
+    println(String + fv);                    // 4
     int fcopy[2];
     fcopy = cco;                      // const ARRAY -> mutable array: a COPY
     fcopy[0] = 9;
-    __println(fcopy[0] + " " + cco[0]);   // 9 2 (cco untouched)
+    println(String + fcopy[0] + " " + cco[0]);   // 9 2 (cco untouched)
 
     // the user's blessed const-string spellings: the deep-const alias to
     // the pool, the shallow alias, and the sized-array COPY.
     const char[] ds = "hi";
-    __println(ds[0]);                 // h
+    println(String + ds[0]);                 // h
     (const char)[] ss = "yo";
-    __println(ss[1]);                 // o
+    println(String + ss[1]);                 // o
     char ows[3] = "ab";
     ows[0] = 'z';
-    __println(ows);                   // zb
+    println(String + ows);                   // zb
 
     // a DEEP-const return type parses and means what it says (the leading
     // const materializes deep at type resolution).
     const int^ dr = deepret(^fv);
-    __println(dr^);                   // 4
+    println(String + dr^);                   // 4
 
     // CONST IS RECURSIVE (the canon block above): `const int^^^ a3` and
     // `(const int^^)^ b3` agree that their derefs are ONE type — a buried
@@ -303,54 +303,54 @@ int32 main() {
     int^^ v2p = ^v1p;
     const int^^^ a3 = ^v2p;
     (const int^^)^ b3 = ^v2p;
-    __println(##type(a3));            // const (const (const (const int)^)^)^
+    println(String + ##type(a3));            // const (const (const (const int)^)^)^
     const int^^^ x3 = b3;
     (const int^^)^ y3 = x3;
-    __println(y3^^^);                 // 7
+    println(String + y3^^^);                 // 7
 
     int n = 7;
     const_forms(^n, ^n);
 
     // a const-qualified reference local; read through it.
     (const int)^ r = ^n;
-    __println(##type(r));        // (const int)^
-    __println(r^);               // 7
+    println(String + ##type(r));        // (const int)^
+    println(String + r^);               // 7
 
     // a tuple with a const slot; both slots read normally.
     (const int, int) ct = (4, 5);
-    __println(##type(ct));       // (const int, int)
+    println(String + ##type(ct));       // (const int, int)
     int sum = ct[0] + ct[1];
-    __println(sum);              // 9
+    println(String + sum);              // 9
 
     // const in COMPLEX types: a complex-value ref param munge, then const at a
     // non-first slot, a nested tuple slot, and an array element (all via type).
     show_pair(^ct);              // (const (const int, const int))^ — deep through the munge
 
     (const int, const char[]) hetero;
-    __println(##type(hetero));   // (const int, const char[])
+    println(String + ##type(hetero));   // (const int, const char[])
     ((const int, int), int) nested;
-    __println(##type(nested));   // ((const int, int), int)
+    println(String + ##type(nested));   // ((const int, int), int)
     ((const int)[2], int) constarr;
-    __println(##type(constarr)); // ((const int)[2], int)
+    println(String + ##type(constarr)); // ((const int)[2], int)
 
     // implicit mutable -> const cast (reference and iterator; not enforced).
     int^ mref = ^n;
     (const int)^ cref = mref;
-    __println(cref^);            // 7
+    println(String + cref^);            // 7
     int arr[3] = (10, 20, 30);
     (const int)[] citer = ^arr[0];
-    __println(citer[1]);         // 20
+    println(String + citer[1]);         // 20
 
     // qualifier casts: <const> adds const, <mutable> removes it (on a pointer of
     // the same type); the full-type forms <const T^> / <T^> do the same. value-
     // preserving — const is erased in IR — so the pointer reads identically.
     int^ qm = ^n;
-    __println(##type(<const> qm));        // const int^
-    __println(##type(<const int^> qm));   // const int^
+    println(String + ##type(<const> qm));        // const int^
+    println(String + ##type(<const int^> qm));   // const int^
     (const int)^ qc = ^n;
-    __println(##type(<mutable> qc));      // int^
+    println(String + ##type(<mutable> qc));      // int^
     int^ qback = <mutable> qc;
-    __println(qback^);                    // 7
+    println(String + qback^);                    // 7
 
     // const on a class reference (munge + explicit deep / shallow).
     Box bx(1);
@@ -360,10 +360,10 @@ int32 main() {
 
     // const carried through an alias.
     CI cv = 7;
-    __println(##type(cv));                // CI
-    __println(cv);                        // 7
+    println(String + ##type(cv));                // CI
+    println(String + cv);                        // 7
     CI^ ap = ^n;
-    __println(##type(ap));                // CI^
+    println(String + ##type(ap));                // CI^
 
     // const VARIABLES: a leading `const` on a NON-SCALAR type (array / tuple /
     // pointer / iterator / class) is a not-mutable VARIABLE — allocated +
@@ -372,65 +372,65 @@ int32 main() {
     // `const` on a foldable SCALAR stays a substituted constant — the array dims
     // and `CI cv` above.)
     const int carr[3] = (1, 2, 3);
-    __println(##type(carr));              // (const int)[3]
+    println(String + ##type(carr));              // (const int)[3]
     int csum = carr[0] + carr[2];
-    __println(csum);                      // 4
+    println(String + csum);                      // 4
 
     const (int, int) ctup = (4, 5);
-    __println(##type(ctup));              // (const int, const int)
-    __println(ctup[1]);                   // 5
+    println(String + ##type(ctup));              // (const int, const int)
+    println(String + ctup[1]);                   // 5
 
     const int^ cdeep = ^n;
-    __println(##type(cdeep));             // const (const int)^
-    __println(cdeep^);                    // 7
+    println(String + ##type(cdeep));             // const (const int)^
+    println(String + cdeep^);                    // 7
 
     const (int, int)^ ctp = ^ctup;
-    __println(##type(ctp));               // const (const int, const int)^
-    __println(##type(ctp^));              // (const int, const int)
-    __println(ctp^[0]);                   // 4
+    println(String + ##type(ctp));               // const (const int, const int)^
+    println(String + ##type(ctp^));              // (const int, const int)
+    println(String + ctp^[0]);                   // 4
 
     const int[] cit = ^carr[0];
-    __println(##type(cit));               // const (const int)[]
-    __println(cit[2]);                    // 3
+    println(String + ##type(cit));               // const (const int)[]
+    println(String + cit[2]);                    // 3
 
     const Box cbx(9);
-    __println(##type(cbx));               // const Box
-    __println(cbx.v_);                    // 9
+    println(String + ##type(cbx));               // const Box
+    println(String + cbx.v_);                    // 9
 
     // a const tuple with a CLASS slot — the tuple-type-with-a-class-slot
     // resolveDeclType gap is fixed, so the composed const type resolves and the
     // const routing builds it (slot 0 is a default construction of Box).
     const (Box, int) cbt = (Box(1), 2);
-    __println(##type(cbt));               // (const Box, const int)
-    __println("" + cbt[0].v_ + " " + cbt[1]);  // 1 2
+    println(String + ##type(cbt));               // (const Box, const int)
+    println(String + "" + cbt[0].v_ + " " + cbt[1]);  // 1 2
 
     // a const variable of a LOCAL class (defined in this body) — the local-class
     // registration runs before the const pre-pass, so the const decl's type resolves.
     Pt(int px_, int py_) { }
     const Pt cp(2, 3);
-    __println(##type(cp));                // const Pt
-    __println(cp.py_);                    // 3
+    println(String + ##type(cp));                // const Pt
+    println(String + cp.py_);                    // 3
 
     // const aggregate in a NESTED block — the resolveStmtList path (distinct from
     // the function-body pre-pass; both register local classes before consts).
     if (true) {
         const int nb[2] = (8, 9);
-        __println(nb[1]);                 // 9
+        println(String + nb[1]);                 // 9
     }
 
     // DEEP const recurses through COMPOSED types: a nested tuple and a
     // multi-dimensional array const-qualify every leaf.
     const ((int, int), int) cnest = ((1, 2), 3);
-    __println(##type(cnest));             // ((const int, const int), const int)
+    println(String + ##type(cnest));             // ((const int, const int), const int)
     const int cm[2][3] = ((1, 2, 3), (4, 5, 6));
-    __println(##type(cm));                // (const int)[2][3]
-    __println(cm[1][2]);                  // 6
+    println(String + ##type(cm));                // (const int)[2][3]
+    println(String + cm[1][2]);                  // 6
 
     // an alias to a NON-SCALAR, declared const: deepConst recurses through the
     // alias; ##type shows the alias NAME (the const rides underneath it).
     const A3 ca = (1, 2, 3);
-    __println(##type(ca));                // A3
-    __println(ca[2]);                     // 3
+    println(String + ##type(ca));                // A3
+    println(String + ca[2]);                     // 3
 
     // a const variable passed BY REF to a function (auto-ref of a const lvalue).
     show_ctup(^ctup);                     // 4
@@ -438,31 +438,31 @@ int32 main() {
     // WRITE through a const variable: REJECTED since the const-lvalue wall
     // landed (the negative below; assign/lvalue.sl owns the write canon).
     const int cw[2] = (1, 2);
-    __println(cw[0]);                     // 1
+    println(String + cw[0]);                     // 1
 
     // move (`<--`) and swap (`<-->`) involving a const variable.
     (int, int) mv = (3, 4);
     const (int, int) cmv <-- mv;
-    __println(cmv[0]);                    // 3
+    println(String + cmv[0]);                    // 3
     const (int, int) csw = (1, 2);
     (int, int) sw = (5, 6);
     csw <--> sw;
-    __println(csw[0]);                    // 5
-    __println(sw[0]);                     // 1
+    println(String + csw[0]);                    // 5
+    println(String + sw[0]);                     // 1
 
     // a const variable of a HOOK class (ctor / dtor) — in its own block so the
     // dtor fires deterministically at block exit. ctor at the decl, dtor once.
     {
         const Res cr(5);
-        __println(##type(cr));            // const Res
-        __println(cr.id_);                // 5
+        println(String + ##type(cr));            // const Res
+        println(String + cr.id_);                // 5
     }                                     // Res.dtor here
 
     // a typeless const aggregate is a runtime deep-const local (const
     // inference) — it no longer mis-routes to the substitution path.
     const infagg = (1, 2, 3);
-    __println(##type(infagg));            // (const int, const int, const int)
-    __println(infagg[0]);                 // 1
+    println(String + ##type(infagg));            // (const int, const int, const int)
+    println(String + infagg[0]);                 // 1
 
     return 0;
 }

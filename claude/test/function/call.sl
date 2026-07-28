@@ -91,20 +91,20 @@ import string;
 int32 fwd_decl(int32 n);
 
 int32 helper() {
-    __println("helper");
+    println(String + "helper");
     return 0;
 }
 
 int32 add(int32 a, int32 b) {
     int32 r = a + b;
-    __println("add= " + r);
+    println(String + "add= " + r);
     return 0;
 }
 
 int32 mixed(int32 i, float32 f, bool b) {
-    __println("i= " + i);
-    __println("f= " + f);
-    __println("b= " + b);
+    println(String + "i= " + i);
+    println(String + "f= " + f);
+    println(String + "b= " + b);
     return 0;
 }
 
@@ -115,17 +115,17 @@ int32 caller() {
 }
 
 int32 callee() {
-    __println("callee");
+    println(String + "callee");
     return 0;
 }
 
 int32 takes_int64(int64 v) {
-    __println("v64= " + v);
+    println(String + "v64= " + v);
     return 0;
 }
 
 int32 takes_int32(int32 v) {
-    __println("v32= " + v);
+    println(String + "v32= " + v);
     return 0;
 }
 
@@ -264,14 +264,14 @@ int first_ref(int^ p) {                      // element-reference param (element
 /* rvalue arm: a tuple LITERAL has no caller-side address, so the call site
    materializes it in a stacksaved temp and passes the temp's address. */
 void echo_tpl((int,int,int)^ t) {
-    __println("echo= " + t^[0] + " " + t^[1] + " " + t^[2]);
+    println(String + "echo= " + t^[0] + " " + t^[1] + " " + t^[2]);
 }
 
 /* multi-arg call mixing lvalue + rvalue: `a` is a caller lvalue (mutates in
    place), `b` is an rvalue tuple literal (materialized in a temp; the function
    reads it but the caller can't see the write). */
 void mix_call(mutable (int,int,int)^ a, (int,int,int)^ b) {
-    __println("mix_b= " + b^[0] + " " + b^[1] + " " + b^[2]);
+    println(String + "mix_b= " + b^[0] + " " + b^[1] + " " + b^[2]);
     a^[0] = 5;
 }
 
@@ -290,88 +290,88 @@ int32 main() {
 
     // call as expression (kCallExpr)
     int32 s = sum(2, 3);             // call as var-decl init
-    __println("s= " + s);
+    println(String + "s= " + s);
     int32 n = sum(sum(1, 2), 4);     // nested call as arg
-    __println("n= " + n);
+    println(String + "n= " + n);
     int64 w = sum(10, 20);           // int32 return widens to int64 init
-    __println("w= " + w);
+    println(String + "w= " + w);
     int32 e = sum(40, 1) + sum(1, 1);  // calls as binary operands
-    __println("e= " + e);
-    __println("d= " + doubled(21));  // call (return-position result) as print arg
-    __println("fwd= " + fwd_decl(9));  // forward-declared above, defined below
+    println(String + "e= " + e);
+    println(String + "d= " + doubled(21));  // call (return-position result) as print arg
+    println(String + "fwd= " + fwd_decl(9));  // forward-declared above, defined below
 
     // array args + an array return
     int m[3] = makeA3();
-    __println("makeA3= " + m[0] + " " + m[2]);   // 3 5
-    __println("sumA3= " + sumA3(m));             // 12
-    __println("arrSum= " + arrSum(m));           // 12
-    __println("arrSumN= " + arrSumN(m));         // 12
+    println(String + "makeA3= " + m[0] + " " + m[2]);   // 3 5
+    println(String + "sumA3= " + sumA3(m));             // 12
+    println(String + "arrSum= " + arrSum(m));           // 12
+    println(String + "arrSumN= " + arrSumN(m));         // 12
 
     // const-expr dim in a TYPE-position return type and a tuple-slot param type
     int mN[A3LEN] = makeArrN();
-    __println("makeArrN= " + mN[0] + " " + mN[2]);   // 6 8
+    println(String + "makeArrN= " + mN[0] + " " + mN[2]);   // 6 8
     (int[A3LEN], int) tpN = ((1, 2, 3), 10);
-    __println("sumTupN= " + sumTupN(tpN));            // 16
+    println(String + "sumTupN= " + sumTupN(tpN));            // 16
 
     /* expected: 10,20,30 */
     int a1[3] = (0,0,0);
     array_by_pointer(a1);
-    __println("a1 = [" + a1[0] + "," + a1[1] + "," + a1[2] + "]");
+    println(String + "a1 = [" + a1[0] + "," + a1[1] + "," + a1[2] + "]");
 
     /* expected: 40,50,60 */
     (int,int,int) t1 = (0,0,0);
     tuple_by_pointer(t1);
-    __println("t1 = (" + t1[0] + "," + t1[1] + "," + t1[2] + ")");
+    println(String + "t1 = (" + t1[0] + "," + t1[1] + "," + t1[2] + ")");
 
     /* expected: 40,50,60 */
     (int,int,int) t2 = (0,0,0);
     tuple_by_pointer(^t2);
-    __println("t2 = (" + t2[0] + "," + t2[1] + "," + t2[2] + ")");
+    println(String + "t2 = (" + t2[0] + "," + t2[1] + "," + t2[2] + ")");
 
     /* expected: 70 */
     Class cls1;
     class_by_pointer(cls1);
-    __println("cls1.field_ = " + cls1.field_);
+    println(String + "cls1.field_ = " + cls1.field_);
 
     /* expected: 70 */
     Class cls2;
     class_by_pointer(^cls2);
-    __println("cls2.field_ = " + cls2.field_);
+    println(String + "cls2.field_ = " + cls2.field_);
 
     /* alias-tuple convenience — lvalue arm through an alias type. expected: 33 44 */
     Pair pp = (0, 0);
     mutate_pair(pp);
-    __println("pp = " + pp[0] + " " + pp[1]);
+    println(String + "pp = " + pp[0] + " " + pp[1]);
 
     /* alias-array convenience — lvalue arm through an array alias. expected: 11 22 */
     Vec2 va = (0, 0);
     mutate_vec(va);
-    __println("va = " + va[0] + " " + va[1]);
+    println(String + "va = " + va[0] + " " + va[1]);
 
     /* multi-dim array param. expected: 1 2 */
     int gg[2][3] = ((0,0,0), (0,0,0));
     mutate_2d(gg);
-    __println("gg = " + gg[0][0] + " " + gg[1][2]);
+    println(String + "gg = " + gg[0][0] + " " + gg[1][2]);
 
     /* sizeof on an array-by-pointer param: pointee size, not pointer size.
        expected: 12 */
     int p3[3] = (0,0,0);
-    __println("param_size = " + param_size(p3));
+    println(String + "param_size = " + param_size(p3));
 
     /* array-by-reference params — the size is carried in the type; `fn(arr)`
        promotes the whole array to its address. expected: 6, 6 */
     int rb[3] = (1, 2, 3);
-    __println("sum_grp_ref = " + sum_grp_ref(rb));
-    __println("sum_alias_ref = " + sum_alias_ref(rb));
+    println(String + "sum_grp_ref = " + sum_grp_ref(rb));
+    println(String + "sum_alias_ref = " + sum_alias_ref(rb));
     /* a `(`-led tuple element with a sized dim: an array of 2 (int,int).
        expected: 10 */
     (int,int) tb[2] = ((1,2), (3,4));
-    __println("sum_tup_ref = " + sum_tup_ref(tb));
+    println(String + "sum_tup_ref = " + sum_tup_ref(tb));
     /* element decay: a bare array to an iterator / element-reference param.
        expected: 15, 4 */
     int rd[3] = (4, 5, 6);
-    __println("sum_iter = " + sum_iter(rd));
-    __println("first_ref = " + first_ref(rd));
+    println(String + "sum_iter = " + sum_iter(rd));
+    println(String + "first_ref = " + first_ref(rd));
 
     /* rvalue arm — a tuple LITERAL materializes a temp at the call site.
        expected: echo= 9 8 7 */
@@ -382,21 +382,21 @@ int32 main() {
        expected: t_arr[0] = (40,50,60) */
     (int,int,int) t_arr[2] = ((0,0,0), (0,0,0));
     tuple_by_pointer(t_arr[0]);
-    __println("t_arr[0] = (" + t_arr[0][0] + "," + t_arr[0][1] + "," + t_arr[0][2] + ")");
+    println(String + "t_arr[0] = (" + t_arr[0][0] + "," + t_arr[0][1] + "," + t_arr[0][2] + ")");
 
     /* deref-lvalue — `pt^` is an lvalue (reaches the pointee). Passing it by
        convenience takes the pointee's address, not a copy. expected: t3 = (40,50,60) */
     (int,int,int) t3 = (0,0,0);
     (int,int,int)^ pt = ^t3;
     tuple_by_pointer(pt^);
-    __println("t3 = (" + t3[0] + "," + t3[1] + "," + t3[2] + ")");
+    println(String + "t3 = (" + t3[0] + "," + t3[1] + "," + t3[2] + ")");
 
     /* multi-arg mixed lvalue + rvalue: `mx` is mutated in place; `(7,8,9)` is
        a temp the function reads (and writes, invisibly to the caller).
        expected: mix_b= 7 8 9 then mx[0] = 5 */
     (int,int,int) mx = (0, 0, 0);
     mix_call(mx, (7, 8, 9));
-    __println("mx[0] = " + mx[0]);
+    println(String + "mx[0] = " + mx[0]);
 
     //-EXPECT-ERROR: expects 2 arguments, got 1
     //add(1);
@@ -420,10 +420,7 @@ int32 main() {
 
     //-EXPECT-ERROR: returns no value and cannot be used as an expression
     //int32 nv = greet();
-    //__println("nv= " + nv);
-
-    //-EXPECT-ERROR: '__println' cannot be used as an expression
-    //int32 pv = __println("x");
+    //println(String + "nv= " + nv);
 
     // a bare VALUE name is a discarded READ that "uses" the local — no "set but never
     // used" — and evaluates to nothing. `bare_use` is used ONLY by the bare statement.
@@ -431,7 +428,7 @@ int32 main() {
     bare_use;
     const int bare_k = 7;
     bare_k;                          // a const value name works the same way
-    __println("bare = ok");          // reached: the bare reads compiled + ran
+    println(String + "bare = ok");          // reached: the bare reads compiled + ran
 
     return 0;
 }
@@ -440,17 +437,17 @@ int32 main() {
 // terminator; called as a statement below, and the target of the
 // void-as-value negative case.
 void greet() {
-    __println("greet");
+    println(String + "greet");
 }
 
 // a void function with a BARE `return;` — an early exit on one path, falling
 // through (implicit ret void) on the other. "void may return on any path."
 void say_if_pos(int32 n) {
     if (n > 0) {
-        __println("pos");
+        println(String + "pos");
         return;
     }
-    __println("nonpos");
+    println(String + "nonpos");
 }
 
 // the definition matching the forward declaration at the top of the file.
@@ -463,7 +460,7 @@ int32 fwd_decl(int32 n) {
 
 //-EXPECT-ERROR: must end with a return statement
 //int32 falls_through() {
-//    __println("no return here");
+//    println(String + "no return here");
 //}
 
 //-EXPECT-ERROR: A void function cannot return a value

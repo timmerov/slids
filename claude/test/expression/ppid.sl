@@ -131,7 +131,7 @@ lvalue check rejects a bumped operand (would need the target lowering on both op
 import string;
 
 int32 show2(int32 a, int32 b) {
-    __println("show " + a + " " + b);
+    println(String + "show " + a + " " + b);
     return 0;
 }
 
@@ -144,51 +144,51 @@ Pt(int32 v_) {                           // a one-field class, for field-operand
 int32 main() {
     int32 a = 1;
     int32 x = a++;            // post: x reads old a, a bumps after
-    __println("x= " + x + " a= " + a);
+    println(String + "x= " + x + " a= " + a);
 
     int32 b = 1;
     int32 y = ++b;            // pre: b bumps first, y reads new b
-    __println("y= " + y + " b= " + b);
+    println(String + "y= " + y + " b= " + b);
 
     int32 c = 1;
     int32 z = (++c) + (++c);  // both pre: c bumps twice up front, reads see 3
-    __println("z= " + z + " c= " + c);
+    println(String + "z= " + z + " c= " + c);
 
     int32 d = 1;
     int32 w = d++ + d++;      // both post: reads see 1, two bumps after
-    __println("w= " + w + " d= " + d);
+    println(String + "w= " + w + " d= " + d);
 
     int32 s = 5;
     s = s++;                  // the statement is the phrase: store 5, bump after -> 6
-    __println("s= " + s);
+    println(String + "s= " + s);
 
     int32 t = 5;
     t = t++ + t++;            // store 10, two post-bumps after -> 12
-    __println("t= " + t);
+    println(String + "t= " + t);
 
     int32 e = 5;
     e--;                      // bare inc/dec statement
-    __println("e= " + e);
+    println(String + "e= " + e);
 
     int32 g = 1;
     show2(g++, ++g);          // each arg is its own phrase -> show 1 3
-    __println("g= " + g);
+    println(String + "g= " + g);
 
     int32 h = 0;
     bool ct = true;
     bool r1 = (ct && h++);    // rhs reached -> h bumps
-    __println("h= " + h);
-    __println("r1= " + r1);
+    println(String + "h= " + h);
+    println(String + "r1= " + r1);
 
     int32 i = 0;
     bool cf = false;
     bool r2 = (cf && i++);    // short-circuited -> i unchanged
-    __println("i= " + i);
-    __println("r2= " + r2);
+    println(String + "i= " + i);
+    println(String + "r2= " + r2);
 
     float32 f = 1.0;
     f++;                      // float scalar steps by 1.0
-    __println("f= " + f);
+    println(String + "f= " + f);
 
     /* an inc on an ALIASED-type variable keeps the alias transparent: the inc
        expression is a binary OPERAND, so its OWN type drives the common-type rule.
@@ -197,125 +197,125 @@ int32 main() {
     alias Counter = int32;
     Counter cnt = 41;
     int32 sum = (cnt++) + 100;            // post-inc value 41 -> 141; cnt becomes 42
-    __println("alias inc= " + sum);       // 141
-    __println("alias var= " + cnt);       // 42
+    println(String + "alias inc= " + sum);       // 141
+    println(String + "alias var= " + cnt);       // 42
 
     /* || rhs is a sub-phrase: short-circuited (lhs true) skips the bump. */
     int32 j = 0;
     bool ot = true;
     bool r3 = (ot || j++);                // skipped -> j unchanged
-    __println("j= " + j);                 // 0
-    __println("r3= " + r3);               // true
+    println(String + "j= " + j);                 // 0
+    println(String + "r3= " + r3);               // true
     int32 k = 0;
     bool of = false;
     bool r4 = (of || k++);                // rhs reached -> k bumps
-    __println("k= " + k);                 // 1
-    __println("r4= " + r4);               // false
+    println(String + "k= " + k);                 // 1
+    println(String + "r4= " + r4);               // false
 
     /* an if CONDITION is a phrase: the post-bump fires after the condition. */
     int32 m = 0;
-    if (m++ > 0) { __println("if-then"); } else { __println("if-else"); }
-    __println("m= " + m);                 // 1 (read 0 -> else, bump after)
+    if (m++ > 0) { println(String + "if-then"); } else { println(String + "if-else"); }
+    println(String + "m= " + m);                 // 1 (read 0 -> else, bump after)
 
     /* a while CONDITION is a phrase, re-evaluated each pass (post-bump each time). */
     int32 n = 0;
     while (n++ < 3) { }
-    __println("n= " + n);                 // 4
+    println(String + "n= " + n);                 // 4
 
     /* tuple-literal slots are SEPARATE phrases, evaluated left to right. */
     int32 p = 1;
     (int32, int32) t1 = (p++, ++p);       // post then pre, same var -> (1, 3), p=3
-    __println("t1= " + t1[0] + " " + t1[1] + " p= " + p);
+    println(String + "t1= " + t1[0] + " " + t1[1] + " p= " + p);
 
     int32 c2 = 1;
     (int32, int32) t2 = (++c2, ++c2);     // two pre, same var -> (2, 3), c2=3
-    __println("t2= " + t2[0] + " " + t2[1] + " c2= " + c2);
+    println(String + "t2= " + t2[0] + " " + t2[1] + " c2= " + c2);
 
     int32 d2 = 1;
     (int32, int32) t3 = (d2++, d2++);     // two post, same var -> (1, 2), d2=3
-    __println("t3= " + t3[0] + " " + t3[1] + " d2= " + d2);
+    println(String + "t3= " + t3[0] + " " + t3[1] + " d2= " + d2);
 
     int32 p3 = 1;
     (int32, int32, int32) t4 = (p3++, p3++, p3++);   // three post, same var -> (1, 2, 3), p3=4
-    __println("t4= " + t4[0] + " " + t4[1] + " " + t4[2] + " p3= " + p3);
+    println(String + "t4= " + t4[0] + " " + t4[1] + " " + t4[2] + " p3= " + p3);
 
     int32 a2 = 10;
     int32 b2 = 20;
     int32 c4 = 30;
     int32 d4 = 40;
     (int32, int32, int32, int32) t5 = (a2++, ++b2, c4--, --d4);   // different vars, mixed
-    __println("t5= " + t5[0] + " " + t5[1] + " " + t5[2] + " " + t5[3]);   // 10 21 30 39
-    __println("t5vars= " + a2 + " " + b2 + " " + c4 + " " + d4);           // 11 21 29 39
+    println(String + "t5= " + t5[0] + " " + t5[1] + " " + t5[2] + " " + t5[3]);   // 10 21 30 39
+    println(String + "t5vars= " + a2 + " " + b2 + " " + c4 + " " + d4);           // 11 21 29 39
 
     /* destructure rhs slots are separate phrases too, left to right. */
     int32 dp = 5;
     int32 da2;
     int32 db2;
     (da2, db2) = (dp++, ++dp);            // da2=5 (dp=6), db2=7 (dp=7)
-    __println("da2= " + da2 + " db2= " + db2 + " dp= " + dp);   // 5 7 7
+    println(String + "da2= " + da2 + " db2= " + db2 + " dp= " + dp);   // 5 7 7
 
     int32 ea = 1;
     int32 eb = 10;
     int32 dx;
     int32 dy;
     (dx, dy) = (ea++, eb--);              // different vars: dx=1 (ea=2), dy=10 (eb=9)
-    __println("dx= " + dx + " dy= " + dy + " ea= " + ea + " eb= " + eb);   // 1 10 2 9
+    println(String + "dx= " + dx + " dy= " + dy + " ea= " + ea + " eb= " + eb);   // 1 10 2 9
 
     /* multiple ppid in ONE phrase: all pres fire at phrase entry, all posts at
        phrase exit, every read sees the between value. */
     int32 sa = 1;
     int32 v1 = ++sa + sa++;               // 1 pre + 1 post, same var: pre sa=2, reads see 2 -> 4, post sa=3
-    __println("v1= " + v1 + " sa= " + sa);            // 4 3
+    println(String + "v1= " + v1 + " sa= " + sa);            // 4 3
 
     int32 sm = 1;
     int32 v2 = ++sm + sm++ + ++sm + sm++; // 2 pre + 2 post, same var: pres sm=3, 4 reads see 3 -> 12, posts sm=5
-    __println("v2= " + v2 + " sm= " + sm);            // 12 5
+    println(String + "v2= " + v2 + " sm= " + sm);            // 12 5
 
     int32 va = 1;
     int32 vb = 10;
     int32 vc = 100;
     int32 v3 = va++ + ++vb + vc--;        // different vars, mixed: pre vb=11; reads 1+11+100=112; posts va=2, vc=99
-    __println("v3= " + v3);                           // 112
-    __println("v3vars= " + va + " " + vb + " " + vc); // 2 11 99
+    println(String + "v3= " + v3);                           // 112
+    println(String + "v3vars= " + va + " " + vb + " " + vc); // 2 11 99
 
     /* a for-RANGE bound is a phrase: the bump fires once, at loop setup. */
     int32 q = 2;
     int32 qn = 0;
     for (int32 ii : 0..q++) { qn = qn + 1; }
-    __println("qn= " + qn + " q= " + q);
+    println(String + "qn= " + qn + " q= " + q);
 
     /* range START and STEP also carry ppid — each bump fires once at setup. */
     int32 ra = 1;
     int32 rb = 2;
     int32 rsum = 0;
     for (int32 jj : ra++ .. 10 + rb++) { rsum = rsum + jj; }   // start 1 (ra=2), step +2 (rb=3)
-    __println("rsum= " + rsum + " ra= " + ra + " rb= " + rb);  // 25 2 3
+    println(String + "rsum= " + rsum + " ra= " + ra + " rb= " + rb);  // 25 2 3
 
     /* a return value is a phrase: post returns the OLD value (read before bump). */
     int32 rp1 = retPost(5);
     int32 rp2 = retPre(5);
-    __println("rp1= " + rp1 + " rp2= " + rp2);   // 5 6
+    println(String + "rp1= " + rp1 + " rp2= " + rp2);   // 5 6
 
     /* a do-while CONDITION is a phrase, re-tested after each pass (post-bump each).
        slids spells do-while as `while { body } (cond);` — body runs first. */
     int32 dw = 0;
     int32 dn = 0;
     while { dn = dn + 1; } (dw++ < 2);
-    __println("dn= " + dn + " dw= " + dw);       // 3 3
+    println(String + "dn= " + dn + " dw= " + dw);       // 3 3
 
     /* prefix ppid in a short-circuited && rhs is skipped too. */
     int32 pi = 0;
     bool pf = false;
     bool pr = (pf && ++pi);
-    __println("pi= " + pi + " pr= " + pr);       // 0 false
+    println(String + "pi= " + pi + " pr= " + pr);       // 0 false
 
     /* a switch scrutinee is a phrase: the bump fires once as it is evaluated. */
     int32 sw = 1;
     switch (sw++) {
-        1: { __println("sw case 1"); }
-        default: { __println("sw default"); }
+        1: { println(String + "sw case 1"); }
+        default: { println(String + "sw default"); }
     }
-    __println("sw= " + sw);                       // 2
+    println(String + "sw= " + sw);                       // 2
 
     /* store / move / swap statements are phrases too: a ppid operand lifts off and
        the post fires after the statement. */
@@ -323,7 +323,7 @@ int32 main() {
     int32 sty = 0;
     int32^ stp = ^sty;
     stp^ = stx++;                                 // store old stx into sty, then stx bumps
-    __println("sty= " + sty + " stx= " + stx);    // 5 6
+    println(String + "sty= " + sty + " stx= " + stx);    // 5 6
 
     int32 ar[3];
     ar[0] = 0;
@@ -331,12 +331,12 @@ int32 main() {
     ar[2] = 0;
     int32 kk = 1;
     ar[kk++] = 99;                                // index bump lifts: store ar[1], then kk++
-    __println("ar1= " + ar[1] + " kk= " + kk);    // 99 2
+    println(String + "ar1= " + ar[1] + " kk= " + kk);    // 99 2
 
     int32 mva = 5;
     int32 mvb = 0;
     mvb <-- mva++;                                // move old mva into mvb, then mva bumps
-    __println("mvb= " + mvb + " mva= " + mva);    // 5 6
+    println(String + "mvb= " + mvb + " mva= " + mva);    // 5 6
 
     /* COMPLEX-LVALUE ppid: ++/-- on an array element or a deref, in statement AND
        expression position, prefix AND postfix. The leaf address is bound ONCE (a
@@ -347,66 +347,66 @@ int32 main() {
     cl[0]++;                                      // statement post -> 11
     ++cl[1];                                      // statement pre  -> 21
     cl[2]--;                                      // statement post-dec -> 29
-    __println("cl= " + cl[0] + " " + cl[1] + " " + cl[2]);          // 11 21 29
+    println(String + "cl= " + cl[0] + " " + cl[1] + " " + cl[2]);          // 11 21 29
     int32 clp = cl[3]++;                          // expr post: reads 40, then cl[3]=41
     int32 clq = ++cl[3];                          // expr pre: cl[3]=42, reads 42
-    __println("clp= " + clp + " clq= " + clq + " cl3= " + cl[3]);   // 40 42 42
+    println(String + "clp= " + clp + " clq= " + clq + " cl3= " + cl[3]);   // 40 42 42
 
     int32 dv = 5;
     int32^ dpp = ^dv;
     dpp^++;                                       // statement post on a deref -> dv=6
     int32 dr = dpp^++;                            // expr post on a deref: reads 6, dv=7
-    __println("dv= " + dv + " dr= " + dr);        // 7 6
+    println(String + "dv= " + dv + " dr= " + dr);        // 7 6
 
     /* address-once: a side-effecting index is evaluated a single time, for a 1D
        and a multi-dim element. */
     int32 ao[3] = (100, 200, 300);
     int32 aok = 0;
     ao[aok++]++;                                  // ao[0] bumps; aok read once -> ao[0]=101, aok=1
-    __println("ao0= " + ao[0] + " aok= " + aok); // 101 1
+    println(String + "ao0= " + ao[0] + " aok= " + aok); // 101 1
 
     int32 md[2][3];
     int32 mi = 0;
     while (mi < 6) { md[mi/3][mi%3] = 0; mi = mi + 1; }
     int32 mk = 0;
     md[mk++][1]++;                                // 2D elem; outer index once -> md[0][1]=1, mk=1
-    __println("md01= " + md[0][1] + " mk= " + mk);   // 1 1
+    println(String + "md01= " + md[0][1] + " mk= " + mk);   // 1 1
 
     /* a complex operand inside a SUB-PHRASE (a call arg): each arg is its own
        phrase, the bump fires at that phrase's exit. */
     int32 sp[2] = (7, 8);
     show2(sp[0]++, ++sp[1]);                      // show 7 9 ; sp -> 8 9
-    __println("sp= " + sp[0] + " " + sp[1]);      // 8 9
+    println(String + "sp= " + sp[0] + " " + sp[1]);      // 8 9
 
     /* short-circuit on a complex operand: the && rhs bumps only when reached. */
     int32 sc[2] = (3, 4);
     bool scz = (false && (sc[0]++ > 0));          // skipped -> sc[0] unchanged
     bool scw = (true && (sc[1]++ > 0));           // reached -> sc[1] bumps
-    __println("sc= " + sc[0] + " " + sc[1]);      // 3 5
-    __println("scz= " + scz + " scw= " + scw);    // false true
+    println(String + "sc= " + sc[0] + " " + sc[1]);      // 3 5
+    println(String + "scz= " + scz + " scw= " + scw);    // false true
 
     /* post defers to phrase exit, so a re-read in the same phrase sees the OLD
        value — old+old, then the bump (consistent with the scalar `a++ + a`). */
     int32 oo[2] = (7, 0);
     int32 ooq = oo[0]++ + oo[0];                  // 7 + 7 = 14, then oo[0]=8
-    __println("ooq= " + ooq + " oo0= " + oo[0]);  // 14 8
+    println(String + "ooq= " + ooq + " oo0= " + oo[0]);  // 14 8
 
     /* a non-int (float) element steps by one; post reads the old value. */
     float64 fl[2] = (1.5, 2.5);
     fl[0]++;                                      // float element post -> 2.5
     float64 flr = fl[1]--;                        // post-dec: reads 2.5, fl[1]=1.5
-    __println("fl= " + fl[0] + " " + fl[1] + " flr= " + flr);   // 2.5 1.5 2.5
+    println(String + "fl= " + fl[0] + " " + fl[1] + " flr= " + flr);   // 2.5 1.5 2.5
 
     /* decrement through a deref. */
     int32 dd = 9;
     int32^ ddp = ^dd;
     ddp^--;                                       // -> dd=8
-    __println("dd= " + dd);                       // 8
+    println(String + "dd= " + dd);                       // 8
 
     /* two DISTINCT complex elements in one phrase: both posts defer to phrase exit. */
     int32 tw[2] = (5, 50);
     int32 twq = tw[0]++ + tw[1]++;                // 5 + 50 = 55, then tw -> 6, 51
-    __println("twq= " + twq + " tw= " + tw[0] + " " + tw[1]);   // 55 6 51
+    println(String + "twq= " + twq + " tw= " + tw[0] + " " + tw[1]);   // 55 6 51
 
     /* an ITERATOR element steps by one ELEMENT (pointer arithmetic), not by 1. */
     int32 idata[4] = (10, 20, 30, 40);
@@ -417,13 +417,13 @@ int32 main() {
     int32 ia = its[0]^;                           // 20
     int32 ib = (its[1]++)^;                       // post: reads idata[2]=30, then steps
     int32 ic = its[1]^;                           // 40
-    __println("ia= " + ia + " ib= " + ib + " ic= " + ic);      // 20 30 40
+    println(String + "ia= " + ia + " ib= " + ib + " ic= " + ic);      // 20 30 40
 
     /* a class FIELD operand — `pt.v_` lowers to an index, the same complex path. */
     Pt pt = 10;
     pt.v_++;                                      // field post -> 11
     int32 ptpre = ++pt.v_;                        // field pre  -> 12
-    __println("ptv= " + pt.v_ + " ptpre= " + ptpre);   // 12 12
+    println(String + "ptv= " + pt.v_ + " ptpre= " + ptpre);   // 12 12
 
     /* AGGREGATE ppid: ++/-- on a tuple or array steps EVERY leaf (numeric ±1,
        iterator one element), recursively — in every position scalars work. Same
@@ -431,41 +431,41 @@ int32 main() {
        per-leaf scalar/iterator bump. */
     (int32, int32) at = (5, 6);
     ++at;                                         // every slot +1 -> (6, 7)
-    __println("at++= " + at[0] + " " + at[1]);    // 6 7
+    println(String + "at++= " + at[0] + " " + at[1]);    // 6 7
     at--;                                         // -> (5, 6)
-    __println("at--= " + at[0] + " " + at[1]);    // 5 6
+    println(String + "at--= " + at[0] + " " + at[1]);    // 5 6
 
     int32 aa[3] = (10, 20, 30);
     ++aa;                                         // array, every elem +1 -> (11, 21, 31)
-    __println("aa++= " + aa[0] + " " + aa[1] + " " + aa[2]);   // 11 21 31
+    println(String + "aa++= " + aa[0] + " " + aa[1] + " " + aa[2]);   // 11 21 31
 
     /* pre yields the NEW aggregate, post the OLD (the read carries the value, the
        bump fires before (pre) / after (post)). */
     (int32, int32) pv = (1, 2);
     (int32, int32) pre = ++pv;                    // pv -> (2,3); pre reads new
-    __println("aggpre= " + pre[0] + " " + pre[1] + " pv= " + pv[0] + " " + pv[1]);   // 2 3 2 3
+    println(String + "aggpre= " + pre[0] + " " + pre[1] + " pv= " + pv[0] + " " + pv[1]);   // 2 3 2 3
     (int32, int32) ps = (1, 2);
     (int32, int32) post = ps++;                   // post reads old; ps -> (2,3)
-    __println("aggpost= " + post[0] + " " + post[1] + " ps= " + ps[0] + " " + ps[1]);  // 1 2 2 3
+    println(String + "aggpost= " + post[0] + " " + post[1] + " ps= " + ps[0] + " " + ps[1]);  // 1 2 2 3
 
     /* nested tuple + multi-dim array: the walk recurses to every scalar leaf. */
     ((int32,int32),(int32,int32)) nt = ((1,2),(3,4));
     ++nt;                                         // ((2,3),(4,5))
-    __println("aggnt= " + nt[0][0] + " " + nt[1][1]);          // 2 5
+    println(String + "aggnt= " + nt[0][0] + " " + nt[1][1]);          // 2 5
     int32 md2[2][2] = ((1,2),(3,4));
     ++md2;                                        // ((2,3),(4,5))
-    __println("aggmd= " + md2[0][0] + " " + md2[1][1]);        // 2 5
+    println(String + "aggmd= " + md2[0][0] + " " + md2[1][1]);        // 2 5
 
     /* a complex aggregate lvalue — an array-of-tuples ELEMENT — bumps that element's
        leaves (the leaf address is bound once via _$lv, then the aggregate walk). */
     (int32,int32) aot[2] = ((10,20), (30,40));
     aot[0]++;                                     // element (10,20) -> (11,21)
-    __println("aggaot= " + aot[0][0] + " " + aot[0][1]);       // 11 21
+    println(String + "aggaot= " + aot[0][0] + " " + aot[0][1]);       // 11 21
 
     /* float leaves step by 1.0. */
     (float32, float32) ft = (1.5, 2.5);
     ++ft;                                         // (2.5, 3.5)
-    __println("aggft= " + ft[0] + " " + ft[1]);               // 2.5 3.5
+    println(String + "aggft= " + ft[0] + " " + ft[1]);               // 2.5 3.5
 
     /* an ARRAY OF ITERATORS: ++ steps each iterator by one ELEMENT, not by 1. */
     int32 idat[4] = (100, 200, 300, 400);
@@ -473,16 +473,16 @@ int32 main() {
     ai[0] = ^idat[0];
     ai[1] = ^idat[2];
     ++ai;                                         // ai[0] -> idat[1], ai[1] -> idat[3]
-    __println("aggai= " + ai[0]^ + " " + ai[1]^);             // 200 400
+    println(String + "aggai= " + ai[0]^ + " " + ai[1]^);             // 200 400
 
     /* an aggregate ++ in a SUB-PHRASE: each tuple-literal slot is its own phrase, so
        a post bumps after that slot is read, a pre before it. */
     (int32,int32) e1 = (1, 2);
     (int32,int32) e2 = (3, 4);
     ((int32,int32),(int32,int32)) tt = (e1++, ++e2);   // slot 0 reads old, slot 1 new
-    __println("aggsub= " + tt[0][0] + " " + tt[0][1] + " "
+    println(String + "aggsub= " + tt[0][0] + " " + tt[0][1] + " "
               + tt[1][0] + " " + tt[1][1]);           // 1 2 4 5
-    __println("aggsubv= " + e1[0] + " " + e1[1] + " " + e2[0] + " " + e2[1]);   // 2 3 4 5
+    println(String + "aggsubv= " + e1[0] + " " + e1[1] + " " + e2[0] + " " + e2[1]);   // 2 3 4 5
 
     /* PPID in an assignment TARGET and complex operand — the `*p++` family. A postfix bump
        ON the target lifts to the phrase edge and the RESIDUAL lvalue remains; a PREFIX bump
@@ -490,19 +490,19 @@ int32 main() {
     int32 pbuf[4]; pbuf[0] = 10; pbuf[1] = 20; pbuf[2] = 30; pbuf[3] = 40;
     int32[] pw1 = pbuf;
     int32 prd = pw1++^;                          // read *pw1, advance: prd=10, pw1 -> pbuf[1]
-    __println("rd= " + prd + " wpv= " + pw1^);                       // 10 20
+    println(String + "rd= " + prd + " wpv= " + pw1^);                       // 10 20
     int32[] pw2 = pbuf;
     pw2++^ = 77;                                 // *pw2 = 77, advance: pbuf[0]=77, pw2 -> pbuf[1]
-    __println("st= " + pbuf[0] + " spv= " + pw2^);                   // 77 20
+    println(String + "st= " + pbuf[0] + " spv= " + pw2^);                   // 77 20
     int32[] pw3 = pbuf;
     pw3++^ += 3;                                 // *pw3 += 3, advance: pbuf[0]=80, pw3 -> pbuf[1]
-    __println("au= " + pbuf[0] + " apv= " + pw3^);                   // 80 20
+    println(String + "au= " + pbuf[0] + " apv= " + pw3^);                   // 80 20
     int32 pj = 0;
     pbuf[pj++]++ = 5;                            // pbuf[0]=5; pbuf[0]++ ->6; pj++ ->1
-    __println("cx= " + pbuf[0] + " buf1= " + pbuf[1] + " j= " + pj); // 6 20 1
+    println(String + "cx= " + pbuf[0] + " buf1= " + pbuf[1] + " j= " + pj); // 6 20 1
     int32 pbare = 42;
     pbare++ = 3;                                 // pbare = 3; pbare++ -> 4 (postfix NOT wasted)
-    __println("bare= " + pbare);                                    // 4
+    println(String + "bare= " + pbare);                                    // 4
 
     //-EXPECT-ERROR: Constant 'K' cannot be incremented
     //const int32 K = 5;

@@ -51,8 +51,8 @@ import string;
 // declares a fresh instance the funnel must default-construct (ctor hook) AND register
 // for destruction, then copy its element into.
 Tracked(int id_ = -1) {
-    _() { __println("Tracked ctor " + id_); }
-    ~() { __println("Tracked dtor " + id_); }
+    _() { println(String + "Tracked ctor " + id_); }
+    ~() { println(String + "Tracked dtor " + id_); }
 }
 (Tracked, Tracked) makeTracked() {    // tuple-of-class source for the destructure
     return (Tracked(1), Tracked(2));
@@ -64,39 +64,39 @@ int32 main() {
     int a = 0;
     int b = 0;
     (a, b) = (10, 20);
-    __println("reuse: a= " + a + " b= " + b);              // 10 20
+    println(String + "reuse: a= " + a + " b= " + b);              // 10 20
 
     /* untyped slots that don't exist DECLARE, type inferred from the slot. */
     (c, d) = (30, 40);
-    __println("declare: c= " + c + " d= " + d);            // 30 40
+    println(String + "declare: c= " + c + " d= " + d);            // 30 40
 
     /* TYPED slots declare a fresh variable of the written type. */
     (int x, int y) = (50, 60);
-    __println("typed: x= " + x + " y= " + y);              // 50 60
+    println(String + "typed: x= " + x + " y= " + y);              // 50 60
 
     /* mixed: reuse a, declare-typed e, declare-inferred f. */
     (a, int e, f) = (70, 80, 90);
-    __println("mixed: a= " + a + " e= " + e + " f= " + f); // 70 80 90
+    println(String + "mixed: a= " + a + " e= " + e + " f= " + f); // 70 80 90
 
     /* a trailing empty slot DISCARDS its tuple element. */
     int g = 0;
     (g, ) = (100, 200);
-    __println("discard-tail: g= " + g);                    // 100
+    println(String + "discard-tail: g= " + g);                    // 100
 
     /* an interior empty slot discards too. */
     int h = 0;
     int k = 0;
     (h, , k) = (1, 2, 3);
-    __println("discard-mid: h= " + h + " k= " + k);        // 1 3
+    println(String + "discard-mid: h= " + h + " k= " + k);        // 1 3
 
     /* destructure from a tuple VARIABLE, not only a literal. */
     (int, int) pr = (7, 8);
     (int m, int n) = pr;
-    __println("from-var: m= " + m + " n= " + n);           // 7 8
+    println(String + "from-var: m= " + m + " n= " + n);           // 7 8
 
     /* HETEROGENEOUS slots — the tuple's slots have different types. */
     (int hx, bool hy, float hz) = (1, true, 2.5);
-    __println("hetero: hx= " + hx + " hy= " + hy + " hz= " + hz);   // 1 true 2.5
+    println(String + "hetero: hx= " + hx + " hy= " + hy + " hz= " + hz);   // 1 true 2.5
 
     /* a LITERAL source is bound ELEMENT BY ELEMENT, so each element is still a literal
        when it meets its slot — and a literal has no type of its own. `int8 nb = 1;` is
@@ -109,17 +109,17 @@ int32 main() {
     int8 wr = 0;
     (int8 wb, int ww) = (1, 2);
     (wr, ) = (100, 200);
-    __println("narrow: wb= " + wb + " ww= " + ww + " wr= " + wr);   // 1 2 100
+    println(String + "narrow: wb= " + wb + " ww= " + ww + " wr= " + wr);   // 1 2 100
 
     /* the rhs may be a FUNCTION returning a tuple. */
     (int fa, int fb) = makePair();
-    __println("func: fa= " + fa + " fb= " + fb);           // 11 22
+    println(String + "func: fa= " + fa + " fb= " + fb);           // 11 22
 
     /* the rhs is evaluated ONCE, so a self-referential destructure SWAPS. */
     int sa = 1;
     int sb = 2;
     (sa, sb) = (sb, sa);
-    __println("swap: sa= " + sa + " sb= " + sb);           // 2 1
+    println(String + "swap: sa= " + sa + " sb= " + sb);           // 2 1
 
     /* enclosing scope: an untyped slot REUSES an outer-scope variable; a TYPED
        slot declares a fresh local that SHADOWS the outer one. */
@@ -127,36 +127,36 @@ int32 main() {
     int ob = 2;
     {
         (oa, int ob) = (10, 20);
-        __println("inner: oa= " + oa + " ob= " + ob);      // 10 20
+        println(String + "inner: oa= " + oa + " ob= " + ob);      // 10 20
     }
-    __println("outer: oa= " + oa + " ob= " + ob);          // 10 2
+    println(String + "outer: oa= " + oa + " ob= " + ob);          // 10 2
 
     /* an ARRAY is a homogeneous tuple, so it destructures too. */
     int arr[2] = (10, 20);
     (int aa, int ab) = arr;
-    __println("array: aa= " + aa + " ab= " + ab);          // 10 20
+    println(String + "array: aa= " + aa + " ab= " + ab);          // 10 20
 
     /* NESTED destructure — a slot may itself be a (sub-pattern), recursively. */
     ((int na, int nb), int nc) = ((1, 2), 3);
-    __println("nested: na= " + na + " nb= " + nb + " nc= " + nc);   // 1 2 3
+    println(String + "nested: na= " + na + " nb= " + nb + " nc= " + nc);   // 1 2 3
 
     /* nesting composes with reuse and discard. */
     int ra = 0;
     ((ra, ), rd) = ((4, 5), 6);
-    __println("nested2: ra= " + ra + " rd= " + rd);        // 4 6
+    println(String + "nested2: ra= " + ra + " rd= " + rd);        // 4 6
 
     /* a MULTI-DIMENSIONAL array destructures into ROW sub-arrays — each slot is a
        homogeneous tuple one rank smaller (here an int[2] row, inferred). */
     int md[2][2] = ((1, 2), (3, 4));
     (mr0, mr1) = md;
-    __println("rows: " + mr0[0] + " " + mr0[1] + " " + mr1[0] + " " + mr1[1]);   // 1 2 3 4
+    println(String + "rows: " + mr0[0] + " " + mr0[1] + " " + mr1[0] + " " + mr1[1]);   // 1 2 3 4
 
     /* destructure into CLASS slots — each typed slot declares a fresh instance,
        default-constructs it (funnel: ctor hook + dtor registration), then copies its
        element in; the source instances and the slots all balance their dtors. */
     {
         (Tracked ct0, Tracked ct1) = makeTracked();
-        __println("class: ct0= " + ct0.id_ + " ct1= " + ct1.id_);   // 1 2
+        println(String + "class: ct0= " + ct0.id_ + " ct1= " + ct1.id_);   // 1 2
     }
 
     return 0;

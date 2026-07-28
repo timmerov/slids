@@ -13,72 +13,72 @@ Value(
 ) {
     _() {
         ++g_count;
-        //__println("Value:ctor");
+        //println(String + "Value:ctor");
     }
     ~() {
         --g_count;
-        //__println("Value:dtor");
+        //println(String + "Value:dtor");
     }
     op<--(mutable Value^ rhs) {
-        __println("Value::move");
+        println(String + "Value::move");
         x_ = rhs^.x_;
     }
 }
 
 int32 main() {
-    __println("---Vector<int>---");
+    println(String + "---Vector<int>---");
     {
         Vector<int> intvec;
-        __println("resize(3)");
+        println(String + "resize(3)");
         intvec.resize(3);
     }
-    __println("ctor/dtor count = " + g_count);
-    __println("---Vector<Value>---");
+    println(String + "ctor/dtor count = " + g_count);
+    println(String + "---Vector<Value>---");
     {
         Vector<Value> valvec;
-        __println("resize(3)");
+        println(String + "resize(3)");
         valvec.resize(3);
-        __println("reserve(5)");
+        println(String + "reserve(5)");
         valvec.reserve(5);
-        __println("resize(7)");
+        println(String + "resize(7)");
         valvec.resize(7);
-        __println("resize(5)");
+        println(String + "resize(5)");
         valvec.resize(5);
-        //__println("---dtors---");
+        //println(String + "---dtors---");
     }
-    __println("ctor/dtor count = " + g_count);
-    __println("---copy/move---");
+    println(String + "ctor/dtor count = " + g_count);
+    println(String + "---copy/move---");
     {
         Vector<Value> a;
-        __println("resize(3)");
+        println(String + "resize(3)");
         a.resize(3);
-        __println("copy");
+        println(String + "copy");
         Vector<Value> b = a;
-        __println("move");
+        println(String + "move");
         Vector<Value> c <-- a;
-        __println("a.size() = " + a.size());
-        __println("b.size() = " + b.size());
-        __println("c.size() = " + c.size());
-        //__println("---dtors---");
+        println(String + "a.size() = " + a.size());
+        println(String + "b.size() = " + b.size());
+        println(String + "c.size() = " + c.size());
+        //println(String + "---dtors---");
     }
-    __println("ctor/dtor count = " + g_count);
-    __println("---index---");
+    println(String + "ctor/dtor count = " + g_count);
+    println(String + "---index---");
     {
         Vector<Value> vec;
-        __println("resize(3)");
+        println(String + "resize(3)");
         vec.resize(3);
         vec[0].x_ = 10;
         vec[1].x_ = 20;
         vec[2].x_ = 40;
-        __print("vec (by ref) = [");
+        print(String + "vec (by ref) = [");
         for (Value^ v : vec) {
-            __print(" " + v^.x_);
+            print(String + " " + v^.x_);
         }
-        __println(" ]");
-        //__println("---dtors---");
+        println(String + " ]");
+        //println(String + "---dtors---");
     }
-    __println("ctor/dtor count = " + g_count);
-    __println("---insert/append---");
+    println(String + "ctor/dtor count = " + g_count);
+    println(String + "---insert/append---");
     {
         Vector<Value> vec;
         Value val;
@@ -90,15 +90,15 @@ int32 main() {
         vec.insert(1, ^val);
         vp = vec.insert(2);
         vp^.x_ = 300;
-        __print("vec = [");
+        print(String + "vec = [");
         for (Value^ v : vec) {
-            __print(" " + v^.x_);
+            print(String + " " + v^.x_);
         }
-        __println(" ]");
-        //__println("---dtors---");
+        println(String + " ]");
+        //println(String + "---dtors---");
     }
-    __println("ctor/dtor count = " + g_count);
-    __println("---remove---");
+    println(String + "ctor/dtor count = " + g_count);
+    println(String + "---remove---");
     {
         Vector<Value> vec;
         vec.resize(7);
@@ -106,15 +106,15 @@ int32 main() {
             vec[i].x_ = i;
         }
         vec.remove(2, 3);
-        __print("vec = [");
+        print(String + "vec = [");
         for (Value^ v : vec) {
-            __print(" " + v^.x_);
+            print(String + " " + v^.x_);
         }
-        __println(" ]");
-        //__println("---dtors---");
+        println(String + " ]");
+        //println(String + "---dtors---");
     }
-    __println("ctor/dtor count = " + g_count);
-    __println("----------");
+    println(String + "ctor/dtor count = " + g_count);
+    println(String + "----------");
 
     return 0;
 }

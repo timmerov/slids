@@ -11,6 +11,6 @@ import importee2;
 //import file_does_not_exist;
 
 int32 main() {
-    __println("Hello, World!");
+    println(String + "Hello, World!");
     return 0;
 }

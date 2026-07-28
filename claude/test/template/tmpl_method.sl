@@ -44,13 +44,13 @@ the template body must rewrite every usage of the argument when it is converted
 to a reference.
 
     void template_method<T>(T arg) {
-        __println(arg);
+        println(String + arg);
     }
 
 transforms - when T is not-primitive - to:
 
     void template_method<T>(T^ arg) {
-        __println(arg^);
+        println(String + arg^);
     }
 */
 
@@ -210,143 +210,143 @@ Coex(int c_ = 0) {
 int32 main() {
 
     Jar j(4);
-    int e1 = j.scaled<int>(5); __println("e1 = " + e1);
-    int e2 = j.scaled(6); __println("e2 = " + e2);
+    int e1 = j.scaled<int>(5); println(String + "e1 = " + e1);
+    int e2 = j.scaled(6); println(String + "e2 = " + e2);
 
     /* the instance writes the field; later calls see it. */
     j.grow(10);
-    int e3 = j.scaled(1); __println("e3 = " + e3);
+    int e3 = j.scaled(1); println(String + "e3 = " + e3);
 
     /* one instance serves every object. */
     Jar k(100);
-    int e4 = k.scaled(2); __println("e4 = " + e4);
+    int e4 = k.scaled(2); println(String + "e4 = " + e4);
 
     /* sibling / self / free composition inside a template method. */
-    int e5 = j.mix(2); __println("e5 = " + e5);
+    int e5 = j.mix(2); println(String + "e5 = " + e5);
 
     /* composite T + the template-typed default: omitted, then supplied. */
     int arr[2] = (5, 6);
-    int e6 = j.sum2(arr); __println("e6 = " + e6);
-    int e7 = j.sum2(arr, 10); __println("e7 = " + e7);
+    int e6 = j.sum2(arr); println(String + "e6 = " + e6);
+    int e7 = j.sum2(arr, 10); println(String + "e7 = " + e7);
 
     /* a method-call expression inside a larger expression. */
-    int e8 = j.scaled(2) + k.scaled(1); __println("e8 = " + e8);
+    int e8 = j.scaled(2) + k.scaled(1); println(String + "e8 = " + e8);
 
     /* the derived receiver reaches the base's template method. */
     Kid kid;
-    int e9 = kid.plus(7); __println("e9 = " + e9);
-    int e10 = kid.plus<int>(8); __println("e10 = " + e10);
+    int e9 = kid.plus(7); println(String + "e9 = " + e9);
+    int e10 = kid.plus<int>(8); println(String + "e10 = " + e10);
 
     /* explicit-only: T appears in no parameter. */
-    int e11 = j.fresh<int>(); __println("e11 = " + e11);
+    int e11 = j.fresh<int>(); println(String + "e11 = " + e11);
 
     /* a STATEMENT-position call with an explicit type-list. */
     j.grow<int8>(2);
-    int f1 = j.scaled(1); __println("f1 = " + f1);
+    int f1 = j.scaled(1); println(String + "f1 = " + f1);
 
     /* a construction-temp receiver. */
-    int ct = Jar(7).scaled(2); __println("ct = " + ct);
+    int ct = Jar(7).scaled(2); println(String + "ct = " + ct);
 
     /* a pointer receiver. */
     Jar^ jp = ^j;
-    int pr = jp^.scaled(2); __println("pr = " + pr);
+    int pr = jp^.scaled(2); println(String + "pr = " + pr);
 
     /* T bound to a class; the instance method returns the class by value. */
     Vec v1(3);
     Vec v2(4);
     Vec v3 = j.comb(^v1, ^v2);
-    __println("v3 = " + v3.x_);
+    println(String + "v3 = " + v3.x_);
 
     /* the same template-method name in an unrelated class. */
-    int vs = v1.scaled(1); __println("vs = " + vs);
+    int vs = v1.scaled(1); println(String + "vs = " + vs);
 
     /* an alias-template use in the signature. */
     int aa2 = 42;
-    int vr = j.viaRf(^aa2); __println("vr = " + vr);
+    int vr = j.viaRf(^aa2); println(String + "vr = " + vr);
 
     /* the hoisted class's template method. */
     Outer:Inner oi;
-    int hz = oi.dub(21); __println("hz = " + hz);
+    int hz = oi.dub(21); println(String + "hz = " + hz);
 
     /* method self-recursion. */
-    int fc = j.fact(5); __println("fc = " + fc);
+    int fc = j.fact(5); println(String + "fc = " + fc);
 
     /* THE CONVENTION OF CONVENIENCE on a method template: S binds a class
        through the by-value spelling — the instance takes `(const Vec)^`
        behind it, and the body stays generic. */
-    Vec vcs = j.same(v1); __println("cs = " + vcs.x_);
-    int cp = j.peek(v1); __println("cp = " + cp);
+    Vec vcs = j.same(v1); println(String + "cs = " + vcs.x_);
+    int cp = j.peek(v1); println(String + "cp = " + cp);
 
     /* the out-of-line member template. */
-    int ol = j.extra(4); __println("ol = " + ol);
+    int ol = j.extra(4); println(String + "ol = " + ol);
 
     /* derived TEMPLATE shadows base PLAIN; derived PLAIN shadows base TEMPLATE;
        the base's own versions stay reachable on a base object. */
     Bb bb;
-    __println("s1 = " + bb.m(1));
-    __println("s2 = " + bb.t(1));
+    println(String + "s1 = " + bb.m(1));
+    println(String + "s2 = " + bb.t(1));
     Aa aax;
-    __println("s3 = " + aax.m(1));
-    __println("s4 = " + aax.t(1));
+    println(String + "s3 = " + aax.m(1));
+    println(String + "s4 = " + aax.t(1));
 
     /* the bypass spelling pins the base's template through the shadow. */
     Ww w;
-    __println("b1 = " + w.useBase(5));
-    __println("b2 = " + w.useBaseX(5));
-    __println("b3 = " + w.useOwn(5));
+    println(String + "b1 = " + w.useBase(5));
+    println(String + "b2 = " + w.useBaseX(5));
+    println(String + "b3 = " + w.useOwn(5));
 
     /* beside virtuals: dispatch is undisturbed, the template is static. */
     Circle c;
-    __println("ci = " + c.tag(5));
+    println(String + "ci = " + c.tag(5));
     Shape^ sp = ^c;
-    __println("vd = " + sp^.id());
-    __println("st = " + sp^.tag(3));
+    println(String + "vd = " + sp^.id());
+    println(String + "st = " + sp^.tag(3));
 
     /* the convention across the FLAVORS (class bindings everywhere): the
        hoisted class's dub (Vec+Vec through op+), the base's echoK through the
        derived receiver, and the virtual class's ident. */
     Vec cv(5);
-    Vec hd = oi.dub(cv); __println("f1 = " + hd.x_);
-    Vec kd = kid.echoK(cv); __println("f2 = " + kd.x_);
-    Vec vd2 = c.ident(cv); __println("f3 = " + vd2.x_);
+    Vec hd = oi.dub(cv); println(String + "f1 = " + hd.x_);
+    Vec kd = kid.echoK(cv); println(String + "f2 = " + kd.x_);
+    Vec vd2 = c.ident(cv); println(String + "f3 = " + vd2.x_);
 
     /* arity-only overloading on a method template: count selects. */
-    int y1 = j.pairup(1); __println("y1 = " + y1);
-    int y2 = j.pairup(2, 3); __println("y2 = " + y2);
-    int y3 = j.pairup<int>(4); __println("y3 = " + y3);
+    int y1 = j.pairup(1); println(String + "y1 = " + y1);
+    int y2 = j.pairup(2, 3); println(String + "y2 = " + y2);
+    int y3 = j.pairup<int>(4); println(String + "y3 = " + y3);
 
     /* plain beats template, both declaration orders; the template takes
        what the plain cannot; an explicit list forces the template. */
     Coex co;
-    int z1 = co.m(1); __println("z1 = " + z1);
+    int z1 = co.m(1); println(String + "z1 = " + z1);
     /* the template takes what the plain cannot — a FLOAT binding (a pointer
        binding could not return through the bare-S identity, canon B). */
-    float z2 = co.m(2.5); __println("z2 = " + z2);
-    int z3 = co.m<int>(4); __println("z3 = " + z3);
-    int z4 = co.t2(1); __println("z4 = " + z4);
+    float z2 = co.m(2.5); println(String + "z2 = " + z2);
+    int z3 = co.m<int>(4); println(String + "z3 = " + z3);
+    int z4 = co.t2(1); println(String + "z4 = " + z4);
     int64 zbig = 8;
-    int64 z5 = co.t2(zbig); __println("z5 = " + z5);
+    int64 z5 = co.t2(zbig); println(String + "z5 = " + z5);
 
     /* explicit type arguments on a plain method. */
     //-EXPECT-ERROR: is not a template method
-    //int np = j.half<int>(4); __println("np = " + np);
+    //int np = j.half<int>(4); println(String + "np = " + np);
 
     /* the wrong number of explicit type arguments. */
     //-EXPECT-ERROR: Wrong number of template arguments
-    //int wa = j.scaled<int, int>(1); __println("wa = " + wa);
+    //int wa = j.scaled<int, int>(1); println(String + "wa = " + wa);
 
     /* conflicting bindings across the user arguments. */
     //-EXPECT-ERROR: Conflicting bindings for template parameter
     //int8 c8 = 1;
-    //int cb = j.sum2(arr, c8); __println("cb = " + cb);
+    //int cb = j.sum2(arr, c8); println(String + "cb = " + cb);
 
     /* nothing binds T. */
     //-EXPECT-ERROR: Cannot infer template parameter
-    //int nb = j.fresh(); __println("nb = " + nb);
+    //int nb = j.fresh(); println(String + "nb = " + nb);
 
     /* an EMPTY explicit type-list parses (the per-flavor repeal made `<>`
        a spelling) and binds nothing — the call falls to inference. */
-    int em = j.scaled<>(1); __println("em = " + em);
+    int em = j.scaled<>(1); println(String + "em = " + em);
 
     return 0;
 }

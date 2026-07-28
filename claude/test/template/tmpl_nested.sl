@@ -21,7 +21,7 @@ template method inside template class.
 
     TClass<T>(T t_) {
         S smethod<S>(S s) {
-            __println("t=" + t_ + " s=" + s)
+            println(String + "t=" + t_ + " s=" + s)
             return s;
         }
     }
@@ -146,7 +146,7 @@ import string;
 
 TClass<T>(T t_) {
     S smethod<S>(S s) {
-        __println("t=" + t_ + " s=" + s);
+        println(String + "t=" + t_ + " s=" + s);
         return s;
     }
     SClass<S>(S s_) { }
@@ -237,8 +237,8 @@ Depth<T>(T d_ = 0) {
    EXPRESSION. */
 Ho<T>(T unused_ = 0) {
     Sub<S>(S s_ = 0, T t_ = 0) {
-        _() { __println("sub ctor " + s_); }
-        ~() { __println("sub dtor " + s_); }
+        _() { println(String + "sub ctor " + s_); }
+        ~() { println(String + "sub dtor " + s_); }
         S sum() { return s_ + t_; }
     }
 }
@@ -317,7 +317,7 @@ Host2<T>(T t_ = 2) {
 /* a deep flavor minted in ONE function answers qualified from another. */
 void warmH() {
     Host2<int>:H<int> wh(9);
-    __println("wh = " + wh.hv());
+    println(String + "wh = " + wh.hv());
 }
 
 /* a NAMESPACE-hosted template with a nested template: the chain crosses
@@ -390,75 +390,75 @@ int32 main() {
     /* the canon shape: two outer flavors, explicit and inferred inner
        bindings; the flavors' patterns bind independently. */
     TClass<int> ti(3);
-    int e1 = ti.smethod<int>(5); __println("e1 = " + e1);
-    int e2 = ti.smethod(6); __println("e2 = " + e2);
-    float e3 = ti.smethod(2.5); __println("e3 = " + e3);
+    int e1 = ti.smethod<int>(5); println(String + "e1 = " + e1);
+    int e2 = ti.smethod(6); println(String + "e2 = " + e2);
+    float e3 = ti.smethod(2.5); println(String + "e3 = " + e3);
 
     TClass<float> tf(1.5);
-    int e4 = tf.smethod(7); __println("e4 = " + e4);
-    float e5 = tf.smethod<float>(3.5); __println("e5 = " + e5);
+    int e4 = tf.smethod(7); println(String + "e4 = " + e4);
+    float e5 = tf.smethod<float>(3.5); println(String + "e5 = " + e5);
 
     /* one method instance serves every object of a flavor. */
     TClass<int> tj(9);
-    int e6 = tj.smethod(5); __println("e6 = " + e6);
+    int e6 = tj.smethod(5); println(String + "e6 = " + e6);
 
     /* binding surfaces. */
     Box<int> bx(10);
-    int f1 = bx.viaT(2); __println("f1 = " + f1);
-    int f2 = bx.echo(41); __println("f2 = " + f2);
-    int f3 = bx.seed<int>(); __println("f3 = " + f3);
-    int f4 = bx.mix(4); __println("f4 = " + f4);
+    int f1 = bx.viaT(2); println(String + "f1 = " + f1);
+    int f2 = bx.echo(41); println(String + "f2 = " + f2);
+    int f3 = bx.seed<int>(); println(String + "f3 = " + f3);
+    int f4 = bx.mix(4); println(String + "f4 = " + f4);
 
     /* a second flavor mints an independent inner pattern. */
     Box<float> bf(0.5);
-    float f5 = bf.viaT(1.5); __println("f5 = " + f5);
-    float f6 = bf.echo(0.25); __println("f6 = " + f6);
+    float f5 = bf.viaT(1.5); println(String + "f5 = " + f5);
+    float f6 = bf.echo(0.25); println(String + "f6 = " + f6);
     /* the arithmetic convenience through template bindings: T=float, X=int —
        `v_ + x` converts the int operand. */
-    float f7 = bf.viaT(2); __println("f7 = " + f7);
+    float f7 = bf.viaT(2); println(String + "f7 = " + f7);
 
     /* two class params under one method template. */
     Pair<int, int8> p(100, 27);
-    int g1 = p.pick(1); __println("g1 = " + g1);
+    int g1 = p.pick(1); println(String + "g1 = " + g1);
 
     /* the re-open's contributed template method beside the primary's plain
        method. */
     Gauge<int> gg(8);
-    int h1 = gg.twice(21); __println("h1 = " + h1);
-    int h2 = gg.raw(); __println("h2 = " + h2);
+    int h1 = gg.twice(21); println(String + "h1 = " + h1);
+    int h2 = gg.raw(); println(String + "h2 = " + h2);
 
     /* a block-scope class template with a template method (the probe shape). */
     Loc<T>(T q_ = 0) {
         S bump<S>(S s) { S r = s + q_; return r; }
     }
     Loc<int> l(5);
-    int k1 = l.bump(2); __println("k1 = " + k1);
+    int k1 = l.bump(2); println(String + "k1 = " + k1);
 
     /* a construction-temp receiver. */
-    int k2 = TClass<int>(4).smethod(1); __println("k2 = " + k2);
+    int k2 = TClass<int>(4).smethod(1); println(String + "k2 = " + k2);
 
     /* the canon hoisted templates: SClass's own list, reached through the
        LISTLESS qualifier; UClass's unlisted T bound by the REAL qualifier. */
-    TClass<>:SClass<int> sobj(7); __println("n1 = " + sobj.s_);
+    TClass<>:SClass<int> sobj(7); println(String + "n1 = " + sobj.s_);
     TClass<float>:UClass<int> uobj(3, 1.5);
-    __println("n2 = " + uobj.u_ + " " + uobj.t_);
+    println(String + "n2 = " + uobj.u_ + " " + uobj.t_);
 
     /* a second flavor of the same hoisted template — independent memo. */
-    TClass<>:SClass<float> sf(2.5); __println("n3 = " + sf.s_);
+    TClass<>:SClass<float> sf(2.5); println(String + "n3 = " + sf.s_);
 
     /* the INSTANCE-qualified spelling: the qualifier mints TClass<int> and
        the walk reaches ITS per-flavor sub-pattern — sq's type is distinct
        from sf's (`TClass<>:SClass<float>`), the per-qualifier rule. */
-    TClass<int>:SClass<float> sq(4.5); __println("nq = " + sq.s_);
+    TClass<int>:SClass<float> sq(4.5); println(String + "nq = " + sq.s_);
 
     /* hoisted templates with bases: the file-scope base, and the own-list
        instance base with dispatch landing most-derived — both hoisted
        classes are T-independent, so <> reaches them. */
     Host2<>:HD<int> hd(1, 9);
-    int hx1 = hd.gv(); __println("hx1 = " + hx1);
+    int hx1 = hd.gv(); println(String + "hx1 = " + hx1);
     Host2<>:HV<int> hv(3, 2);
     VW<int>^ wp = ^hv;
-    int hx2 = wp^.tagv(); __println("hx2 = " + hx2);
+    int hx2 = wp^.tagv(); println(String + "hx2 = " + hx2);
 
     /* DEPTH-2 chains, every qualifier mix: the listless host, listless-
        then-instance, and the full instance chain (whose H<int> flavor was
@@ -466,61 +466,61 @@ int32 main() {
        PLAIN nested class (P needs the real flavor). */
     warmH();
     Host2<>:H<int> hh(8);
-    int hx3 = hh.hv(); __println("hx3 = " + hx3);
+    int hx3 = hh.hv(); println(String + "hx3 = " + hx3);
     Host2<>:H<int>:D<int> dd1(4);
-    int hx4 = dd1.dv(); __println("hx4 = " + hx4);
+    int hx4 = dd1.dv(); println(String + "hx4 = " + hx4);
     Host2<int>:H<int>:D<int> dd2(5);
-    int hx5 = dd2.dv(); __println("hx5 = " + hx5);
+    int hx5 = dd2.dv(); println(String + "hx5 = " + hx5);
     Host2<int>:P:E<int> pe(6);
-    int hx6 = pe.ev(); __println("hx6 = " + hx6);
+    int hx6 = pe.ev(); println(String + "hx6 = " + hx6);
 
     /* depth-2 derived (its base reached through two hoisting levels), the
        depth-2 alias template, the depth-2 member const, and DISTINCT args
        at every level keying independent flavors. */
     Host2<int>:H<int>:G<int> hg(1, 2);
-    int hx7 = hg.g2v(); __println("hx7 = " + hx7);
+    int hx7 = hg.g2v(); println(String + "hx7 = " + hx7);
     int zz = 5;
     Host2<int>:H<int>:R2<int> hrp = ^zz;
-    __println("hx8 = " + hrp^);
-    int hx9 = Host2<int>:H<int>:kH; __println("hx9 = " + hx9);
+    println(String + "hx8 = " + hrp^);
+    int hx9 = Host2<int>:H<int>:kH; println(String + "hx9 = " + hx9);
     Host2<int>:H<int8>:D<float> hdf(1.5);
-    __println("hx10 = " + hdf.dv());
+    println(String + "hx10 = " + hdf.dv());
 
     /* the namespace-hosted chain, same and mixed flavors. */
     Spc3:B<int>:C<int> sc(6);
-    int hx11 = sc.cv(); __println("hx11 = " + hx11);
+    int hx11 = sc.cv(); println(String + "hx11 = " + hx11);
     Spc3:B<int8>:C<float> scf(1.5);
-    __println("hx12 = " + scf.cv());
+    println(String + "hx12 = " + scf.cv());
 
     /* methods on a hoisted instance: the bare receiver name; own P from its
        list, the outer T from the qualifier. */
     Host<int>:Pack<int> pk(10, 20);
-    int n4 = pk.total(3); __println("n4 = " + n4);
-    int n5 = pk.dbl(); __println("n5 = " + n5);
+    int n4 = pk.total(3); println(String + "n4 = " + n4);
+    int n5 = pk.dbl(); println(String + "n5 = " + n5);
 
     /* a block-scope host: the sub-pattern lives and dies with the scope. */
     Halo<T>(T unused_ = 0) {
         Duo<D>(D d_ = 0, T e_ = 0) { }
     }
     Halo<int8>:Duo<int> duo(4, 5);
-    int n6 = duo.d_ + duo.e_; __println("n6 = " + n6);
+    int n6 = duo.d_ + duo.e_; println(String + "n6 = " + n6);
 
     /* the inner list re-using the outer's name: the call's binding wins
        (int8 flavor, int call — 300 fits the CALL's T). */
     Sh<int8> sh(2);
-    int p1 = sh.same(300); __println("p1 = " + p1);
+    int p1 = sh.same(300); println(String + "p1 = " + p1);
 
     /* hoisted lifecycle: hooks fire per instance object, reverse order. */
     Ho<int8>:Sub<int> hs(10, 3);
-    int p2 = hs.sum(); __println("p2 = " + p2);
+    int p2 = hs.sum(); println(String + "p2 = " + p2);
 
     /* the qualified construction EXPRESSION fills a plain class's field. */
     Wrap w(Ho<int8>:Sub<int>(7, 1));
-    int p3 = w.f_.sum(); __println("p3 = " + p3);
+    int p3 = w.f_.sum(); println(String + "p3 = " + p3);
 
     /* template-method self-recursion inside a flavor. */
     Rec<int> rc;
-    int p4 = rc.fact(5); __println("p4 = " + p4);
+    int p4 = rc.fact(5); println(String + "p4 = " + p4);
 
     /* --- tier 3: templates inside template lists (canon spellings). --- */
     Vector< Vector<int> > vvi;
@@ -530,8 +530,8 @@ int32 main() {
 
     /* the tight form; construction through the nested spelling; chains. */
     Vector<Vector<int>> tv(Vector<int>(5));
-    int q1 = tv.get().get(); __println("q1 = " + q1);
-    __println(##type(tv));
+    int q1 = tv.get().get(); println(String + "q1 = " + q1);
+    println(String + ##type(tv));
 
     /* three deep: the lexer's `>>` + `>` combination. */
     Vector<Vector<Vector<int>>> deep;
@@ -540,99 +540,99 @@ int32 main() {
     /* a nested use as an alias-template argument, and via the reference. */
     Vector<int> vone(3);
     Rf<Vector<int>> rv = ^vone;
-    int q2 = rv^.get(); __println("q2 = " + q2);
+    int q2 = rv^.get(); println(String + "q2 = " + q2);
     Vector<Vector<int>>^ tp = ^tv;
-    int q3 = tp^.get().get(); __println("q3 = " + q3);
+    int q3 = tp^.get().get(); println(String + "q3 = " + q3);
 
     /* a nested use in a function template's explicit type-list. */
-    int q4 = idOf<Vector<Vector<int>>>(^tv, 4); __println("q4 = " + q4);
+    int q4 = idOf<Vector<Vector<int>>>(^tv, 4); println(String + "q4 = " + q4);
 
     /* two nested args under one use. */
     Pair<Vector<int>, int8> pn;
-    __println(##type(pn));
+    println(String + ##type(pn));
 
     /* `>>` and `<` stay expressions where no type gates. */
     int sx = 1;
     int sy = 8;
-    int q5 = sy >> sx; __println("q5 = " + q5);
-    bool q6 = sx < sy; __println("q6 = " + q6);
+    int q5 = sy >> sx; println(String + "q5 = " + q5);
+    bool q6 = sx < sy; println(String + "q6 = " + q6);
 
     /* hoisted ALIAS templates: own list, T-independent, so <> reaches it;
        ##type keeps the use as written. */
     int rz = 11;
     TClass<>:Ref<int> rp = ^rz;
-    int r1 = rp^; __println("r1 = " + r1);
-    __println(##type(rp));
+    int r1 = rp^; println(String + "r1 = " + r1);
+    println(String + ##type(rp));
 
     /* an alias target using the outer param UNLISTED: the qualifier binds
        it (T=int; the alias's own slot is free). */
-    TClass<int>:Wide<int8> wv = 300; __println("r2 = " + wv);
+    TClass<int>:Wide<int8> wv = 300; println(String + "r2 = " + wv);
 
     /* alias templates inside a template FUNCTION and METHOD body. */
-    int r3 = viaAlias(7); __println("r3 = " + r3);
+    int r3 = viaAlias(7); println(String + "r3 = " + r3);
     Meth<int> mm(1);
-    int r4 = mm.pick(9); __println("r4 = " + r4);
+    int r4 = mm.pick(9); println(String + "r4 = " + r4);
 
     /* class + local-function templates inside template fn/method bodies. */
-    int r5 = viaLocal(12); __println("r5 = " + r5);
-    int r6 = viaFn(12); __println("r6 = " + r6);
+    int r5 = viaLocal(12); println(String + "r5 = " + r5);
+    int r6 = viaFn(12); println(String + "r6 = " + r6);
     Meth2<int> m2;
-    int r7 = m2.meth(4); __println("r7 = " + r7);
+    int r7 = m2.meth(4); println(String + "r7 = " + r7);
 
     /* the convention on a member template's OUTER param: both S and T bind
        the class Cp; both params arrive `(const Cp)^` behind the spelling. */
     Depth<Cp> dp;
     Cp ca(3);
     Cp cb(4);
-    int r8 = dp.both(ca, cb); __println("r8 = " + r8);
+    int r8 = dp.both(ca, cb); println(String + "r8 = " + r8);
 
     /* arity-only overloading inside a flavor: the count selects per flavor. */
-    int r9 = ti.choose(3); __println("r9 = " + r9);
-    int r10 = ti.choose(3, 4); __println("r10 = " + r10);
+    int r9 = ti.choose(3); println(String + "r9 = " + r9);
+    int r10 = ti.choose(3, 4); println(String + "r10 = " + r10);
 
     /* plain beats template inside a flavor: plain for int, template else. */
     CoexF<int> cfx;
-    int r11 = cfx.m(1); __println("r11 = " + r11);
+    int r11 = cfx.m(1); println(String + "r11 = " + r11);
     int64 rbig = 9;
-    int64 r12 = cfx.m(rbig); __println("r12 = " + r12);
+    int64 r12 = cfx.m(rbig); println(String + "r12 = " + r12);
 
     /* --- the per-flavor member set and the LISTLESS qualifier. --- */
 
     /* <> reaches the list-independent members: a plain alias, an alias
        template, a plain nested class, a const, an enum (type and member). */
-    TClass<>:Integer w1 = 4; __println("w1 = " + w1);
-    TClass<>:Type<float> w2 = 1.5; __println("w2 = " + w2);
-    TClass<>:HoistI w3(9); __println("w3 = " + w3.i_);
-    int w4 = TClass<>:kTc; __println("w4 = " + w4);
+    TClass<>:Integer w1 = 4; println(String + "w1 = " + w1);
+    TClass<>:Type<float> w2 = 1.5; println(String + "w2 = " + w2);
+    TClass<>:HoistI w3(9); println(String + "w3 = " + w3.i_);
+    int w4 = TClass<>:kTc; println(String + "w4 = " + w4);
     TClass<>:Color w5 = TClass<>:Color:kGreen;
-    int w5v = w5; __println("w5 = " + w5v);
+    int w5v = w5; println(String + "w5 = " + w5v);
 
     /* a REAL flavor reaches the same members — and the dependent ones. */
-    TClass<int>:Integer w6 = 5; __println("w6 = " + w6);
-    TClass<int>:RefT w7 = ^w6; __println("w7 = " + w7^);
-    TClass<int>:HoistT w8(3); __println("w8 = " + w8.h_);
-    int w9 = TClass<float>:kTc; __println("w9 = " + w9);
+    TClass<int>:Integer w6 = 5; println(String + "w6 = " + w6);
+    TClass<int>:RefT w7 = ^w6; println(String + "w7 = " + w7^);
+    TClass<int>:HoistT w8(3); println(String + "w8 = " + w8.h_);
+    int w9 = TClass<float>:kTc; println(String + "w9 = " + w9);
 
     /* a flavor's GLOBAL is distinct STORAGE per qualifier: three
        qualifiers, three variables. */
     TClass<>:g_ = 21;
     TClass<int>:g_ = 42;
     TClass<float>:g_ = 63;
-    __println("w10 = " + TClass<>:g_ + " " + TClass<int>:g_
+    println(String + "w10 = " + TClass<>:g_ + " " + TClass<int>:g_
               + " " + TClass<float>:g_);
 
     /* DISTINCT TYPES per qualifier, even with no list dependency —
        ##type spells each side. */
-    __println(##type(w3));
+    println(String + ##type(w3));
     TClass<int>:HoistI w11(1);
-    __println(##type(w11));
+    println(String + ##type(w11));
 
     /* a construction EXPRESSION through the <> qualifier. */
-    int w12 = TClass<>:HoistS<int>(6).s_; __println("w12 = " + w12);
+    int w12 = TClass<>:HoistS<int>(6).s_; println(String + "w12 = " + w12);
 
     /* <> composes at depth: a NESTED pattern's own listless flavor. */
-    int w13 = Host2<int>:H<>:kH; __println("w13 = " + w13);
-    int w14 = Host2<>:H<>:kH; __println("w14 = " + w14);
+    int w13 = Host2<int>:H<>:kH; println(String + "w13 = " + w13);
+    int w14 = Host2<>:H<>:kH; println(String + "w14 = " + w14);
 
     return 0;
 }

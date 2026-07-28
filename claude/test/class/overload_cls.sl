@@ -57,7 +57,7 @@ Calc(int base_) {
     // and the WIDTH follows the value (9999999999 exceeds int32 -> int64). ##type
     // shows the inferred type directly.
     void inftypes(a = 7, b = 1.5, c = 'q', d = 9999999999) {
-        __println("inftypes: " + ##type(a) + " " + ##type(b) + " "
+        println(String + "inftypes: " + ##type(a) + " " + ##type(b) + " "
                   + ##type(c) + " " + ##type(d));
     }
 
@@ -81,46 +81,46 @@ int32 main() {
 
     Calc c(0);
 
-    __println("area1 = " + c.area(5));              // 25
-    __println("area2 = " + c.area(3, 4));           // 12
+    println(String + "area1 = " + c.area(5));              // 25
+    println(String + "area2 = " + c.area(3, 4));           // 12
 
     int32 i = 7;
     float32 f = 2.5;
-    __println("kind_i = " + c.kind(i));             // 1
-    __println("kind_f = " + c.kind(f));             // 2
+    println(String + "kind_i = " + c.kind(i));             // 1
+    println(String + "kind_f = " + c.kind(f));             // 2
 
     int64 j = 9;
-    __println("rank_i = " + c.rank(i));             // 32 (exact)
-    __println("rank_j = " + c.rank(j));             // 64 (exact)
+    println(String + "rank_i = " + c.rank(i));             // 32 (exact)
+    println(String + "rank_j = " + c.rank(j));             // 64 (exact)
     int16 s16 = 3;
-    __println("rank_s = " + c.rank(s16));           // 32 (smallest widening int16->int32)
+    println(String + "rank_s = " + c.rank(s16));           // 32 (smallest widening int16->int32)
 
-    __println("withdef1 = " + c.withdef(5));        // 105 (int overload, b=100, base_=0)
-    __println("withdef2 = " + c.withdef(5, 6));     // 11
-    __println("withdef_f = " + c.withdef(2.5));     // 999 (float overload)
+    println(String + "withdef1 = " + c.withdef(5));        // 105 (int overload, b=100, base_=0)
+    println(String + "withdef2 = " + c.withdef(5, 6));     // 11
+    println(String + "withdef_f = " + c.withdef(2.5));     // 999 (float overload)
 
-    __println("inf0 = " + c.inf());                 // 7
-    __println("inf1 = " + c.inf(5));                // 5
+    println(String + "inf0 = " + c.inf());                 // 7
+    println(String + "inf1 = " + c.inf(5));                // 5
     c.inftypes();                                   // inftypes: int float char int64
-    __println("finf0 = " + c.finf());               // 3.5 (float: 2.5 + 1.0)
-    __println("finf1 = " + c.finf(4.5));            // 5.5
+    println(String + "finf0 = " + c.finf());               // 3.5 (float: 2.5 + 1.0)
+    println(String + "finf1 = " + c.finf(4.5));            // 5.5
 
-    __println("viaself = " + c.viaself(6));         // 36
-    __println("viabare = " + c.viabare(3, 4));      // 12
+    println(String + "viaself = " + c.viaself(6));         // 36
+    println(String + "viabare = " + c.viabare(3, 4));      // 12
 
     // overload resolution through a DEREF receiver (`p^.method`).
     Calc^ p = ^c;
-    __println("ptr_area1 = " + p^.area(5));         // 25
-    __println("ptr_area2 = " + p^.area(3, 4));      // 12
+    println(String + "ptr_area1 = " + p^.area(5));         // 25
+    println(String + "ptr_area2 = " + p^.area(3, 4));      // 12
 
     // a single method with multiple defaults — fill left to right.
-    __println("multi1 = " + c.multi(1));            // 6  (1+2+3)
-    __println("multi2 = " + c.multi(1, 20));        // 24 (1+20+3)
-    __println("multi3 = " + c.multi(1, 20, 30));    // 51 (1+20+30)
+    println(String + "multi1 = " + c.multi(1));            // 6  (1+2+3)
+    println(String + "multi2 = " + c.multi(1, 20));        // 24 (1+20+3)
+    println(String + "multi3 = " + c.multi(1, 20, 30));    // 51 (1+20+30)
 
     // overload on a class-typed param vs a primitive.
-    __println("g_int = " + c.g(5));                 // 1
-    __println("g_ref = " + c.g(^c));                // 2
+    println(String + "g_int = " + c.g(5));                 // 1
+    println(String + "g_ref = " + c.g(^c));                // 2
 
     return 0;
 }

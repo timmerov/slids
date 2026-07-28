@@ -44,20 +44,20 @@ int32 bump(Integer^ p) {      // alias-REFERENCE in param position
 int32 main() {
 
     Integer x = 42;
-    __println(##type(x) + " " + ##name(x) + " = " + x);
+    println(String + ##type(x) + " " + ##name(x) + " = " + x);
 
     Float y = 3.14;
-    __println(##type(y) + " " + ##name(y) + " = " + y);
+    println(String + ##type(y) + " " + ##name(y) + " = " + y);
 
     Whole z = 7;              // Whole -> Integer -> int
-    __println(##type(z) + " " + ##name(z) + " = " + z);
+    println(String + ##type(z) + " " + ##name(z) + " = " + z);
 
     Integer w;               // declare-then-assign through an alias type
     w = doubled(20);
-    __println(##type(w) + " " + ##name(w) + " = " + w);
+    println(String + ##type(w) + " " + ##name(w) + " = " + w);
 
     Dir d = Dir:kNorth;
-    __println(##type(d) + " " + ##name(d) + " = " + d);
+    println(String + ##type(d) + " " + ##name(d) + " = " + d);
 
     /* an alias whose TARGET has a const-EXPRESSION dim (`alias Vec = int[kVecN]`):
        resolve expanded each use eagerly with the provisional dim; constfold bakes
@@ -65,18 +65,18 @@ int32 main() {
        (entry type) and sizeof of the alias TYPE (node type) all see the real size. */
     Vec vrow = (4, 5, 6);
     vrow[1] = 50;
-    __println(##type(vrow) + " vrow= " + vrow[0] + " " + vrow[1] + " " + vrow[2]);  // Vec vrow= 4 50 6
-    __println("sizeof(vrow)= " + sizeof(vrow) + " sizeof(Vec)= " + sizeof(Vec));    // 12 12
+    println(String + ##type(vrow) + " vrow= " + vrow[0] + " " + vrow[1] + " " + vrow[2]);  // Vec vrow= 4 50 6
+    println(String + "sizeof(vrow)= " + sizeof(vrow) + " sizeof(Vec)= " + sizeof(Vec));    // 12 12
 
     /* propagation: alias + same alias -> alias; + int -> drops to underlying;
        + literal -> alias (flexes in); a comparison -> bool. */
     Integer p = 10;
     Integer q = 20;
     int     m = 5;
-    __println("p+q : " + ##type(p + q));      // Integer
-    __println("p+m : " + ##type(p + m));      // int  (alias dropped)
-    __println("p+1 : " + ##type(p + 1));      // Integer
-    __println("p<q : " + ##type(p < q));      // bool
+    println(String + "p+q : " + ##type(p + q));      // Integer
+    println(String + "p+m : " + ##type(p + m));      // int  (alias dropped)
+    println(String + "p+1 : " + ##type(p + 1));      // Integer
+    println(String + "p<q : " + ##type(p < q));      // bool
 
     /* an alias type carries a pointer suffix: a reference and an iterator. the
        alias label rides along the `^` / `[]` (an array dim goes after the name,
@@ -84,38 +84,38 @@ int32 main() {
        forms that needed the typed-decl lookahead). */
     Integer val = 100;
     Integer^ ref = ^val;
-    __println(##type(ref) + " " + ##name(ref) + " = " + ref^);   // Integer^ ref = 100
+    println(String + ##type(ref) + " " + ##name(ref) + " = " + ref^);   // Integer^ ref = 100
     Integer nums[3];
     nums[0] = 11;
     nums[1] = 22;
     nums[2] = 33;
     Integer[] iter = ^nums[0];
     iter = iter + 1;
-    __println(##type(iter) + " " + ##name(iter) + " = " + iter^); // Integer[] iter = 22
+    println(String + ##type(iter) + " " + ##name(iter) + " = " + iter^); // Integer[] iter = 22
 
     /* a for-array by-REFERENCE loop var of an alias type — the alias base
        (Integer -> int) is resolved before the element-type match. */
     Integer total = 0;
     for (Integer^ e : nums) { total = total + e^; }
-    __println("for-ref sum= " + total);                          // 66
+    println(String + "for-ref sum= " + total);                          // 66
 
     /* an enum type takes a reference suffix too. */
     Dir^ dp = ^d;
-    __println(##type(dp) + " " + ##name(dp) + " = " + dp^);       // Dir^ dp = 0
+    println(String + ##type(dp) + " " + ##name(dp) + " = " + dp^);       // Dir^ dp = 0
 
     /* a namespace-qualified type with a suffix (the qualified-name walk then the
        suffix). */
     Space:Compass c = Space:Compass:south;
     Space:Compass^ cp = ^c;
-    __println(##type(cp) + " " + ##name(cp) + " = " + cp^);       // Space:Compass^ cp = 1
+    println(String + ##type(cp) + " " + ##name(cp) + " = " + cp^);       // Space:Compass^ cp = 1
 
     /* an alias whose target is a pointer (IntPtr = int^) resolves and keeps its
        label. */
     IntPtr ip = ^val;
-    __println(##type(ip) + " " + ##name(ip) + " = " + ip^);       // IntPtr ip = 100
+    println(String + ##type(ip) + " " + ##name(ip) + " = " + ip^);       // IntPtr ip = 100
 
     /* an alias-reference param. */
-    __println("bump= " + bump(^val));                            // 101
+    println(String + "bump= " + bump(^val));                            // 101
 
     //-EXPECT-ERROR: Unknown type 'Bogus'
     //Bogus q;

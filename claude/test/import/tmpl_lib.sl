@@ -19,6 +19,8 @@ consumer (of tmpl_lib2 — viaW2), so it dumps its own .sli and tmpl_lib2
 compiles after it.
 */
 
+import string;
+
 import tmpl_lib;
 import tmpl_lib2;
 
@@ -46,8 +48,8 @@ int usepriv() {
 }
 
 Traced<T>() {
-    _() { __println("tr ctor " + t_); }
-    ~() { __println("tr dtor " + t_); }
+    _() { println(String + "tr ctor " + t_); }
+    ~() { println(String + "tr dtor " + t_); }
     T get() { return t_; }
 }
 

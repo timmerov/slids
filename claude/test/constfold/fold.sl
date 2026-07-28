@@ -198,78 +198,81 @@ import string;
 
 int32 main() {
     // D1 — float binary fold (+ - * / %)
-    __println("f_add= " + (1.5 + 2.5));               // 4
-    __println("f_sub= " + (10.0 - 0.5));              // 9.5
-    __println("f_mul= " + (4.0 * 2.5));               // 10
-    __println("f_div= " + (7.0 / 2.0));               // 3.5
-    __println("f_mod= " + (7.5 % 2.0));               // 1.5
-    __println("f_nest= " + (1.0 + 2.0 * 3.0));        // 7  (precedence)
+    println(String + "f_add= " + (1.5 + 2.5));               // 4
+    println(String + "f_sub= " + (10.0 - 0.5));              // 9.5
+    println(String + "f_mul= " + (4.0 * 2.5));               // 10
+    println(String + "f_div= " + (7.0 / 2.0));               // 3.5
+    println(String + "f_mod= " + (7.5 % 2.0));               // 1.5
+    println(String + "f_nest= " + (1.0 + 2.0 * 3.0));        // 7  (precedence)
 
     // D2 — shift fold, int lhs
-    __println("sh_int_l= "    + (1 << 10));           // 1024
-    __println("sh_int_r= "    + (1024 >> 4));         // 64
-    __println("sh_int_neg= "  + (-8 >> 1));           // -4  (arithmetic >>)
-    __println("sh_int_wide= " + (1 << 63));           // -9223372036854775808 (sign bit)
-    __println("sh_int_huge= " + (1 << 70));           // 0   (count >= width folds to 0)
+    println(String + "sh_int_l= "    + (1 << 10));           // 1024
+    println(String + "sh_int_r= "    + (1024 >> 4));         // 64
+    println(String + "sh_int_neg= "  + (-8 >> 1));           // -4  (arithmetic >>)
+    println(String + "sh_int_wide= " + (1 << 63));           // -9223372036854775808 (sign bit)
+    /* the fold result 0 has nominal uint1, and a BARE 0/1 in a String chain
+       coerces op=(bool) — print through a typed local so the golden reads 0. */
+    int sh_huge = 1 << 70;
+    println(String + "sh_int_huge= " + sh_huge);             // 0   (count >= width folds to 0)
 
     // D2 — shift fold, float lhs (pow2 mul/div path)
-    __println("sh_flt_l= " + (2.5 << 3));             // 20  (2.5 * 8)
-    __println("sh_flt_r= " + (16.0 >> 2));            // 4   (16.0 / 4)
+    println(String + "sh_flt_l= " + (2.5 << 3));             // 20  (2.5 * 8)
+    println(String + "sh_flt_r= " + (16.0 >> 2));            // 4   (16.0 / 4)
 
     // D3 — comparison fold, int
-    __println("c_eq_t= " + (5 == 5));                 // true
-    __println("c_eq_f= " + (5 == 6));                 // false
-    __println("c_ne= "   + (5 != 6));                 // true
-    __println("c_lt= "   + (5 < 6));                  // true
-    __println("c_le= "   + (5 <= 5));                 // true
-    __println("c_gt= "   + (6 > 5));                  // true
-    __println("c_ge= "   + (5 >= 5));                 // true
-    __println("c_neg= "  + (-1 < 1));                 // true (signed)
+    println(String + "c_eq_t= " + (5 == 5));                 // true
+    println(String + "c_eq_f= " + (5 == 6));                 // false
+    println(String + "c_ne= "   + (5 != 6));                 // true
+    println(String + "c_lt= "   + (5 < 6));                  // true
+    println(String + "c_le= "   + (5 <= 5));                 // true
+    println(String + "c_gt= "   + (6 > 5));                  // true
+    println(String + "c_ge= "   + (5 >= 5));                 // true
+    println(String + "c_neg= "  + (-1 < 1));                 // true (signed)
 
     // D3 — comparison fold, float
-    __println("cf_eq= " + (1.5 == 1.5));              // true
-    __println("cf_lt= " + (1.5 < 2.5));               // true
-    __println("cf_ge= " + (3.0 >= 2.999));            // true
+    println(String + "cf_eq= " + (1.5 == 1.5));              // true
+    println(String + "cf_lt= " + (1.5 < 2.5));               // true
+    println(String + "cf_ge= " + (3.0 >= 2.999));            // true
 
     // D4 — rule-6 overflow-to-unsigned
     // INT64_MAX + 1 overflows int64 but fits uint64.
-    __println("ov_add= " + (9223372036854775807 + 1));  // 9223372036854775808
+    println(String + "ov_add= " + (9223372036854775807 + 1));  // 9223372036854775808
     // INT64_MIN - 1 also overflows; uint64 wrap holds it.
-    __println("ov_sub= " + (-9223372036854775808 - 1)); // 9223372036854775807
+    println(String + "ov_sub= " + (-9223372036854775808 - 1)); // 9223372036854775807
     // Multiplication overflow.
-    __println("ov_mul= " + (4611686018427387904 * 2)); // 9223372036854775808
+    println(String + "ov_mul= " + (4611686018427387904 * 2)); // 9223372036854775808
     // INT64_MIN / -1 — mathematically INT64_MAX+1; flips to uint64.
-    __println("ov_div= " + (-9223372036854775808 / -1)); // 9223372036854775808
+    println(String + "ov_div= " + (-9223372036854775808 / -1)); // 9223372036854775808
 
     // Item 7 — lossy float32 literals must emit via hex bit-pattern so llc
     // accepts them. 3.14 in float32 is 3.1400001049... ; printf %g rounds
     // back to "3.14" at default precision.
     float xf_pi   = 3.14;
     float xf_tenth = 0.1;
-    __println("xf_pi= "    + xf_pi);     // 3.14
-    __println("xf_tenth= " + xf_tenth);  // 0.1
+    println(String + "xf_pi= "    + xf_pi);     // 3.14
+    println(String + "xf_tenth= " + xf_tenth);  // 0.1
 
     // D5 — unary fold VALUES (rules 1a, 1c, 1d, 1e). KIND rules, unary !, and the
     // logical / comparison folds are covered in constant.sl.
-    __println("u_plus= " + (+5));        // 5    (1a nop)
-    __println("u_negf= " + (-3.5));      // -3.5 (1c float -> float)
-    __println("u_negi= " + (-5));        // -5   (1d -> integer)
-    __println("u_negc= " + (-'A'));      // -65  (1d char -> integer)
-    __println("u_not0= " + (~0));        // -1   (1e integer)
-    __println("u_not5= " + (~5));        // -6   (1e integer)
+    println(String + "u_plus= " + (+5));        // 5    (1a nop)
+    println(String + "u_negf= " + (-3.5));      // -3.5 (1c float -> float)
+    println(String + "u_negi= " + (-5));        // -5   (1d -> integer)
+    println(String + "u_negc= " + (-'A'));      // -65  (1d char -> integer)
+    println(String + "u_not0= " + (~0));        // -1   (1e integer)
+    println(String + "u_not5= " + (~5));        // -6   (1e integer)
 
     // D6 — bitwise fold VALUES (rule 5b)
-    __println("bw_and= " + (12 & 10));   // 8
-    __println("bw_or= "  + (12 | 3));    // 15
-    __println("bw_xor= " + (12 ^ 10));   // 6
+    println(String + "bw_and= " + (12 & 10));   // 8
+    println(String + "bw_or= "  + (12 | 3));    // 15
+    println(String + "bw_xor= " + (12 ^ 10));   // 6
 
     // D7 — integer math fold VALUES (rule 6, no overflow; the overflow edges are
     // D4 above and the >uint64 error is in constant.sl)
-    __println("m_add= " + (2 + 3));      // 5
-    __println("m_sub= " + (10 - 4));     // 6
-    __println("m_mul= " + (6 * 7));      // 42
-    __println("m_div= " + (20 / 3));     // 6
-    __println("m_mod= " + (20 % 3));     // 2
+    println(String + "m_add= " + (2 + 3));      // 5
+    println(String + "m_sub= " + (10 - 4));     // 6
+    println(String + "m_mul= " + (6 * 7));      // 42
+    println(String + "m_div= " + (20 / 3));     // 6
+    println(String + "m_mod= " + (20 % 3));     // 2
 
     // D8 — unsigned upper-bits nominal (canon: the nominal width is the smallest
     // where the upper bits are all-zeros or all-ones). ~0x0F keeps nominal uint8 —
@@ -277,9 +280,10 @@ int32 main() {
     // (0xFF..F0) reinterprets as -16 by bit-truncation on the widen. Standalone, the
     // same ~0x0F materializes at its uint64 computation type.
     intptr cap = 100;
-    __println("round16= " + ((cap + 0x0F) & ~0x0F));  // 112  (round up to mult of 16)
-    __println("u_maskz= " + (0 & ~0x0F));             // 0
-    __println("u_notF= "  + (~0x0F));                 // 18446744073709551600 (uint64)
+    println(String + "round16= " + ((cap + 0x0F) & ~0x0F));  // 112  (round up to mult of 16)
+    uint64 u_mz = 0 & ~0x0F;   // bare 0/1 would coerce op=(bool); see sh_int_huge
+    println(String + "u_maskz= " + u_mz);                    // 0
+    println(String + "u_notF= "  + (~0x0F));                 // 18446744073709551600 (uint64)
 
     /* compile errors — invalid fold operations (the negative-test runner
        uncomments one block at a time). float+int mix and the >uint64 integer

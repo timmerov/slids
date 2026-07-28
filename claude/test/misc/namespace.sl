@@ -120,8 +120,8 @@ Cog(int teeth_) {
 Space {
     const int kGain = 3;
     Meter(int v_) {
-        _() { __println("Meter:ctor " + v_); }
-        ~() { __println("Meter:dtor " + v_); }
+        _() { println(String + "Meter:ctor " + v_); }
+        ~() { println(String + "Meter:dtor " + v_); }
         int amp() { return v_ * kGain; }
     }
 }
@@ -153,8 +153,8 @@ Space {
    hooks of its own). */
 Space {
     Tracked(int id_) {
-        _() { __println("Tracked:ctor " + id_); }
-        ~() { __println("Tracked:dtor " + id_); }
+        _() { println(String + "Tracked:ctor " + id_); }
+        ~() { println(String + "Tracked:dtor " + id_); }
         int id() { return id_; }
     }
 }
@@ -173,7 +173,7 @@ Space {
         int g() { return v_; }
     }
 }
-void show_cell(Space:Cell^ c) { __println("cell = " + c^.g()); }
+void show_cell(Space:Cell^ c) { println(String + "cell = " + c^.g()); }
 Space:Cell make_cell(int n) {
     Space:Cell c(n);
     return c;
@@ -208,13 +208,13 @@ Span(int len_) {
 int32 main() {
 
     int x = Space:bar();
-    __println("x = " + x);
+    println(String + "x = " + x);
 
     int y = Space:kOne;
-    __println("y = " + y);
+    println(String + "y = " + y);
 
     int w = scoped();
-    __println("w = " + w);
+    println(String + "w = " + w);
 
     /* open space in local scope. */
     SubSpace {
@@ -229,78 +229,78 @@ int32 main() {
         }
     }
     int z = SubSpace:box();
-    __println("z = " + z);
+    println(String + "z = " + z);
 
     int u = Space:Nested:kFour;
-    __println("u = " + u);
+    println(String + "u = " + u);
 
     int v = SubSpace:Nested:kFive;
-    __println("v = " + v);
+    println(String + "v = " + v);
 
     int mn = not_qualified();
-    __println("mn = " + mn);
+    println(String + "mn = " + mn);
 
     int j = Local:local_best();
-    __println("j = " + j);
+    println(String + "j = " + j);
 
     int k = Local:global_best();
-    __println("k = " + k);
+    println(String + "k = " + k);
 
     /* qualifier not needed. */
     int h = kEight;
-    __println("h = " + h);
+    println(String + "h = " + h);
 
     /* a class defined in a namespace — constructed and method-called like any
        class (Space:Gadget). */
     Space:Gadget g(7);
-    __println("g = " + g.tick());
+    println(String + "g = " + g.tick());
 
     /* a class whose fields forward-reference across file/namespace scope. */
     Crate cr(5);
-    __println("cr = " + cr.total());
+    println(String + "cr = " + cr.total());
 
     /* a namespace class with ctor/dtor; the method reaches kGain bare. The
        ctor/dtor prints bracket the value inside meter_demo. */
     int amp = meter_demo();
-    __println("amp = " + amp);
+    println(String + "amp = " + amp);
 
     /* a class in a nested namespace. */
     A:B:Knob kb(9);
-    __println("knob = " + kb.turn());
+    println(String + "knob = " + kb.turn());
 
     /* a namespace member alias used as a qualified type, + a namespace function
        returning it (Count = int). */
     Space:Count cn = 3;
-    __println("cnt = " + Space:counted() + " cn = " + cn);
+    println(String + "cnt = " + Space:counted() + " cn = " + cn);
 
     /* a namespace function whose param is a class defined later (forward-ref). */
     Span sp(8);
-    __println("sized = " + Space:sized(sp));
+    println(String + "sized = " + Space:sized(sp));
 
     /* an empty namespace class. */
     Space:Tag tg;
-    __println("tag = " + tg.answer());
+    println(String + "tag = " + tg.answer());
 
     /* transitive lifecycle: Wrapper's dtor runs because its field's class has one.
        ctor/dtor prints bracket the value inside wrap_demo. */
     int wr = wrap_demo();
-    __println("wrap = " + wr);
+    println(String + "wrap = " + wr);
 
     /* a namespace class on the heap. */
     Space:Cell^ hp = new Space:Cell(13);
-    __println("heap = " + hp^.g());
+    println(String + "heap = " + hp^.g());
     delete hp;
 
     /* an array of a namespace class (default field value). */
     Space:Cell arr[2];
-    __println("arr = " + arr[0].g());
+    println(String + "arr = " + arr[0].g());
 
     /* a namespace class as a function return + reference param. */
     Space:Cell mc = make_cell(21);
     show_cell(mc);
 
     /* a class in a locally-opened namespace. */
-    __println("lnc = " + local_ns_class());
+    println(String + "lnc = " + local_ns_class());
 
     /* compile error: need qualifier */
     //-EXPECT-ERROR: 'foo' needs a namespace qualifier
@@ -334,7 +334,7 @@ int32 main() {
 /* compile error: a namespace body holds definitions, never a naked statement —
    a non-definition item is read as a (malformed) function. */
 //-EXPECT-ERROR: Expected function name.
-//NsNaked { __println("naked"); }
+//NsNaked { println(String + "naked"); }
 
 /* compile error: a field-bearing duplicate class within a namespace — a re-open
    cannot add fields. */

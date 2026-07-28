@@ -37,32 +37,32 @@ import string;
 int32 main() {
     int x = 5;
     int^ ref = ^x;
-    __println("ref^= " + ref^);              // 5
+    println(String + "ref^= " + ref^);              // 5
 
     /* write through the reference. */
     ref^ = 99;
-    __println("x= " + x);                    // 99
-    __println("ref^= " + ref^);              // 99
+    println(String + "x= " + x);                    // 99
+    println(String + "ref^= " + ref^);              // 99
 
     /* re-point the reference. */
     int y = 7;
     ref = ^y;
-    __println("ref^= " + ref^);              // 7
+    println(String + "ref^= " + ref^);              // 7
 
     /* identity comparison — only == and != (both directions). */
     int^ same = ^y;
     int^ other = ^x;
-    __println("ref==same= " + (ref == same));    // true  (both -> y)
-    __println("ref==other= " + (ref == other));  // false (y vs x)
-    __println("ref!=other= " + (ref != other));  // true
-    __println("ref!=same= " + (ref != same));    // false
+    println(String + "ref==same= " + (ref == same));    // true  (both -> y)
+    println(String + "ref==other= " + (ref == other));  // false (y vs x)
+    println(String + "ref!=other= " + (ref != other));  // true
+    println(String + "ref!=same= " + (ref != same));    // false
 
     /* nullptr. */
     int^ none = nullptr;
-    __println("none==nullptr= " + (none == nullptr));  // true
-    __println("none!=nullptr= " + (none != nullptr));  // false
+    println(String + "none==nullptr= " + (none == nullptr));  // true
+    println(String + "none!=nullptr= " + (none != nullptr));  // false
     none = ^x;
-    __println("none==nullptr= " + (none == nullptr));  // false
+    println(String + "none==nullptr= " + (none == nullptr));  // false
 
     return 0;
 }

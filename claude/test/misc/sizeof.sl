@@ -80,26 +80,26 @@ Simple(
     float64 y_ = 3.14
 ) {
     _() {
-        __println("Simple:ctor: " + x_);
+        println(String + "Simple:ctor: " + x_);
     }
     ~() {
-        __println("Simple:dtor: " + x_);
+        println(String + "Simple:dtor: " + x_);
     }
 }
 
 int32 main() {
     /* primitive widths. */
-    __println("char= "    + sizeof(char));            // 1
-    __println("int16= "   + sizeof(int16));           // 2
-    __println("int= "     + sizeof(int));             // 4
-    __println("int64= "   + sizeof(int64));           // 8
-    __println("intptr= "  + sizeof(intptr));          // 8
-    __println("float32= " + sizeof(float32));         // 4
-    __println("float64= " + sizeof(float64));         // 8
+    println(String + "char= "    + sizeof(char));            // 1
+    println(String + "int16= "   + sizeof(int16));           // 2
+    println(String + "int= "     + sizeof(int));             // 4
+    println(String + "int64= "   + sizeof(int64));           // 8
+    println(String + "intptr= "  + sizeof(intptr));          // 8
+    println(String + "float32= " + sizeof(float32));         // 4
+    println(String + "float64= " + sizeof(float64));         // 8
 
     /* any pointer / iterator is 8. */
-    __println("void^= "   + sizeof(void^));           // 8
-    __println("char[]= "  + sizeof(char[]));          // 8
+    println(String + "void^= "   + sizeof(void^));           // 8
+    println(String + "char[]= "  + sizeof(char[]));          // 8
 
     /* a variable, a reference, a dereference, an array (total bytes), a
        multi-dimensional array, an array element, an address-of, an iterator. */
@@ -110,82 +110,82 @@ int32 main() {
     int32  grid[3][5];
     grid[0][0] = 0;
     int32[] it = ^arr[0];
-    __println("var= "      + sizeof(x));              // 4
-    __println("ref= "      + sizeof(ref));            // 8
-    __println("ref^= "     + sizeof(ref^));           // 4
-    __println("arr= "      + sizeof(arr));            // 16
-    __println("grid= "     + sizeof(grid));           // 60
-    __println("element= "  + sizeof(grid[0][0]));     // 4
-    __println("addrof= "   + sizeof(^x));             // 8
-    __println("iter= "     + sizeof(it));             // 8
-    __println("nullptr= "  + sizeof(nullptr));        // 8
-    __println("arith= "    + sizeof(x + x));          // 4
+    println(String + "var= "      + sizeof(x));              // 4
+    println(String + "ref= "      + sizeof(ref));            // 8
+    println(String + "ref^= "     + sizeof(ref^));           // 4
+    println(String + "arr= "      + sizeof(arr));            // 16
+    println(String + "grid= "     + sizeof(grid));           // 60
+    println(String + "element= "  + sizeof(grid[0][0]));     // 4
+    println(String + "addrof= "   + sizeof(^x));             // 8
+    println(String + "iter= "     + sizeof(it));             // 8
+    println(String + "nullptr= "  + sizeof(nullptr));        // 8
+    println(String + "arith= "    + sizeof(x + x));          // 4
 
     /* a string literal: content bytes + the terminating null. */
-    __println("string= " + sizeof("Hello, World!")); // 14
+    println(String + "string= " + sizeof("Hello, World!")); // 14
 
     /* an array TYPE spelling as the operand (not a variable): total bytes. */
-    __println("arrtype= "  + sizeof(int[3]));         // 12
-    __println("arrtype2= " + sizeof(int[2][3]));      // 24
+    println(String + "arrtype= "  + sizeof(int[3]));         // 12
+    println(String + "arrtype2= " + sizeof(int[2][3]));      // 24
 
     /* const-EXPRESSION dims in a sizeof TYPE operand: folded + baked onto the
        sizeof node before it folds to the size. */
     const int kSz = 3;
-    __println("arrtypeN= "  + sizeof(int[kSz]));          // 12
-    __println("arrtypeN2= " + sizeof(int[kSz][kSz + 1])); // 48
+    println(String + "arrtypeN= "  + sizeof(int[kSz]));          // 12
+    println(String + "arrtypeN2= " + sizeof(int[kSz][kSz + 1])); // 48
 
     /* an alias, a bare enum, and a namespace-qualified enum type all resolve to
        their underlying. */
-    __println("alias= "     + sizeof(Integer));       // 8
-    __println("enum= "      + sizeof(Dir));           // 4
-    __println("qualified= " + sizeof(Space:Compass)); // 4
+    println(String + "alias= "     + sizeof(Integer));       // 8
+    println(String + "enum= "      + sizeof(Dir));           // 4
+    println(String + "qualified= " + sizeof(Space:Compass)); // 4
 
     /* sizeof is an intptr value, usable like any other. */
     intptr total = sizeof(int) + sizeof(int64);
-    __println("sum= " + total);                       // 12
+    println(String + "sum= " + total);                       // 12
 
     /* sizeof is a compile-time constant: it folds in constfold, so it may
        initialize a const (typed or inferred) and feed a const expression. */
     const intptr cn = sizeof(int);
     const cm = sizeof(int16) + sizeof(int64);
-    __println("const= "  + cn);                       // 4
-    __println("const2= " + cm);                       // 10
+    println(String + "const= "  + cn);                       // 4
+    println(String + "const2= " + cm);                       // 10
 
     Simple simple;
     simple_ref = ^simple;
     intptr simple_size1 = sizeof(Simple);
     intptr simple_size2 = sizeof(simple);
     intptr simple_size3 = sizeof(simple_ref^);
-    __println("simple_size = " + simple_size1 + " " + simple_size2 + " " + simple_size3);
+    println(String + "simple_size = " + simple_size1 + " " + simple_size2 + " " + simple_size3);
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: 'foo' is a function, not a value or a type
-    //__println("e= " + sizeof(foo));
+    //println(String + "e= " + sizeof(foo));
 
     //-EXPECT-ERROR: 'Box' is a namespace, not a value or a type
-    //__println("e= " + sizeof(Box));
+    //println(String + "e= " + sizeof(Box));
 
     //-EXPECT-ERROR: 'nope' is not a value or a type
-    //__println("e= " + sizeof(nope));
+    //println(String + "e= " + sizeof(nope));
 
     /* void has no size. */
     //-EXPECT-ERROR: Cannot take sizeof of 'void'
-    //__println("e= " + sizeof(void));
+    //println(String + "e= " + sizeof(void));
 
     /* sizeof(Class) is a runtime value (the __$sizeof() call), not foldable, so it
        cannot initialize a const. */
     //-EXPECT-ERROR: not a constant expression
     //const intptr cs = sizeof(Simple);
-    //__println("e= " + cs);
+    //println(String + "e= " + cs);
 
     /* a value operand is unevaluated: sizeof reads only the TYPE, so an
        uninitialized local needs no definite assignment, and the use-before-init
        suppression recurses through arithmetic. */
     int32 u;
     int32 v;
-    __println("uninit= "  + sizeof(u));               // 4
-    __println("uninit2= " + sizeof(v + 1));           // 4
+    println(String + "uninit= "  + sizeof(u));               // 4
+    println(String + "uninit2= " + sizeof(v + 1));           // 4
 
     return 0;
 }

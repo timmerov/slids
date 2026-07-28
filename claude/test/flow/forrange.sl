@@ -441,43 +441,43 @@ int range_int_bound_wide(int n) {
 }
 
 int32 main() {
-    __println("sum_range(5) = " + sum_range(5));        // 10
-    __println("sum_incl(5) = " + sum_incl(5));          // 15
-    __println("sum_down(4) = " + sum_down(4));          // 10
-    __println("powers(256) = " + powers(256));          // 9
-    __println("mul_step(27) = " + mul_step(27));        // 4
-    __println("parens(2, 2) = " + parens(2, 2));        // 2
-    __println("var_bounds(0, 10, 2) = " + var_bounds(0, 10, 2));    // 5
-    __println("const_range() = " + const_range());      // 10
-    __println("empty_body_range(5) = " + empty_body_range(5));      // 0
-    __println("range_break(5) = " + range_break(5));    // 4
-    __println("range_continue(6) = " + range_continue(6));          // 9
-    __println("div_step(100) = " + div_step(100));      // 7
-    __println("shr_step(256) = " + shr_step(256));      // 9
-    __println("ne_cmp(5) = " + ne_cmp(5));              // 10
-    __println("float_range() = " + float_range());      // 4
-    __println("char_range() = " + char_range());        // 4
-    __println("boundary_le() = " + boundary_le());      // 1
-    __println("unary_operand(3) = " + unary_operand(3));            // 3
-    __println("call_operand() = " + call_operand());    // 10
-    __println("nested_range(3, 4) = " + nested_range(3, 4));        // 12
-    __println("ppid_operand(5) = " + ppid_operand(5));  // 56
-    __println("range_typeless(5) = " + range_typeless(5));              // 10
-    __println("range_typeless_reuse(7) = " + range_typeless_reuse(7));  // 7
-    __println("range_typeless_char() = " + range_typeless_char());      // 4
-    __println("range_typeless_incl(5) = " + range_typeless_incl(5));    // 15
-    __println("range_typeless_step(27) = " + range_typeless_step(27));  // 4
-    __println("range_typeless_wide(2, 7) = " + range_typeless_wide(2, 7));  // 5
-    __println("range_typeless_alias(2, 7) = " + range_typeless_alias(2, 7));  // 5
-    __println("range_labeled_break() = " + range_labeled_break());      // 2
-    __println("range_numbered_break() = " + range_numbered_break());    // 2
-    __println("range_labeled_continue() = " + range_labeled_continue());  // 3
-    __println("nested_typeless_range(3, 4) = " + nested_typeless_range(3, 4));  // 12
-    __println("ppid_pre_operand(5) = " + ppid_pre_operand(5));          // 66
-    __println("range_int64_typed(2, 7) = " + range_int64_typed(2, 7));  // 5
-    __println("range_runtime_empty(5, 0) = " + range_runtime_empty(5, 0));  // 0
-    __println("range_char_bound() = " + range_char_bound());            // 4
-    __println("range_int_bound_wide(5) = " + range_int_bound_wide(5));  // 5
+    println(String + "sum_range(5) = " + sum_range(5));        // 10
+    println(String + "sum_incl(5) = " + sum_incl(5));          // 15
+    println(String + "sum_down(4) = " + sum_down(4));          // 10
+    println(String + "powers(256) = " + powers(256));          // 9
+    println(String + "mul_step(27) = " + mul_step(27));        // 4
+    println(String + "parens(2, 2) = " + parens(2, 2));        // 2
+    println(String + "var_bounds(0, 10, 2) = " + var_bounds(0, 10, 2));    // 5
+    println(String + "const_range() = " + const_range());      // 10
+    println(String + "empty_body_range(5) = " + empty_body_range(5));      // 0
+    println(String + "range_break(5) = " + range_break(5));    // 4
+    println(String + "range_continue(6) = " + range_continue(6));          // 9
+    println(String + "div_step(100) = " + div_step(100));      // 7
+    println(String + "shr_step(256) = " + shr_step(256));      // 9
+    println(String + "ne_cmp(5) = " + ne_cmp(5));              // 10
+    println(String + "float_range() = " + float_range());      // 4
+    println(String + "char_range() = " + char_range());        // 4
+    println(String + "boundary_le() = " + boundary_le());      // 1
+    println(String + "unary_operand(3) = " + unary_operand(3));            // 3
+    println(String + "call_operand() = " + call_operand());    // 10
+    println(String + "nested_range(3, 4) = " + nested_range(3, 4));        // 12
+    println(String + "ppid_operand(5) = " + ppid_operand(5));  // 56
+    println(String + "range_typeless(5) = " + range_typeless(5));              // 10
+    println(String + "range_typeless_reuse(7) = " + range_typeless_reuse(7));  // 7
+    println(String + "range_typeless_char() = " + range_typeless_char());      // 4
+    println(String + "range_typeless_incl(5) = " + range_typeless_incl(5));    // 15
+    println(String + "range_typeless_step(27) = " + range_typeless_step(27));  // 4
+    println(String + "range_typeless_wide(2, 7) = " + range_typeless_wide(2, 7));  // 5
+    println(String + "range_typeless_alias(2, 7) = " + range_typeless_alias(2, 7));  // 5
+    println(String + "range_labeled_break() = " + range_labeled_break());      // 2
+    println(String + "range_numbered_break() = " + range_numbered_break());    // 2
+    println(String + "range_labeled_continue() = " + range_labeled_continue());  // 3
+    println(String + "nested_typeless_range(3, 4) = " + nested_typeless_range(3, 4));  // 12
+    println(String + "ppid_pre_operand(5) = " + ppid_pre_operand(5));          // 66
+    println(String + "range_int64_typed(2, 7) = " + range_int64_typed(2, 7));  // 5
+    println(String + "range_runtime_empty(5, 0) = " + range_runtime_empty(5, 0));  // 0
+    println(String + "range_char_bound() = " + range_char_bound());            // 4
+    println(String + "range_int_bound_wide(5) = " + range_int_bound_wide(5));  // 5
     return 0;
 }
 
@@ -489,7 +489,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_empty() {
 //    for (int i : 5..0) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -498,7 +498,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_gt() {
 //    for (int i : 0..>10) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -507,7 +507,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_ne() {
 //    for (int i : 0..!=0) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -516,7 +516,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_le() {
 //    for (int i : 5..<=4) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -525,7 +525,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_ge() {
 //    for (int i : 0..>=10) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -534,7 +534,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_boundary() {
 //    for (int i : 5..<5) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -543,7 +543,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_float() {
 //    for (float f : 0.0..-1.0) {
-//        __println(f);
+//        println(String + f);
 //    }
 //    return 0;
 //}
@@ -552,7 +552,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_range_typeless_empty() {
 //    for (i : 5..0) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -562,7 +562,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int'; use an explicit type conversion.
 //int neg_range_typeless_narrow(int64 hi) {
 //    for (i : 0..hi) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -571,7 +571,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range comparator
 //int neg_range_eqeq() {
 //    for (int i : 0..==5) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -580,7 +580,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range step operator
 //int neg_range_mod_step() {
 //    for (int i : 0..<=10 % 2) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -589,7 +589,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range step operator
 //int neg_range_and_step() {
 //    for (int i : 0..<=10 & 2) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -598,7 +598,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range step operator
 //int neg_range_andand_step() {
 //    for (int i : 0..<=10 && 2) {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}

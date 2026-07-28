@@ -13,7 +13,6 @@
 
 #include "ast.h"
 #include "diagnostic.h"
-#include "print.h"
 #include "strings.h"
 #include "widen.h"
 
@@ -2833,7 +2832,6 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         }
         case ast::Kind::kCallExpr:   // a discarded method-call expression statement
         case ast::Kind::kCallStmt: {
-            if (print::tryEmitCall(stmt, syms, pool, out, diag)) return;
             // A DISCARDED sret call still constructs its result into a slot — the
             // caller owns it, so destroy it here (otherwise the slot leaks and its
             // ctor goes unbalanced). Materialize the slot, call into it, dtor it.
@@ -3930,7 +3928,6 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     out << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
     strings::emit(pool, out);
     if (!pool.texts.empty()) out << "\n";
-    out << "declare i32 @printf(ptr, ...)\n";
     out << "declare ptr @malloc(i64)\n";
     out << "declare void @free(ptr)\n";
     // Save/restore the stack pointer around a call that materializes an rvalue

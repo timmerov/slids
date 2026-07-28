@@ -61,10 +61,10 @@ alias Big = int64;
 
 Simple(int x_ = -2) {
     _() {
-        __println("Simple:ctor: " + x_);
+        println(String + "Simple:ctor: " + x_);
     }
     ~() {
-        __println("Simple:dtor: " + x_);
+        println(String + "Simple:dtor: " + x_);
     }
 }
 
@@ -81,18 +81,18 @@ int32 main() {
     /* heap single: new T -> T^. */
     int^ ref = new int;
     ref^ = 42;
-    __println("single= " + ref^);                    // 42
+    println(String + "single= " + ref^);                    // 42
     delete ref;
-    __println("freed single= " + (ref == nullptr));  // true
+    println(String + "freed single= " + (ref == nullptr));  // true
 
     /* heap array: new T[n] -> T[] (n is a runtime expression). */
     int[] iter = new int[4];
     iter[0] = 7;
     iter[3] = 9;
-    __println("array[0]= " + iter[0]);               // 7
-    __println("array[3]= " + iter[3]);               // 9
+    println(String + "array[0]= " + iter[0]);               // 7
+    println(String + "array[3]= " + iter[3]);               // 9
     delete iter;
-    __println("freed array= " + (iter == nullptr));  // true
+    println(String + "freed array= " + (iter == nullptr));  // true
 
     /* placement: a raw buffer-class buffer, then build an int[2] inside it. */
     intptr sz = 2 * sizeof(int);
@@ -100,30 +100,30 @@ int32 main() {
     int[] intp = new(rawp) int[2];
     intp[0] = 100;
     intp[1] = 200;
-    __println("placement[0]= " + intp[0]);           // 100
-    __println("placement[1]= " + intp[1]);           // 200
+    println(String + "placement[0]= " + intp[0]);           // 100
+    println(String + "placement[1]= " + intp[1]);           // 200
     delete rawp;
 
     /* a non-4-byte element: the allocation size multiplies by the width. */
     int64[] wide = new int64[3];
     wide[2] = 7;
-    __println("wide[2]= " + wide[2]);                // 7
+    println(String + "wide[2]= " + wide[2]);                // 7
     delete wide;
 
     /* placement single: new(addr) T (no [n]) -> T^. */
     int8[] one = new int8[sizeof(int)];
     int^ slot = new(one) int;
     slot^ = 5;
-    __println("placement single= " + slot^);         // 5
+    println(String + "placement single= " + slot^);         // 5
     delete one;
 
     /* the new result obeys the implicit cast rules — a single object strips to
        void^ / intptr, same as any pointer. */
     void^ vp = new int;
-    __println("to void^= " + (vp != nullptr));       // true
+    println(String + "to void^= " + (vp != nullptr));       // true
     delete vp;
     intptr ip = new int;
-    __println("to intptr= " + (ip != 0));            // true
+    println(String + "to intptr= " + (ip != 0));            // true
     int^ ipp = <int^> ip;                            // explicit intptr -> pointer
     delete ipp;
 
@@ -131,42 +131,42 @@ int32 main() {
        not yet declarable, so the result is held in an int64^. */
     int64^ ab = new Big;
     ab^ = 11;
-    __println("alias elem= " + ab^);                 // 11
+    println(String + "alias elem= " + ab^);                 // 11
     delete ab;
 
     /* new/delete a single object. */
-    __println("ctor 1 after");
+    println(String + "ctor 1 after");
     simple_ref = new Simple(1);
     delete simple_ref;
-    __println("dtor 1 before");
+    println(String + "dtor 1 before");
 
     /* new/delete an array of objects. */
-    __println("ctor -2 -2 -2 after");
+    println(String + "ctor -2 -2 -2 after");
     simple_arr = new Simple[3];
     simple_arr[0].x_ = 10;
     simple_arr[1].x_ = 11;
     simple_arr[2].x_ = 12;
     delete simple_arr;
-    __println("dtor 12 11 10 before");
+    println(String + "dtor 12 11 10 before");
 
     /* placment new a single object and direct call the dtor. */
-    __println("ctor 20 after");
+    println(String + "ctor 20 after");
     raw_ptr = new int8[sizeof(Simple)];
     simple_place = new(raw_ptr) Simple(20);
     simple_place^.~();
     delete raw_ptr;
-    __println("dtor 20 before");
+    println(String + "dtor 20 before");
 
     /* placement new as a STATEMENT: run for the ctor side effect, the value
        (the addr already in hand) discarded; the dtor called directly after. */
-    __println("ctor 21 after");
+    println(String + "ctor 21 after");
     int8[] raw2 = new int8[sizeof(Simple)];
     new(raw2) Simple(21);
     Simple^ sview = <Simple^> raw2;
-    __println("splaced= " + sview^.x_);
+    println(String + "splaced= " + sview^.x_);
     sview^.~();
     delete raw2;
-    __println("dtor 21 before");
+    println(String + "dtor 21 before");
 
     /* a PRIMITIVE pointee's `.~()` is a NO-OP — the pseudo-destructor rule:
        a generic destroy path spells `ptr^.~()` for every element type, so
@@ -175,27 +175,27 @@ int32 main() {
     int^ iview = new(rawi) int;
     iview^ = 5;
     iview^.~();
-    __println("pseudo= " + iview^);
+    println(String + "pseudo= " + iview^);
     delete rawi;
 
     /* a TRIVIAL class: field-init only (no ctor/dtor output), plain free. */
     pl = new Plain(1, 2);                              // multi-field construct
-    __println("plain single: " + pl^.a_ + " " + pl^.b_);   // 1 2
+    println(String + "plain single: " + pl^.a_ + " " + pl^.b_);   // 1 2
     delete pl;
     pls = new Plain[2];                                // array: field defaults, no cookie
-    __println("plain array: " + pls[0].a_ + " " + pls[1].b_); // 9 8
+    println(String + "plain array: " + pls[0].a_ + " " + pls[1].b_); // 9 8
     delete pls;
 
     /* a no-args single new: default-construct. */
-    __println("default ctor after");
+    println(String + "default ctor after");
     sd = new Simple;
     delete sd;
-    __println("default dtor before");                 // ctor/dtor -2
+    println(String + "default dtor before");                 // ctor/dtor -2
 
     /* field WRITES through different lvalue bases. */
     Plain pv;
     pv.a_ = 7;                                         // plain class value: cls.field
-    __println("pv.a= " + pv.a_);                      // 7
+    println(String + "pv.a= " + pv.a_);                      // 7
     sp = new Simple(5);
     sp^.x_ = 99;                                       // pointer deref: ptr^.field
     delete sp;                                         // dtor 99
@@ -203,12 +203,12 @@ int32 main() {
     /* null single-delete is a safe no-op (not a crash). */
     Simple^ snull = nullptr;
     delete snull;
-    __println("survived null delete");
+    println(String + "survived null delete");
 
     /* new T[0] — a zero-count array allocates, constructs nothing, frees. */
     z = new Simple[0];
     delete z;
-    __println("empty array ok");
+    println(String + "empty array ok");
 
     /* delete takes ANY pointer expression, not just a variable: a NON-variable
        lvalue (array element / tuple slot) is freed AND nulled back; an rvalue (a
@@ -216,11 +216,11 @@ int32 main() {
     {
         int^ ea[2] = (new int, new int);
         delete ea[0];                                     // array element lvalue
-        __println("ea[0] null= " + (ea[0] == nullptr));   // true
+        println(String + "ea[0] null= " + (ea[0] == nullptr));   // true
         delete ea[1];
         (int^, int^) et = (new int, new int);
         delete et[0];                                     // tuple slot lvalue
-        __println("et[0] null= " + (et[0] == nullptr));   // true
+        println(String + "et[0] null= " + (et[0] == nullptr));   // true
         delete et[1];
         delete allocInt();                                // rvalue (fn return)
         /* a DEREF lvalue: pp^ is a pointer; delete frees it + nulls pp^. (`int^ ^`
@@ -229,8 +229,8 @@ int32 main() {
         int^ rr = new int;
         int^ ^ pp = ^rr;
         delete pp^;
-        __println("deref delete, rr null= " + (rr == nullptr));   // true
-        __println("non-variable delete ok");
+        println(String + "deref delete, rr null= " + (rr == nullptr));   // true
+        println(String + "non-variable delete ok");
     }
 
     /* --- the element type may be ANY variable type, not just a primitive or a
@@ -241,7 +241,7 @@ int32 main() {
     int pe_v = 5;
     int^ ^ pe = new int^;
     pe^ = ^pe_v;
-    __println("ptr elem= " + pe^^);                  // 5
+    println(String + "ptr elem= " + pe^^);                  // 5
     delete pe;
 
     /* an ARRAY of pointers: new T^[n] -> T^[]. */
@@ -251,7 +251,7 @@ int32 main() {
     parr[0] = ^pa_a;
     parr[1] = ^pa_b;
     int pa_sum = parr[0]^ + parr[1]^;
-    __println("ptr array= " + pa_sum);               // 3
+    println(String + "ptr array= " + pa_sum);               // 3
     delete parr;
 
     /* a TUPLE element: new (T1,T2) -> (T1,T2)^ (disambiguated from placement). */
@@ -259,7 +259,7 @@ int32 main() {
     tup^ = (10, 20);
     (int tu0, int tu1) = tup^;
     int tu_sum = tu0 + tu1;
-    __println("tuple single= " + tu_sum);            // 30
+    println(String + "tuple single= " + tu_sum);            // 30
     delete tup;
 
     /* a padded TUPLE array: (int8,int) lays out as {i8, pad, i32} — the alloc size
@@ -270,7 +270,7 @@ int32 main() {
     tarr[2] = (3, 300);
     (int8 tp_a, int tp_b) = tarr[2];
     int tp_sum = tp_a + tp_b;
-    __println("tuple array= " + tp_sum);             // 303
+    println(String + "tuple array= " + tp_sum);             // 303
     delete tarr;
 
     /* a GROUPED type: new (const int)^ -> a pointer to const int. */
@@ -278,7 +278,7 @@ int32 main() {
     (const int)^ ^ cpp = new (const int)^;
     cpp^ = ^cp_v;
     int cp_r = cpp^^;
-    __println("const ptr= " + cp_r);                 // 7
+    println(String + "const ptr= " + cp_r);                 // 7
     delete cpp;
 
     /* MULTI-DIM: new T[n][d]... — the FIRST dim is the runtime count, the rest are
@@ -287,30 +287,30 @@ int32 main() {
     md[0][0][0] = 1;
     md[1][1][1] = 8;
     int md_sum = md[0][0][0] + md[1][1][1];
-    __println("multidim= " + md_sum);                // 9
+    println(String + "multidim= " + md_sum);                // 9
     delete md;
 
     /* an array new WITH a size-matched initializer distributes it element-by-element,
        exactly like the stack `Simple arr[k](...)` form — each element gets its own value
        and its own ctor/dtor. the count must be a compile-time literal. */
-    __println("ctor 7 8 9 after");
+    println(String + "ctor 7 8 9 after");
     sinit = new Simple[3](7, 8, 9);
-    __println("init array= " + sinit[0].x_ + " " + sinit[1].x_ + " " + sinit[2].x_);  // 7 8 9
+    println(String + "init array= " + sinit[0].x_ + " " + sinit[1].x_ + " " + sinit[2].x_);  // 7 8 9
     delete sinit;
-    __println("dtor 9 8 7 before");
+    println(String + "dtor 9 8 7 before");
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: Cannot allocate 'void'
     //void^ nvp = new void;
-    //__println("x= " + (nvp == nullptr));
+    //println(String + "x= " + (nvp == nullptr));
 
     //-EXPECT-ERROR: A placement address must be a buffer-class pointer
     //int yy = 0;
     //int^ ypp = ^yy;
     //int[] qp = new(ypp) int[2];
     //qp[0] = 1;
-    //__println("x= " + qp[0]);
+    //println(String + "x= " + qp[0]);
 
     //-EXPECT-ERROR: Cannot delete a non-pointer value of type 'int32'
     //int32 nint = 0;
@@ -327,23 +327,23 @@ int32 main() {
     //float32 fsz = 2.0;
     //int[] fp = new int[fsz];
     //fp[0] = 1;
-    //__println("x= " + fp[0]);
+    //println(String + "x= " + fp[0]);
 
     /* an unknown element type. */
     //-EXPECT-ERROR: Unknown type 'Bogus'
     //int^ bp = new Bogus;
     //bp^ = 1;
-    //__println("x= " + bp^);
+    //println(String + "x= " + bp^);
 
     /* void has no size in the array form either. */
     //-EXPECT-ERROR: Cannot allocate 'void'
     //void^ wp = new void[4];
-    //__println("x= " + (wp == nullptr));
+    //println(String + "x= " + (wp == nullptr));
 
     /* constructor args belong to a class, not a primitive. */
     //-EXPECT-ERROR: Only a class takes constructor arguments
     //int^ cp = new int(5);
-    //__println("x= " + cp^);
+    //println(String + "x= " + cp^);
 
     /* an array new WITH an initializer needs a LITERAL count — a runtime size has no
        fixed shape to match a fixed initializer against, so the initializer is rejected. */

@@ -185,8 +185,8 @@ Host() {                                      // re-open: give Nested its own ne
     }
 }
 int Host:Nested:Tip:tm(int n) { return t_ + n; }
-Host:Nested:Tip:_() { __println("tip ctor " + t_); }
-Host:Nested:Tip:~() { __println("tip dtor " + t_); }
+Host:Nested:Tip:_() { println(String + "tip ctor " + t_); }
+Host:Nested:Tip:~() { println(String + "tip dtor " + t_); }
 
 /* STAGE B — `Class:Namespace { }`: a NAMESPACE member added to a class by the
    external form. Its const/function are reached via the full qualified path. */
@@ -328,8 +328,8 @@ Forward(int a_) {
     _(); ~();
 }
 Forward() {
-    _() { __println("Forward:ctor: " + a_); }
-    ~() { __println("Forward:dtor: " + a_); }
+    _() { println(String + "Forward:ctor: " + a_); }
+    ~() { println(String + "Forward:dtor: " + a_); }
 }
 
 /* the two DEFINITIONS a forward declaration obligates may land in DIFFERENT openings:
@@ -338,10 +338,10 @@ Split(int a_) {
     _(); ~();
 }
 Split() {
-    _() { __println("Split:ctor: " + a_); }
+    _() { println(String + "Split:ctor: " + a_); }
 }
 Split() {
-    ~() { __println("Split:dtor: " + a_); }
+    ~() { println(String + "Split:dtor: " + a_); }
 }
 
 /* a re-open supplies BOTH hooks with no forward declaration at all — the primary's
@@ -349,8 +349,8 @@ Split() {
 Late(int a_) {
 }
 Late() {
-    _() { __println("Late:ctor: " + a_); }
-    ~() { __println("Late:dtor: " + a_); }
+    _() { println(String + "Late:ctor: " + a_); }
+    ~() { println(String + "Late:dtor: " + a_); }
 }
 
 /* a ctor/dtor is a METHOD with restrictions, so the EXTERNAL form applies to it too:
@@ -358,8 +358,8 @@ Late() {
 Ext(int a_) {
     _(); ~();
 }
-Ext:_() { __println("Ext:ctor: " + a_); }
-Ext:~() { __println("Ext:dtor: " + a_); }
+Ext:_() { println(String + "Ext:ctor: " + a_); }
+Ext:~() { println(String + "Ext:dtor: " + a_); }
 
 /* the external hook form CHAINS like an external method, and mixes freely with the
    block form: the ctor arrives in a re-open, the dtor through a qualified path. */
@@ -368,10 +368,10 @@ Hh(int h_) {
         _(); ~();
     }
     Nst() {
-        _() { __println("Nst:ctor: " + n_); }
+        _() { println(String + "Nst:ctor: " + n_); }
     }
 }
-Hh:Nst:~() { __println("Nst:dtor: " + n_); }
+Hh:Nst:~() { println(String + "Nst:dtor: " + n_); }
 
 /* the external hook form inside a NAMESPACE body, targeting a class declared there
    (STAGE E — the form is not file-scope-bound). */
@@ -379,8 +379,8 @@ Hs {
     Veg(int v_) {
         _(); ~();
     }
-    Veg:_() { __println("Veg:ctor: " + v_); }
-    Veg:~() { __println("Veg:dtor: " + v_); }
+    Veg:_() { println(String + "Veg:ctor: " + v_); }
+    Veg:~() { println(String + "Veg:dtor: " + v_); }
 }
 
 /* the external hook form inside a CLASS body, targeting a sibling hoisted class. */
@@ -388,74 +388,74 @@ Hc2(int c_) {
     Sib(int s_) {
         _(); ~();
     }
-    Sib:_() { __println("Sib:ctor: " + s_); }
-    Sib:~() { __println("Sib:dtor: " + s_); }
+    Sib:_() { println(String + "Sib:ctor: " + s_); }
+    Sib:~() { println(String + "Sib:dtor: " + s_); }
 }
 
 int32 main() {
     Rc r = (10);
-    __println("base = " + r.base_m());        // 10 + 1 = 11
-    __println("more = " + r.more_m());        // 11 + 2 = 13
-    __println("last = " + r.last_m());        // 13 + 1 = 14
-    __println("oli = " + r.oli());            // 11 + 1 = 12 (OUT-OF-LINE method)
+    println(String + "base = " + r.base_m());        // 10 + 1 = 11
+    println(String + "more = " + r.more_m());        // 11 + 2 = 13
+    println(String + "last = " + r.last_m());        // 13 + 1 = 14
+    println(String + "oli = " + r.oli());            // 11 + 1 = 12 (OUT-OF-LINE method)
 
     En en = (5);
-    __println("tagged = " + en.tagged());     // 5 + 9 = 14
-    __println("en.qual = " + En:kTag);        // 9 (re-open enum via qualifier)
+    println(String + "tagged = " + en.tagged());     // 5 + 9 = 14
+    println(String + "en.qual = " + En:kTag);        // 9 (re-open enum via qualifier)
 
     Dc d = (1, 2);                            // a_=1 (base), b_=2 (derived)
-    __println("d.base = " + d.base_m());      // 1   (base method)
-    __println("d.extra = " + d.extra());      // 101 (BASE RE-OPEN method on a derived)
-    __println("d.deriv = " + d.deriv());      // 3
+    println(String + "d.base = " + d.base_m());      // 1   (base method)
+    println(String + "d.extra = " + d.extra());      // 101 (BASE RE-OPEN method on a derived)
+    println(String + "d.deriv = " + d.deriv());      // 3
 
     Host:Nested nst = (7);
-    __println("nst.nm = " + nst.nm());        // 7 (primary nested method)
-    __println("nst.nm2 = " + nst.nm2());      // 8 (nested RE-OPEN method calls primary nested)
-    __println("nst.nm3 = " + nst.nm3());      // 107 (MULTI-SEGMENT out-of-line method)
+    println(String + "nst.nm = " + nst.nm());        // 7 (primary nested method)
+    println(String + "nst.nm2 = " + nst.nm2());      // 8 (nested RE-OPEN method calls primary nested)
+    println(String + "nst.nm3 = " + nst.nm3());      // 107 (MULTI-SEGMENT out-of-line method)
     {
         Host:Nested:Tip tip = (40);           // out-of-line hook: tip ctor 40
-        __println("tip.tm = " + tip.tm(2));   // 42 (DEPTH-3 out-of-line method)
+        println(String + "tip.tm = " + tip.tm(2));   // 42 (DEPTH-3 out-of-line method)
     }                                         // out-of-line hook: tip dtor 40
 
-    __println("ns.kN = " + Ns:Space:kN);      // 42  (Class:Namespace const)
-    __println("ns.f = " + Ns:Space:f());      // 43  (Class:Namespace function)
+    println(String + "ns.kN = " + Ns:Space:kN);      // 42  (Class:Namespace const)
+    println(String + "ns.f = " + Ns:Space:f());      // 43  (Class:Namespace function)
 
     Bag:Item it = (5);
-    __println("it.extra = " + it.extra());    // 105 (Class:Reopen() of a hoisted class)
+    println(String + "it.extra = " + it.extra());    // 105 (Class:Reopen() of a hoisted class)
 
     Ov:Md:Inr z = (3);
-    __println("z.cm = " + z.cm());            // 13  (chained path through a namespace)
+    println(String + "z.cm = " + z.cm());            // 13  (chained path through a namespace)
 
-    __println("mg.sum = " + Mg:Space:sum());  // 23  (merged block + external namespace)
-    __println("mg.kA = " + Mg:Space:kA);      // 1   (from the in-block opening)
-    __println("mg.tag = " + Mg:Space:kTag);   // 20  (enum in an external opening)
+    println(String + "mg.sum = " + Mg:Space:sum());  // 23  (merged block + external namespace)
+    println(String + "mg.kA = " + Mg:Space:kA);      // 1   (from the in-block opening)
+    println(String + "mg.tag = " + Mg:Space:kTag);   // 20  (enum in an external opening)
 
     Hc:Item hi = (5);
-    __println("hc.kX = " + Hc:Item:kX);       // 50  (const via external re-open)
-    __println("hc.viaHost = " + hi.viaHost()); // 1005 (host const bare + own method)
+    println(String + "hc.kX = " + Hc:Item:kX);       // 50  (const via external re-open)
+    println(String + "hc.viaHost = " + hi.viaHost()); // 1005 (host const bare + own method)
     Hc:Item:Sub sub = (7);
-    __println("hc.sub = " + sub.sm());        // 7   (nested class via external re-open)
+    println(String + "hc.sub = " + sub.sm());        // 7   (nested class via external re-open)
 
-    __println("cx.kL = " + Cx:Md:Bx:Leaf:kL); // 9   (chained namespace def)
+    println(String + "cx.kL = " + Cx:Md:Bx:Leaf:kL); // 9   (chained namespace def)
     Cx:Md:Bx cb = (3);
-    __println("cx.extra = " + cb.extra());     // 7   (chained class re-open)
+    println(String + "cx.extra = " + cb.extra());     // 7   (chained class re-open)
 
     G1:N1:G2:N2:G3 g3 = (4);
-    __println("deep = " + g3.deep());          // 9   (full C:N:C:N:C:method chain)
+    println(String + "deep = " + g3.deep());          // 9   (full C:N:C:N:C:method chain)
 
     Ro:Sp:In ri = (2);
-    __println("ro.rm = " + ri.rm());           // 32  (namespace segment from a re-open)
+    println(String + "ro.rm = " + ri.rm());           // 32  (namespace segment from a re-open)
 
     /* STAGE E — external const + alias + method at FILE scope. */
     Efc ef = (5);
-    __println("efc.base = " + ef.base());       // 5
-    __println("efc.combine = " + ef.combine()); // 105  (a_ + kAdd, via ext alias Num)
-    __println("efc.kAdd = " + Efc:kAdd);        // 100  (external const, qualified)
+    println(String + "efc.base = " + ef.base());       // 5
+    println(String + "efc.combine = " + ef.combine()); // 105  (a_ + kAdd, via ext alias Num)
+    println(String + "efc.kAdd = " + Efc:kAdd);        // 100  (external const, qualified)
 
     /* STAGE E — external forms inside a NAMESPACE body. */
     Ens:Ec ec = (3);
-    __println("ec.plus = " + ec.plus());        // 8    (cm() + kQ)
-    __println("ec.kQ = " + Ens:Ec:kQ);          // 5    (external const in target frame)
+    println(String + "ec.plus = " + ec.plus());        // 8    (cm() + kQ)
+    println(String + "ec.kQ = " + Ens:Ec:kQ);          // 5    (external const in target frame)
 
     /* STAGE E — external forms in a FUNCTION body on a body-local class: an external
        method / const / alias, an external hoisted-class re-open, and an external
@@ -470,30 +470,30 @@ int32 main() {
     Elc:Sp { const int kB = 8; }                        // ext namespace def
 
     Elc el = (7);
-    __println("el.via = " + el.viaExt());       // 37   (v_ + kL)
+    println(String + "el.via = " + el.viaExt());       // 37   (v_ + kL)
     Elc:Item eit = (9);
-    __println("el.item = " + eit.extra());      // 10   (im() + 1, via ext re-open)
-    __println("el.sp = " + Elc:Sp:kB);          // 8    (ext namespace const)
+    println(String + "el.item = " + eit.extra());      // 10   (im() + 1, via ext re-open)
+    println(String + "el.sp = " + Elc:Sp:kB);          // 8    (ext namespace const)
 
     /* STAGE F — external ENUM at file scope, namespace body, and class body. */
     Efe efe = (5);
-    __println("efe.pick = " + efe.pick());      // 7    (base + Col:kB)
-    __println("efe.col = " + Efe:Col:kB);       // 2    (ext enum member, qualified)
+    println(String + "efe.pick = " + efe.pick());      // 7    (base + Col:kB)
+    println(String + "efe.col = " + Efe:Col:kB);       // 2    (ext enum member, qualified)
     Enf:Nc nc = (3);
-    __println("nc.go = " + nc.go());            // 10   (cm + kQ + E:kTwo)
-    __println("nc.e = " + Enf:Nc:E:kOne);       // 1    (ext enum in a namespace body)
+    println(String + "nc.go = " + nc.go());            // 10   (cm + kQ + E:kTwo)
+    println(String + "nc.e = " + Enf:Nc:E:kOne);       // 1    (ext enum in a namespace body)
     Outer:Sib os = (6);
-    __println("os.go = " + os.go());            // 11   (sm + kC + E:kB, class-body forms)
-    __println("os.kC = " + Outer:Sib:kC);       // 4
-    __println("os.e = " + Outer:Sib:E:kB);      // 1
+    println(String + "os.go = " + os.go());            // 11   (sm + kC + E:kB, class-body forms)
+    println(String + "os.kC = " + Outer:Sib:kC);       // 4
+    println(String + "os.e = " + Outer:Sib:E:kB);      // 1
 
     /* STAGE F — external ENUM in a FUNCTION body on a body-local class. */
     Lce(int v_) { int lm() { return v_; } }
     enum int Lce:E ( kX, kY, kZ );
     int Lce:sum() { return lm() + E:kZ; }        // lm + 2
     Lce le = (5);
-    __println("le.sum = " + le.sum());          // 7
-    __println("le.e = " + Lce:E:kY);            // 1
+    println(String + "le.sum = " + le.sum());          // 7
+    println(String + "le.e = " + Lce:E:kY);            // 1
 
     Forward fwd;
     Split sp = (3);                             // hooks defined in two SEPARATE re-opens

@@ -44,13 +44,13 @@ the template body must rewrite every usage of the argument when it is converted
 to a reference.
 
     void template_function<T>(T arg) {
-        __println(arg);
+        println(String + arg);
     }
 
 transforms - when T is not-primitive - to:
 
     void template_function<T>(T^ arg) {
-        __println(arg^);
+        println(String + arg^);
     }
 */
 
@@ -136,14 +136,14 @@ T twoWay<T>(T a, T b) { return a + b + b; }
 /* a mixed signature: T infers from the first argument; the concrete int64
    parameter is a not-template part — its argument converts normally. */
 void zork<T>(T a, int64 b) {
-    __println(a + " " + b);
+    println(String + a + " " + b);
 }
 
 /* T inferred THROUGH a tuple-shaped reference parameter: the `#` tuple is an
    rvalue (materializes into the ref), its char[] slots are the not-template
    parts (normal matching), and T binds through the value-pointer slot. */
 void dump<T>( (char[], char[], char[], char[], T^)^ tuple) {
-    __println(tuple^[0] + ":line#: "
+    println(String + tuple^[0] + ":line#: "
         + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }
 
@@ -242,7 +242,7 @@ T sum3v<T>(T a[3]) { return a[0] + a[1] + a[2]; }
 
 /* the body may ask compile-time questions of T. */
 void meta<T>(T v) {
-    __println("ty = " + ##type(v) + " sz = " + sizeof(T) + " v = " + v);
+    println(String + "ty = " + ##type(v) + " sz = " + sizeof(T) + " v = " + v);
 }
 
 /* an uninstantiated template's body is never checked: nobody calls this, so it
@@ -268,7 +268,7 @@ int shade(int v) { return v; }
    pointee munges const the same way (`fn<CvP^>` -> `(const CvP)^`). */
 CvP(int v_ = 0) { }
 int cvread<T>(T s) { return s.v_; }
-void cvshow<T>(T s) { __println(##type(s)); s; }
+void cvshow<T>(T s) { println(String + ##type(s)); s; }
 void cvbump<T>(mutable T^ t) { t^.v_ = t^.v_ + 1; }
 
 /* a bare-T body may not WRITE its param — the convention is const. */
@@ -284,7 +284,7 @@ void cvbump<T>(mutable T^ t) { t^.v_ = t^.v_ + 1; }
 
 /* the CALLER side: a const class cannot flow into `mutable T^`. */
 //-EXPECT-ERROR: Cannot pass a const value
-//void cv_neg_pass() { const CvP c(1); cvbump(^c); __println("" + c.v_); }
+//void cv_neg_pass() { const CvP c(1); cvbump(^c); println(String + "" + c.v_); }
 
 /* duplicate type-parameter names. */
 //-EXPECT-ERROR: Duplicate type-parameter name
@@ -305,48 +305,48 @@ void cvbump<T>(mutable T^ t) { t^.v_ = t^.v_ + 1; }
    which would stop the chain early with a cast error instead.) */
 //-EXPECT-ERROR: instantiation depth limit
 //void deeper<T>(mutable T^ p) { deeper(^p); }
-//void start_deeper() { int seed = 1; deeper(^seed); __println("seed = " + seed); }
+//void start_deeper() { int seed = 1; deeper(^seed); println(String + "seed = " + seed); }
 
 int32 main() {
 
-    int x = add<int>(1, 2); __println("x = " + x);
-    float f = add<float>(1.9, 2.8); __println("f = " + f);
+    int x = add<int>(1, 2); println(String + "x = " + x);
+    float f = add<float>(1.9, 2.8); println(String + "f = " + f);
 
     /* inferred: a literal binds the type a typeless declaration would give. */
-    int xi = add(3, 4); __println("xi = " + xi);
-    float fi = add(1.5, 2.5); __println("fi = " + fi);
+    int xi = add(3, 4); println(String + "xi = " + xi);
+    float fi = add(1.5, 2.5); println(String + "fi = " + fi);
 
     /* inferred from typed lvalues; same instance as add<int> above (memoized). */
     int a = 10;
     int b = 20;
-    int c = add(a, b); __println("c = " + c);
+    int c = add(a, b); println(String + "c = " + c);
 
     /* explicit type-list; the argument widens into the bound parameter. */
     int8 i8 = 3;
-    int w = add<int>(i8, 4); __println("w = " + w);
+    int w = add<int>(i8, 4); println(String + "w = " + w);
 
     /* two type parameters, both inferred. */
-    int u = addu(a, i8); __println("u = " + u);
+    int u = addu(a, i8); println(String + "u = " + u);
 
     /* pointer position: inferred and explicit. */
-    bump(^a); __println("a = " + a);
-    bump<int>(^b); __println("b = " + b);
+    bump(^a); println(String + "a = " + a);
+    bump<int>(^b); println(String + "b = " + b);
 
     /* iterator position via array decay: explicit and inferred. */
     int arr[3] = (1, 2, 3);
-    int s3 = sum3<int>(arr); __println("s3 = " + s3);
-    int s4 = sum3(arr); __println("s4 = " + s4);
+    int s3 = sum3<int>(arr); println(String + "s3 = " + s3);
+    int s4 = sum3(arr); println(String + "s4 = " + s4);
 
     /* a template instantiating another template. */
-    int t = triple(5); __println("t = " + t);
+    int t = triple(5); println(String + "t = " + t);
 
     /* explicit-only: T appears in no parameter. */
-    int m = make<int>(); __println("m = " + m);
+    int m = make<int>(); println(String + "m = " + m);
 
     /* a template declared in a block, like any nested function. */
     T sq<T>(T v) { return v * v; }
-    int s = sq(6); __println("s = " + s);
-    int e = sq<int>(7); __println("e = " + e);
+    int s = sq(6); println(String + "s = " + s);
+    int e = sq<int>(7); println(String + "e = " + e);
 
     int za = 62;
     zork("za = ", za);
@@ -358,93 +358,93 @@ int32 main() {
     dump(#answer);
 
     /* namespace-scope template, inferred and explicit. */
-    int nt = Space:twice(21); __println("nt = " + nt);
-    int ne = Space:twice<int>(2); __println("ne = " + ne);
+    int nt = Space:twice(21); println(String + "nt = " + nt);
+    int ne = Space:twice<int>(2); println(String + "ne = " + ne);
 
     /* the externally-defined namespace template, inferred and explicit. */
-    int nx = Space:thrice(4); __println("nx = " + nx);
-    int ny = Space:thrice<int>(5); __println("ny = " + ny);
+    int nx = Space:thrice(4); println(String + "nx = " + nx);
+    int ny = Space:thrice<int>(5); println(String + "ny = " + ny);
 
     /* T bound to a class; the instance runs the class operator. */
     Pair p1(3, 4);
     Pair p2(10, 20);
     Pair p3 = addc(^p1, ^p2);
-    __println("p3 = " + p3.x_ + " " + p3.y_);
+    println(String + "p3 = " + p3.x_ + " " + p3.y_);
 
     /* templates inside a method body: memoized across calls, field readable. */
     Tally ty(10);
-    __println("ty1 = " + ty.bump(3));
-    __println("ty2 = " + ty.bump(4));
+    println(String + "ty1 = " + ty.bump(3));
+    println(String + "ty2 = " + ty.bump(4));
 
     /* self-recursion within one instance. */
-    int fa = fact(5); __println("fa = " + fa);
+    int fa = fact(5); println(String + "fa = " + fa);
 
     /* a template parameter default: omitted, then supplied. */
-    int pd = pad(7); __println("pd = " + pd);
-    int pe = pad(7, 8); __println("pe = " + pe);
+    int pd = pad(7); println(String + "pd = " + pd);
+    int pe = pad(7, 8); println(String + "pe = " + pe);
 
     /* T bound to a POINTER type — a READ-ONLY body (canon B, 2026-07-26: a
        bare-T body cannot RETURN a pointer binding; the munge consts the
        pointee while the return type stays mutable — cv_neg_ret below pins
        the rejection); a substituted-const argument through the identity. */
     int^ pi = ^a;
-    int qi = deref1(pi); __println("qi = " + qi);
+    int qi = deref1(pi); println(String + "qi = " + qi);
     const int ci = 5;
-    int cv = same(ci); __println("cv = " + cv);
+    int cv = same(ci); println(String + "cv = " + cv);
 
     /* one argument binding T twice, consistently. */
-    int sp2 = sumpair((4, 5)); __println("sp2 = " + sp2);
+    int sp2 = sumpair((4, 5)); println(String + "sp2 = " + sp2);
 
     /* T as the element of a sized-array parameter. */
-    int s5 = sum3v(arr); __println("s5 = " + s5);
+    int s5 = sum3v(arr); println(String + "s5 = " + s5);
 
     /* compile-time questions of T inside the body. */
     meta(za);
 
     /* an alias type argument canonicalizes to its underlying instance. */
-    int ai = add<Integer>(21, 21); __println("ai = " + ai);
+    int ai = add<Integer>(21, 21); println(String + "ai = " + ai);
 
     /* an explicit iterator type argument. */
     zork<char[]>("hey", 9);
 
     /* a block template shadows the same-name file-scope function. */
     T shade<T>(T v) { return v + 100; }
-    int sh = shade(1); __println("sh = " + sh);
+    int sh = shade(1); println(String + "sh = " + sh);
 
     /* the gate rule's comparison side: parenthesized, `<` is a comparison. */
-    bool lt = (a < b); __println("lt = " + lt);
+    bool lt = (a < b); println(String + "lt = " + lt);
 
     /* a block template CAPTURING an enclosing local: the instance is a nested
        function, so the capture machinery carries `base` in by reference. */
     int base = 1000;
     T offset<T>(T v) { return v + base; }
-    int of = offset(7); __println("of = " + of);
+    int of = offset(7); println(String + "of = " + of);
 
     /* conflicting exact bindings for T. */
     //-EXPECT-ERROR: Conflicting bindings for template parameter
     //int32 n32 = 1;
     //int8 n8 = 2;
-    //int bad = add(n32, n8); __println("bad = " + bad);
+    //int bad = add(n32, n8); println(String + "bad = " + bad);
 
     /* nothing binds T. */
     //-EXPECT-ERROR: Cannot infer template parameter
-    //int nope = make(); __println("nope = " + nope);
+    //int nope = make(); println(String + "nope = " + nope);
 
     /* more explicit type arguments than template parameters. */
     //-EXPECT-ERROR: Wrong number of template arguments
-    //int extra = add<int, float>(1, 2); __println("extra = " + extra);
+    //int extra = add<int, float>(1, 2); println(String + "extra = " + extra);
 
     /* too FEW explicit type arguments. */
     //-EXPECT-ERROR: Wrong number of template arguments
-    //int few = addu<int>(1, 2); __println("few = " + few);
+    //int few = addu<int>(1, 2); println(String + "few = " + few);
 
     /* an unknown type in an explicit type-list. */
     //-EXPECT-ERROR: Unknown type
-    //int unk = add<Bogus>(1, 2); __println("unk = " + unk);
+    //int unk = add<Bogus>(1, 2); println(String + "unk = " + unk);
 
     /* type arguments on a non-template function. */
     //-EXPECT-ERROR: is not a template function
-    //int np = plain<int>(1); __println("np = " + np);
+    //int np = plain<int>(1); println(String + "np = " + np);
 
     /* a structurally unmatchable argument: a pointer against the tuple shape. */
     //-EXPECT-ERROR: does not match the template pattern
@@ -452,68 +452,68 @@ int32 main() {
 
     /* a conflict reached through a composite: both tuple slots bind T. */
     //-EXPECT-ERROR: Conflicting bindings for template parameter
-    //int spx = sumpair((1, 2.5)); __println("spx = " + spx);
+    //int spx = sumpair((1, 2.5)); println(String + "spx = " + spx);
 
     /* the gate rule: bare `a < b > (c)` IS a template-call shape — the
        comparison reading requires parentheses. */
     //-EXPECT-ERROR: not a function
-    //int amb = a < b > (0); __println("amb = " + amb);
+    //int amb = a < b > (0); println(String + "amb = " + amb);
 
     /* THE CONVENTION OF CONVENIENCE: T binds a class through the by-value
        spelling — the instance's param is really `(const Pair)^`, the body
        stays generic (`a + b` dispatches op+ through the auto-deref), and the
        result returns by value. */
-    Pair px = add(p1, p2); __println("px = " + px.x_ + "," + px.y_);
+    Pair px = add(p1, p2); println(String + "px = " + px.x_ + "," + px.y_);
 
     /* ...the identity shape: class in, class out, explicit and inferred. */
-    Pair pi1 = idf<Pair>(p1); __println("pi1 = " + pi1.x_ + "," + pi1.y_);
-    Pair pi2 = idf(p2); __println("pi2 = " + pi2.x_ + "," + pi2.y_);
+    Pair pi1 = idf<Pair>(p1); println(String + "pi1 = " + pi1.x_ + "," + pi1.y_);
+    Pair pi2 = idf(p2); println(String + "pi2 = " + pi2.x_ + "," + pi2.y_);
 
     /* ...a tuple binding converts the same way. */
     (int, int) tt = (5, 6);
     (int, int) tu = idf(tt);
-    __println("tu = " + tu[0] + "," + tu[1]);
+    println(String + "tu = " + tu[0] + "," + tu[1]);
 
     /* ...a primitive binds by value; a REFERENCE binding reads through the
        deref pin (canon B — the identity cannot return a pointer binding). */
-    int iv = idf(9); __println("iv = " + iv);
+    int iv = idf(9); println(String + "iv = " + iv);
     int zz = 4;
-    int zr = deref1(^zz); __println("zr = " + zr);
+    int zr = deref1(^zz); println(String + "zr = " + zr);
 
     /* ...`^param` composes: the addr-of of the auto-deref is the reference. */
-    int pxr = viaAddr(p1); __println("pxr = " + pxr);
+    int pxr = viaAddr(p1); println(String + "pxr = " + pxr);
 
     /* ...a NAMESPACE template converts the same way. */
-    Pair ps = Space:twice(p1); __println("ps = " + ps.x_ + "," + ps.y_);
+    Pair ps = Space:twice(p1); println(String + "ps = " + ps.x_ + "," + ps.y_);
 
     /* ...a BLOCK-scope template too. */
     S blockId<S>(S s) { return s; }
-    Pair pb = blockId(p2); __println("pb = " + pb.x_ + "," + pb.y_);
+    Pair pb = blockId(p2); println(String + "pb = " + pb.x_ + "," + pb.y_);
 
     /* ...and a local template INSIDE a template's body. */
-    Pair pn = outerId(p1); __println("pn = " + pn.x_ + "," + pn.y_);
+    Pair pn = outerId(p1); println(String + "pn = " + pn.x_ + "," + pn.y_);
 
     /* a CONCRETE class param inside a template keeps the plain rejection —
        the convention is for TEMPLATE-typed params only. */
     //-EXPECT-ERROR: must be a pointer
-    //int ncc = concrete(1, p1); __println("ncc = " + ncc);
+    //int ncc = concrete(1, p1); println(String + "ncc = " + ncc);
 
     /* ARITY-ONLY OVERLOADING: the count selects, inferred and explicit; a
        class binding rides the convention through either arity. */
-    int w1 = twoWay(4); __println("w1 = " + w1);
-    int w2 = twoWay(4, 5); __println("w2 = " + w2);
-    int w3 = twoWay<int>(6); __println("w3 = " + w3);
-    Pair wp = twoWay(p1, p2); __println("wp = " + wp.x_ + "," + wp.y_);
+    int w1 = twoWay(4); println(String + "w1 = " + w1);
+    int w2 = twoWay(4, 5); println(String + "w2 = " + w2);
+    int w3 = twoWay<int>(6); println(String + "w3 = " + w3);
+    Pair wp = twoWay(p1, p2); println(String + "wp = " + wp.x_ + "," + wp.y_);
 
     /* PLAIN BEATS TEMPLATE: the plain matches (widening included), the
        template takes the rest, an explicit list forces the template. */
-    int cx1 = coex(1); __println("cx1 = " + cx1);
+    int cx1 = coex(1); println(String + "cx1 = " + cx1);
     int8 cs8 = 3;
-    int cx2 = coex(cs8); __println("cx2 = " + cx2);
+    int cx2 = coex(cs8); println(String + "cx2 = " + cx2);
     /* the template takes what the plain cannot — a FLOAT binding (a pointer
        binding could not return through the bare-T identity, canon B). */
-    float cx3 = coex(2.5); __println("cx3 = " + cx3);
-    int cx4 = coex<int>(2); __println("cx4 = " + cx4);
+    float cx3 = coex(2.5); println(String + "cx3 = " + cx3);
+    int cx4 = coex<int>(2); println(String + "cx4 = " + cx4);
 
     /* the bare-T convention: reads through the const ref. A CLASS binding
        AUTO-derefs its uses, so ##type reads the pointee (`const T`); a
@@ -521,12 +521,12 @@ int32 main() {
        (`(const CvP)^` — the `fn<CvP^>` pin). The sanctioned mutation
        spelling (`mutable T^`) reaches the caller. */
     CvP cvo(4);
-    int cv1 = cvread(cvo); __println("cv1 = " + cv1);
+    int cv1 = cvread(cvo); println(String + "cv1 = " + cv1);
     cvshow(cvo);                                  // const T
     CvP^ cvp = ^cvo;
     cvshow(cvp);                                  // (const CvP)^
     cvbump(^cvo);
-    __println("cv2 = " + cvo.v_);                 // 5
+    println(String + "cv2 = " + cvo.v_);                 // 5
 
     return 0;
 }

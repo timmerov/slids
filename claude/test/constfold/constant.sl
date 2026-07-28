@@ -106,8 +106,8 @@ const int kShadowMe = 10;        // shadowed by a function-scope const below
 int32 foo() {
     const float kTau = 2.0 * kPi;
     const int kForty = kFortyTwo - 2;
-    __println(##type(kTau) + " kTau = " + kTau);
-    __println(##type(kForty) + " kForty = " + kForty);
+    println(String + ##type(kTau) + " kTau = " + kTau);
+    println(String + ##type(kForty) + " kForty = " + kForty);
     return 0;
 }
 
@@ -121,10 +121,10 @@ int32 main() {
     /* compile errors — out-of-scope refs to foo()'s local consts */
 
     //-EXPECT-ERROR: Unresolved identifier 'kTau'
-    //__println("kTau = " + kTau);
+    //println(String + "kTau = " + kTau);
 
     //-EXPECT-ERROR: Unresolved identifier 'kForty'
-    //__println("kForty = " + kForty);
+    //println(String + "kForty = " + kForty);
 
     /* compile errors — write to a constant */
 
@@ -184,7 +184,7 @@ int32 main() {
        even though 42 fits int8. A weak const would flex. */
     //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
     //int8 kNarrow = kFortyTwo;
-    //__println("kNarrow = " + kNarrow);
+    //println(String + "kNarrow = " + kNarrow);
 
     /* compile errors — duplicate const decl in the same frame */
 
@@ -214,7 +214,7 @@ int32 main() {
        strong int8, 200 doesn't fit int8, so the result is int 205 (no error). A
        DECLARED int8 = 200 is still a hard error (see kTooBig above). */
     const kDemote = kByte + 200;          // 200 weak, exceeds int8 -> widens to int
-    __println(##type(kDemote) + " kDemote = " + kDemote);   // const int 205
+    println(String + ##type(kDemote) + " kDemote = " + kDemote);   // const int 205
 
     /* a typeless const from a non-constant local no longer errors — it is a
        RUNTIME const local (const inference, test/assign/infer.sl): nothing
@@ -222,20 +222,20 @@ int32 main() {
        scalar const from a runtime rhs still errors (kFromVar above). */
     int yVar = 7;
     const kRuntime = yVar + 1;
-    __println(##type(kRuntime) + " kRuntime = " + kRuntime);   // const int 8
+    println(String + ##type(kRuntime) + " kRuntime = " + kRuntime);   // const int 8
 
     /* the arithmetic convenience (fold.sl 43-46): a float / integer-class
        literal mix folds on the FLOAT path for + - * / % — the integer
        converts silently; a COMPARISON of the same pair stays a compile
        error (negative below). */
     const kFloatIntMix = 3.5 + 2;
-    __println("kFloatIntMix= " + kFloatIntMix);
+    println(String + "kFloatIntMix= " + kFloatIntMix);
     const kFloatIntMod = 7.5 % 2;
-    __println("kFloatIntMod= " + kFloatIntMod);
+    println(String + "kFloatIntMod= " + kFloatIntMod);
 
     //-EXPECT-ERROR: No common type for floating-point and integer-class literals
     //const kFloatIntCmp = 3.5 < 2;
-    //__println("kFloatIntCmp= " + kFloatIntCmp);
+    //println(String + "kFloatIntCmp= " + kFloatIntCmp);
 
     /* compile error — two STRONG integer consts whose common type would exceed 64
        bits (a signed/unsigned 64-bit mix): rejected, same as the variable path. */
@@ -261,44 +261,44 @@ int32 main() {
 
     const float kPi2 = kPi / 2.0;
     const int kFortyFour = kFortyTwo + 2;
-    __println(##type(kPi2) + " kPi2 = " + kPi2);
-    __println(##type(kFortyFour) + " kFortyFour = " + kFortyFour);
+    println(String + ##type(kPi2) + " kPi2 = " + kPi2);
+    println(String + ##type(kFortyFour) + " kFortyFour = " + kFortyFour);
 
     /* a const read inside an expression strips const -> the bare underlying. */
-    __println("kFortyTwo+2 : " + ##type(kFortyTwo + 2));   // int (const dropped)
+    println(String + "kFortyTwo+2 : " + ##type(kFortyTwo + 2));   // int (const dropped)
 
     /* a bare literal expression reports the no-width preferred spelling (int /
        uint / float / char), like a const/inferred init — a DECLARED-width value
        keeps its width name. char-arith stays char when the folded value fits,
        else promotes to int. (##type folds literal-only subtrees but never
        substitutes a const, so kFortyTwo above still reads as the const's type.) */
-    __println("1 : "        + ##type(1));                  // int
-    __println("0xFF : "     + ##type(0xFF));               // uint
-    __println("3.5 : "      + ##type(3.5));                // float
-    __println("'A'+1 : "    + ##type('A' + 1));            // char
-    __println("'A'+1000 : " + ##type('A' + 1000));         // int (overflow)
+    println(String + "1 : "        + ##type(1));                  // int
+    println(String + "0xFF : "     + ##type(0xFF));               // uint
+    println(String + "3.5 : "      + ##type(3.5));                // float
+    println(String + "'A'+1 : "    + ##type('A' + 1));            // char
+    println(String + "'A'+1000 : " + ##type('A' + 1000));         // int (overflow)
 
     /* compile error — cyclic const dependency (kThree → kOne → kThree) */
 
     const int kThree = kOne + kTwo;
     const int kTwo = kOne * 2;
     const int kOne = 3*3 - 2*2*2;
-    __println(##type(kThree) + " kThree = " + kThree);
+    println(String + ##type(kThree) + " kThree = " + kThree);
 
     /* additional positives — broader kind coverage from file scope */
 
-    __println(##type(kPlanck) + " kPlanck = " + kPlanck);
-    __println(##type(kAlive) + " kAlive = " + kAlive);
-    __println(##type(kStar) + " kStar = " + kStar);
-    __println(##type(kBeta) + " kBeta = " + kBeta);
-    __println(##type(kNegSeven) + " kNegSeven = " + kNegSeven);
+    println(String + ##type(kPlanck) + " kPlanck = " + kPlanck);
+    println(String + ##type(kAlive) + " kAlive = " + kAlive);
+    println(String + ##type(kStar) + " kStar = " + kStar);
+    println(String + ##type(kBeta) + " kBeta = " + kBeta);
+    println(String + ##type(kNegSeven) + " kNegSeven = " + kNegSeven);
 
     /* forward ref within function body — kSum sees kA and kB declared later */
 
     const int kSum = kA + kB;
     const int kA = 10;
     const int kB = 20;
-    __println(##type(kSum) + " kSum = " + kSum);
+    println(String + ##type(kSum) + " kSum = " + kSum);
 
     /* inferred-type constants — the type comes from the rhs const-expression.
        STRONG when the rhs references a typed const (the inferred const takes that
@@ -309,9 +309,9 @@ int32 main() {
     const kInferInt  = kFortyTwo - 2;     // strong: kFortyTwo is const int
     const kInferByte = kByte + 1;         // strong: kByte is const int8
     const kInferWeak = 17;                // weak:   a bare literal
-    __println(##type(kInferInt)  + " kInferInt = "  + kInferInt);
-    __println(##type(kInferByte) + " kInferByte = " + kInferByte);
-    __println(##type(kInferWeak) + " kInferWeak = " + kInferWeak);
+    println(String + ##type(kInferInt)  + " kInferInt = "  + kInferInt);
+    println(String + ##type(kInferByte) + " kInferByte = " + kInferByte);
+    println(String + ##type(kInferWeak) + " kInferWeak = " + kInferWeak);
 
     /* weak literal-kind matrix — a bare-literal const presents the preferred
        default spelling for its kind. */
@@ -320,11 +320,11 @@ int32 main() {
     const kWbool  = true;
     const kWuint  = 0xFF;
     const kWbig   = 5000000000;
-    __println(##type(kWfloat) + " kWfloat = " + kWfloat);
-    __println(##type(kWchar)  + " kWchar = "  + kWchar);
-    __println(##type(kWbool)  + " kWbool = "  + kWbool);
-    __println(##type(kWuint)  + " kWuint = "  + kWuint);
-    __println(##type(kWbig)   + " kWbig = "   + kWbig);
+    println(String + ##type(kWfloat) + " kWfloat = " + kWfloat);
+    println(String + ##type(kWchar)  + " kWchar = "  + kWchar);
+    println(String + ##type(kWbool)  + " kWbool = "  + kWbool);
+    println(String + ##type(kWuint)  + " kWuint = "  + kWuint);
+    println(String + ##type(kWbig)   + " kWbig = "   + kWbig);
 
     /* strong inference variety: strong float; strong+strong (-> common type); a
        strength chain; and unary on a strong const. */
@@ -333,11 +333,11 @@ int32 main() {
     const kChainA = kByte;                // strong int8 (direct copy)
     const kChainB = kChainA + 1;          // strong int8 (chained through kChainA)
     const kNeg    = -kByte;               // strong int8 (unary keeps strength)
-    __println(##type(kSfloat) + " kSfloat = " + kSfloat);
-    __println(##type(kSS)     + " kSS = "     + kSS);
-    __println(##type(kChainA) + " kChainA = " + kChainA);
-    __println(##type(kChainB) + " kChainB = " + kChainB);
-    __println(##type(kNeg)    + " kNeg = "    + kNeg);
+    println(String + ##type(kSfloat) + " kSfloat = " + kSfloat);
+    println(String + ##type(kSS)     + " kSS = "     + kSS);
+    println(String + ##type(kChainA) + " kChainA = " + kChainA);
+    println(String + ##type(kChainB) + " kChainB = " + kChainB);
+    println(String + ##type(kNeg)    + " kNeg = "    + kNeg);
 
     /* two strong consts of the SAME sign take their common type (explicit width
        honored, no-width slot when an operand contributed it). A sign MIX drops
@@ -351,11 +351,11 @@ int32 main() {
     const kWP3 = kFortyTwo + kI32;         // int   + int32 -> int32 (author's width wins)
     const kWP4 = kU8 + kU;                 // uint8 + uint  -> uint  (no-width slot)
     const kWP5 = kByte + kU8;              // int8  + uint8 -> int16 (sign mix widens via commonType)
-    __println(##type(kWP1) + " kWP1 = " + kWP1);
-    __println(##type(kWP2) + " kWP2 = " + kWP2);
-    __println(##type(kWP3) + " kWP3 = " + kWP3);
-    __println(##type(kWP4) + " kWP4 = " + kWP4);
-    __println(##type(kWP5) + " kWP5 = " + kWP5);
+    println(String + ##type(kWP1) + " kWP1 = " + kWP1);
+    println(String + ##type(kWP2) + " kWP2 = " + kWP2);
+    println(String + ##type(kWP3) + " kWP3 = " + kWP3);
+    println(String + ##type(kWP4) + " kWP4 = " + kWP4);
+    println(String + ##type(kWP5) + " kWP5 = " + kWP5);
 
     /* char arithmetic keeps char and TRUNCATES the value to uint8 (char OP char,
        or char OP a weak literal that fits char). A char OP a weak literal that
@@ -367,13 +367,13 @@ int32 main() {
     const kChBig  = 'A' + 1000;    // 1000 weak, exceeds char -> widens to int 1065
     const kChMul  = 'a' * 'a';     // 9409 truncated to uint8 -> char 193
     const kChShl  = 'A' << 8;      // 16640 truncated to uint8 -> char 0
-    __println(##type(kChFit)  + " kChFit = "  + kChFit);
-    __println(##type(kChDown) + " kChDown = " + kChDown);
-    __println(##type(kChAnd)  + " kChAnd = "  + kChAnd);
-    __println(##type(kChShr)  + " kChShr = "  + kChShr);
-    __println(##type(kChBig)  + " kChBig = "  + kChBig);
-    __println(##type(kChMul)  + " kChMul = "  + kChMul);
-    __println(##type(kChShl)  + " kChShl = "  + kChShl);
+    println(String + ##type(kChFit)  + " kChFit = "  + kChFit);
+    println(String + ##type(kChDown) + " kChDown = " + kChDown);
+    println(String + ##type(kChAnd)  + " kChAnd = "  + kChAnd);
+    println(String + ##type(kChShr)  + " kChShr = "  + kChShr);
+    println(String + ##type(kChBig)  + " kChBig = "  + kChBig);
+    println(String + ##type(kChMul)  + " kChMul = "  + kChMul);
+    println(String + ##type(kChShl)  + " kChShl = "  + kChShl);
 
     /* strong unsigned subtraction truncates/wraps (a negative result becomes a
        large unsigned, like the variable path); bool arithmetic truncates to 1 bit
@@ -384,15 +384,15 @@ int32 main() {
     const kSubNeg  = kU3 - kU5;     // -2 truncates to uint -> 4294967294
     const kBoolAnd = true & false;  // 0/1              -> bool
     const kBoolAdd = true + true;   // 2 truncates to bool -> false
-    __println(##type(kSubPos)  + " kSubPos = "  + kSubPos);
-    __println(##type(kSubNeg)  + " kSubNeg = "  + kSubNeg);
-    __println(##type(kBoolAnd) + " kBoolAnd = " + kBoolAnd);
-    __println(##type(kBoolAdd) + " kBoolAdd = " + kBoolAdd);
+    println(String + ##type(kSubPos)  + " kSubPos = "  + kSubPos);
+    println(String + ##type(kSubNeg)  + " kSubNeg = "  + kSubNeg);
+    println(String + ##type(kBoolAnd) + " kBoolAnd = " + kBoolAnd);
+    println(String + ##type(kBoolAdd) + " kBoolAdd = " + kBoolAdd);
 
     /* a strong const WIDENS within family like a typed value (kFortyTwo is int ->
        int64 widens); narrowing it is rejected (see the kNarrow negative). */
     int64 kWide = kFortyTwo;
-    __println("kWide = " + kWide);   // 42
+    println(String + "kWide = " + kWide);   // 42
 
     /* comparison operators fold to a bool const (integer and float operands;
        spec: == != < <= > >= -> bool). */
@@ -403,13 +403,13 @@ int32 main() {
     const kCmpEq = 5 == 5;      // true
     const kCmpNe = 4 != 4;      // false
     const kCmpF  = 3.5 < 4.0;   // true  (float comparison)
-    __println(##type(kCmpLt) + " kCmpLt = " + kCmpLt);
-    __println(##type(kCmpLe) + " kCmpLe = " + kCmpLe);
-    __println(##type(kCmpGt) + " kCmpGt = " + kCmpGt);
-    __println(##type(kCmpGe) + " kCmpGe = " + kCmpGe);
-    __println(##type(kCmpEq) + " kCmpEq = " + kCmpEq);
-    __println(##type(kCmpNe) + " kCmpNe = " + kCmpNe);
-    __println(##type(kCmpF)  + " kCmpF = "  + kCmpF);
+    println(String + ##type(kCmpLt) + " kCmpLt = " + kCmpLt);
+    println(String + ##type(kCmpLe) + " kCmpLe = " + kCmpLe);
+    println(String + ##type(kCmpGt) + " kCmpGt = " + kCmpGt);
+    println(String + ##type(kCmpGe) + " kCmpGe = " + kCmpGe);
+    println(String + ##type(kCmpEq) + " kCmpEq = " + kCmpEq);
+    println(String + ##type(kCmpNe) + " kCmpNe = " + kCmpNe);
+    println(String + ##type(kCmpF)  + " kCmpF = "  + kCmpF);
 
     /* logical operators (&& || ^^ and unary !) apply to ALL literal kinds plus
        nullptr: zero-like is false, not-zero-like is true; the result is a bool.
@@ -425,84 +425,84 @@ int32 main() {
     const kNotF   = !3.5;            // float not-zero    -> false
     const kNotZero= !0;              // int zero          -> true
     const kNotNull= !nullptr;        // nullptr zero-like -> true
-    __println(##type(kLAnd)    + " kLAnd = "    + kLAnd);
-    __println(##type(kLOr)     + " kLOr = "     + kLOr);
-    __println(##type(kLXor)    + " kLXor = "    + kLXor);
-    __println(##type(kLInt)    + " kLInt = "    + kLInt);
-    __println(##type(kLZero)   + " kLZero = "   + kLZero);
-    __println(##type(kLFlt)    + " kLFlt = "    + kLFlt);
-    __println(##type(kLChar)   + " kLChar = "   + kLChar);
-    __println(##type(kLPtr)    + " kLPtr = "    + kLPtr);
-    __println(##type(kNotF)    + " kNotF = "    + kNotF);
-    __println(##type(kNotZero) + " kNotZero = " + kNotZero);
-    __println(##type(kNotNull) + " kNotNull = " + kNotNull);
+    println(String + ##type(kLAnd)    + " kLAnd = "    + kLAnd);
+    println(String + ##type(kLOr)     + " kLOr = "     + kLOr);
+    println(String + ##type(kLXor)    + " kLXor = "    + kLXor);
+    println(String + ##type(kLInt)    + " kLInt = "    + kLInt);
+    println(String + ##type(kLZero)   + " kLZero = "   + kLZero);
+    println(String + ##type(kLFlt)    + " kLFlt = "    + kLFlt);
+    println(String + ##type(kLChar)   + " kLChar = "   + kLChar);
+    println(String + ##type(kLPtr)    + " kLPtr = "    + kLPtr);
+    println(String + ##type(kNotF)    + " kNotF = "    + kNotF);
+    println(String + ##type(kNotZero) + " kNotZero = " + kNotZero);
+    println(String + ##type(kNotNull) + " kNotNull = " + kNotNull);
 
     /* bool yields to a non-bool partner: the result takes the partner's kind
        (spec: bool + K -> K). bool + char -> char, bool + int -> int. */
     const kBoolChar = true + 'A';   // char 'B'
     const kBoolIntP = false + 5;    // int 5
-    __println(##type(kBoolChar) + " kBoolChar = " + kBoolChar);
-    __println(##type(kBoolIntP) + " kBoolIntP = " + kBoolIntP);
+    println(String + ##type(kBoolChar) + " kBoolChar = " + kBoolChar);
+    println(String + ##type(kBoolIntP) + " kBoolIntP = " + kBoolIntP);
 
     /* a char arithmetic result that goes NEGATIVE promotes to int (the value-fit
        rule's negative side; kChDown above only covered a positive in-range
        result). */
     const kChNeg = 'A' - 'B';       // -1 truncated to uint8 -> char 255
-    __println(##type(kChNeg) + " kChNeg = " + kChNeg);
+    println(String + ##type(kChNeg) + " kChNeg = " + kChNeg);
 
     /* strong + the SAME strong type (same width) keeps that strong type when the
        value fits. */
     const int8 kE8a = 5;
     const int8 kE8b = 6;
     const kSameStrong = kE8a + kE8b;   // int8 11
-    __println(##type(kSameStrong) + " kSameStrong = " + kSameStrong);
+    println(String + ##type(kSameStrong) + " kSameStrong = " + kSameStrong);
 
     /* a fold whose value exceeds int64 max promotes the KIND to unsigned
        (integer -> unsigned value-fit rule) -> uint64. */
     const kToU64 = 9223372036854775807 + 9223372036854775807;   // uint64
-    __println(##type(kToU64) + " kToU64 = " + kToU64);
+    println(String + ##type(kToU64) + " kToU64 = " + kToU64);
 
     /* strong + strong whose value overflows the result width TRUNCATES (wraps) to
        that width — register semantics, not a flex drop. */
     const int16 kO16a = 30000;
     const int16 kO16b = 30000;
     const kOverLarge = kO16a + kO16b;   // int16+int16, 60000 truncates int16 -> -5536
-    __println(##type(kOverLarge) + " kOverLarge = " + kOverLarge);
+    println(String + ##type(kOverLarge) + " kOverLarge = " + kOverLarge);
 
     /* shift takes the kind/type of the LEFT operand; the right operand need only
        be integer-class (here a uint8 count into an int32 base). */
     const uint8 kShCount = 2;
     const int32 kShBase  = 1;
     const kShiftMix = kShBase << kShCount;   // int32 4
-    __println(##type(kShiftMix) + " kShiftMix = " + kShiftMix);
+    println(String + ##type(kShiftMix) + " kShiftMix = " + kShiftMix);
 
     /* ---- declaration mechanics ---- */
 
     /* a const declared inside a nested block is scoped to that block. */
     if (true) {
         const int kBlk = 5;
-        __println(##type(kBlk) + " kBlk = " + kBlk);
+        println(String + ##type(kBlk) + " kBlk = " + kBlk);
     }
 
     /* a function-scope const SHADOWS a file-scope const of the same name (not a
        duplicate — kShadowMe is `const int = 10` at file scope). */
     const int kShadowMe = 99;
-    __println(##type(kShadowMe) + " kShadowMe = " + kShadowMe);
+    println(String + ##type(kShadowMe) + " kShadowMe = " + kShadowMe);
 
     /* an explicit wide type takes a small literal (it widens into the type). */
     const int64 kWideLit = 5;
-    __println(##type(kWideLit) + " kWideLit = " + kWideLit);
+    println(String + ##type(kWideLit) + " kWideLit = " + kWideLit);
 
     /* a char const takes a CHAR literal — an int literal never matches char
        (canon widen.sl/overload_fn.sl; the rejection is a negative below). */
     const char kCharNum = 'A';
-    __println(##type(kCharNum) + " kCharNum = " + kCharNum);
+    println(String + ##type(kCharNum) + " kCharNum = " + kCharNum);
 
     /* boundary values fit their declared type exactly. */
     const int8  kMin = -128;
     const uint8 kMax = 255;
-    __println(##type(kMin) + " kMin = " + kMin);
-    __println(##type(kMax) + " kMax = " + kMax);
+    println(String + ##type(kMin) + " kMin = " + kMin);
+    println(String + ##type(kMax) + " kMax = " + kMax);
 
     /* unary `~` complements within the operand's KIND: a STRONG fixed-width operand
        (char=8, bool=1) at that width; a WEAK no-width literal (`0xFF`) at the 64-bit
@@ -510,9 +510,9 @@ int32 main() {
     const kNotChar = ~'A';        // ~65 @ uint8 = 190 -> char
     const kNotBool = ~true;       // ~1  @ 1 bit  = 0   -> bool false
     const kNotUint = ~0xFF;       // weak no-width -> 64-bit complement -> uint64
-    __println(##type(kNotChar) + " kNotChar = " + kNotChar);
-    __println(##type(kNotBool) + " kNotBool = " + kNotBool);
-    __println(##type(kNotUint) + " kNotUint = " + kNotUint);
+    println(String + ##type(kNotChar) + " kNotChar = " + kNotChar);
+    println(String + ##type(kNotBool) + " kNotBool = " + kNotBool);
+    println(String + ##type(kNotUint) + " kNotUint = " + kNotUint);
 
     /* `~` on a STRONG (typed) const complements at that const's DECLARED width and
        keeps its type — distinct from the weak `~0xFF` above (64-bit). */
@@ -522,9 +522,9 @@ int32 main() {
     const kNotU32 = ~kU32a;       // ~0xFF @ 32 -> uint32 4294967040
     const kNotI8  = ~kI8a;        // ~5    @ 8  -> int8 -6
     const kNotU8  = ~kU8z;        // ~0    @ 8  -> uint8 255
-    __println(##type(kNotU32) + " kNotU32 = " + kNotU32);
-    __println(##type(kNotI8)  + " kNotI8 = "  + kNotI8);
-    __println(##type(kNotU8)  + " kNotU8 = "  + kNotU8);
+    println(String + ##type(kNotU32) + " kNotU32 = " + kNotU32);
+    println(String + ##type(kNotI8)  + " kNotI8 = "  + kNotI8);
+    println(String + ##type(kNotU8)  + " kNotU8 = "  + kNotU8);
 
     /* strong + strong whose value OVERFLOWS the result width truncates (wraps) to
        that width — register semantics, on the smallest widths (kOverLarge above
@@ -535,8 +535,8 @@ int32 main() {
     const uint8 kU8y = 100;
     const kI8Wrap = kI8x + kI8y;   // 200 wraps int8  -> -56
     const kU8Wrap = kU8x + kU8y;   // 300 wraps uint8 -> 44
-    __println(##type(kI8Wrap) + " kI8Wrap = " + kI8Wrap);
-    __println(##type(kU8Wrap) + " kU8Wrap = " + kU8Wrap);
+    println(String + ##type(kI8Wrap) + " kI8Wrap = " + kI8Wrap);
+    println(String + ##type(kU8Wrap) + " kU8Wrap = " + kU8Wrap);
 
     return 0;
 }

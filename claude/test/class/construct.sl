@@ -18,10 +18,10 @@ example declaration:
 
     Class(int f1_, int f2_) {
         _() {
-            __println("Class:ctor");
+            println(String + "Class:ctor");
         }
         ~() {
-            __println("Class:dtor");
+            println(String + "Class:dtor");
         }
     }
 
@@ -111,10 +111,10 @@ import string;
 
 CtorDtor(int c_) {
     _() {
-        __println("CtorDtor:ctor: " + c_);
+        println(String + "CtorDtor:ctor: " + c_);
     }
     ~() {
-        __println("CtorDtor:dtor: " + c_);
+        println(String + "CtorDtor:dtor: " + c_);
     }
 }
 
@@ -122,21 +122,21 @@ CtorDtor(int c_) {
    op=: `X x(a,b)` field-list-constructs in place (ctor only), while `X x = (a,b)` is
    value-init — default-construct then dispatch op=((int,int)^). */
 TupleInit(int p_, int q_) {
-    _() { __println("TupleInit:ctor: (" + p_ + "," + q_ + ")"); }
-    ~() { __println("TupleInit:dtor: (" + p_ + "," + q_ + ")"); }
+    _() { println(String + "TupleInit:ctor: (" + p_ + "," + q_ + ")"); }
+    ~() { println(String + "TupleInit:dtor: (" + p_ + "," + q_ + ")"); }
     op=( (int, int)^ t ) {
         p_ = t^[0];
         q_ = t^[1];
-        __println("TupleInit:op=tuple: (" + p_ + "," + q_ + ")");
+        println(String + "TupleInit:op=tuple: (" + p_ + "," + q_ + ")");
     }
 }
 
 /* a class with a SCALAR op= — for the scalar-value explode and the construction-vs-value
    collapse guard: `ScalarOp(5)` (construction) must field-list, while `= 5` must op=. */
 ScalarOp(int v_) {
-    _() { __println("ScalarOp:ctor: " + v_); }
-    ~() { __println("ScalarOp:dtor: " + v_); }
-    op=(int x) { v_ = x; __println("ScalarOp:op=int: " + v_); }
+    _() { println(String + "ScalarOp:ctor: " + v_); }
+    ~() { println(String + "ScalarOp:dtor: " + v_); }
+    op=(int x) { v_ = x; println(String + "ScalarOp:op=int: " + v_); }
 }
 
 /* a class with a class-typed FIELD. In the CONSTRUCTION spelling (`Boxed bx(7,(1,2))`) the
@@ -145,8 +145,8 @@ ScalarOp(int v_) {
    field's transfer cannot hoist past the enclosing ctor to do (splitTransferInit's field note /
    todo) — so both are rejected rather than silently field-listed or blitted (negatives below). */
 Boxed(int tag_, TupleInit inner_) {
-    _() { __println("Boxed:ctor: " + tag_); }
-    ~() { __println("Boxed:dtor: " + tag_); }
+    _() { println(String + "Boxed:ctor: " + tag_); }
+    ~() { println(String + "Boxed:dtor: " + tag_); }
 }
 
 /* TRIVIAL (POD) classes: no ctor/dtor. A trivial class-typed FIELD is exempt from the
@@ -189,10 +189,10 @@ ScalarOp   retScalar() { return 7; }        /* value op=(int) */
    FIELD (delete takes any pointer lvalue, not just a variable). */
 Resource(int^ data_) {
     _() {
-        __println("Resource:ctor");
+        println(String + "Resource:ctor");
     }
     ~() {
-        __println("Resource:dtor");
+        println(String + "Resource:dtor");
         delete data_;
     }
 }
@@ -208,10 +208,10 @@ ForwardCtorDtor(int d_) {
 
     /* ctor/dtor definition. */
     _() {
-        __println("ForwardCtorDtor:ctor: " + d_);
+        println(String + "ForwardCtorDtor:ctor: " + d_);
     }
     ~() {
-        __println("ForwardCtorDtor:dtor: " + d_);
+        println(String + "ForwardCtorDtor:dtor: " + d_);
     }
 
     /* ctor/dtor aft-ward declaration. weird but allowed. */
@@ -233,26 +233,26 @@ dtor runs before the field's dtor. construction descends Leaf->Middle->Deep;
 destruction unwinds the mirror Deep->Middle->Leaf.
 */
 Leaf(int v_) {
-    _() { __println("Leaf:ctor " + v_); }
-    ~() { __println("Leaf:dtor " + v_); }
+    _() { println(String + "Leaf:ctor " + v_); }
+    ~() { println(String + "Leaf:dtor " + v_); }
 }
 Middle(Leaf leaf_) {
-    _() { __println("Middle:ctor"); }
-    ~() { __println("Middle:dtor"); }
+    _() { println(String + "Middle:ctor"); }
+    ~() { println(String + "Middle:dtor"); }
 }
 Deep(Middle mid_) {
-    _() { __println("Deep:ctor"); }
-    ~() { __println("Deep:dtor"); }
+    _() { println(String + "Deep:ctor"); }
+    ~() { println(String + "Deep:dtor"); }
 }
 
 /* class with field class defined later. */
 Now(Later later_) {
-    _() { __println("Now:ctor: " + later_.x_); }
-    ~() { __println("Now:dtor: " + later_.x_); }
+    _() { println(String + "Now:ctor: " + later_.x_); }
+    ~() { println(String + "Now:dtor: " + later_.x_); }
 }
 Later(int x_) {
-    _() { __println("Later:ctor: " + x_); }
-    ~() { __println("Later:dtor: " + x_); }
+    _() { println(String + "Later:ctor: " + x_); }
+    ~() { println(String + "Later:dtor: " + x_); }
 }
 
 /*
@@ -352,13 +352,13 @@ int32 main() {
     and the dtors of its fields in reversed order.
     */
     {
-        __println("expect ctors 100,200 after.");
+        println(String + "expect ctors 100,200 after.");
 
         SynthesizedCtorDtor scd(100, 200);
 
-        __println("expect ctors 100,200 before and dtors 200,100 after.");
+        println(String + "expect ctors 100,200 before and dtors 200,100 after.");
     }
-    __println("expect dtors 200,100 before.");
+    println(String + "expect dtors 200,100 before.");
 
     /*
     a 3-deep chain where every level has an explicit ctor/dtor AND a hook field.
@@ -366,21 +366,21 @@ int32 main() {
     (Leaf, Middle, Deep); dtors run the mirror (Deep, Middle, Leaf).
     */
     {
-        __println("expect Leaf/Middle/Deep ctors after.");
+        println(String + "expect Leaf/Middle/Deep ctors after.");
         Deep dp(5);
-        __println("expect ctors above, dtors Deep/Middle/Leaf below.");
+        println(String + "expect ctors above, dtors Deep/Middle/Leaf below.");
     }
-    __println("expect dtors above.");
+    println(String + "expect dtors above.");
 
     /* ctor/dtor order. */
     {
-        __println("expect ctors 1,2,3 below.");
+        println(String + "expect ctors 1,2,3 below.");
         CtorDtor cd1(1);
         CtorDtor cd2(2);
         CtorDtor cd3(3);
-        __println("expect ctors 1,2,3 above and dtors 3,2,1 below.");
+        println(String + "expect ctors 1,2,3 above and dtors 3,2,1 below.");
     }
-    __println("expect dtors 3,2,1 above.");
+    println(String + "expect dtors 3,2,1 above.");
 
     {
         ForwardCtorDtor fcd1 = 57;
@@ -388,41 +388,41 @@ int32 main() {
 
     /* array of ctor classes. */
     {
-        __println("ctors 36,37,38 after.");
+        println(String + "ctors 36,37,38 after.");
         CtorDtor arr[3] = (36, 37, 38);
-        __println("ctors 36,37,38 before dtors 38,37,36 after.");
+        println(String + "ctors 36,37,38 before dtors 38,37,36 after.");
     }
-    __println("dtors 38,37,36 before.");
+    println(String + "dtors 38,37,36 before.");
 
     /* MULTI-DIM array of ctor classes — every element ctor'd in row-major order,
        dtor'd in reverse at scope exit. */
     {
-        __println("ctors 41,42,43,44 after.");
+        println(String + "ctors 41,42,43,44 after.");
         CtorDtor grid[2][2] = ((41, 42), (43, 44));
-        __println("ctors 41,42,43,44 before dtors 44,43,42,41 after.");
+        println(String + "ctors 41,42,43,44 before dtors 44,43,42,41 after.");
     }
-    __println("dtors 44,43,42,41 before.");
+    println(String + "dtors 44,43,42,41 before.");
 
     /* tuple of ctor classes — each slot constructed by slot in order; dtors run in
        reverse slot order at scope exit. (The `(CtorDtor(14), ...)` temporary-in-
        expression spelling is still a front-end gap; this names the slot types.) */
     {
-        __println("ctors 14,24,34 after.");
+        println(String + "ctors 14,24,34 after.");
         (CtorDtor, CtorDtor, CtorDtor) t = (14, 24, 34);
-        __println("ctors 14,24,34 before dtors 34,24,14 after.");
+        println(String + "ctors 14,24,34 before dtors 34,24,14 after.");
     }
-    __println("dtors 34,24,14 before.");
+    println(String + "dtors 34,24,14 before.");
 
     /* construction shape vs assignment shape diverge once a tuple op= exists:
        `(a,b)` builds in place (one ctor); `= (a,b)` default-constructs then op='s. */
     {
-        __println("TupleInit tp(7,8): expect ctor (7,8) only.");
+        println(String + "TupleInit tp(7,8): expect ctor (7,8) only.");
         TupleInit tp(7, 8);
-        __println("TupleInit ta = (5,6): expect ctor (0,0) then op=tuple (5,6).");
+        println(String + "TupleInit ta = (5,6): expect ctor (0,0) then op=tuple (5,6).");
         TupleInit ta = (5, 6);
-        __println("expect dtors (5,6) then (7,8) after.");
+        println(String + "expect dtors (5,6) then (7,8) after.");
     }
-    __println("dtors (5,6),(7,8) before.");
+    println(String + "dtors (5,6),(7,8) before.");
 
     /* THE SLOT-WISE EXPLODE for op=: a TUPLE of classes initialized from a tuple-of-tuples
        does NOT field-list each slot — every slot whose value matches a tuple op= is
@@ -430,91 +430,91 @@ int32 main() {
        default-constructs both slots FIRST, then the peeled op= statements run in slot
        order. */
     {
-        __println("(TupleInit,TupleInit) pair = ((1,2),(3,4)):");
-        __println("  expect ctors (0,0),(0,0) then op=tuple (1,2),(3,4).");
+        println(String + "(TupleInit,TupleInit) pair = ((1,2),(3,4)):");
+        println(String + "  expect ctors (0,0),(0,0) then op=tuple (1,2),(3,4).");
         (TupleInit, TupleInit) pair = ((1, 2), (3, 4));
-        __println("  expect dtors (3,4),(1,2) after.");
+        println(String + "  expect dtors (3,4),(1,2) after.");
     }
-    __println("pair dtors before.");
+    println(String + "pair dtors before.");
 
     /* the same explode reaches ARRAY elements: each element op='s in place. */
     {
-        __println("TupleInit row[2] = ((5,6),(7,8)):");
-        __println("  expect ctors (0,0),(0,0) then op=tuple (5,6),(7,8).");
+        println(String + "TupleInit row[2] = ((5,6),(7,8)):");
+        println(String + "  expect ctors (0,0),(0,0) then op=tuple (5,6),(7,8).");
         TupleInit row[2] = ((5, 6), (7, 8));
-        __println("  expect dtors (7,8),(5,6) after.");
+        println(String + "  expect dtors (7,8),(5,6) after.");
     }
-    __println("row dtors before.");
+    println(String + "row dtors before.");
 
     /* a MIXED aggregate: a field-list slot (no matching op=) still builds in place while
        its sibling op='s — the explode is per slot. TupleInit has a 2-int op= but CtorDtor
        does not, so the CtorDtor slot field-lists (one ctor) and the TupleInit slot op='s. */
     {
-        __println("(CtorDtor,TupleInit) mix = (9,(1,2)):");
-        __println("  expect CtorDtor ctor 9, TupleInit ctor (0,0) then op=tuple (1,2).");
+        println(String + "(CtorDtor,TupleInit) mix = (9,(1,2)):");
+        println(String + "  expect CtorDtor ctor 9, TupleInit ctor (0,0) then op=tuple (1,2).");
         (CtorDtor, TupleInit) mix = (9, (1, 2));
-        __println("  expect dtors TupleInit (1,2), CtorDtor 9 after.");
+        println(String + "  expect dtors TupleInit (1,2), CtorDtor 9 after.");
     }
-    __println("mix dtors before.");
+    println(String + "mix dtors before.");
 
     /* the explode is recursive: a NESTED aggregate op='s every leaf slot in place. */
     {
-        __println("((TupleInit,TupleInit),TupleInit) nest = (((1,2),(3,4)),(5,6)):");
-        __println("  expect 3 ctors (0,0) then op=tuple (1,2),(3,4),(5,6).");
+        println(String + "((TupleInit,TupleInit),TupleInit) nest = (((1,2),(3,4)),(5,6)):");
+        println(String + "  expect 3 ctors (0,0) then op=tuple (1,2),(3,4),(5,6).");
         ((TupleInit, TupleInit), TupleInit) nest = (((1, 2), (3, 4)), (5, 6));
-        __println("  expect dtors (5,6),(3,4),(1,2) after.");
+        println(String + "  expect dtors (5,6),(3,4),(1,2) after.");
     }
-    __println("nest dtors before.");
+    println(String + "nest dtors before.");
 
     /* a SCALAR-valued op= per slot (not just tuple values): ScalarOp defines op=(int). */
     {
-        __println("(ScalarOp,ScalarOp) sc = (11,22):");
-        __println("  expect ctors 0,0 then op=int 11,22.");
+        println(String + "(ScalarOp,ScalarOp) sc = (11,22):");
+        println(String + "  expect ctors 0,0 then op=int 11,22.");
         (ScalarOp, ScalarOp) sc = (11, 22);
-        __println("  expect dtors 22,11 after.");
+        println(String + "  expect dtors 22,11 after.");
     }
-    __println("sc dtors before.");
+    println(String + "sc dtors before.");
 
     /* a same-class LVALUE slot is a COPY, not an op=: buildClassFromValue excludes a value
        already of the class type, so the slot is default-constructed then whole-value copied
        (the synthesized copy is silent — only the two default ctors and the source ctors print). */
     {
-        __println("(TupleInit,TupleInit) cp = (a,b) [lvalues]:");
-        __println("  expect ctors a(1,2),b(3,4), then two default ctors (0,0) (copies silent).");
+        println(String + "(TupleInit,TupleInit) cp = (a,b) [lvalues]:");
+        println(String + "  expect ctors a(1,2),b(3,4), then two default ctors (0,0) (copies silent).");
         TupleInit a(1, 2);
         TupleInit b(3, 4);
         (TupleInit, TupleInit) cp = (a, b);
-        __println("  cp[0]=(" + cp[0].p_ + "," + cp[0].q_ + ") cp[1]=(" + cp[1].p_ + "," + cp[1].q_ + ")");
+        println(String + "  cp[0]=(" + cp[0].p_ + "," + cp[0].q_ + ") cp[1]=(" + cp[1].p_ + "," + cp[1].q_ + ")");
     }
-    __println("cp/a/b dtors before.");
+    println(String + "cp/a/b dtors before.");
 
     /* a class-typed FIELD in the CONSTRUCTION spelling FIELD-LISTS (one ctor, no op=) — fields
        stay field-list even when the field class has a matching op=. The VALUE-INIT spelling and
        a field COPY are rejected instead (negatives at end). */
     {
-        __println("Boxed bx(7,(1,2)):");
-        __println("  expect TupleInit ctor (1,2) [field-list, no op=], then Boxed ctor 7.");
+        println(String + "Boxed bx(7,(1,2)):");
+        println(String + "  expect TupleInit ctor (1,2) [field-list, no op=], then Boxed ctor 7.");
         Boxed bx(7, (1, 2));
-        __println("  bx.inner=(" + bx.inner_.p_ + "," + bx.inner_.q_ + ")");
+        println(String + "  bx.inner=(" + bx.inner_.p_ + "," + bx.inner_.q_ + ")");
     }
-    __println("bx dtors before.");
+    println(String + "bx dtors before.");
 
     /* a TRIVIAL (no ctor/dtor) class FIELD is exempt from the rejections: a copy from an lvalue,
        a move from a call rvalue, and a value-init are all legal — the blit is byte-correct with
        nothing to skip. No lifecycle output (Pod/SuperPod are silent); the field values prove it. */
     {
-        __println("SuperPod (trivial Pod field):");
+        println(String + "SuperPod (trivial Pod field):");
         SuperPod sa(1, 2);
-        __println("  sa(1,2):                p_=(" + sa.p_.a_ + "," + sa.p_.b_ + "," + sa.p_.c_ + ") d_=" + sa.d_);
+        println(String + "  sa(1,2):                p_=(" + sa.p_.a_ + "," + sa.p_.b_ + "," + sa.p_.c_ + ") d_=" + sa.d_);
         SuperPod sb((12, 3), 4);
-        __println("  sb((12,3),4):           p_=(" + sb.p_.a_ + "," + sb.p_.b_ + "," + sb.p_.c_ + ") d_=" + sb.d_);
+        println(String + "  sb((12,3),4):           p_=(" + sb.p_.a_ + "," + sb.p_.b_ + "," + sb.p_.c_ + ") d_=" + sb.d_);
         Pod p(1, 2, 3);
         SuperPod sc(p, 4);
-        __println("  sc(p,4) [POD copy]:     p_=(" + sc.p_.a_ + "," + sc.p_.b_ + "," + sc.p_.c_ + ") d_=" + sc.d_);
+        println(String + "  sc(p,4) [POD copy]:     p_=(" + sc.p_.a_ + "," + sc.p_.b_ + "," + sc.p_.c_ + ") d_=" + sc.d_);
         SuperPod sd(makePod(), 4);
-        __println("  sd(makePod(),4) [move]: p_=(" + sd.p_.a_ + "," + sd.p_.b_ + "," + sd.p_.c_ + ") d_=" + sd.d_);
+        println(String + "  sd(makePod(),4) [move]: p_=(" + sd.p_.a_ + "," + sd.p_.b_ + "," + sd.p_.c_ + ") d_=" + sd.d_);
         SuperPod se = (makePod(), 4);
-        __println("  se=(makePod(),4)[vinit]: p_=(" + se.p_.a_ + "," + se.p_.b_ + "," + se.p_.c_ + ") d_=" + se.d_);
+        println(String + "  se=(makePod(),4)[vinit]: p_=(" + se.p_.a_ + "," + se.p_.b_ + "," + se.p_.c_ + ") d_=" + se.d_);
     }
 
     /* EMPTY INIT SLOTS in a construction field-list (`Class c(,2,3)` / `(1,,3)`): a LEADING or
@@ -522,46 +522,46 @@ int32 main() {
        with no default (Pod). It CONSUMES its flat position, so the values after it still align.
        Construction form only; a trailing comma is a negative below. */
     {
-        __println("empty init slots:");
+        println(String + "empty init slots:");
         Defs da(, 2, 3);      // a_ defaults to 7
-        __println("  Defs da(,2,3): (" + da.a_ + "," + da.b_ + "," + da.c_ + ")");   // (7,2,3)
+        println(String + "  Defs da(,2,3): (" + da.a_ + "," + da.b_ + "," + da.c_ + ")");   // (7,2,3)
         Defs db(1, , 3);      // b_ defaults to 8
-        __println("  Defs db(1,,3): (" + db.a_ + "," + db.b_ + "," + db.c_ + ")");   // (1,8,3)
+        println(String + "  Defs db(1,,3): (" + db.a_ + "," + db.b_ + "," + db.c_ + ")");   // (1,8,3)
         Defs dc(, , 3);       // a_ and b_ default
-        __println("  Defs dc(,,3):  (" + dc.a_ + "," + dc.b_ + "," + dc.c_ + ")");   // (7,8,3)
+        println(String + "  Defs dc(,,3):  (" + dc.a_ + "," + dc.b_ + "," + dc.c_ + ")");   // (7,8,3)
         Pod pe(, 5, 6);       // no default -> a_ zero-inits
-        __println("  Pod pe(,5,6):  (" + pe.a_ + "," + pe.b_ + "," + pe.c_ + ")");   // (0,5,6)
+        println(String + "  Pod pe(,5,6):  (" + pe.a_ + "," + pe.b_ + "," + pe.c_ + ")");   // (0,5,6)
     }
 
     /* the RETURN slot funnels a value the same way — op= (tuple) and op= (scalar), NRVO'd
        into the caller's slot (one object each). */
     {
-        __println("TupleInit t = retTuple(): expect ctor (0,0) then op=tuple (1,2).");
+        println(String + "TupleInit t = retTuple(): expect ctor (0,0) then op=tuple (1,2).");
         TupleInit t = retTuple();
-        __println("  t=(" + t.p_ + "," + t.q_ + ")");
+        println(String + "  t=(" + t.p_ + "," + t.q_ + ")");
     }
     {
-        __println("ScalarOp s = retScalar(): expect ctor 0 then op=int 7.");
+        println(String + "ScalarOp s = retScalar(): expect ctor 0 then op=int 7.");
         ScalarOp s = retScalar();
-        __println("  s=" + s.v_);
+        println(String + "  s=" + s.v_);
     }
 
     /* MOVE-init of an op= aggregate explodes per slot exactly like copy-init. */
     {
-        __println("(TupleInit,TupleInit) mv <-- ((1,2),(3,4)):");
-        __println("  expect ctors 0,0 then op=tuple (1,2),(3,4).");
+        println(String + "(TupleInit,TupleInit) mv <-- ((1,2),(3,4)):");
+        println(String + "  expect ctors 0,0 then op=tuple (1,2),(3,4).");
         (TupleInit, TupleInit) mv <-- ((1, 2), (3, 4));
-        __println("  expect dtors (3,4),(1,2) after.");
+        println(String + "  expect dtors (3,4),(1,2) after.");
     }
-    __println("mv dtors before.");
+    println(String + "mv dtors before.");
 
     /* construction-vs-value collapse guard: `ScalarOp(5)` is a BUILD (field-list ctor),
        NOT a value op=(int) — the `(5)` arg tuple must not collapse into the op=(int) source.
        Its `= 5` sibling IS a value op=. */
     {
-        __println("ScalarOp cx = ScalarOp(5): expect ctor 5 ONLY (build, no op=int).");
+        println(String + "ScalarOp cx = ScalarOp(5): expect ctor 5 ONLY (build, no op=int).");
         ScalarOp cx = ScalarOp(5);
-        __println("ScalarOp cy = 5: expect ctor 0 then op=int 5.");
+        println(String + "ScalarOp cy = 5: expect ctor 0 then op=int 5.");
         ScalarOp cy = 5;
     }
 
@@ -570,51 +570,51 @@ int32 main() {
     }
 
     /* destruction on a mid-function return (partial construction per path). */
-    __println("early_return(1): expect ctors 1,2 then dtors 2,1.");
+    println(String + "early_return(1): expect ctors 1,2 then dtors 2,1.");
     early_return(1);
-    __println("early_return(0): expect ctors 1,3 then dtors 3,1.");
+    println(String + "early_return(0): expect ctors 1,3 then dtors 3,1.");
     early_return(0);
 
     /* a hook local in a loop, destroyed each iteration incl. continue + break. */
-    __println("loop_break_continue(5): expect ctor/dtor 1,2,3,4 (break at 4).");
+    println(String + "loop_break_continue(5): expect ctor/dtor 1,2,3,4 (break at 4).");
     loop_break_continue(5);
 
     /* conditional construction — only the taken branch builds + tears down. */
-    __println("if_else(1): expect ctor/dtor 11.");
+    println(String + "if_else(1): expect ctor/dtor 11.");
     if_else(1);
-    __println("if_else(0): expect ctor/dtor 12.");
+    println(String + "if_else(0): expect ctor/dtor 12.");
     if_else(0);
 
     /* returned by function, by value: one ctor, one dtor (result discarded). */
-    __println("makeCtorDtor(7): expect ctor/dtor 7.");
+    println(String + "makeCtorDtor(7): expect ctor/dtor 7.");
     makeCtorDtor(7);
 
     /* a hook local in a FOR-RANGE body — ctor/dtor each iteration. */
-    __println("for_range(3): expect ctor/dtor 0,1,2.");
+    println(String + "for_range(3): expect ctor/dtor 0,1,2.");
     for_range(3);
 
     /* a hook local in a DO-WHILE body — ctor/dtor each iteration (incl. first). */
-    __println("do_while(3): expect ctor/dtor 0,1,2.");
+    println(String + "do_while(3): expect ctor/dtor 0,1,2.");
     do_while(3);
 
     /* a hook local in a SWITCH clause — ctor/dtor at the clause block scope. */
-    __println("switch_clause(1): expect ctor/dtor 81.");
+    println(String + "switch_clause(1): expect ctor/dtor 81.");
     switch_clause(1);
 
     /* a LABELED break — tears down hook locals in inner AND outer loop scopes. */
-    __println("labeled_break(2): expect ctors 91,92 then dtors 92,91.");
+    println(String + "labeled_break(2): expect ctors 91,92 then dtors 92,91.");
     labeled_break(2);
 
     /* heap: the dtor runs on delete. */
     {
-        __println("new/delete: expect ctor/dtor 50.");
+        println(String + "new/delete: expect ctor/dtor 50.");
         CtorDtor^ p = new CtorDtor(50);
         delete p;
     }
 
     /* RAII: a class's dtor frees a heap field it owns (delete of a field). */
     {
-        __println("RAII: expect Resource ctor then dtor.");
+        println(String + "RAII: expect Resource ctor then dtor.");
         int^ d = new int;
         Resource r(d);
     }
@@ -625,7 +625,7 @@ int32 main() {
        `CtorDtor[]` (NOT `CtorDtor^`): a single-ref + single-delete of an array
        allocation mismatches the cookie. */
     {
-        __println("new[]/delete: expect ctors 0,0,0 then dtors 0,0,0.");
+        println(String + "new[]/delete: expect ctors 0,0,0 then dtors 0,0,0.");
         CtorDtor[] pa = new CtorDtor[3];
         delete pa;
     }
@@ -633,7 +633,7 @@ int32 main() {
     /* placement new into a raw buffer + explicit obj^.~(); the buffer is freed
        with no automatic dtor, so the object is destroyed exactly once. */
     {
-        __println("placement new + obj^.~(): expect ctor/dtor 60.");
+        println(String + "placement new + obj^.~(): expect ctor/dtor 60.");
         int8[] raw = new int8[sizeof(CtorDtor)];
         CtorDtor^ pp = new(raw) CtorDtor(60);
         pp^.~();

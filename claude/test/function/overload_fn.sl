@@ -313,72 +313,72 @@ char chsel_i(int64 x) { return 'I'; }
 char chonly(char c) { return c; }
 
 int32 main() {
-    __println("area(5) = " + area(5));              // 25
-    __println("area(3, 4) = " + area(3, 4));        // 12
+    println(String + "area(5) = " + area(5));              // 25
+    println(String + "area(3, 4) = " + area(3, 4));        // 12
 
     int32 i = 7;
     float32 f = 2.5;
-    __println("kind(i32) = " + kind(i));            // 1
-    __println("kind(f32) = " + kind(f));            // 2
+    println(String + "kind(i32) = " + kind(i));            // 1
+    println(String + "kind(f32) = " + kind(f));            // 2
 
     int64 j = 9;
     int16 s = 3;
-    __println("rank(i32) = " + rank(i));            // 32 (exact)
-    __println("rank(i64) = " + rank(j));            // 64 (exact)
-    __println("rank(i16) = " + rank(s));            // 32 (smallest widening int16->int32)
+    println(String + "rank(i32) = " + rank(i));            // 32 (exact)
+    println(String + "rank(i64) = " + rank(j));            // 64 (exact)
+    println(String + "rank(i16) = " + rank(s));            // 32 (smallest widening int16->int32)
 
     uint8 u = 5;
-    __println("sign(u8) = " + sign(u));             // 16 (uint8->uint16 same-sign beats ->int64)
+    println(String + "sign(u8) = " + sign(u));             // 16 (uint8->uint16 same-sign beats ->int64)
 
-    __println("conv(i16) = " + conv(s));            // 1 (int16 widens to int32)
+    println(String + "conv(i16) = " + conv(s));            // 1 (int16 widens to int32)
 
-    __println("withdef(5) = " + withdef(5));        // 105 (int overload, b=100)
-    __println("withdef(5, 6) = " + withdef(5, 6));  // 11
-    __println("withdef(2.5) = " + withdef(2.5));    // 999 (float overload)
+    println(String + "withdef(5) = " + withdef(5));        // 105 (int overload, b=100)
+    println(String + "withdef(5, 6) = " + withdef(5, 6));  // 11
+    println(String + "withdef(2.5) = " + withdef(2.5));    // 999 (float overload)
 
-    __println("rank(big) = " + rank(5_000_000_000)); // 64 (literal defaults to int64, exact)
+    println(String + "rank(big) = " + rank(5_000_000_000)); // 64 (literal defaults to int64, exact)
 
     Integer iv = 7;
-    __println("aov(int) = " + aov(i));              // 100 (exact int32)
-    __println("aov(alias) = " + aov(iv));           // 200 (exact Integer)
+    println(String + "aov(int) = " + aov(i));              // 100 (exact int32)
+    println(String + "aov(alias) = " + aov(iv));           // 200 (exact Integer)
 
     uint w2 = 5;
-    __println("xs(u32) = " + xs(w2));               // 64 (uint32->int64 cross-sign; uint16 narrows)
+    println(String + "xs(u32) = " + xs(w2));               // 64 (uint32->int64 cross-sign; uint16 narrows)
 
     float32 fv = 1.5;
-    __println("fw(f32) = " + fw(fv));               // 64 (float32->float64 widen; int rejected)
+    println(String + "fw(f32) = " + fw(fv));               // 64 (float32->float64 widen; int rejected)
 
     Small sm = 3;
-    __println("awiden(alias) = " + awiden(sm));     // 320 (int16 alias widens same-sign to int32)
+    println(String + "awiden(alias) = " + awiden(sm));     // 320 (int16 alias widens same-sign to int32)
 
     (int16, int16) tv = (3, 4);
-    __println("agg(tuple) = " + agg(tv));           // 32 (per-leaf widen to int32 beats int64)
+    println(String + "agg(tuple) = " + agg(tv));           // 32 (per-leaf widen to int32 beats int64)
 
-    __println("lm(i32) = " + lm(i));                // 1 (exact at arity 1 beats int64 widen)
-    __println("lm(i64) = " + lm(j));                // 2 (int64 exact; L narrows, rejected)
+    println(String + "lm(i32) = " + lm(i));                // 1 (exact at arity 1 beats int64 widen)
+    println(String + "lm(i64) = " + lm(j));                // 2 (int64 exact; L narrows, rejected)
 
     int mv = 3;
-    __println("mx(asym) = " + mx(mv, ^mv));         // 1 (cast-worst 2 beats widen-worst 5)
+    println(String + "mx(asym) = " + mx(mv, ^mv));         // 1 (cast-worst 2 beats widen-worst 5)
 
     int aw[5];
     aw[0] = 11;
-    __println("arrp(arr) = " + arrp(aw));           // 5 (whole-array ref exact beats element decay)
-    __println("arrp(elem) = " + arrp(^aw[0]));      // 1 (int^ via one iter->ref cast)
+    println(String + "arrp(arr) = " + arrp(aw));           // 5 (whole-array ref exact beats element decay)
+    println(String + "arrp(elem) = " + arrp(^aw[0]));      // 1 (int^ via one iter->ref cast)
 
     char cstr[5];
     cstr[0] = 'x';
-    __println("chp(arr) = " + chp(cstr));           // 7 (char array element decay to char^)
+    println(String + "chp(arr) = " + chp(cstr));           // 7 (char array element decay to char^)
 
-    __println("np(null) = " + np(nullptr));         // 9 (nullptr flexes into int^)
+    println(String + "np(null) = " + np(nullptr));         // 9 (nullptr flexes into int^)
 
     Base b(1);
     Base^ bp = ^b;
-    __println("pk(base) = " + pk(bp));              // 1 (Base^ exact)
+    println(String + "pk(base) = " + pk(bp));              // 1 (Base^ exact)
     Super sup(1);
     Super^ spp = ^sup;
-    __println("pk(super) = " + pk(spp));            // 3 (Super^ exact)
+    println(String + "pk(super) = " + pk(spp));            // 3 (Super^ exact)
     void^ vpp = ^b;
-    __println("pk(void) = " + pk(vpp));             // 2 (void^->intptr; typed ptrs rejected)
+    println(String + "pk(void) = " + pk(vpp));             // 2 (void^->intptr; typed ptrs rejected)
 
     /* a string literal is `const char[N]` — storage, N counting the NUL — so the
        rejection now names the literal's real type and its size. */
@@ -389,10 +389,10 @@ int32 main() {
        uint64 (never char); char widens into a lone integer overload. */
     uint8 cu8 = 65;
     char cch = 'Q';
-    __println("chsel(u8) = " + chsel(cu8));      // U (uint64 — an integer never matches char)
-    __println("chsel(ch) = " + chsel(cch));      // Q (char exact)
-    __println("chsel(65) = " + chsel(65));       // U (an int literal never matches char)
-    __println("chsel_i(ch) = " + chsel_i(cch));  // I (char widens out into int64)
+    println(String + "chsel(u8) = " + chsel(cu8));      // U (uint64 — an integer never matches char)
+    println(String + "chsel(ch) = " + chsel(cch));      // Q (char exact)
+    println(String + "chsel(65) = " + chsel(65));       // U (an int literal never matches char)
+    println(String + "chsel_i(ch) = " + chsel_i(cch));  // I (char widens out into int64)
 
     return 0;
 }
@@ -400,7 +400,7 @@ int32 main() {
 /* an integer LITERAL cannot reach a char-only overload. */
 //-EXPECT-ERROR: only char matches char
 //int32 neg_char_only_lit() {
-//    __println("" + chonly(65));
+//    println(String + "" + chonly(65));
 //    return 0;
 //}
 
@@ -408,7 +408,7 @@ int32 main() {
 //-EXPECT-ERROR: Cannot implicitly convert 'uint8' to 'char'
 //int32 neg_char_only_u8() {
 //    uint8 nu = 65;
-//    __println("" + chonly(nu));
+//    println(String + "" + chonly(nu));
 //    return 0;
 //}
 

@@ -62,10 +62,10 @@ Vec2<T>() {
 /* the lifecycle spans openings: the ctor in the primary, the dtor in the
    closing re-open (which also appends a field). */
 Tr<T>(T t_ = 0, ...) {
-    _() { __println("tc " + t_); }
+    _() { println(String + "tc " + t_); }
 }
 Tr<T>(T u_ = 1) {
-    ~() { __println("td " + t_ + " " + u_); }
+    ~() { println(String + "td " + t_ + " " + u_); }
 }
 
 /* external members of a template: an out-of-line METHOD spelling the
@@ -94,8 +94,8 @@ Us2<T>() {
 /* a hooked plain class, appended as a FIELD by a closing re-open: needs
    propagate through pending_fields; hooks balance. */
 Datb(int d_ = 3) {
-    _() { __println("db ctor " + d_); }
-    ~() { __println("db dtor " + d_); }
+    _() { println(String + "db ctor " + d_); }
+    ~() { println(String + "db dtor " + d_); }
     int dv() { return d_; }
 }
 Tr2<T>(T a_ = 1, ...) {
@@ -136,10 +136,10 @@ Spc {
 /* the ctor DECLARED in the primary, DEFINED by the re-open. */
 Hk<T>(T h_ = 2, ...) {
     _();
-    ~() { __println("hk dtor " + h_); }
+    ~() { println(String + "hk dtor " + h_); }
 }
 Hk<T>() {
-    _() { __println("hk ctor " + h_); }
+    _() { println(String + "hk ctor " + h_); }
 }
 
 /* an external member relocated while the template was still OPEN. */
@@ -199,37 +199,37 @@ int32 main() {
     /* defaults across all three openings, then explicit args (layout order:
        primary fields, then appended). */
     Grow<int> g;
-    int ga = g.ga(); __println("ga = " + ga);
-    int gb = g.gb(); __println("gb = " + gb);
-    int gs = g.gsum(); __println("gs = " + gs);
+    int ga = g.ga(); println(String + "ga = " + ga);
+    int gb = g.gb(); println(String + "gb = " + gb);
+    int gs = g.gsum(); println(String + "gs = " + gs);
     Grow<int> g2(10, 20);
-    int ga2 = g2.ga(); __println("ga2 = " + ga2);
-    int gb2 = g2.gb(); __println("gb2 = " + gb2);
-    int gs2 = g2.gsum(); __println("gs2 = " + gs2);
+    int ga2 = g2.ga(); println(String + "ga2 = " + ga2);
+    int gb2 = g2.gb(); println(String + "gb2 = " + gb2);
+    int gs2 = g2.gsum(); println(String + "gs2 = " + gs2);
 
     /* a second binding gets the same merged openings. */
     Grow<int8> g8(4, 5);
-    int8 gs8 = g8.gsum(); __println("g8 = " + gs8);
+    int8 gs8 = g8.gsum(); println(String + "g8 = " + gs8);
 
     /* members added by a re-open: the method and the operator. */
     Vec2<int> v(6);
-    int d1 = v.dbl(); __println("d1 = " + d1);
+    int d1 = v.dbl(); println(String + "d1 = " + d1);
     Vec2<int> w = v + v;
-    int d2 = w.get(); __println("d2 = " + d2);
-    int d3 = w.dbl(); __println("d3 = " + d3);
+    int d2 = w.get(); println(String + "d2 = " + d2);
+    int d3 = w.dbl(); println(String + "d3 = " + d3);
 
     /* hooks contributed by different openings pair per class. */
     {
         Tr<int> tr(5, 6);
-        __println("mid");
+        println(String + "mid");
     }
 
     /* external members ride every instance. */
     Ext<int> ex;
-    int x1 = ex.gete(); __println("x1 = " + x1);
-    int x2 = ex.viak(); __println("x2 = " + x2);
+    int x1 = ex.gete(); println(String + "x1 = " + x1);
+    int x2 = ex.viak(); println(String + "x2 = " + x2);
     Ext<int> ex2(9);
-    int x3 = ex2.viak(); __println("x3 = " + x3);
+    int x3 = ex2.viak(); println(String + "x3 = " + x3);
 
     /* block-scope: incomplete + completing re-open in a function body. */
     Lg<T>(T p_ = 2, ...) {
@@ -238,74 +238,74 @@ int32 main() {
         T lsum() { return p_ + q_; }
     }
     Lg<int> lg;
-    int b1 = lg.lsum(); __println("b1 = " + b1);
+    int b1 = lg.lsum(); println(String + "b1 = " + b1);
     Lg<int> lg2(7, 8);
-    int b2 = lg2.lsum(); __println("b2 = " + b2);
+    int b2 = lg2.lsum(); println(String + "b2 = " + b2);
 
     /* a user op= from a re-open is called — the skew shows, no blit. */
     Us2<int> pa(5);
     Us2<int> pb = pa;
-    __println("r1 = " + pb.get());
+    println(String + "r1 = " + pb.get());
 
     /* a hooked class field appended by a re-open: constructed in place,
        destroyed exactly once. */
     {
         Tr2<int> t2(9, Datb(4));
-        __println("r2 = " + t2.both());
+        println(String + "r2 = " + t2.both());
     }
 
     /* the overload set spans openings. */
     Ov<int> ov(10);
-    int r3 = ov.f(1); __println("r3 = " + r3);
-    int r4 = ov.f(1, 2); __println("r4 = " + r4);
+    int r3 = ov.f(1); println(String + "r3 = " + r3);
+    int r4 = ov.f(1, 2); println(String + "r4 = " + r4);
 
     /* the virtual slot declared in the primary dispatches to the re-open's
        implementation — directly and through a derived receiver. */
     Vb2<int> vb(2);
-    int r5 = vb.vg(); __println("r5 = " + r5);
+    int r5 = vb.vg(); println(String + "r5 = " + r5);
     Vk2 vk(3, 4);
     Vb2<int>^ vp = ^vk;
-    int r6 = vp^.vg(); __println("r6 = " + r6);
+    int r6 = vp^.vg(); println(String + "r6 = " + r6);
 
     /* the namespace-member re-opened template, defaults and args. */
     Spc:NGrow<int> ng;
-    int r8 = ng.nsum(); __println("r8 = " + r8);
+    int r8 = ng.nsum(); println(String + "r8 = " + r8);
     Spc:NGrow<int> ng2(20, 30);
-    int r8b = ng2.nsum(); __println("r8b = " + r8b);
+    int r8b = ng2.nsum(); println(String + "r8b = " + r8b);
 
     /* the declared ctor's definition came from the re-open. */
     {
         Hk<int> hk(7);
-        __println("hkmid");
+        println(String + "hkmid");
     }
 
     /* an empty leading slot over the merged layout. */
     Grow<int> g3(,20);
-    int r9 = g3.gsum(); __println("r9 = " + r9);
+    int r9 = g3.gsum(); println(String + "r9 = " + r9);
 
     /* a re-opened template instantiated from a function template's body — a
        fresh binding, all openings cloned at classify time. */
     int16 mg = 3;
-    int16 r10 = mkg(mg); __println("r10 = " + r10);
+    int16 r10 = mkg(mg); println(String + "r10 = " + r10);
 
     /* the external alias + enum members. */
-    int r11 = ex.viae(); __println("r11 = " + r11);
+    int r11 = ex.viae(); println(String + "r11 = " + r11);
 
     /* the external method relocated while the template was open. */
     Og<int> og;
-    int r12 = og.extm(); __println("r12 = " + r12);
-    int r13 = og.g1_ + og.g2_; __println("r13 = " + r13);
+    int r12 = og.extm(); println(String + "r12 = " + r12);
+    int r13 = og.g1_ + og.g2_; println(String + "r13 = " + r13);
 
     /* the sweep: new, an array, a tuple slot, alias-argument dedup. */
     Grow<int>^ gp = new Grow<int>;
-    int r14 = gp^.gsum(); __println("r14 = " + r14);
+    int r14 = gp^.gsum(); println(String + "r14 = " + r14);
     Grow<int> garr[2];
-    int r15 = garr[0].gsum() + garr[1].gsum(); __println("r15 = " + r15);
+    int r15 = garr[0].gsum() + garr[1].gsum(); println(String + "r15 = " + r15);
     Grow<int> g0;
     (Grow<int>, int) gt = (g0, 5);
-    int r16 = gt[0].gsum() + gt[1]; __println("r16 = " + r16);
+    int r16 = gt[0].gsum() + gt[1]; println(String + "r16 = " + r16);
     Vec2<Integer> valias(6);
-    int r17 = valias.dbl(); __println("r17 = " + r17);
+    int r17 = valias.dbl(); println(String + "r17 = " + r17);
 
     /* an appending re-open may not duplicate a field. */
     //-EXPECT-ERROR: Duplicate field
@@ -314,7 +314,7 @@ int32 main() {
     //Df<T>(T da_ = 2) {
     //}
     //Df<int> df;
-    //int qd = df.da_; __println("qd = " + qd);
+    //int qd = df.da_; println(String + "qd = " + qd);
 
     /* never-completed at block scope, with a use — the diagnostic fires at
        the use site. */
@@ -322,7 +322,7 @@ int32 main() {
     //Ob<T>(T o_ = 1, ...) {
     //}
     //Ob<int> ob;
-    //int qb = ob.o_; __println("qb = " + qb);
+    //int qb = ob.o_; println(String + "qb = " + qb);
 
     /* a re-open may not add a NEW virtual method. */
     //-EXPECT-ERROR: may not add the new virtual method
@@ -333,7 +333,7 @@ int32 main() {
     //    virtual T vnew() { return 1; }
     //}
     //V3<int> v3x;
-    //int q9 = v3x.vm(); __println("q9 = " + q9);
+    //int q9 = v3x.vm(); println(String + "q9 = " + q9);
 
     return 0;
 }

@@ -108,60 +108,60 @@ int32 main() {
 
     int a = 5;
     int b <-- a;                        // copy; a is untouched
-    __println("b = " + b + " a = " + a);            // 5 5
+    println(String + "b = " + b + " a = " + a);            // 5 5
 
     int c <-- 42;                       // move from a literal rvalue
-    __println("c = " + c);                          // 42
+    println(String + "c = " + c);                          // 42
 
     int64 w <-- a;                      // widening move (int -> int64)
-    __println("w = " + w);                          // 5
+    println(String + "w = " + w);                          // 5
 
     /* ---- move: pointer nulls the source ---- */
 
     int y = 9;
     int^ q = ^y;
     int^ p <-- q;                       // p takes q; q is nulled
-    __println("p = " + p^ + " qnull = " + (q == nullptr));   // 9 true
+    println(String + "p = " + p^ + " qnull = " + (q == nullptr));   // 9 true
 
     int^ r = ^y;
     int^ s = nullptr;
     s <-- r;                            // move statement; r nulled
-    __println("s = " + s^ + " rnull = " + (r == nullptr));   // 9 true
+    println(String + "s = " + s^ + " rnull = " + (r == nullptr));   // 9 true
 
     /* ---- swap exchanges values ---- */
 
     int x1 = 1;
     int x2 = 2;
     x1 <--> x2;
-    __println("x1 = " + x1 + " x2 = " + x2);        // 2 1
+    println(String + "x1 = " + x1 + " x2 = " + x2);        // 2 1
 
     int m = 7;
     int n = 8;
     int^ pm = ^m;
     int^ pn = ^n;
     pm <--> pn;                         // pointers exchange (no nulling)
-    __println("pm = " + pm^ + " pn = " + pn^);      // 8 7
+    println(String + "pm = " + pm^ + " pn = " + pn^);      // 8 7
 
     /* ---- tuple move: source pointer leaf nulled ---- */
 
     int z = 100;
     (int, int^) tsrc = (3, ^z);
     (int, int^) tdst <-- tsrc;          // copy; tsrc's pointer slot nulled
-    __println("tdst1 = " + tdst[1]^ + " srcnull = " + (tsrc[1] == nullptr));   // 100 true
+    println(String + "tdst1 = " + tdst[1]^ + " srcnull = " + (tsrc[1] == nullptr));   // 100 true
 
     /* ---- the fancy case: a deeply nested pointer leaf ---- */
 
     int deep = 42;
     (int, (int, (int, int^))) t1 = (1, (2, (3, ^deep)));
     (int, (int, (int, int^))) t2 <-- t1;
-    __println("t2deep = " + t2[1][1][1]^ + " t1null = " + (t1[1][1][1] == nullptr));   // 42 true
+    println(String + "t2deep = " + t2[1][1][1]^ + " t1null = " + (t1[1][1][1] == nullptr));   // 42 true
 
     /* ---- swap tuples ---- */
 
     (int, int) ta = (10, 11);
     (int, int) tb = (20, 21);
     ta <--> tb;
-    __println("ta0 = " + ta[0] + " tb0 = " + tb[0]);    // 20 10
+    println(String + "ta0 = " + ta[0] + " tb0 = " + tb[0]);    // 20 10
 
     /* ---- indexed lvalues ---- */
 
@@ -170,9 +170,9 @@ int32 main() {
     arr[1] = 1;
     arr[2] = 2;
     arr[0] <-- arr[1];
-    __println("arr0 = " + arr[0]);                  // 1
+    println(String + "arr0 = " + arr[0]);                  // 1
     arr[1] <--> arr[2];
-    __println("arr1 = " + arr[1] + " arr2 = " + arr[2]);    // 2 1
+    println(String + "arr1 = " + arr[1] + " arr2 = " + arr[2]);    // 2 1
 
     /* ---- iterator move (a pointer too — source nulled) ---- */
 
@@ -180,16 +180,16 @@ int32 main() {
     ia[0] = 5;
     int[] it = ^ia[0];
     int[] jt <-- it;
-    __println("jt = " + jt[0] + " itnull = " + (it == nullptr));    // 5 true
+    println(String + "jt = " + jt[0] + " itnull = " + (it == nullptr));    // 5 true
 
     /* ---- tuple-slot operands ---- */
 
     (int, int) pr = (3, 4);
     pr[1] <-- pr[0];                    // move one slot into another
-    __println("pr1 = " + pr[1]);                    // 3
+    println(String + "pr1 = " + pr[1]);                    // 3
     (int, int) sw = (5, 6);
     sw[0] <--> sw[1];                   // swap two slots
-    __println("sw0 = " + sw[0] + " sw1 = " + sw[1]);    // 6 5
+    println(String + "sw0 = " + sw[0] + " sw1 = " + sw[1]);    // 6 5
 
     /* ---- deref-lvalue operands (swap the pointed-to values) ---- */
 
@@ -198,14 +198,14 @@ int32 main() {
     int^ dp = ^dy;
     int^ dq = ^dz;
     dp^ <--> dq^;
-    __println("dy = " + dy + " dz = " + dz);        // 9 3
+    println(String + "dy = " + dy + " dz = " + dz);        // 9 3
 
     /* ---- pointer move with an implicit cast (int^ -> void^) ---- */
 
     int vy = 1;
     int^ vq = ^vy;
     void^ vv <-- vq;                    // implicit cast on the copy; vq nulled
-    __println("vqnull = " + (vq == nullptr) + " vvset = " + (vv != nullptr));   // true true
+    println(String + "vqnull = " + (vq == nullptr) + " vvset = " + (vv != nullptr));   // true true
 
     /* ---- swap a tuple holding a pointer: pointers EXCHANGE, not nulled ---- */
 
@@ -214,13 +214,13 @@ int32 main() {
     (int, int^) g1 = (1, ^sa);
     (int, int^) g2 = (2, ^sb);
     g1 <--> g2;
-    __println("g1p = " + g1[1]^ + " g2p = " + g2[1]^);    // 20 10
+    println(String + "g1p = " + g1[1]^ + " g2p = " + g2[1]^);    // 20 10
 
     /* ---- move from a non-lvalue pointer rvalue (addr-of): pure copy, no null ---- */
 
     int ay = 7;
     int^ ap <-- ^ay;
-    __println("ap = " + ap^);                       // 7
+    println(String + "ap = " + ap^);                       // 7
 
     /* move an array of pointers. */
     int x3 = 42;
@@ -228,55 +228,55 @@ int32 main() {
     int x5 = 99;
     int^ a1[3] = (^x3, ^x4, ^x5);
     int^ a2[3] <-- a1;
-    __print("a1 = (");
+    print(String + "a1 = (");
     for (int^ ref : a1) {
         if (ref == nullptr) {
-            __print(" nullptr");
+            print(String + " nullptr");
         } else {
-            __print(" " + ref^);
+            print(String + " " + ref^);
         }
     }
-    __println(" )");
-    __print("a2 = (");
+    println(String + " )");
+    print(String + "a2 = (");
     for (int^ ref : a2) {
         if (ref == nullptr) {
-            __print(" nullptr");
+            print(String + " nullptr");
         } else {
-            __print(" " + ref^);
+            print(String + " " + ref^);
         }
     }
-    __println(" )");
+    println(String + " )");
 
     /* whole-array swap (plain elements) — a whole-value exchange of the arrays. */
     int s1[3] = (1, 2, 3);
     int s2[3] = (4, 5, 6);
     s1 <--> s2;
-    __println("s1 = " + s1[0] + " " + s1[1] + " " + s1[2]);   // 4 5 6
-    __println("s2 = " + s2[0] + " " + s2[1] + " " + s2[2]);   // 1 2 3
+    println(String + "s1 = " + s1[0] + " " + s1[1] + " " + s1[2]);   // 4 5 6
+    println(String + "s2 = " + s2[0] + " " + s2[1] + " " + s2[2]);   // 1 2 3
 
     /* whole-array swap of a POINTER array — the pointers exchange (no nulling). */
     int^ b1[3] = (^x3, ^x4, ^x5);
     int^ b2[3] = (^x5, ^x4, ^x3);
     b1 <--> b2;
-    __println("b1 = " + b1[0]^ + " " + b1[2]^);   // 99 42
-    __println("b2 = " + b2[0]^ + " " + b2[2]^);   // 42 99
+    println(String + "b1 = " + b1[0]^ + " " + b1[2]^);   // 99 42
+    println(String + "b2 = " + b2[0]^ + " " + b2[2]^);   // 42 99
 
     /* multi-dim array: whole-value move/swap + the dim-product null walk. */
     int md1[2][2] = ((1, 2), (3, 4));
     int md2[2][2] <-- md1;
-    __println("md2 = " + md2[0][0] + " " + md2[0][1] + " " + md2[1][0] + " " + md2[1][1]);   // 1 2 3 4
+    println(String + "md2 = " + md2[0][0] + " " + md2[0][1] + " " + md2[1][0] + " " + md2[1][1]);   // 1 2 3 4
     int me1[2][2] = ((1, 2), (3, 4));
     int me2[2][2] = ((5, 6), (7, 8));
     me1 <--> me2;
-    __println("me1 = " + me1[0][0] + " " + me1[1][1] + " me2 = " + me2[0][0] + " " + me2[1][1]);   // 5 8 / 1 4
+    println(String + "me1 = " + me1[0][0] + " " + me1[1][1] + " me2 = " + me2[0][0] + " " + me2[1][1]);   // 5 8 / 1 4
     int^ mq1[2][2] = ((^x3, ^x4), (^x5, ^x3));
     int^ mq2[2][2] <-- mq1;
-    __println("mq2 = " + mq2[0][0]^ + " mq1null = " + (mq1[0][0] == nullptr) + " " + (mq1[1][1] == nullptr));   // 42 / true true
+    println(String + "mq2 = " + mq2[0][0]^ + " mq1null = " + (mq1[0][0] == nullptr) + " " + (mq1[1][1] == nullptr));   // 42 / true true
 
     /* array of (int, int^): move nulls each element's pointer slot (array x tuple). */
     (int, int^) at1[2] = ((1, ^x3), (2, ^x4));
     (int, int^) at2[2] <-- at1;
-    __println("at2 = " + at2[0][1]^ + " " + at2[1][1]^ + " at1null = " + (at1[0][1] == nullptr) + " " + (at1[1][1] == nullptr));   // 42 37 / true true
+    println(String + "at2 = " + at2[0][1]^ + " " + at2[1][1]^ + " at1null = " + (at1[0][1] == nullptr) + " " + (at1[1][1] == nullptr));   // 42 37 / true true
 
     /* iterator swap (iterators are pointers — they exchange, not null). */
     int isa[2];
@@ -285,27 +285,27 @@ int32 main() {
     int[] i1 = ^isa[0];
     int[] i2 = ^isa[1];
     i1 <--> i2;
-    __println("i1 = " + i1[0] + " i2 = " + i2[0]);   // 22 11
+    println(String + "i1 = " + i1[0] + " i2 = " + i2[0]);   // 22 11
 
     /* float move + swap; move from a tuple-literal rvalue. */
     float32 fa <-- 1.5;
     float32 fb = 2.5;
     float32 fc <-- fb;
-    __println("fa = " + fa + " fc = " + fc);   // 1.5 2.5
+    println(String + "fa = " + fa + " fc = " + fc);   // 1.5 2.5
     float32 fx = 1.0;
     float32 fy = 2.0;
     fx <--> fy;
-    __println("fx = " + fx + " fy = " + fy);   // 2 1
+    println(String + "fx = " + fx + " fy = " + fy);   // 2 1
     (int, int) trv <-- (8, 9);
-    __println("trv = " + trv[0] + " " + trv[1]);   // 8 9
+    println(String + "trv = " + trv[0] + " " + trv[1]);   // 8 9
 
     /* move from nullptr; move a pointer into intptr (source pointer nulled). */
     int^ pn0 <-- nullptr;
-    __println("pn0null = " + (pn0 == nullptr));   // true
+    println(String + "pn0null = " + (pn0 == nullptr));   // true
     int npv = 5;
     int^ npp = ^npv;
     intptr ipv <-- npp;
-    __println("ipvset = " + (ipv != 0) + " nppnull = " + (npp == nullptr));   // true true
+    println(String + "ipvset = " + (ipv != 0) + " nppnull = " + (npp == nullptr));   // true true
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
@@ -314,7 +314,7 @@ int32 main() {
     //int e1 = 1;
     //int64 e2 = 2;
     //e1 <--> e2;
-    //__println("x= " + e1);
+    //println(String + "x= " + e1);
 
     /* a constant is not an assignable move target. */
     //-EXPECT-ERROR: Cannot assign to constant 'EK'
@@ -325,7 +325,7 @@ int32 main() {
     //int ei = 1;
     //int eu;
     //eu <--> ei;
-    //__println("x= " + eu);
+    //println(String + "x= " + eu);
 
     /* both swap operands must be lvalues — a swap rhs is parsed as a general
        expression, so a non-lvalue is rejected (no storage to exchange) rather
@@ -333,25 +333,25 @@ int32 main() {
     //-EXPECT-ERROR: A swap operand must be an lvalue
     //int el = 1;
     //el <--> 7;
-    //__println("x= " + el);
+    //println(String + "x= " + el);
 
     /* move copies under widening rules, so a narrowing move is rejected. */
     //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int8'
     //int64 ew = 300;
     //int8 en <-- ew;
-    //__println("x= " + en);
+    //println(String + "x= " + en);
 
     /* a self-swap is a no-op and almost certainly a bug — rejected. */
     //-EXPECT-ERROR: Cannot swap a value with itself
     //int ss = 1;
     //ss <--> ss;
-    //__println("x= " + ss);
+    //println(String + "x= " + ss);
 
     /* a self-move would null the source it just copied from — rejected. */
     //-EXPECT-ERROR: Cannot move a value onto itself
     //int^ smv = nullptr;
     //smv <-- smv;
-    //__println("x= " + (smv == nullptr));
+    //println(String + "x= " + (smv == nullptr));
 
     return 0;
 }

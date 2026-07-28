@@ -43,11 +43,11 @@ Outer(int x_ = -1) {
 
     _() {
         Inner:Innerger x = x_;
-        __println("Outer:ctor: " + x);
+        println(String + "Outer:ctor: " + x);
     }
     ~() {
         Outer:Inner:Innerger x = x_;
-        __println("Outer:dtor: " + x);
+        println(String + "Outer:dtor: " + x);
     }
 
     Inner(int y_ = -2) {
@@ -55,11 +55,11 @@ Outer(int x_ = -1) {
 
         _() {
             Outerger y = y_;
-            __println("Inner:ctor: " + y);
+            println(String + "Inner:ctor: " + y);
         }
         ~() {
             Outer:Outerger y = y_;
-            __println("Inner:dtor: " + y);
+            println(String + "Inner:dtor: " + y);
         }
     }
 }
@@ -68,8 +68,8 @@ Outer(int x_ = -1) {
    scope (same scope its ctor/dtor see). The field's hooks run transitively. */
 Box(Item i_) {
     Item(int v_) {
-        _() { __println("Item:ctor: " + v_); }
-        ~() { __println("Item:dtor: " + v_); }
+        _() { println(String + "Item:ctor: " + v_); }
+        ~() { println(String + "Item:dtor: " + v_); }
     }
 }
 
@@ -78,20 +78,20 @@ Tree(int x_) {
     Branch(int y_) {
         enum int Side ( left, right );
         Leaf(int z_) {
-            _() { __println("Leaf:ctor: " + z_); }
-            ~() { __println("Leaf:dtor: " + z_); }
+            _() { println(String + "Leaf:ctor: " + z_); }
+            ~() { println(String + "Leaf:dtor: " + z_); }
         }
     }
 }
 
 /* a hoisted class shadows a same-named FILE-SCOPE class (distinct types). */
 Node(int z_) {
-    _() { __println("FILE:Node: " + z_); }
+    _() { println(String + "FILE:Node: " + z_); }
     ~() { }
 }
 Tower(int x_) {
     Node(int y_) {
-        _() { __println("HOISTED:Node: " + y_); }
+        _() { println(String + "HOISTED:Node: " + y_); }
         ~() { }
     }
 }
@@ -103,7 +103,7 @@ Cfg(int x_) {
         _() {
             int a = kMax;
             int b = Cfg:kMax;
-            __println("Reader: " + a + " " + b);
+            println(String + "Reader: " + a + " " + b);
         }
         ~() { }
     }
@@ -113,12 +113,12 @@ Cfg(int x_) {
    (a by-value class parameter is rejected language-wide; pass by reference). */
 Maker(int x_) {
     Widget(int w_) {
-        _() { __println("Widget:ctor: " + w_); }
-        ~() { __println("Widget:dtor: " + w_); }
+        _() { println(String + "Widget:ctor: " + w_); }
+        ~() { println(String + "Widget:dtor: " + w_); }
     }
 }
 Maker:Widget makeWidget() { Maker:Widget r(7); return r; }
-void useWidget(Maker:Widget^ p) { __println("useWidget: " + p^.w_); }
+void useWidget(Maker:Widget^ p) { println(String + "useWidget: " + p^.w_); }
 
 /* an alias to the host class sees through to a hoisted member, exactly as a
    type-alias sees through a file-scope class's namespace (cf. Time:Count). */
@@ -139,7 +139,7 @@ Palette(int x_) {
         _() {
             int a = Hue:green;
             int b = Palette:Hue:green;
-            __println("Pen: " + a + " " + b);
+            println(String + "Pen: " + a + " " + b);
         }
         ~() { }
     }
@@ -158,12 +158,12 @@ Units(int x_) {
    fire (Pixel's ctor before Cell's, dtors in reverse). */
 Frame(int x_) {
     Pixel(int v_) {
-        _() { __println("Pixel:ctor: " + v_); }
-        ~() { __println("Pixel:dtor: " + v_); }
+        _() { println(String + "Pixel:ctor: " + v_); }
+        ~() { println(String + "Pixel:dtor: " + v_); }
     }
     Cell(Pixel p_) {
-        _() { __println("Cell:ctor"); }
-        ~() { __println("Cell:dtor"); }
+        _() { println(String + "Cell:ctor"); }
+        ~() { println(String + "Cell:dtor"); }
     }
 }
 
@@ -173,11 +173,11 @@ int32 main() {
     { Outer:Inner inner(2); }
 
     // a host field typed as a hoisted class — bare in the host; transitive hooks.
-    { Box bx; __println("box.i = " + bx.i_.v_); }
+    { Box bx; println(String + "box.i = " + bx.i_.v_); }
 
     // sizeof + new / delete of a hoisted class.
     {
-        __println("sizeof Item = " + sizeof(Box:Item));
+        println(String + "sizeof Item = " + sizeof(Box:Item));
         Box:Item^ p = new Box:Item(5);
         delete p;
     }
@@ -185,7 +185,7 @@ int32 main() {
     // deeper nesting (3 levels) + a member enum at the bottom level.
     {
         Tree:Branch:Leaf leaf(8);
-        __println("Side:right = " + Tree:Branch:Side:right);
+        println(String + "Side:right = " + Tree:Branch:Side:right);
     }
 
     // a hoisted class shadows a same-named file-scope class.
@@ -199,8 +199,8 @@ int32 main() {
     {
         Loc(int x_) {
             Sub(int y_) {
-                _() { __println("Sub:ctor: " + y_); }
-                ~() { __println("Sub:dtor: " + y_); }
+                _() { println(String + "Sub:ctor: " + y_); }
+                ~() { println(String + "Sub:dtor: " + y_); }
             }
         }
         Loc:Sub s(3);
@@ -216,7 +216,7 @@ int32 main() {
     { HostAlias:Inner ai(5); }
 
     // sibling hoisted classes refer to each other by reference (finite size).
-    __println("sizeof Ring:Ping = " + sizeof(Ring:Ping));
+    println(String + "sizeof Ring:Ping = " + sizeof(Ring:Ping));
 
     // a host member enum reached from a hoisted class (bare + qualified).
     { Palette:Pen p(0); }
@@ -224,11 +224,11 @@ int32 main() {
     // a member alias/const inside a hoisted class, named via the full path.
     {
         Units:Metric:Real s = Units:Metric:kScale;
-        __println(##type(s) + " = " + s);
+        println(String + ##type(s) + " = " + s);
     }
 
     // a hoisted sibling held by value in another (acyclic) — transitive hooks.
-    { Frame:Cell c; __println("c.pixel = " + c.p_.v_); }
+    { Frame:Cell c; println(String + "c.pixel = " + c.p_.v_); }
 
     return 0;
 }
@@ -240,7 +240,7 @@ int32 main() {
 //-EXPECT-ERROR: 'Inner' needs a namespace qualifier
 //int32 neg_bare_inner() {
 //    Inner err1;
-//    __println(##type(err1));
+//    println(String + ##type(err1));
 //    return 0;
 //}
 
@@ -248,7 +248,7 @@ int32 main() {
 //-EXPECT-ERROR: 'Innerger' needs a namespace qualifier
 //int32 neg_bare_innerger() {
 //    Innerger err2;
-//    __println(##type(err2));
+//    println(String + ##type(err2));
 //    return 0;
 //}
 
@@ -257,7 +257,7 @@ int32 main() {
 //-EXPECT-ERROR: Unresolved identifier 'hx'
 //Holder(int hx) {
 //    Peek(int py) {
-//        _() { __println("" + hx); }
+//        _() { println(String + "" + hx); }
 //        ~() { }
 //    }
 //}

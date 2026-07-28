@@ -3408,11 +3408,24 @@ std::string stableGlobalName(parse::Tree const& in, parse::Entry const& e) {
 }
 
 // The stable base for a header-declared GROUP's shared touch thunk (`__g_<path><Group>`).
-std::string stableGroupBase(parse::Tree const& in, int ns_entry_id) {
-    parse::Entry const& e = in.entries[ns_entry_id];
-    std::string s = "__g_";
-    for (std::string const& seg : scopeSegments(in, e.owner_ns_frame)) s += seg + "_";
-    return s + e.name;
+// The group node's resolved_entry_id is its ns_frame_id (openNamespace returns the
+// FRAME) — find the kNamespace ENTRY owning that frame. The old code indexed the
+// ENTRY table with the frame id and minted the thunk from an ARBITRARY entry's
+// name; every TU computed the same-shaped garbage so it still linked — until an
+// operator entry landed at that index and put `op=` into a symbol, which llc
+// rejects.
+std::string stableGroupBase(parse::Tree const& in, int ns_frame_id) {
+    for (parse::Entry const& e : in.entries) {
+        if (e.kind == parse::EntryKind::kNamespace
+            && e.ns_frame_id == ns_frame_id) {
+            std::string s = "__g_";
+            for (std::string const& seg : scopeSegments(in, e.owner_ns_frame))
+                s += seg + "_";
+            return s + e.name;
+        }
+    }
+    assert(false && "stableGroupBase: no namespace entry for the group frame");
+    return "__g_group_" + std::to_string(ns_frame_id);
 }
 
 // Structural equality of two FOLDED initializer literals (kind + value text, recursing

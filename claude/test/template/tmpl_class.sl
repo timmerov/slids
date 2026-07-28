@@ -91,8 +91,8 @@ CPoint(int c_ = 0) {
 
 /* lifecycle hooks in a template: ctor/dtor run per instance object. */
 Trace<T>(T t_ = 0) {
-    _() { __println("ctor " + t_); }
-    ~() { __println("dtor " + t_); }
+    _() { println(String + "ctor " + t_); }
+    ~() { println(String + "dtor " + t_); }
     T get() { return t_; }
 }
 
@@ -199,8 +199,8 @@ Us<T>(T u_ = 0) {
 
 /* a plain class WITH HOOKS, for binding K to a class type. */
 Data(int d_ = 3) {
-    _() { __println("data ctor " + d_); }
-    ~() { __println("data dtor " + d_); }
+    _() { println(String + "data ctor " + d_); }
+    ~() { println(String + "data dtor " + d_); }
     int dv() { return d_; }
 }
 
@@ -246,8 +246,8 @@ K Pair<V, K>:pcross(K b) { return v_ + b; }
 Oolh<T>(T h_ = 1) {
     T hv() { return h_; }
 }
-Oolh<T>:_() { __println("oolh ctor " + h_); }
-Oolh<T>:~() { __println("oolh dtor " + h_); }
+Oolh<T>:_() { println(String + "oolh ctor " + h_); }
+Oolh<T>:~() { println(String + "oolh dtor " + h_); }
 Oolh<T>:op+=(T b) { h_ += b; }
 
 /* an instance-qualified nested class in a SIGNATURE position. */
@@ -296,7 +296,7 @@ void fnA() {
         T id() { return q_ + 1; }
     }
     Loc2<int> l(5);
-    __println("fa = " + l.id());
+    println(String + "fa = " + l.id());
 }
 
 void fnB() {
@@ -304,14 +304,14 @@ void fnB() {
         T id() { return q_ + 2; }
     }
     Loc2<int> l(5);
-    __println("fb = " + l.id());
+    println(String + "fb = " + l.id());
 }
 
 /* a flavor minted in ONE function answers instance-qualified lookups from
    ANOTHER — the memo is TU-wide, member lookup falls back to DECLARED. */
 void fnC() {
     Kit<int64> kc(9);
-    __println("fc = " + kc.subv());
+    println(String + "fc = " + kc.subv());
 }
 
 /* the NESTED-CLASS SPECIES, all riding the per-flavor machinery: a plain
@@ -335,8 +335,8 @@ Spec<T>(T t_ = 2) {
     SBase : NB(T e_ = 4) { T ev() { return bump() + e_; } }
     VB<T> : NV(T f_ = 6) { virtual T tagv() { return 100 + f_; } }
     NH(T h_ = 1) {
-        _() { __println("NH:ctor: " + h_); }
-        ~() { __println("NH:dtor: " + h_); }
+        _() { println(String + "NH:ctor: " + h_); }
+        ~() { println(String + "NH:dtor: " + h_); }
     }
     NO(T o_ = 0) {
         op=(NO^ s) { o_ = s^.o_ + 1; }
@@ -368,93 +368,93 @@ int32 main() {
 
     /* construction with arguments; methods read and write T fields. */
     Vec<int> a(3, 4);
-    int e1 = a.sum(); __println("e1 = " + e1);
-    int e2 = a.addx(10); __println("e2 = " + e2);
+    int e1 = a.sum(); println(String + "e1 = " + e1);
+    int e2 = a.addx(10); println(String + "e2 = " + e2);
 
     /* copy init; the copies are independent. */
     Vec<int> b = a;
-    int e3 = b.sum(); __println("e3 = " + e3);
+    int e3 = b.sum(); println(String + "e3 = " + e3);
     b.addx(1);
-    int e4 = a.sum(); __println("e4 = " + e4);
-    int e5 = b.sum(); __println("e5 = " + e5);
+    int e4 = a.sum(); println(String + "e4 = " + e4);
+    int e5 = b.sum(); println(String + "e5 = " + e5);
 
     /* a second binding of the same template is a distinct class. */
     Vec<int8> c8(2, 3);
-    int8 e7 = c8.sum(); __println("e7 = " + e7);
+    int8 e7 = c8.sum(); println(String + "e7 = " + e7);
 
     /* the user operator on instances. */
     Vec<int> s = a + b;
-    int e8 = s.sum(); __println("e8 = " + e8);
+    int e8 = s.sum(); println(String + "e8 = " + e8);
 
     /* THE CONVENTION OF CONVENIENCE, uniform: a CLASS type argument — the
        flavor's T-typed method params pass by reference-to-const behind the
        value spelling; sum/addx dispatch CPoint's operators through it. */
     Vec<CPoint> vcp(CPoint(3), CPoint(4));
-    CPoint cc1 = vcp.sum(); __println("cc1 = " + cc1.c_);
-    CPoint cc2 = vcp.addx(CPoint(10)); __println("cc2 = " + cc2.c_);
+    CPoint cc1 = vcp.sum(); println(String + "cc1 = " + cc1.c_);
+    CPoint cc2 = vcp.addx(CPoint(10)); println(String + "cc2 = " + cc2.c_);
 
     /* an alias argument names the SAME instance; ##type reports as written. */
     Vec<Integer> d2 = a;
-    int e9 = d2.sum(); __println("e9 = " + e9);
+    int e9 = d2.sum(); println(String + "e9 = " + e9);
     intptr szd = sizeof(Vec<Integer>) - sizeof(Vec<int>);
-    __println("szd = " + szd);
-    __println("t1: " + ##type(a));
-    __println("t2: " + ##type(d2));
+    println(String + "szd = " + szd);
+    println(String + "t1: " + ##type(a));
+    println(String + "t2: " + ##type(d2));
 
     /* two type parameters. */
     Pair<int, int8> p1(400, 5);
-    int e10 = p1.key(); __println("e10 = " + e10);
-    int8 e11 = p1.val(); __println("e11 = " + e11);
+    int e10 = p1.key(); println(String + "e10 = " + e10);
+    int8 e11 = p1.val(); println(String + "e11 = " + e11);
 
     /* default construction, an empty leading slot, a nameless temp. */
     Vec<int> z0;
-    int e12 = z0.sum(); __println("e12 = " + e12);
+    int e12 = z0.sum(); println(String + "e12 = " + e12);
     Vec<int> es(,9);
-    int e13 = es.sum(); __println("e13 = " + e13);
-    int nt = Vec<int>(20, 1).sum(); __println("nt = " + nt);
+    int e13 = es.sum(); println(String + "e13 = " + e13);
+    int nt = Vec<int>(20, 1).sum(); println(String + "nt = " + nt);
 
     /* heap and array instantiation. */
     Vec<int>^ np = new Vec<int>;
     np^.addx(3);
-    int e14 = np^.sum(); __println("e14 = " + e14);
+    int e14 = np^.sum(); println(String + "e14 = " + e14);
     Vec<int> va[2];
     va[0].addx(5);
     va[1].addx(6);
-    int e15 = va[0].sum() + va[1].sum(); __println("e15 = " + e15);
+    int e15 = va[0].sum() + va[1].sum(); println(String + "e15 = " + e15);
 
     /* ctor/dtor hooks fire per object, at block scope. */
     {
         Trace<int> tr(5);
-        __println("in block");
+        println(String + "in block");
     }
 
     /* deriving from an instance; the upcast reads the base. */
     Der dd(1, 2, 3);
-    int e16 = dd.total(); __println("e16 = " + e16);
+    int e16 = dd.total(); println(String + "e16 = " + e16);
     Vec<int>^ bp = ^dd;
-    int e17 = bp^.sum(); __println("e17 = " + e17);
+    int e17 = bp^.sum(); println(String + "e17 = " + e17);
 
     /* a template with a base. */
     TDer<int> td(4, 10);
-    int e18 = td.mix(); __println("e18 = " + e18);
+    int e18 = td.mix(); println(String + "e18 = " + e18);
 
     /* virtual dispatch through an instance-typed base pointer. */
     VK vk(3, 7);
     VB<int>^ vp = ^vk;
-    int e19 = vp^.tagv(); __println("e19 = " + e19);
+    int e19 = vp^.tagv(); println(String + "e19 = " + e19);
     VB<int> vb0(9);
-    int e20 = vb0.tagv(); __println("e20 = " + e20);
+    int e20 = vb0.tagv(); println(String + "e20 = " + e20);
 
     /* a namespace-declared template, used qualified. */
     Space:Boxed<int> sb(41);
-    int e21 = sb.get(); __println("e21 = " + e21);
+    int e21 = sb.get(); println(String + "e21 = " + e21);
 
     /* a block-scope template. */
     Loc<T>(T q_ = 0) {
         T dq() { return q_ * 2; }
     }
     Loc<int> lc(21);
-    int e22 = lc.dq(); __println("e22 = " + e22);
+    int e22 = lc.dq(); println(String + "e22 = " + e22);
 
     /* for-class over an instance. */
     Trio<int> t3(5, 6, 7);
@@ -462,121 +462,121 @@ int32 main() {
     for (int x : t3) {
         acc = acc + x;
     }
-    __println("acc = " + acc);
+    println(String + "acc = " + acc);
 
     /* an instance through a function template's inference (a CLASS binding —
        the convention's value copy; a POINTER binding could not RETURN its
        const-munged param, canon B 2026-07-26)... */
     Vec<int> tp = thru(a);
-    int e23 = tp.sum(); __println("e23 = " + e23);
+    int e23 = tp.sum(); println(String + "e23 = " + e23);
 
     /* ...a class template instantiated from a function template's body — a
        binding that exists nowhere else (int16 first appears here)... */
-    int e24 = boxsum(5); __println("e24 = " + e24);
+    int e24 = boxsum(5); println(String + "e24 = " + e24);
     int16 s16 = 6;
-    int16 e25 = boxsum(s16); __println("e25 = " + e25);
+    int16 e25 = boxsum(s16); println(String + "e25 = " + e25);
 
     /* ...an instance as a plain class's field, and in a signature. */
     Wrap ww(Vec<int>(2, 3));
-    int e26 = ww.wsum(); __println("e26 = " + e26);
-    int e27 = useVec(^b); __println("e27 = " + e27);
+    int e26 = ww.wsum(); println(String + "e26 = " + e26);
+    int e27 = useVec(^b); println(String + "e27 = " + e27);
 
     /* the global instance: registry-constructed, read and written. */
-    int g1 = gvec.sum(); __println("g1 = " + g1);
+    int g1 = gvec.sum(); println(String + "g1 = " + g1);
     gvec.addx(5);
-    int g2 = gvec.sum(); __println("g2 = " + g2);
+    int g2 = gvec.sum(); println(String + "g2 = " + g2);
 
     /* the synthesized default move and swap between instances. */
     Vec<int> m1(30, 40);
     Vec<int> m2(1, 2);
     m2 <-- m1;
-    __println("mv = " + m2.sum() + " " + m1.sum());
+    println(String + "mv = " + m2.sum() + " " + m1.sum());
     Vec<int> sw1(7, 8);
     Vec<int> sw2(1, 1);
     sw1 <--> sw2;
-    __println("sw = " + sw1.sum() + " " + sw2.sum());
+    println(String + "sw = " + sw1.sum() + " " + sw2.sum());
 
     /* the USER transfer operators are called — the +1/+100 skews prove no
        blit; the move empties its source. */
     Us<int> ua(5);
     Us<int> ub = ua;
-    __println("u1 = " + ua.u_ + " " + ub.u_);
+    println(String + "u1 = " + ua.u_ + " " + ub.u_);
     Us<int> uc;
     uc <-- ua;
-    __println("u2 = " + uc.u_ + " " + ua.u_);
+    println(String + "u2 = " + uc.u_ + " " + ua.u_);
 
     /* composite fields: the tuple default, a pointer field, a T-local array. */
     Com<int> cm;
-    int c1 = cm.tsum(); __println("c1 = " + c1);
+    int c1 = cm.tsum(); println(String + "c1 = " + c1);
     int x9 = 11;
     Com<int> cm2(1, ^x9, (4, 6));
-    int c2 = cm2.ptr_^ + cm2.tsum(); __println("c2 = " + c2);
-    int c3 = cm.locsum(30); __println("c3 = " + c3);
+    int c2 = cm2.ptr_^ + cm2.tsum(); println(String + "c2 = " + c2);
+    int c3 = cm.locsum(30); println(String + "c3 = " + c3);
 
     /* K bound to a HOOKED class: the field constructs (field-list fill from
        the scalar default) and destroys exactly once. */
     {
         Pair<Data, int> pd;
-        __println("pd = " + pd.k_.dv() + " " + pd.v_);
+        println(String + "pd = " + pd.k_.dv() + " " + pd.v_);
     }
 
     /* an instance as a type argument, via the alias. */
     Pair<VI, int8> pv(Vec<int>(2, 3), 7);
-    int k2 = pv.k_.sum(); __println("k2 = " + k2);
-    int8 k3 = pv.v_; __println("k3 = " + k3);
+    int k2 = pv.k_.sum(); println(String + "k2 = " + k2);
+    int8 k3 = pv.v_; println(String + "k3 = " + k3);
 
     /* destructor balance: a copy (ctor on defaults, transfer fills, two
        dtors)... */
     {
         Trace<int> tc1(1);
         Trace<int> tc2 = tc1;
-        __println("copied " + tc2.get());
+        println(String + "copied " + tc2.get());
     }
     /* ...an array (two ctors, two dtors, reverse order)... */
     {
         Trace<int8> ta[2];
-        __println("array");
+        println(String + "array");
     }
     /* ...a hooked instance field inside a plain class (in-place construction,
        the one legal class-field value)... */
     {
         Hold hd(Trace<int>(7));
-        __println("held");
+        println(String + "held");
     }
     /* ...and an expression temp, dead at its semicolon. */
-    int tg = Trace<int>(9).get(); __println("tg = " + tg);
+    int tg = Trace<int>(9).get(); println(String + "tg = " + tg);
 
     /* the member vocabulary: const + enum, nested class, member alias, and a
        free-template call from an instance method. */
     Kit<int> kt;
-    int c5 = kt.total(); __println("c5 = " + c5);
-    int c6 = kt.subv(); __println("c6 = " + c6);
-    int c7 = kt.dbl(21); __println("c7 = " + c7);
-    int cf = kt.viaFree(5); __println("cf = " + cf);
+    int c5 = kt.total(); println(String + "c5 = " + c5);
+    int c6 = kt.subv(); println(String + "c6 = " + c6);
+    int c7 = kt.dbl(21); println(String + "c7 = " + c7);
+    int cf = kt.viaFree(5); println(String + "cf = " + cf);
 
     /* for-class via begin/end/next. */
     Cnt<int> ct(4);
     int acc2 = 0;
     for (int i : ct) { acc2 = acc2 + i; }
-    __println("acc2 = " + acc2);
+    println(String + "acc2 = " + acc2);
 
     /* a pointer type argument. */
     int pv9 = 42;
     Cell<int^> cp(^pv9);
-    int c9 = cp.take()^; __println("c9 = " + c9);
+    int c9 = cp.take()^; println(String + "c9 = " + c9);
 
     /* the self-referential field, linked and terminal. */
     Node<int> n2(20);
     Node<int> n1(10, ^n2);
-    int c10 = n1.tail2(); __println("c10 = " + c10);
-    int c11 = n2.tail2(); __println("c11 = " + c11);
+    int c10 = n1.tail2(); println(String + "c10 = " + c10);
+    int c11 = n2.tail2(); println(String + "c11 = " + c11);
 
     /* the empty instance is one byte. */
     Emp<int> e0;
-    intptr c12 = sizeof(e0); __println("c12 = " + c12);
+    intptr c12 = sizeof(e0); println(String + "c12 = " + c12);
 
     /* self spellings + the base bypass (on the object from e18). */
-    int c13 = td.mix2(); __println("c13 = " + c13);
+    int c13 = td.mix2(); println(String + "c13 = " + c13);
 
     /* the same-named block templates, each in its own function. */
     fnA();
@@ -585,36 +585,36 @@ int32 main() {
     /* a tuple with an instance slot, indexed and destructured. */
     Vec<int> tv(13, 4);
     (Vec<int>, int) tup = (tv, 5);
-    int c14 = tup[0].sum() + tup[1]; __println("c14 = " + c14);
+    int c14 = tup[0].sum() + tup[1]; println(String + "c14 = " + c14);
     (Vec<int> dva, int dvb) = tup;
-    int c15 = dva.sum() + dvb; __println("c15 = " + c15);
+    int c15 = dva.sum() + dvb; println(String + "c15 = " + c15);
 
     /* INSTANCE-QUALIFIED member spellings from outside the body: the nested
        class as a decl type, a statement construction, a heap new, a value-
        position construction, a signature position, and sizeof. */
     Kit<int>:Sub ks(9);
-    int iq1 = ks.sv(); __println("iq1 = " + iq1);
-    int iq2 = Kit<int>:Sub(8).sv(); __println("iq2 = " + iq2);
+    int iq1 = ks.sv(); println(String + "iq1 = " + iq1);
+    int iq2 = Kit<int>:Sub(8).sv(); println(String + "iq2 = " + iq2);
     Kit<int>:Sub^ ksp = new Kit<int>:Sub(5);
-    int iq3 = ksp^.sv(); __println("iq3 = " + iq3);
-    int iq4 = useSub(^ks); __println("iq4 = " + iq4);
-    intptr iqz = sizeof(Kit<int>:Sub) - sizeof(int); __println("iqz = " + iqz);
+    int iq3 = ksp^.sv(); println(String + "iq3 = " + iq3);
+    int iq4 = useSub(^ks); println(String + "iq4 = " + iq4);
+    intptr iqz = sizeof(Kit<int>:Sub) - sizeof(int); println(String + "iqz = " + iqz);
 
     /* the member alias, the enum (type + value), and the member const. */
-    Kit<int>:Elem ie = 21; __println("iq5 = " + ie);
-    Kit<int>:E ev2 = Kit<int>:E:eTwo; __println("iq6 = " + ev2);
-    int iq7 = Kit<int>:kBase; __println("iq7 = " + iq7);
+    Kit<int>:Elem ie = 21; println(String + "iq5 = " + ie);
+    Kit<int>:E ev2 = Kit<int>:E:eTwo; println(String + "iq6 = " + ev2);
+    int iq7 = Kit<int>:kBase; println(String + "iq7 = " + iq7);
 
     /* an alias argument names the SAME flavor; a new flavor is minted BY the
        qualifier alone (no other Kit<float> use exists in this file). */
-    int iq8 = Kit<Integer>:kBase + Kit<int>:E:eOne; __println("iq8 = " + iq8);
-    int iq9 = Kit<float>:kBase; __println("iq9 = " + iq9);
+    int iq8 = Kit<Integer>:kBase + Kit<int>:E:eOne; println(String + "iq8 = " + iq8);
+    int iq9 = Kit<float>:kBase; println(String + "iq9 = " + iq9);
 
     /* a namespace-member template instance as the qualifier... */
-    int iq10 = Space:Boxed<int>:kBox; __println("iq10 = " + iq10);
+    int iq10 = Space:Boxed<int>:kBox; println(String + "iq10 = " + iq10);
 
     /* ...and a NESTED type-list in the qualifier (the `>>` split). */
-    int iq11 = Vec<Vec<int>>:kVid; __println("iq11 = " + iq11);
+    int iq11 = Vec<Vec<int>>:kVid; println(String + "iq11 = " + iq11);
 
     /* the instance-qualified enum value as a case label. */
     int iq12 = 0;
@@ -622,82 +622,82 @@ int32 main() {
         Kit<int>:E:eTwo: { iq12 = 22; }
         default: { iq12 = 1; }
     }
-    __println("iq12 = " + iq12);
+    println(String + "iq12 = " + iq12);
 
     /* the `Base:` bypass naming the instance base (the trio inside VK), the
        depth-2 chain (VKK), and virtual dispatch still landing most-derived. */
-    int iq13 = vk.trio(); __println("iq13 = " + iq13);
+    int iq13 = vk.trio(); println(String + "iq13 = " + iq13);
     VKK vkk(1, 2, 3);
-    int iq14 = vkk.deep(); __println("iq14 = " + iq14);
-    int iq15 = vkk.tagv(); __println("iq15 = " + iq15);
+    int iq14 = vkk.deep(); println(String + "iq14 = " + iq14);
+    int iq15 = vkk.tagv(); println(String + "iq15 = " + iq15);
     VB<int>^ vkp = ^vkk;
-    int iq16 = vkp^.tagv(); __println("iq16 = " + iq16);
+    int iq16 = vkp^.tagv(); println(String + "iq16 = " + iq16);
     TVD<int> tvd(5, 6);
-    int iq17 = tvd.mixv(); __println("iq17 = " + iq17);
+    int iq17 = tvd.mixv(); println(String + "iq17 = " + iq17);
 
     /* the own-class pin inside the template body itself. */
-    int iq18 = vb0.selfq(); __println("iq18 = " + iq18);
+    int iq18 = vb0.selfq(); println(String + "iq18 = " + iq18);
 
     /* the flavor fnC minted: its members answer qualified from here. */
     fnC();
     int64 iq23 = Kit<int64>:kBase + Kit<int64>:E:eTwo;
-    __println("iq23 = " + iq23);
+    println(String + "iq23 = " + iq23);
 
     /* the nested-class species, per flavor: derived-from-sibling, from a
        file-scope base, from an instance base (dispatch lands most-derived),
        hooks balance, and the user copy skew proves no blit. */
     Spec<int>:ND snd(3, 7);
-    int ns1 = snd.dv(); __println("ns1 = " + ns1);
+    int ns1 = snd.dv(); println(String + "ns1 = " + ns1);
     Spec<int>:NB snb(1, 4);
-    int ns2 = snb.ev(); __println("ns2 = " + ns2);
+    int ns2 = snb.ev(); println(String + "ns2 = " + ns2);
     Spec<int>:NV snv(3, 6);
     VB<int>^ svp = ^snv;
-    int ns3 = svp^.tagv(); __println("ns3 = " + ns3);
+    int ns3 = svp^.tagv(); println(String + "ns3 = " + ns3);
     {
         Spec<int>:NH snh(5);
-        __println("held2");
+        println(String + "held2");
     }
     Spec<int>:NO sno(4);
     Spec<int>:NO sn2 = sno;
-    int ns4 = sn2.o_; __println("ns4 = " + ns4);
+    int ns4 = sn2.o_; println(String + "ns4 = " + ns4);
 
     /* a SECOND flavor's species are their own classes. */
     Spec<int64>:ND wnd(2, 3);
-    int64 ns5 = wnd.dv(); __println("ns5 = " + ns5);
+    int64 ns5 = wnd.dv(); println(String + "ns5 = " + ns5);
 
     /* a const INSIDE a plain nested class of a flavor (three segments, plain
        interior), and the sibling-base bypass from inside the nested derived. */
-    int ns6 = Spec<int>:N:kN; __println("ns6 = " + ns6);
-    int ns7 = snd.dv2(); __println("ns7 = " + ns7);
+    int ns6 = Spec<int>:N:kN; println(String + "ns6 = " + ns6);
+    int ns7 = snd.dv2(); println(String + "ns7 = " + ns7);
 
     /* the remaining type positions: an alias to the qualified spelling, an
        array, the plain-class field, the global; ##type reports as written. */
     KSub k4(3);
-    int iq19 = k4.sv(); __println("iq19 = " + iq19);
+    int iq19 = k4.sv(); println(String + "iq19 = " + iq19);
     Kit<int>:Sub sarr[2];
-    int iq20 = sarr[0].sv() + sarr[1].sv(); __println("iq20 = " + iq20);
+    int iq20 = sarr[0].sv() + sarr[1].sv(); println(String + "iq20 = " + iq20);
     SubHold sh(Kit<int>:Sub(4));
-    int iq21 = sh.hv(); __println("iq21 = " + iq21);
-    int iq22 = gsub.sv(); __println("iq22 = " + iq22);
-    __println("iqt: " + ##type(ks));
+    int iq21 = sh.hv(); println(String + "iq21 = " + iq21);
+    int iq22 = gsub.sv(); println(String + "iq22 = " + iq22);
+    println(String + "iqt: " + ##type(ks));
 
     /* --- out-of-line members of a template (the binder-list head). --- */
-    int oo1 = a.oolPlain(2); __println("oo1 = " + oo1);
-    int oo2 = a.oolRen(3); __println("oo2 = " + oo2);
-    int oo3 = a.oolTm<int32>(4); __println("oo3 = " + oo3);
-    int oo4 = a.oolTm(5); __println("oo4 = " + oo4);
+    int oo1 = a.oolPlain(2); println(String + "oo1 = " + oo1);
+    int oo2 = a.oolRen(3); println(String + "oo2 = " + oo2);
+    int oo3 = a.oolTm<int32>(4); println(String + "oo3 = " + oo3);
+    int oo4 = a.oolTm(5); println(String + "oo4 = " + oo4);
 
     /* the renamed re-open, and the swap re-spelling: pcross's K bound
        slot 1 (int8), not slot 0 — position beats the name. */
-    int oo5 = p1.pfirst(); __println("oo5 = " + oo5);
-    int8 oo6 = p1.psecond(); __println("oo6 = " + oo6);
-    int8 oo7 = p1.pcross(2); __println("oo7 = " + oo7);
+    int oo5 = p1.pfirst(); println(String + "oo5 = " + oo5);
+    int8 oo6 = p1.psecond(); println(String + "oo6 = " + oo6);
+    int8 oo7 = p1.pcross(2); println(String + "oo7 = " + oo7);
 
     /* out-of-line hooks + operator on a template owner, balanced. */
     {
         Oolh<int> oh(5);
         oh += 3;
-        __println("oo8 = " + oh.hv());
+        println(String + "oo8 = " + oh.hv());
     }
 
     /* the type-list is required. */
@@ -706,32 +706,32 @@ int32 main() {
 
     /* ...in construction position too. */
     //-EXPECT-ERROR: requires a type-argument list
-    //int q1 = Vec(1, 2).sum(); __println("q1 = " + q1);
+    //int q1 = Vec(1, 2).sum(); println(String + "q1 = " + q1);
 
     /* ...and in sizeof. */
     //-EXPECT-ERROR: requires a type-argument list
-    //int q2 = sizeof(Vec); __println("q2 = " + q2);
+    //int q2 = sizeof(Vec); println(String + "q2 = " + q2);
 
     /* the wrong number of template arguments. */
     //-EXPECT-ERROR: Wrong number of template arguments
-    //Vec<int, int> wa; int q3 = wa.sum(); __println("q3 = " + q3);
+    //Vec<int, int> wa; int q3 = wa.sum(); println(String + "q3 = " + q3);
 
     /* an unknown argument type. */
     //-EXPECT-ERROR: Unknown type
-    //Vec<Bogus> bg; int q4 = bg.sum(); __println("q4 = " + q4);
+    //Vec<Bogus> bg; int q4 = bg.sum(); println(String + "q4 = " + q4);
 
     /* a type-list on a class that is not a template. */
     //-EXPECT-ERROR: is not a template
-    //Wrap<int> nw; int q5 = nw.wsum(); __println("q5 = " + q5);
+    //Wrap<int> nw; int q5 = nw.wsum(); println(String + "q5 = " + q5);
 
     /* an empty type-list names the LISTLESS flavor — a qualifier only,
        never a storage type (the per-flavor repeal, tmpl_nested.sl). */
     //-EXPECT-ERROR: does not name a usable type
-    //Vec<> ev; int q6 = ev.sum(); __println("q6 = " + q6);
+    //Vec<> ev; int q6 = ev.sum(); println(String + "q6 = " + q6);
 
     /* a void type argument fails the field default's fit-check. */
     //-EXPECT-ERROR: does not fit
-    //Vec<void> vv; int q7 = vv.sum(); __println("q7 = " + q7);
+    //Vec<void> vv; int q7 = vv.sum(); println(String + "q7 = " + q7);
 
     /* an abstract instance cannot be constructed. */
     //-EXPECT-ERROR: abstract
@@ -739,14 +739,14 @@ int32 main() {
     //    virtual T m() = delete;
     //}
     //Abs<int> ab;
-    //int q8 = ab.m(); __println("q8 = " + q8);
+    //int q8 = ab.m(); println(String + "q8 = " + q8);
 
     /* a self-instantiating FIELD chain nests to the depth limit... */
     //-EXPECT-ERROR: depth limit
     //Bad<T>(Bad<T^>^ b_ = nullptr) { }
     //Bad<int> bx;
     //Bad<int>^ bpn = ^bx;
-    //__println("p = " + (bpn == nullptr));
+    //println(String + "p = " + (bpn == nullptr));
 
     /* ...and a METHOD-BODY chain reaches the drain flat — the total cap. */
     //-EXPECT-ERROR: depth limit
@@ -758,20 +758,20 @@ int32 main() {
 
     /* an instance cannot pass by value — the general class rule. */
     //-EXPECT-ERROR: must be a pointer
-    //void bv(Vec<int> v) { __println("s = " + v.sum()); }
+    //void bv(Vec<int> v) { println(String + "s = " + v.sum()); }
     //bv(tv);
 
     /* a function template is not a type. */
     //-EXPECT-ERROR: is not a template
-    //thru<int> tx = 5; __println("tx = " + tx);
+    //thru<int> tx = 5; println(String + "tx = " + tx);
 
     /* an instance's frame is not a member-registration target. */
     //-EXPECT-ERROR: template instance
-    //int Kit<int>:kNew = 5; __println("kn = " + Kit<int>:kNew);
+    //int Kit<int>:kNew = 5; println(String + "kn = " + Kit<int>:kNew);
 
     /* a member the instance does not have. */
     //-EXPECT-ERROR: is not a type in
-    //Kit<int>:NoSuch nsx; __println("ns = " + nsx.sv());
+    //Kit<int>:NoSuch nsx; println(String + "ns = " + nsx.sv());
 
     /* an instance-qualified METHOD still needs a receiver object (was the
        leaked "Unresolved identifier '_$recv'" — now the rule). */

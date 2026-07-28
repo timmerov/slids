@@ -30,16 +30,16 @@ only an issue when type inference lands.
 
     int x = -1;
     for (x = 0) (x < 10) { ++x; } {
-        __println(x);
+        println(String + x);
     }
-    __println("x should be 10: " + x);
+    println(String + "x should be 10: " + x);
 
 optional labels follow the closing curly bracket.
 the default name of a for loop is 'for'.
 when labels land.
 
     for (int x = 0) (x < 10) { ++x; } {
-        __println(x);
+        println(String + x);
     } :loop;
 
 break and continue may use an optional number or name to break from
@@ -71,7 +71,7 @@ in other words, there are 3 scope frames: for, update, body.
 
     for (int x = 0) (x < 10) { ++x; } {
         int x = 42;
-        __println("prints 42: " + x);
+        println(String + "prints 42: " + x);
     }
 
 clarification: there are 4 scopes counting the enclosing scope.
@@ -419,8 +419,8 @@ bool stack_leak_for() {
    `= (tuple)`: constructed once at varlist init, its field usable in the body,
    destroyed once at loop exit. */
 CtorVar(int v_) {
-    _() { __println("CtorVar ctor " + v_); }
-    ~() { __println("CtorVar dtor " + v_); }
+    _() { println(String + "CtorVar ctor " + v_); }
+    ~() { println(String + "CtorVar dtor " + v_); }
 }
 int for_ctor_var() {
     int sum = 0;
@@ -431,45 +431,45 @@ int for_ctor_var() {
 }
 
 int32 main() {
-    __println("sum_for(5) = " + sum_for(5));                // 10
-    __println("empty_clauses(4) = " + empty_clauses(4));    // 6
-    __println("for_empty_cond(5) = " + for_empty_cond(5));  // 4
-    __println("for_true_terminator(4) = " + for_true_terminator(4));    // 4
-    __println("two_vars(10) = " + two_vars(10));            // 5
-    __println("for_continue(6) = " + for_continue(6));      // 9
-    __println("for_break(5) = " + for_break(5));            // 4
-    __println("for_grid(3, 4) = " + for_grid(3, 4));        // 12
-    __println("for_shadow(3) = " + for_shadow(3));          // 126
-    __println("for_typed_noinit(3) = " + for_typed_noinit(3));  // 6
-    __println("for_update_reads_body(3) = " + for_update_reads_body(3));    // 3
-    __println("for_nested_break(3, 5) = " + for_nested_break(3, 5));        // 6
-    __println("for_nested_continue(2, 4) = " + for_nested_continue(2, 4));  // 6
-    __println("for_break_in_update(3) = " + for_break_in_update(3));        // 3
-    __println("for_ppid_cond(3) = " + for_ppid_cond(3));                    // 3
-    __println("for_ppid_varinit(8) = " + for_ppid_varinit(8));              // 306
-    __println("for_and_cond(5) = " + for_and_cond(5));                      // 10
-    __println("for_empty_body(4) = " + for_empty_body(4));                  // 4
-    __println("for_update_local(6) = " + for_update_local(6));              // 6
-    __println("for_typeless(5) = " + for_typeless(5));                      // 10
-    __println("for_reuse(4) = " + for_reuse(4));                            // 4
-    __println("for_typeless_mixed(10) = " + for_typeless_mixed(10));        // 5
-    __println("for_two_typeless(10) = " + for_two_typeless(10));            // 5
-    __println("for_typeless_shadow(3) = " + for_typeless_shadow(3));        // 126
-    __println("for_typeless_ppid(8) = " + for_typeless_ppid(8));            // 306
-    __println("for_typeless_nested(3, 4) = " + for_typeless_nested(3, 4));  // 12
-    __println("stack leak detected: " + stack_leak_for());                  // false
-    __println("for_ctor_var() = " + for_ctor_var());                        // 21 (ctor/dtor 7 once)
+    println(String + "sum_for(5) = " + sum_for(5));                // 10
+    println(String + "empty_clauses(4) = " + empty_clauses(4));    // 6
+    println(String + "for_empty_cond(5) = " + for_empty_cond(5));  // 4
+    println(String + "for_true_terminator(4) = " + for_true_terminator(4));    // 4
+    println(String + "two_vars(10) = " + two_vars(10));            // 5
+    println(String + "for_continue(6) = " + for_continue(6));      // 9
+    println(String + "for_break(5) = " + for_break(5));            // 4
+    println(String + "for_grid(3, 4) = " + for_grid(3, 4));        // 12
+    println(String + "for_shadow(3) = " + for_shadow(3));          // 126
+    println(String + "for_typed_noinit(3) = " + for_typed_noinit(3));  // 6
+    println(String + "for_update_reads_body(3) = " + for_update_reads_body(3));    // 3
+    println(String + "for_nested_break(3, 5) = " + for_nested_break(3, 5));        // 6
+    println(String + "for_nested_continue(2, 4) = " + for_nested_continue(2, 4));  // 6
+    println(String + "for_break_in_update(3) = " + for_break_in_update(3));        // 3
+    println(String + "for_ppid_cond(3) = " + for_ppid_cond(3));                    // 3
+    println(String + "for_ppid_varinit(8) = " + for_ppid_varinit(8));              // 306
+    println(String + "for_and_cond(5) = " + for_and_cond(5));                      // 10
+    println(String + "for_empty_body(4) = " + for_empty_body(4));                  // 4
+    println(String + "for_update_local(6) = " + for_update_local(6));              // 6
+    println(String + "for_typeless(5) = " + for_typeless(5));                      // 10
+    println(String + "for_reuse(4) = " + for_reuse(4));                            // 4
+    println(String + "for_typeless_mixed(10) = " + for_typeless_mixed(10));        // 5
+    println(String + "for_two_typeless(10) = " + for_two_typeless(10));            // 5
+    println(String + "for_typeless_shadow(3) = " + for_typeless_shadow(3));        // 126
+    println(String + "for_typeless_ppid(8) = " + for_typeless_ppid(8));            // 306
+    println(String + "for_typeless_nested(3, 4) = " + for_typeless_nested(3, 4));  // 12
+    println(String + "stack leak detected: " + stack_leak_for());                  // false
+    println(String + "for_ctor_var() = " + for_ctor_var());                        // 21 (ctor/dtor 7 once)
 
     /* a reference / iterator as the long-for condition. non-null enters; the update
        nulls it, so the body runs once. */
     {
         int fx = 5;
         for (int^ fp = ^fx) (fp) { fp = nullptr; } {
-            __println("for-ref body");
+            println(String + "for-ref body");
         }
         int fa[2] = (1, 2);
         for (int[] fit = ^fa[0]) (fit) { fit = nullptr; } {
-            __println("for-iter body");
+            println(String + "for-iter body");
         }
     }
     return 0;
@@ -483,7 +483,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: A 'break' statement is not allowed in a for-loop update clause.
 //int neg_update_break(int n) {
 //    for (int i = 0) (i < n) { break; } {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -492,7 +492,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: A 'continue' statement is not allowed in a for-loop update clause.
 //int neg_update_continue(int n) {
 //    for (int i = 0) (i < n) { continue; } {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -501,7 +501,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: A 'return' statement is not allowed in a for-loop update clause.
 //int neg_update_return(int n) {
 //    for (int i = 0) (i < n) { return 0; } {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -511,7 +511,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Use of uninitialized variable 'i'
 //int neg_for_var_uninit(int n) {
 //    for (int i) (i < n) { ++i; } {
-//        __println(i);
+//        println(String + i);
 //    }
 //    return 0;
 //}
@@ -582,7 +582,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: A variable declaration needs an explicit type or an initializer.
 //int neg_noinit_undeclared(int n) {
 //    for (k) (k < n) { ++k; } {
-//        __println(k);
+//        println(String + k);
 //    }
 //    return 0;
 //}
@@ -593,7 +593,7 @@ negatives — one //-block uncommented per run.
 //int neg_noinit_local(int n) {
 //    int x = 0;
 //    for (x) (x < n) { ++x; } {
-//        __println(x);
+//        println(String + x);
 //    }
 //    return 0;
 //}
@@ -604,7 +604,7 @@ negatives — one //-block uncommented per run.
 //int neg_typeless_reuse_const(int n) {
 //    const int c = 5;
 //    for (c = 0) (c < n) { } {
-//        __println(c);
+//        println(String + c);
 //    }
 //    return 0;
 //}
@@ -625,7 +625,7 @@ negatives — one //-block uncommented per run.
 //int neg_for_tuple() {
 //    (int, int) t = (1, 2);
 //    for (int x = 0) (t) { x++; } {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -634,7 +634,7 @@ negatives — one //-block uncommented per run.
 //int neg_for_array() {
 //    int a[2] = (1, 2);
 //    for (int x = 0) (a) { x++; } {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -644,7 +644,7 @@ negatives — one //-block uncommented per run.
 //    Box(int v_) { }
 //    Box b(1);
 //    for (int x = 0) (b) { x++; } {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -655,7 +655,7 @@ negatives — one //-block uncommented per run.
 //    int x = 5;
 //    void^ p = ^x;
 //    for (int i = 0) (p^) { i++; } {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}

@@ -90,12 +90,12 @@ alias DumpTuple<T> = (
 );
 
 void dump64(DumpTuple<int64>^ tuple) {
-    __println(tuple^[0] + ":" + tuple^[1] + ": "
+    println(String + tuple^[0] + ":" + tuple^[1] + ": "
         + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }
 
 void dump<T>(DumpTuple<T>^ tuple) {
-    __println(tuple^[0] + ":" + tuple^[1] + ": "
+    println(String + tuple^[0] + ":" + tuple^[1] + ": "
         + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }
 
@@ -108,136 +108,136 @@ int32 main() {
     dump(#y);
 
     Ref<int> p;
-    __println("Ref<int> p type: " + ##type(p));
+    println(String + "Ref<int> p type: " + ##type(p));
 
     int a = 10;
     int b = 20;
 
     /* the label is the use as written; structure is the underlying. */
     IP ip = ^a;
-    __println("ip type: " + ##type(ip) + " deref = " + deref_ip(ip));
+    println(String + "ip type: " + ##type(ip) + " deref = " + deref_ip(ip));
     Ref<int> rp = pick(^b);
-    __println("rp = " + rp^);
+    println(String + "rp = " + rp^);
 
     /* a two-parameter use; a tuple expansion is an ordinary tuple. */
     Pair2<int, float> pf = (3, 2.5);
-    __println("pf = " + pf[0] + " " + pf[1] + " (" + ##type(pf) + ")");
+    println(String + "pf = " + pf[0] + " " + pf[1] + " (" + ##type(pf) + ")");
 
     /* a template-alias use as a tuple SLOT type. */
     (Ref<int>, int) rt = (^a, 5);
-    __println("rt = " + rt[0]^ + " " + rt[1]);
+    println(String + "rt = " + rt[0]^ + " " + rt[1]);
 
     /* a class field typed by a use. */
     Holder h(^a, 7);
-    __println("h = " + h.r_^ + " " + h.v_);
+    println(String + "h = " + h.r_^ + " " + h.v_);
 
     /* qualified uses: namespace-scope and class-body alias templates. */
     Deep:RT<int> dq = ^b;
-    __println("dq = " + dq^);
+    println(String + "dq = " + dq^);
     Box:BR<int> bq = ^a;
-    __println("bq = " + bq^);
+    println(String + "bq = " + bq^);
 
     /* a block-scope alias template. */
     alias LR<T> = T^;
     LR<int> lp = ^b;
-    __println("lp = " + lp^);
+    println(String + "lp = " + lp^);
 
     /* an explicit type-list on the composing template. */
     dump<uint32>(#y);
 
     /* the as-written label survives an ALIAS argument (same underlying). */
     Ref<Integer2> ari = ^a;
-    __println("ari type: " + ##type(ari) + " deref = " + ari^);
+    println(String + "ari type: " + ##type(ari) + " deref = " + ari^);
 
     /* a CAST of a use (same-pointee reinterpret). */
     int^ q1 = ^a;
     Ref<int> cst = <Ref<int> >(q1);
-    __println("cst = " + cst^);
+    println(String + "cst = " + cst^);
 
     /* sizeof of uses. */
-    __println("sz = " + sizeof(Ref<int>) + " " + sizeof(Pair2<int, float>));
+    println(String + "sz = " + sizeof(Ref<int>) + " " + sizeof(Pair2<int, float>));
 
     /* an array of uses. */
     Ref<int> ra[2];
     ra[0] = ^a;
     ra[1] = ^b;
-    __println("ra = " + ra[0]^ + " " + ra[1]^);
+    println(String + "ra = " + ra[0]^ + " " + ra[1]^);
 
     /* a use as the new operand. */
     Ref<int>^ np = new Ref<int>;
     np^ = ^a;
-    __println("np = " + np^^);
+    println(String + "np = " + np^^);
     delete np;
 
     /* the file-scope global typed by a use. */
     gref = ^x;
-    __println("gref = " + gref^);
+    println(String + "gref = " + gref^);
 
     /* the degenerate target ignores its argument; the label keeps it. */
     K<float> kf = 9;
-    __println("kf = " + kf + " (" + ##type(kf) + ")");
+    println(String + "kf = " + kf + " (" + ##type(kf) + ")");
 
     /* composite arguments. */
     Pair2<int^, (const char)[]> pc = (^a, "hi");
-    __println("pc = " + pc[0]^ + " " + pc[1]);
+    println(String + "pc = " + pc[0]^ + " " + pc[1]);
 
     /* a use in a template's signature and body; T binds through the expansion. */
     int sec = second((7, 8));
-    __println("sec = " + sec);
+    println(String + "sec = " + sec);
 
     /* bare use inside the declaring namespace; the class's own method. */
-    __println("thru = " + Deep:through(41));
+    println(String + "thru = " + Deep:through(41));
     Box bx(5);
-    __println("look = " + bx.look(^a));
+    println(String + "look = " + bx.look(^a));
 
     /* wrong number of template arguments. */
     //-EXPECT-ERROR: Wrong number of template arguments
-    //Ref<int, float> bad1 = ^a; __println("bad1 = " + bad1^);
+    //Ref<int, float> bad1 = ^a; println(String + "bad1 = " + bad1^);
 
     /* type arguments on a plain alias. */
     //-EXPECT-ERROR: is not a template alias
-    //Plain<int> bad2 = 0; __println("bad2 = " + bad2);
+    //Plain<int> bad2 = 0; println(String + "bad2 = " + bad2);
 
     /* a template alias needs its arguments. */
     //-EXPECT-ERROR: needs a type-argument list
-    //Ref bare = ^a; __println("bare = " + bare^);
+    //Ref bare = ^a; println(String + "bare = " + bare^);
 
     /* an unknown type as an argument. */
     //-EXPECT-ERROR: Unknown type
-    //Ref<Bogus> bad3 = ^a; __println("bad3 = " + bad3^);
+    //Ref<Bogus> bad3 = ^a; println(String + "bad3 = " + bad3^);
 
     /* a QUALIFIED bare use needs its arguments too. */
     //-EXPECT-ERROR: needs a type-argument list
-    //Deep:RT qb = ^a; __println("qb = " + qb^);
+    //Deep:RT qb = ^a; println(String + "qb = " + qb^);
 
     /* an empty argument list on an ALIAS template: `<>` names a CLASS
        template's listless flavor — an alias use still needs its arguments. */
     //-EXPECT-ERROR: Wrong number of template arguments
-    //Ref<> re = ^a; __println("re = " + re^);
+    //Ref<> re = ^a; println(String + "re = " + re^);
 
     /* arguments on a NAMESPACE name. */
     //-EXPECT-ERROR: is not a template alias
-    //Deep<int> dn = ^a; __println("dn = " + dn^);
+    //Deep<int> dn = ^a; println(String + "dn = " + dn^);
 
     /* a qualified use with the wrong arity. */
     //-EXPECT-ERROR: Wrong number of template arguments
-    //Deep:RT<int, int> qa = ^a; __println("qa = " + qa^);
+    //Deep:RT<int, int> qa = ^a; println(String + "qa = " + qa^);
 
     /* a duplicate block-scope alias template. */
     //-EXPECT-ERROR: Duplicate declaration
     //alias LR<U> = U[];
 
     /* a use inside a function-template type-list PARSES now (the nested-type
-       landing, tmpl_nested.sl); this case then stops at the print intrinsic,
-       whose segments don't take a reference type. */
-    //-EXPECT-ERROR: does not yet support segments
+       landing, tmpl_nested.sl); this case then stops in dump's body, where the
+       String chain meets the reference-typed T value. */
+    //-EXPECT-ERROR: Arithmetic is not allowed on a reference
     //dump<Ref<uint32> >(#y);
 
     /* a self-NESTED use is composition, not a cycle: Nest<int> = int^^. */
     int nz = 9;
     Ref<int> nr = ^nz;
     Nest<int> nn = ^nr;
-    int nv = nn^^; __println("nv = " + nv);
+    int nv = nn^^; println(String + "nv = " + nv);
 
     return 0;
 }

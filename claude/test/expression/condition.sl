@@ -47,26 +47,26 @@ int32 main() {
     int[] it = ^a[0];     // non-null iterator
 
     // unary `!` on a reference / iterator: null -> true, non-null -> false.
-    __println("!p = " + (!p));          // false
-    __println("!pn = " + (!pn));        // true
-    __println("!it = " + (!it));        // false
+    println(String + "!p = " + (!p));          // false
+    println(String + "!pn = " + (!pn));        // true
+    println(String + "!it = " + (!it));        // false
 
     // && / || / ^^ with a pointer-like operand (coerces: non-null true, null false).
-    __println("p && true = " + (p && true));      // true
-    __println("pn && true = " + (pn && true));    // false
-    __println("p || false = " + (p || false));    // true
-    __println("pn || false = " + (pn || false));  // false
-    __println("p ^^ true = " + (p ^^ true));      // false
-    __println("it ^^ false = " + (it ^^ false));  // true
+    println(String + "p && true = " + (p && true));      // true
+    println(String + "pn && true = " + (pn && true));    // false
+    println(String + "p || false = " + (p || false));    // true
+    println(String + "pn || false = " + (pn || false));  // false
+    println(String + "p ^^ true = " + (p ^^ true));      // false
+    println(String + "it ^^ false = " + (it ^^ false));  // true
 
     // logical augmented-assign with a pointer-like rhs.
-    bool b1 = false; b1 ||= p;  __println("b1 = " + b1);   // true
-    bool b2 = true;  b2 &&= pn; __println("b2 = " + b2);   // false
-    bool b3 = false; b3 ^^= it; __println("b3 = " + b3);   // true
+    bool b1 = false; b1 ||= p;  println(String + "b1 = " + b1);   // true
+    bool b2 = true;  b2 &&= pn; println(String + "b2 = " + b2);   // false
+    bool b3 = false; b3 ^^= it; println(String + "b3 = " + b3);   // true
 
     // a CLASS operand with op! — `!` dispatches it (v_ defaults to 0 -> op! true).
     Flag f;
-    __println("!flag = " + (!f));   // true
+    println(String + "!flag = " + (!f));   // true
 
     return 0;
 }
@@ -84,7 +84,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //int neg_not() {
 //    (int, int) t = (1, 2);
 //    bool r = !t;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -93,7 +93,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //int neg_and_rhs() {
 //    (int, int) t = (1, 2);
 //    bool r = true && t;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -101,7 +101,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //int neg_and_lhs() {
 //    (int, int) t = (1, 2);
 //    bool r = t && true;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -110,7 +110,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //int neg_or_rhs() {
 //    int a[2] = (1, 2);
 //    bool r = true || a;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -118,7 +118,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //int neg_or_lhs() {
 //    int a[2] = (1, 2);
 //    bool r = a || true;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -127,7 +127,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //int neg_xor_rhs() {
 //    (int, int) t = (1, 2);
 //    bool r = true ^^ t;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -135,7 +135,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //int neg_xor_lhs() {
 //    (int, int) t = (1, 2);
 //    bool r = t ^^ true;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -145,7 +145,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //    bool b = true;
 //    (int, int) t = (1, 2);
 //    b &&= t;
-//    __println("" + b);
+//    println(String + "" + b);
 //    return 0;
 //}
 
@@ -154,7 +154,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //    bool b = true;
 //    int a[2] = (1, 2);
 //    b ||= a;
-//    __println("" + b);
+//    println(String + "" + b);
 //    return 0;
 //}
 
@@ -163,7 +163,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //    bool b = true;
 //    (int, int) t = (1, 2);
 //    b ^^= t;
-//    __println("" + b);
+//    println(String + "" + b);
 //    return 0;
 //}
 
@@ -174,7 +174,7 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
 //    Box(int v_) { }
 //    Box b(1);
 //    bool r = !b;
-//    __println("" + r);
+//    println(String + "" + r);
 //    return 0;
 //}
 
@@ -182,22 +182,22 @@ operator. a void operand is caught earlier as "cannot be used as an expression".
    like a tuple/array. (a void CALL is caught earlier as "cannot be used as an
    expression"; a void^ deref is not, so it reaches the operator check.) */
 //-EXPECT-ERROR: Operator '!' is not defined on type 'void'
-//int neg_not_void() { int x = 5; void^ p = ^x; bool r = !p^; __println("" + r); return 0; }
+//int neg_not_void() { int x = 5; void^ p = ^x; bool r = !p^; println(String + "" + r); return 0; }
 
 //-EXPECT-ERROR: Operator '&&' is not defined on type 'void'
-//int neg_and_void() { int x = 5; void^ p = ^x; bool r = true && p^; __println("" + r); return 0; }
+//int neg_and_void() { int x = 5; void^ p = ^x; bool r = true && p^; println(String + "" + r); return 0; }
 
 //-EXPECT-ERROR: Operator '||' is not defined on type 'void'
-//int neg_or_void() { int x = 5; void^ p = ^x; bool r = true || p^; __println("" + r); return 0; }
+//int neg_or_void() { int x = 5; void^ p = ^x; bool r = true || p^; println(String + "" + r); return 0; }
 
 //-EXPECT-ERROR: Operator '^^' is not defined on type 'void'
-//int neg_xor_void() { int x = 5; void^ p = ^x; bool r = true ^^ p^; __println("" + r); return 0; }
+//int neg_xor_void() { int x = 5; void^ p = ^x; bool r = true ^^ p^; println(String + "" + r); return 0; }
 
 //-EXPECT-ERROR: Operator '&&' is not defined on type 'void'
-//int neg_aug_and_void() { int x = 5; void^ p = ^x; bool b = true; b &&= p^; __println("" + b); return 0; }
+//int neg_aug_and_void() { int x = 5; void^ p = ^x; bool b = true; b &&= p^; println(String + "" + b); return 0; }
 
 //-EXPECT-ERROR: Operator '||' is not defined on type 'void'
-//int neg_aug_or_void() { int x = 5; void^ p = ^x; bool b = true; b ||= p^; __println("" + b); return 0; }
+//int neg_aug_or_void() { int x = 5; void^ p = ^x; bool b = true; b ||= p^; println(String + "" + b); return 0; }
 
 //-EXPECT-ERROR: Operator '^^' is not defined on type 'void'
-//int neg_aug_xor_void() { int x = 5; void^ p = ^x; bool b = true; b ^^= p^; __println("" + b); return 0; }
+//int neg_aug_xor_void() { int x = 5; void^ p = ^x; bool b = true; b ^^= p^; println(String + "" + b); return 0; }

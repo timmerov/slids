@@ -27,9 +27,9 @@ nested tuples loop by reference.
     tuple = ((1,2), (3,4), (5,6));
     for (sub : tuple) {
         for (x : sub^) {
-            __print(x + " ");
+            print(String + x + " ");
         }
-        __println();
+        println(String + );
     }
 
 desugars to:
@@ -112,52 +112,52 @@ int32 main() {
     /* by value, tuple literal */
     int s1 = 0;
     for (x : (7, 4, 2)) { s1 = s1 + x; }
-    __println("s1= " + s1);                              // 13
+    println(String + "s1= " + s1);                              // 13
 
     /* by value, tuple variable */
     (int, int, int) tup = (1, 3, 9);
     int s2 = 0;
     for (x : tup) { s2 = s2 + x; }
-    __println("s2= " + s2);                              // 13
+    println(String + "s2= " + s2);                              // 13
 
     /* by reference (to const) over a literal */
     int sum = 0;
     for (int^ p : (-1, -2, +3)) { sum += p^; }
-    __println("sum= " + sum);                            // 0
+    println(String + "sum= " + sum);                            // 0
 
     /* by mutable reference over a variable — writes back in place */
     (int, int, int) m = (1, 2, 3);
     for (int^ p : m) { p^ = p^ * 10; }
-    __println("m= " + m[0] + " " + m[1] + " " + m[2]);   // 10 20 30
+    println(String + "m= " + m[0] + " " + m[1] + " " + m[2]);   // 10 20 30
 
     /* inferred type. */
     tpl1 = (1,2,4);
-    __print("tpl1 = ( ");
+    print(String + "tpl1 = ( ");
     for (x : tpl1) {
-        __print(x+" ");
+        print(String + x+" ");
     }
-    __println(")");
+    println(String + ")");
 
     /* inferred reference */
     tpl2 = (88,89,90);
     ref2 = ^tpl2;
-    __print("tpl2 = ( ");
+    print(String + "tpl2 = ( ");
     for (x : ref2^) {
-        __print(x+" ");
+        print(String + x+" ");
     }
-    __println(")");
+    println(String + ")");
 
     /* nested tuples */
     tpl3 = ((1,2), (3,4), (5,6));
-    __println("tpl3 = (");
+    println(String + "tpl3 = (");
     for (sub : tpl3) {
-        __print("  ( ");
+        print(String + "  ( ");
         for (x : sub^) {
-            __print(x + " ");
+            print(String + x + " ");
         }
-        __println(")");
+        println(String + ")");
     }
-    __println(")");
+    println(String + ")");
 
     /* break exits a tuple loop. */
     (int, int, int) bt = (1, 2, 3);
@@ -166,7 +166,7 @@ int32 main() {
         if (p^ == 2) { break; }
         bsum = bsum + p^;
     }
-    __println("break= " + bsum);                 // 1
+    println(String + "break= " + bsum);                 // 1
 
     /* continue skips an element. */
     int csum = 0;
@@ -174,7 +174,7 @@ int32 main() {
         if (p^ == 2) { continue; }
         csum = csum + p^;
     }
-    __println("continue= " + csum);              // 1 + 3 = 4
+    println(String + "continue= " + csum);              // 1 + 3 = 4
 
     /* a labeled break from the inner tuple loop exits the OUTER. */
     int lb = 0;
@@ -184,7 +184,7 @@ int32 main() {
             if (b^ == 2) { break scan; }
         }
     } :scan;
-    __println("labeled_break= " + lb);           // 2
+    println(String + "labeled_break= " + lb);           // 2
 
     /* a numbered break exits both tuple loops. */
     int nb = 0;
@@ -194,7 +194,7 @@ int32 main() {
             if (b^ == 2) { break 2; }
         }
     }
-    __println("numbered_break= " + nb);          // 2
+    println(String + "numbered_break= " + nb);          // 2
 
     /* a labeled continue restarts the OUTER tuple loop. */
     int lc = 0;
@@ -204,20 +204,20 @@ int32 main() {
             lc = lc + a^;
         }
     } :outer;
-    __println("labeled_continue= " + lc);        // 1 + 2 + 3 = 6
+    println(String + "labeled_continue= " + lc);        // 1 + 2 + 3 = 6
 
     /* a typeless loop var reuses an enclosing local — observable after. */
     int rlast = 0;
     for (rlast : bt) {
     }
-    __println("reuse= " + rlast);                // 3
+    println(String + "reuse= " + rlast);                // 3
 
     /* a typed by-value loop var (the cases above use typeless by value). */
     int tv = 0;
     for (int x : bt) {
         tv = tv + x;
     }
-    __println("typed_byval= " + tv);             // 6
+    println(String + "typed_byval= " + tv);             // 6
 
     /* a char-element tuple, by reference. */
     (char, char, char) ct = ('a', 'b', 'c');
@@ -225,7 +225,7 @@ int32 main() {
     for (char^ p : ct) {
         chsum = chsum + p^;
     }
-    __println("char= " + chsum);                 // 294
+    println(String + "char= " + chsum);                 // 294
 
     /* a float-element tuple, by value. */
     (float, float, float) ft = (1.5, 2.5, 3.0);
@@ -233,14 +233,14 @@ int32 main() {
     for (float f : ft) {
         fsum = fsum + f;
     }
-    __println("float= " + fsum);                 // 7
+    println(String + "float= " + fsum);                 // 7
 
     /* an rvalue (a function call) is SPILLED to a temp, then iterated. */
     int spill = 0;
     for (x : make_tuple()) {
         spill = spill + x;
     }
-    __println("call_spill= " + spill);           // 15
+    println(String + "call_spill= " + spill);           // 15
 
     /* a const-EXPRESSION dim in the FOR-VAR's TYPE (a tuple slot): iterate a tuple
        whose slots are themselves (int[kFN], int); the by-ref loop var's dim is
@@ -248,26 +248,26 @@ int32 main() {
     const int kFN = 3;
     ((int[kFN], int), (int[kFN], int)) pairs = (((1,2,3), 10), ((4,5,6), 20));
     for ((int[kFN], int)^ e : pairs) {
-        __println("pair= " + e^[0][2] + " " + e^[1]);   // 3 10  then  6 20
+        println(String + "pair= " + e^[0][2] + " " + e^[1]);   // 3 10  then  6 20
     }
 
     {
         Class(int x_) { }
         tuple = (Class(1), Class(2), Class(3));
-        __print("tuple = (");
+        print(String + "tuple = (");
         for (ref : tuple) {
-            __print(" " + ref^.x_);
+            print(String + " " + ref^.x_);
         }
-        __println(" )");
+        println(String + " )");
     }
 
     /* GLOBAL tuple iteration — the iterator base `^gtup` touches the lazy global,
        constructing it before the walk; by value + by mutable reference. */
     int gsum = 0;
     for (x : gtup) { gsum = gsum + x; }
-    __println("gsum= " + gsum);                          // 60 (10+20+30)
+    println(String + "gsum= " + gsum);                          // 60 (10+20+30)
     for (int^ p : gtup) { p^ = p^ + 1; }
-    __println("gtup= " + gtup[0] + " " + gtup[1] + " " + gtup[2]);   // 11 21 31
+    println(String + "gtup= " + gtup[0] + " " + gtup[1] + " " + gtup[2]);   // 11 21 31
 
     return 0;
 }
@@ -280,7 +280,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: requires a homogeneous tuple
 //int neg_heterogeneous() {
 //    for (x : (1, 2.0, 3)) {
-//        __println("" + x);
+//        println(String + "" + x);
 //    }
 //    return 0;
 //}
@@ -291,7 +291,7 @@ negatives — one //-block uncommented per run.
 //    alias Pair = (int, int);
 //    t = ((1, 2), (3, 4));
 //    for (Pair sub : t) {
-//        __println("" + sub[0]);
+//        println(String + "" + sub[0]);
 //    }
 //    return 0;
 //}
@@ -311,7 +311,7 @@ negatives — one //-block uncommented per run.
 //int neg_not_tuple() {
 //    int v = 5;
 //    for (x : v) {
-//        __println("" + x);
+//        println(String + "" + x);
 //    }
 //    return 0;
 //}
@@ -324,7 +324,7 @@ negatives — one //-block uncommented per run.
 //int neg_var_shadows_const() {
 //    const c = 5;
 //    for (c : (1, 2, 3)) {
-//        __println("" + c);
+//        println(String + "" + c);
 //    }
 //    return 0;
 //}

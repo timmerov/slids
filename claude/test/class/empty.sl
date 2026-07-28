@@ -28,8 +28,8 @@ the address-identity check. a pointer flows into an intptr lvalue via ptrtoint.
 import string;
 
 Empty() {
-    _() { __println("Empty:ctor"); }
-    ~() { __println("Empty:dtor"); }
+    _() { println(String + "Empty:ctor"); }
+    ~() { println(String + "Empty:dtor"); }
 }
 
 int32 main() {
@@ -39,21 +39,21 @@ int32 main() {
         Empty b;
         intptr p = ^a;
         intptr q = ^b;
-        __println("same address: " + (p==q));
+        println(String + "same address: " + (p==q));
     }
 
     {
         Empty c[2];
         intptr p = ^c[0];
         intptr q = ^c[1];
-        __println("same address: " + (p==q));
+        println(String + "same address: " + (p==q));
     }
 
     {
         tuple = (Empty(), Empty());
         intptr p = ^tuple[0];
         intptr q = ^tuple[1];
-        __println("same address: " + (p==q));
+        println(String + "same address: " + (p==q));
     }
 
     return 0;

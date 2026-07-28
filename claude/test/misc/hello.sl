@@ -6,10 +6,10 @@ import string;
 
 int32 main() {
 
-    __println("Hello, World!");
+    println(String + "Hello, World!");
 
     (const char)[] str = "Goodbye, World!";
-    __println(str);
+    println(String + str);
 
     return 0;
 }

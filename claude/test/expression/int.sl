@@ -48,19 +48,19 @@ int32 main() {
     int nu = -u;
     int cu = ~u;
     bool bu = !u;
-    __println("pu= " + pu);
-    __println("nu= " + nu);
-    __println("cu= " + cu);
-    __println("bu= " + bu);
+    println(String + "pu= " + pu);
+    println(String + "nu= " + nu);
+    println(String + "cu= " + cu);
+    println(String + "bu= " + bu);
 
     int p5 = +5;
     int n5 = -5;
     int c5 = ~5;
     bool b5 = !5;
-    __println("p5= " + p5);
-    __println("n5= " + n5);
-    __println("c5= " + c5);
-    __println("b5= " + b5);
+    println(String + "p5= " + p5);
+    println(String + "n5= " + n5);
+    println(String + "c5= " + c5);
+    println(String + "b5= " + b5);
 
     int a = 12;
     int b = 5;
@@ -69,59 +69,59 @@ int32 main() {
     int prd = a * b;
     int quo = a / b;
     int rem = a % b;
-    __println("sum= " + sum);
-    __println("dif= " + dif);
-    __println("prd= " + prd);
-    __println("quo= " + quo);
-    __println("rem= " + rem);
+    println(String + "sum= " + sum);
+    println(String + "dif= " + dif);
+    println(String + "prd= " + prd);
+    println(String + "quo= " + quo);
+    println(String + "rem= " + rem);
 
     int sumL = 12 + 5;
     int difL = 12 - 5;
     int prdL = 12 * 5;
     int quoL = 12 / 5;
     int remL = 12 % 5;
-    __println("sumL= " + sumL);
-    __println("difL= " + difL);
-    __println("prdL= " + prdL);
-    __println("quoL= " + quoL);
-    __println("remL= " + remL);
+    println(String + "sumL= " + sumL);
+    println(String + "difL= " + difL);
+    println(String + "prdL= " + prdL);
+    println(String + "quoL= " + quoL);
+    println(String + "remL= " + remL);
 
     int band = a & b;
     int bor  = a | b;
     int bxor = a ^ b;
     int shl  = a << 2;
     int shr  = a >> 2;
-    __println("band= " + band);
-    __println("bor= "  + bor);
-    __println("bxor= " + bxor);
-    __println("shl= "  + shl);
-    __println("shr= "  + shr);
+    println(String + "band= " + band);
+    println(String + "bor= "  + bor);
+    println(String + "bxor= " + bxor);
+    println(String + "shl= "  + shl);
+    println(String + "shr= "  + shr);
 
     int bandL = 12 & 5;
     int borL  = 12 | 5;
     int bxorL = 12 ^ 5;
     int shlL  = 12 << 2;
     int shrL  = 12 >> 2;
-    __println("bandL= " + bandL);
-    __println("borL= "  + borL);
-    __println("bxorL= " + bxorL);
-    __println("shlL= "  + shlL);
-    __println("shrL= "  + shrL);
+    println(String + "bandL= " + bandL);
+    println(String + "borL= "  + borL);
+    println(String + "bxorL= " + bxorL);
+    println(String + "shlL= "  + shlL);
+    println(String + "shrL= "  + shrL);
 
     int sh = 2;
     int shlV = a << sh;
     int shrV = a >> sh;
-    __println("shlV= " + shlV);
-    __println("shrV= " + shrV);
+    println(String + "shlV= " + shlV);
+    println(String + "shrV= " + shrV);
 
     int neg7 = -7;
     int neg8 = -8;
     int sShr = neg8 >> 1;
     int sDiv = neg7 / 2;
     int sRem = neg7 % 2;
-    __println("sShr= " + sShr);
-    __println("sDiv= " + sDiv);
-    __println("sRem= " + sRem);
+    println(String + "sShr= " + sShr);
+    println(String + "sDiv= " + sDiv);
+    println(String + "sRem= " + sRem);
 
     bool t = true;
     bool f = false;
@@ -130,37 +130,37 @@ int32 main() {
     bool aTF = t && f;
     bool aFT = f && t;
     bool aFF = f && f;
-    __println("aTT= " + aTT);
-    __println("aTF= " + aTF);
-    __println("aFT= " + aFT);
-    __println("aFF= " + aFF);
+    println(String + "aTT= " + aTT);
+    println(String + "aTF= " + aTF);
+    println(String + "aFT= " + aFT);
+    println(String + "aFF= " + aFF);
 
     bool oTT = t || t;
     bool oTF = t || f;
     bool oFT = f || t;
     bool oFF = f || f;
-    __println("oTT= " + oTT);
-    __println("oTF= " + oTF);
-    __println("oFT= " + oFT);
-    __println("oFF= " + oFF);
+    println(String + "oTT= " + oTT);
+    println(String + "oTF= " + oTF);
+    println(String + "oFT= " + oFT);
+    println(String + "oFF= " + oFF);
 
     bool xTT = t ^^ t;
     bool xTF = t ^^ f;
     bool xFT = f ^^ t;
     bool xFF = f ^^ f;
-    __println("xTT= " + xTT);
-    __println("xTF= " + xTF);
-    __println("xFT= " + xFT);
-    __println("xFF= " + xFF);
+    println(String + "xTT= " + xTT);
+    println(String + "xTF= " + xTF);
+    println(String + "xFT= " + xFT);
+    println(String + "xFF= " + xFF);
 
     bool aii = 5 && 3;
     bool aiz = 5 && 0;
     bool oiz = 0 || 7;
     bool xiz = 0 ^^ 7;
-    __println("aii= " + aii);
-    __println("aiz= " + aiz);
-    __println("oiz= " + oiz);
-    __println("xiz= " + xiz);
+    println(String + "aii= " + aii);
+    println(String + "aiz= " + aiz);
+    println(String + "oiz= " + oiz);
+    println(String + "xiz= " + xiz);
 
     int c = 12;
 
@@ -176,18 +176,18 @@ int32 main() {
     bool gtAC = a > c;
     bool geAB = a >= b;
     bool geAC = a >= c;
-    __println("eqAB= " + eqAB);
-    __println("eqAC= " + eqAC);
-    __println("neAB= " + neAB);
-    __println("neAC= " + neAC);
-    __println("ltAB= " + ltAB);
-    __println("ltAC= " + ltAC);
-    __println("leAB= " + leAB);
-    __println("leAC= " + leAC);
-    __println("gtAB= " + gtAB);
-    __println("gtAC= " + gtAC);
-    __println("geAB= " + geAB);
-    __println("geAC= " + geAC);
+    println(String + "eqAB= " + eqAB);
+    println(String + "eqAC= " + eqAC);
+    println(String + "neAB= " + neAB);
+    println(String + "neAC= " + neAC);
+    println(String + "ltAB= " + ltAB);
+    println(String + "ltAC= " + ltAC);
+    println(String + "leAB= " + leAB);
+    println(String + "leAC= " + leAC);
+    println(String + "gtAB= " + gtAB);
+    println(String + "gtAC= " + gtAC);
+    println(String + "geAB= " + geAB);
+    println(String + "geAC= " + geAC);
 
     bool eqL = 12 == 5;
     bool neL = 12 != 5;
@@ -195,12 +195,12 @@ int32 main() {
     bool leL = 12 <= 5;
     bool gtL = 12 > 5;
     bool geL = 12 >= 5;
-    __println("eqL= " + eqL);
-    __println("neL= " + neL);
-    __println("ltL= " + ltL);
-    __println("leL= " + leL);
-    __println("gtL= " + gtL);
-    __println("geL= " + geL);
+    println(String + "eqL= " + eqL);
+    println(String + "neL= " + neL);
+    println(String + "ltL= " + ltL);
+    println(String + "leL= " + leL);
+    println(String + "gtL= " + gtL);
+    println(String + "geL= " + geL);
 
     bool eqAL = a == 12;
     bool neAL = a != 12;
@@ -208,67 +208,67 @@ int32 main() {
     bool leAL = a <= 12;
     bool gtAL = a > 12;
     bool geAL = a >= 12;
-    __println("eqAL= " + eqAL);
-    __println("neAL= " + neAL);
-    __println("ltAL= " + ltAL);
-    __println("leAL= " + leAL);
-    __println("gtAL= " + gtAL);
-    __println("geAL= " + geAL);
+    println(String + "eqAL= " + eqAL);
+    println(String + "neAL= " + neAL);
+    println(String + "ltAL= " + ltAL);
+    println(String + "leAL= " + leAL);
+    println(String + "gtAL= " + gtAL);
+    println(String + "geAL= " + geAL);
 
-    int addEq = 100;  addEq += 5;    __println("addEq= " + addEq);
-    int subEq = 100;  subEq -= 5;    __println("subEq= " + subEq);
-    int mulEq = 100;  mulEq *= 3;    __println("mulEq= " + mulEq);
-    int divEq = 100;  divEq /= 7;    __println("divEq= " + divEq);
-    int modEq = 100;  modEq %= 7;    __println("modEq= " + modEq);
+    int addEq = 100;  addEq += 5;    println(String + "addEq= " + addEq);
+    int subEq = 100;  subEq -= 5;    println(String + "subEq= " + subEq);
+    int mulEq = 100;  mulEq *= 3;    println(String + "mulEq= " + mulEq);
+    int divEq = 100;  divEq /= 7;    println(String + "divEq= " + divEq);
+    int modEq = 100;  modEq %= 7;    println(String + "modEq= " + modEq);
 
-    int andEq = 12;   andEq &= 5;    __println("andEq= " + andEq);
-    int orEq  = 12;   orEq  |= 5;    __println("orEq= "  + orEq);
-    int xorEq = 12;   xorEq ^= 5;    __println("xorEq= " + xorEq);
-    int shlEq = 12;   shlEq <<= 2;   __println("shlEq= " + shlEq);
-    int shrEq = 12;   shrEq >>= 2;   __println("shrEq= " + shrEq);
+    int andEq = 12;   andEq &= 5;    println(String + "andEq= " + andEq);
+    int orEq  = 12;   orEq  |= 5;    println(String + "orEq= "  + orEq);
+    int xorEq = 12;   xorEq ^= 5;    println(String + "xorEq= " + xorEq);
+    int shlEq = 12;   shlEq <<= 2;   println(String + "shlEq= " + shlEq);
+    int shrEq = 12;   shrEq >>= 2;   println(String + "shrEq= " + shrEq);
 
-    bool laEq = true;  laEq &&= 0;   __println("laEq= " + laEq);
-    bool loEq = false; loEq ||= 7;   __println("loEq= " + loEq);
-    bool lxEq = true;  lxEq ^^= 7;   __println("lxEq= " + lxEq);
+    bool laEq = true;  laEq &&= 0;   println(String + "laEq= " + laEq);
+    bool loEq = false; loEq ||= 7;   println(String + "loEq= " + loEq);
+    bool lxEq = true;  lxEq ^^= 7;   println(String + "lxEq= " + lxEq);
 
     /* --- Type(value): a nameless temporary of a primitive type, bound by the DECL-INIT
        rules (fit-check, widen a narrower source, no truncation) --- */
-    __println("ti8= "   + int8(-100));
-    __println("ti16= "  + int16(30000));
-    __println("ti32= "  + int32(5));
-    __println("ti64= "  + int64(9000000000));
-    __println("tu8= "   + uint8(255));
-    __println("tu16= "  + uint16(65535));
-    __println("tu32= "  + uint32(4000000000));
-    __println("tu64= "  + uint64(9000000000000000000));
-    __println("tint= "  + int(42));
-    __println("tuint= " + uint(4000000000));
-    __println("tiptr= " + intptr(-7));
+    println(String + "ti8= "   + int8(-100));
+    println(String + "ti16= "  + int16(30000));
+    println(String + "ti32= "  + int32(5));
+    println(String + "ti64= "  + int64(9000000000));
+    println(String + "tu8= "   + uint8(255));
+    println(String + "tu16= "  + uint16(65535));
+    println(String + "tu32= "  + uint32(4000000000));
+    println(String + "tu64= "  + uint64(9000000000000000000));
+    println(String + "tint= "  + int(42));
+    println(String + "tuint= " + uint(4000000000));
+    println(String + "tiptr= " + intptr(-7));
     int8 twv = 42;
-    __println("twiden= " + int64(twv));   // int8 source widens into int64
+    println(String + "twiden= " + int64(twv));   // int8 source widens into int64
 
     /* --- Type(value) negatives: one //-block uncommented per run --- */
 
     //-EXPECT-ERROR: Integer literal does not fit in 'int32'.
     // int32 tnf = int32(0x8000_0000);
-    // __println("tnf= " + tnf);
+    // println(String + "tnf= " + tnf);
 
     //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int32'
     // int64 tnw = 5;
     // int32 tn = int32(tnw);
-    // __println("tn= " + tn);
+    // println(String + "tn= " + tn);
 
     //-EXPECT-ERROR: A primitive temporary 'Type(value)' requires exactly one value.
     // int32 tz = int32();
-    // __println("tz= " + tz);
+    // println(String + "tz= " + tz);
 
     //-EXPECT-ERROR: A primitive temporary 'Type(value)' takes exactly one value.
     // int32 tm = int32(1, 2);
-    // __println("tm= " + tm);
+    // println(String + "tm= " + tm);
 
     //-EXPECT-ERROR: A type is not an expression; write 'Type(value)' for a temporary.
     // int32 tb = int;
-    // __println("tb= " + tb);
+    // println(String + "tb= " + tb);
 
     //-EXPECT-ERROR: Expected variable name.
     // int32(5);

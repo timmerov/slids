@@ -44,9 +44,9 @@ Class(
     void show() {
         // each field read by its BARE name — both as a ##type operand (the self-field
         // rewrite reaches ##type) and as a value.
-        __println(##type(a) + " " + ##type(b) + " " + ##type(c) + " " + ##type(d)
+        println(String + ##type(a) + " " + ##type(b) + " " + ##type(c) + " " + ##type(d)
                   + " " + ##type(e) + " " + ##type(f) + " " + ##type(g));
-        __println("" + a + " " + b + " " + c + " " + d + " "
+        println(String + "" + a + " " + b + " " + c + " " + d + " "
                   + e + " " + f + " " + g);
     }
 
@@ -85,14 +85,14 @@ Pt(int x_ = 0, int y_ = 0) {
     int psum() { return x_ + y_; }
 }
 Hooked(int h_ = 0) {
-    _() { __println("Hooked:ctor: " + h_); }
-    ~() { __println("Hooked:dtor: " + h_); }
+    _() { println(String + "Hooked:ctor: " + h_); }
+    ~() { println(String + "Hooked:dtor: " + h_); }
 }
 Oped(int p_ = 0, int q_ = 0) {
     op=( (int, int)^ t ) {
         p_ = t^[0];
         q_ = t^[1];
-        __println("Oped:op=: must not run for a field default");
+        println(String + "Oped:op=: must not run for a field default");
     }
 }
 Nest(
@@ -124,7 +124,7 @@ Mix(
 ) {
     int msum() { return n_ + e_ + a_[0] + a_[1] + k_.psum(); }
     bool nullr() { return r_ == nullptr; }
-    void strs() { __println("strs = " + i_ + " " + s_); }
+    void strs() { println(String + "strs = " + i_ + " " + s_); }
 }
 
 /* the fill recurses to ANY depth: a full-tuple default for a field whose
@@ -144,34 +144,34 @@ int32 main() {
     part.show();
 
     // fields used in expressions.
-    __println("def.expr = " + def.expr());     // 56  (1+7=8; 1<7 -> 8*7)
-    __println("part.expr = " + part.expr());   // 17  (10+7=17; 10<7 false)
+    println(String + "def.expr = " + def.expr());     // 56  (1+7=8; 1<7 -> 8*7)
+    println(String + "part.expr = " + part.expr());   // 17  (10+7=17; 10<7 false)
 
     // a wider spot-check of fields-in-expressions (index, ^field, compound assign).
-    __println("def.more = " + def.more());
-    __println("part.more = " + part.more());
+    println(String + "def.more = " + def.more());
+    println(String + "part.more = " + part.more());
 
     // fields read as expressions from OUTSIDE the class (obj.field), incl. a write.
     // (compute into a local — a parenthesized `+` inside a print arg is a separate
     // pre-existing print-concatenation gap, not a field issue.)
     def.a = def.a + 1000;          // obj.field write, reading obj.field
     int outsum = def.a + def.g;    // obj.field + def.g in arithmetic
-    __println("def.outsum = " + outsum);
+    println(String + "def.outsum = " + outsum);
 
     // class-typed fields fill from CONSTANT defaults, by slot recursively; the
     // hooked field's ctor runs at the fill; Oped's op= never prints.
     {
         Nest ns;
-        __println("nest = " + ns.nsum());
+        println(String + "nest = " + ns.nsum());
         Nest np((10, 20));
-        __println("npart = " + np.nsum());
+        println(String + "npart = " + np.nsum());
     }
 
     // the remaining constant shapes: negative literal, enum value, array
     // aggregate, nullptr, class-from-named-const. -3 + 2 + 4 + 5 + 5 = 13.
     Mix mx;
-    __println("mix = " + mx.msum());
-    __println("mixr = " + mx.nullr());
+    println(String + "mix = " + mx.msum());
+    println(String + "mixr = " + mx.nullr());
     mx.strs();
     Mix mo(, , , , , "zz", "world");
     mo.strs();
@@ -180,7 +180,7 @@ int32 main() {
     // (1+2) + (3+4) + 8 + (5+6) = 29.
     {
         Deep dp;
-        __println("deep = " + dp.dsum());
+        println(String + "deep = " + dp.dsum());
     }
 
     return 0;
@@ -189,7 +189,7 @@ int32 main() {
 /* a typeless field with NO default has nothing to infer from. */
 //-EXPECT-ERROR: Field 'x' needs an explicit type
 //NoType(x) {
-//    void p() { __println("" + x); }
+//    void p() { println(String + "" + x); }
 //}
 
 /* a field default that CONSTRUCTS is code, not data — a default must be a

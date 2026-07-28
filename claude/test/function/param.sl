@@ -12,7 +12,7 @@ parameters with a default value are optional.
 required parameters first, followed by optional parameters.
 
     void foo(int a, int b = 0, c = 1) {
-        __println(a + b + c);
+        println(String + a + b + c);
     }
 
 non-primitive parameters are passed by pointer.
@@ -61,7 +61,7 @@ int with_expr(int a, b = 2 * 3) {
 
 /* a void function with a typeless default. */
 void announce(n = 42) {
-    __println("n=" + n);
+    println(String + "n=" + n);
 }
 
 /* a typeless char default -> the param infers char. */
@@ -81,7 +81,7 @@ Class(int x_) {
 void classparam(Class^ ref) {
     nestedclassparam(ref);
     void nestedclassparam(Class^ ref) {
-        __println("called nested function with class parameter: " + ref^.x_);
+        println(String + "called nested function with class parameter: " + ref^.x_);
     }
 }
 
@@ -92,16 +92,16 @@ void bump10(mutable int^ p) {
 }
 
 int32 main() {
-    __println("sum3(1) = " + sum3(1));              // 111
-    __println("sum3(1, 2) = " + sum3(1, 2));        // 103
-    __println("sum3(1, 2, 3) = " + sum3(1, 2, 3));  // 6
-    __println("with_expr(10) = " + with_expr(10));          // 16
-    __println("with_expr(10, 20) = " + with_expr(10, 20));  // 30
+    println(String + "sum3(1) = " + sum3(1));              // 111
+    println(String + "sum3(1, 2) = " + sum3(1, 2));        // 103
+    println(String + "sum3(1, 2, 3) = " + sum3(1, 2, 3));  // 6
+    println(String + "with_expr(10) = " + with_expr(10));          // 16
+    println(String + "with_expr(10, 20) = " + with_expr(10, 20));  // 30
     announce();                                     // n=42
     announce(7);                                    // n=7
-    __println("code() = " + code());                // 122
-    __println("lead() = " + lead());                // 104 ('h')
-    __println("lead(\"za\") = " + lead("za"));      // 122 ('z')
+    println(String + "code() = " + code());                // 122
+    println(String + "lead() = " + lead());                // 104 ('h')
+    println(String + "lead(\"za\") = " + lead("za"));      // 122 ('z')
 
     Class cls(42);
     classparam(^cls);
@@ -111,7 +111,7 @@ int32 main() {
     /* the enforced munge: the mutable write reaches the caller. */
     int bv = 5;
     bump10(^bv);
-    __println("bump10 = " + bv);                    // 15
+    println(String + "bump10 = " + bv);                    // 15
 
     return 0;
 }
@@ -119,7 +119,7 @@ int32 main() {
 /* a parameter with no type and no default has nothing to infer from. */
 //-EXPECT-ERROR: needs an explicit type or a default value
 //void neg_no_type(a) {
-//    __println("x");
+//    println(String + "x");
 //}
 
 /* a required parameter cannot follow an optional one. */

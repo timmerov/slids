@@ -41,20 +41,20 @@ int32 deep_nest() {
             {
                 int a = 100;        // shadows the outermost a
                 int d = c + a;      // 3 + 100 = 103
-                __println("d = " + d);
+                println(String + "d = " + d);
                 {
                     int e = d + 1;      // 104
-                    __println("e = " + e);
+                    println(String + "e = " + e);
                     a = a + 1;          // writes the shadowing a -> 101
                 }
-                __println("inner a = " + a);   // 101
+                println(String + "inner a = " + a);   // 101
             }
-            __println("c = " + c);  // 3
+            println(String + "c = " + c);  // 3
         }
         b = b + a;                  // writes outer b: 2 + 1 (outermost a) = 3
-        __println("b = " + b);      // 3
+        println(String + "b = " + b);      // 3
     }
-    __println("a = " + a);          // 1 — outermost untouched
+    println(String + "a = " + a);          // 1 — outermost untouched
     return 0;
 }
 
@@ -66,9 +66,9 @@ name is a duplicate — that negative lives in function/calls.sl.)
 int32 param_shadow(int p) {
     {
         int p = 2;
-        __println("inner p = " + p);
+        println(String + "inner p = " + p);
     }
-    __println("outer p = " + p);    // the param, restored: the call arg
+    println(String + "outer p = " + p);    // the param, restored: the call arg
     return 0;
 }
 
@@ -76,28 +76,28 @@ int32 param_shadow(int p) {
 int32 empty_block() {
     int a = 1;
     { }
-    __println("empty: a = " + a);
+    println(String + "empty: a = " + a);
     return 0;
 }
 
 /* sibling blocks reuse a name — each block-local dies at its block's end, so
    the second `s` is a fresh entry, not a redeclaration. */
 int32 sibling_blocks() {
-    { int s = 1; __println("s1 = " + s); }
-    { int s = 2; __println("s2 = " + s); }
+    { int s = 1; println(String + "s1 = " + s); }
+    { int s = 2; println(String + "s2 = " + s); }
     return 0;
 }
 
 /* PPID inside a block: the bump splices WITHIN the block (desugar recurses into
    nested statement lists), not at function scope. */
 int32 ppid_in_block() {
-    { int k = 0; k++; __println("k = " + k); }
+    { int k = 0; k++; println(String + "k = " + k); }
     return 0;
 }
 
 /* a block whose only content is a nested block. */
 int32 nested_only() {
-    { { int q = 7; __println("q = " + q); } }
+    { { int q = 7; println(String + "q = " + q); } }
     return 0;
 }
 
@@ -107,39 +107,39 @@ int32 main() {
     /* read an outer local inside a block; assign the outer from inside. */
     {
         int y = x + 10;             // read outer x (init flows in)
-        __println("y = " + y);
+        println(String + "y = " + y);
         x = x + 100;                // write outer x (init flows out)
     }
-    __println("x = " + x);          // 101 — the block's assignment persisted
+    println(String + "x = " + x);          // 101 — the block's assignment persisted
 
     /* shadowing: inner x masks the outer; the outer is restored after. */
     {
         int x = 2;
-        __println("inner x = " + x);
+        println(String + "inner x = " + x);
     }
-    __println("outer x = " + x);    // still 101
+    println(String + "outer x = " + x);    // still 101
 
     /* a local declared inside a block, used inside it. */
     {
         int z = 5;
-        __println("z = " + z);
+        println(String + "z = " + z);
     }
 
-    __println("trailing = " + trailing_block());
+    println(String + "trailing = " + trailing_block());
 
     int dn = deep_nest();
-    __println("deep_nest = " + dn);
+    println(String + "deep_nest = " + dn);
 
     int ps = param_shadow(9);
-    __println("param_shadow = " + ps);
+    println(String + "param_shadow = " + ps);
     int eb = empty_block();
-    __println("empty_block = " + eb);
+    println(String + "empty_block = " + eb);
     int sb = sibling_blocks();
-    __println("sibling_blocks = " + sb);
+    println(String + "sibling_blocks = " + sb);
     int pk = ppid_in_block();
-    __println("ppid_in_block = " + pk);
+    println(String + "ppid_in_block = " + pk);
     int no = nested_only();
-    __println("nested_only = " + no);
+    println(String + "nested_only = " + no);
 
     return 0;
 }
@@ -172,7 +172,7 @@ negatives — one //-block uncommented per run.
 //    {
 //        int u;
 //        int v = u;
-//        __println("v = " + v);
+//        println(String + "v = " + v);
 //    }
 //    return 0;
 //}
@@ -182,9 +182,9 @@ negatives — one //-block uncommented per run.
 //int32 neg_block_escape() {
 //    {
 //        int z = 5;
-//        __println("z = " + z);
+//        println(String + "z = " + z);
 //    }
 //    int w = z;
-//    __println("w = " + w);
+//    println(String + "w = " + w);
 //    return 0;
 //}

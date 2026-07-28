@@ -59,21 +59,21 @@ int32 main() {
     /* ---- numbers: the ordinary widening applies ---- */
     int8  n8  = 4;
     int64 n64 = 4;
-    __println("num eq  = " + (n8 == n64));
-    __println("num lt  = " + (n8 <  n64));
-    __println("num lit = " + (n8 == 4));
-    __println("num uns = " + (n8 <  100000));
+    println(String + "num eq  = " + (n8 == n64));
+    println(String + "num lt  = " + (n8 <  n64));
+    println(String + "num lit = " + (n8 == 4));
+    println(String + "num uns = " + (n8 <  100000));
 
     /* ---- baseline: identical pointee ---- */
     int arr[4] = (10, 20, 30, 40);
     int[] p0 = ^arr[0];
     int[] p2 = ^arr[2];
-    __println("it eq   = " + (p0 == p2));
-    __println("it ne   = " + (p0 != p2));
-    __println("it lt   = " + (p0 <  p2));
-    __println("it le   = " + (p0 <= p2));
-    __println("it gt   = " + (p0 >  p2));
-    __println("it ge   = " + (p0 >= p2));
+    println(String + "it eq   = " + (p0 == p2));
+    println(String + "it ne   = " + (p0 != p2));
+    println(String + "it lt   = " + (p0 <  p2));
+    println(String + "it le   = " + (p0 <= p2));
+    println(String + "it gt   = " + (p0 >  p2));
+    println(String + "it ge   = " + (p0 >= p2));
 
     /* a reference pair admits == and != only. */
     int x = 5;
@@ -81,36 +81,36 @@ int32 main() {
     int^ rx  = ^x;
     int^ ry  = ^y;
     int^ rx2 = ^x;
-    __println("ref eq  = " + (rx == rx2));
-    __println("ref ne  = " + (rx != ry));
+    println(String + "ref eq  = " + (rx == rx2));
+    println(String + "ref ne  = " + (rx != ry));
 
     /* ---- nullptr against a pointer, both orders ---- */
     int^ rnull = nullptr;
-    __println("null l  = " + (nullptr == rnull));
-    __println("null r  = " + (rnull == nullptr));
-    __println("null ne = " + (rx != nullptr));
+    println(String + "null l  = " + (nullptr == rnull));
+    println(String + "null r  = " + (rnull == nullptr));
+    println(String + "null ne = " + (rx != nullptr));
 
     /* ---- reference vs iterator: the iterator demotes to the reference ---- */
     /* ra and p0 address the same object, so they compare equal. */
     int^ ra = ^arr[0];
-    __println("mix eq  = " + (ra == p0));
-    __println("mix eq' = " + (p0 == ra));
-    __println("mix ne  = " + (ra != p2));
-    __println("mix ne' = " + (p2 != ra));
+    println(String + "mix eq  = " + (ra == p0));
+    println(String + "mix eq' = " + (p0 == ra));
+    println(String + "mix ne  = " + (ra != p2));
+    println(String + "mix ne' = " + (p2 != ra));
 
     /* ---- pointer vs intptr: the pointer converts, the pair settles on intptr ---- */
     intptr i0 = <intptr> p0;
     intptr i2 = <intptr> p2;
-    __println("ip eq   = " + (p0 == i0));
-    __println("ip eq'  = " + (i0 == p0));
-    __println("ip ne   = " + (p0 != i2));
+    println(String + "ip eq   = " + (p0 == i0));
+    println(String + "ip eq'  = " + (i0 == p0));
+    println(String + "ip ne   = " + (p0 != i2));
     /* ordering is fine: an iterator and an integer, no reference in the pair. */
-    __println("ip lt   = " + (p0 <  i2));
-    __println("ip le   = " + (p0 <= i2));
-    __println("ip gt   = " + (i2 >  p0));
-    __println("ip ge   = " + (i2 >= p0));
+    println(String + "ip lt   = " + (p0 <  i2));
+    println(String + "ip le   = " + (p0 <= i2));
+    println(String + "ip gt   = " + (i2 >  p0));
+    println(String + "ip ge   = " + (i2 >= p0));
     /* a reference against an intptr still admits == and != only. */
-    __println("ip refeq= " + (rx == <intptr> rx));
+    println(String + "ip refeq= " + (rx == <intptr> rx));
 
     /* ---- derived vs base: the derived converts to the base ---- */
     Derived d;
@@ -119,21 +119,21 @@ int32 main() {
     Base^    rb  = ^b;
     /* the base sub-object sits at offset 0, so a derived address IS its base address. */
     Base^    rdb = ^d;
-    __println("cls eq  = " + (rb == rd));
-    __println("cls eq' = " + (rd == rb));
-    __println("cls same= " + (rd == rdb));
-    __println("cls ne  = " + (rd != rb));
+    println(String + "cls eq  = " + (rb == rd));
+    println(String + "cls eq' = " + (rd == rb));
+    println(String + "cls same= " + (rd == rdb));
+    println(String + "cls ne  = " + (rd != rb));
 
     /* the same edge through ITERATORS, which admit all six. */
     Derived darr[2];
     Derived[] pd0 = ^darr[0];
     Derived[] pd1 = ^darr[1];
     Base[]    pb0 = ^darr[0];
-    __println("cit eq  = " + (pb0 == pd0));
-    __println("cit lt  = " + (pb0 <  pd1));
-    __println("cit le  = " + (pb0 <= pd1));
-    __println("cit gt  = " + (pd1 >  pb0));
-    __println("cit ge  = " + (pd1 >= pb0));
+    println(String + "cit eq  = " + (pb0 == pd0));
+    println(String + "cit lt  = " + (pb0 <  pd1));
+    println(String + "cit le  = " + (pb0 <= pd1));
+    println(String + "cit gt  = " + (pd1 >  pb0));
+    println(String + "cit ge  = " + (pd1 >= pb0));
 
     /* ---- pointers order SIGNED ---- */
     /* built from raw values and never dereferenced: -1 must order BELOW +1. an
@@ -142,8 +142,8 @@ int32 main() {
     intptr pos = 1;
     int[] ineg = <int[]> neg;
     int[] ipos = <int[]> pos;
-    __println("sgn lt  = " + (ineg <  ipos));
-    __println("sgn ge  = " + (ipos >= ineg));
+    println(String + "sgn lt  = " + (ineg <  ipos));
+    println(String + "sgn ge  = " + (ipos >= ineg));
 
     return 0;
 }

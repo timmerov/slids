@@ -79,14 +79,14 @@ import string;
 
 Class(int c_) {
     _() {
-        __println("Class:ctor: " + c_);
+        println(String + "Class:ctor: " + c_);
     }
     ~() {
-        __println("Class:dtor: " + c_);
+        println(String + "Class:dtor: " + c_);
     }
 
     void print() {
-        __println("Class:print: " + c_);
+        println(String + "Class:print: " + c_);
     }
     int get() {
         return c_;
@@ -96,20 +96,20 @@ Class(int c_) {
 // a multi-field class — exercises a nameless construction with several args.
 Pair(int a_, int b_) {
     _() {
-        __println("Pair:ctor: " + a_ + "," + b_);
+        println(String + "Pair:ctor: " + a_ + "," + b_);
     }
     ~() {
-        __println("Pair:dtor: " + a_ + "," + b_);
+        println(String + "Pair:dtor: " + a_ + "," + b_);
     }
 }
 
 // a class with DEFAULT field values — partial-arg construction fills the rest.
 Def(int a_ = 10, int b_ = 20) {
     _() {
-        __println("Def:ctor: " + a_ + "," + b_);
+        println(String + "Def:ctor: " + a_ + "," + b_);
     }
     ~() {
-        __println("Def:dtor: " + a_ + "," + b_);
+        println(String + "Def:dtor: " + a_ + "," + b_);
     }
 }
 
@@ -117,10 +117,10 @@ Def(int a_ = 10, int b_ = 20) {
 // and teardown is the wrapper first, then the contained object.
 Wrap(Class in_) {
     _() {
-        __println("Wrap:ctor");
+        println(String + "Wrap:ctor");
     }
     ~() {
-        __println("Wrap:dtor");
+        println(String + "Wrap:dtor");
     }
 }
 
@@ -128,17 +128,17 @@ Wrap(Class in_) {
 // builds only the inner object.
 Host(int h_) {
     _() {
-        __println("Host:ctor: " + h_);
+        println(String + "Host:ctor: " + h_);
     }
     ~() {
-        __println("Host:dtor: " + h_);
+        println(String + "Host:dtor: " + h_);
     }
     Inner(int i_) {
         _() {
-            __println("Inner:ctor: " + i_);
+            println(String + "Inner:ctor: " + i_);
         }
         ~() {
-            __println("Inner:dtor: " + i_);
+            println(String + "Inner:dtor: " + i_);
         }
     }
 }
@@ -150,348 +150,348 @@ Class fn(int x) {
 
 // receives a constructed temporary passed by reference.
 int sink(Class^ p) {
-    __println("sink: " + p^.c_);
+    println(String + "sink: " + p^.c_);
     return 0;
 }
 
 // receives two constructed temporaries — exercises destruction order at the ';'.
 int sink2(Class^ p, Class^ q) {
-    __println("sink2: " + p^.c_ + "," + q^.c_);
+    println(String + "sink2: " + p^.c_ + "," + q^.c_);
     return 0;
 }
 
 int32 main() {
 
     // FORM 1 — statement form: scope lifetime, dtor in reverse declaration order.
-    __println("== 1: form-1, two objects, reverse dtor at scope end ==");
+    println(String + "== 1: form-1, two objects, reverse dtor at scope end ==");
     {
         Class(1);
         Class(2);
-        __println("-- end 1 (dtor 2,1 next) --");
+        println(String + "-- end 1 (dtor 2,1 next) --");
     }
 
     // FORM 1 — a multi-field class constructed by a nameless statement.
-    __println("== 2: form-1 multi-arg ==");
+    println(String + "== 2: form-1 multi-arg ==");
     {
         Pair(3, 4);
-        __println("-- end 2 (dtor 3,4 next) --");
+        println(String + "-- end 2 (dtor 3,4 next) --");
     }
 
     // FORM 1 — no constructor args: the field takes its default/zero.
-    __println("== 3: form-1 no args (default field 0) ==");
+    println(String + "== 3: form-1 no args (default field 0) ==");
     {
         Class();
-        __println("-- end 3 (dtor 0 next) --");
+        println(String + "-- end 3 (dtor 0 next) --");
     }
 
     // a nameless statement-form object and a NAMED local share a scope: both die
     // at scope end in reverse declaration order.
-    __println("== 4: nameless beside a named local ==");
+    println(String + "== 4: nameless beside a named local ==");
     {
         Class a(5);
         Class(6);
-        __println("-- end 4 (dtor 6,5 next) --");
+        println(String + "-- end 4 (dtor 6,5 next) --");
     }
 
     // RETURN-form construction: fn returns Class(x), built directly into the
     // caller's named local (one ctor, one dtor at scope end).
-    __println("== 5: return-construction into a named local ==");
+    println(String + "== 5: return-construction into a named local ==");
     {
         Class cls = fn(7);
-        __println("-- end 5 (dtor 7 next) --");
+        println(String + "-- end 5 (dtor 7 next) --");
     }
 
     // DIRECT construction as a named-local initializer: built in place (one ctor),
     // dtor at scope end.
-    __println("== 6: direct construction into a named local ==");
+    println(String + "== 6: direct construction into a named local ==");
     {
         Class y = Class(8);
-        __println("-- end 6 (dtor 8 next) --");
+        println(String + "-- end 6 (dtor 8 next) --");
     }
 
     // construction-init with no args.
-    __println("== 7: construction-init, no args ==");
+    println(String + "== 7: construction-init, no args ==");
     {
         Class z = Class();
-        __println("-- end 7 (dtor 0 next) --");
+        println(String + "-- end 7 (dtor 0 next) --");
     }
 
     // FORM 2 — method call on a direct construction temporary: dtor at the
     // semicolon (before the next statement).
-    __println("== 8: form-2 method call on a direct temp ==");
+    println(String + "== 8: form-2 method call on a direct temp ==");
     {
         Class(9).print();
-        __println("-- end 8 (dtor 9 already ran) --");
+        println(String + "-- end 8 (dtor 9 already ran) --");
     }
 
     // FORM 2 — method call on a RETURNED temporary: dtor at the semicolon.
-    __println("== 9: form-2 method call on a returned temp ==");
+    println(String + "== 9: form-2 method call on a returned temp ==");
     {
         fn(10).print();
-        __println("-- end 9 (dtor 10 already ran) --");
+        println(String + "-- end 9 (dtor 10 already ran) --");
     }
 
     // FORM 2 — read a field off a construction temporary in an initializer. The
     // value is read; the temp is destroyed at the end of the DECL statement (the
     // scalar rhs is seq-wrapped), before the next statement.
-    __println("== 10: form-2 field read in an initializer ==");
+    println(String + "== 10: form-2 field read in an initializer ==");
     {
         int v = Class(11).c_;
-        __println("v= " + v);
-        __println("-- end 10 (dtor 11 already ran) --");
+        println(String + "v= " + v);
+        println(String + "-- end 10 (dtor 11 already ran) --");
     }
 
     // FORM 2 — a METHOD CALL on a construction temporary, used as a VALUE: the temp
     // is lifted (built, the method called on it, its scalar result read), then
     // destroyed at the end of the DECL statement (the scalar rhs is seq-wrapped). A
     // loop/if CONDITION instead rebuilds it per evaluation — see 10c/10d.
-    __println("== 10b: form-2 method call as a value ==");
+    println(String + "== 10b: form-2 method call as a value ==");
     {
         int g = Class(15).get();
-        __println("g= " + g);
-        __println("-- end 10b (dtor 15 already ran) --");
+        println(String + "g= " + g);
+        println(String + "-- end 10b (dtor 15 already ran) --");
     }
 
     // FORM 2 — a construction-temporary method call in an IF CONDITION: the
     // condition is evaluated once, so the temp is lifted before the if and
     // destroyed right after it.
-    __println("== 10c: form-2 method call in an if condition ==");
+    println(String + "== 10c: form-2 method call in an if condition ==");
     {
         if (Class(16).get() > 0) {
-            __println("positive");
+            println(String + "positive");
         }
-        __println("-- end 10c (dtor 16 ran BEFORE the body) --");
+        println(String + "-- end 10c (dtor 16 ran BEFORE the body) --");
     }
 
     // FORM 2 — a construction-temporary method call in a WHILE condition: re-built
     // AND destroyed EACH iteration (the condition seq re-evaluates per pass), so the
     // ctor/dtor are balanced per iteration.
-    __println("== 10d: form-2 method call in a while condition ==");
+    println(String + "== 10d: form-2 method call in a while condition ==");
     {
         int n = 0;
         while (Class(n).get() < 2) {
-            __println("loop " + n);
+            println(String + "loop " + n);
             n += 1;
         }
-        __println("-- end 10d --");
+        println(String + "-- end 10d --");
     }
 
     // FORM 2 — a construction passed as a function argument: built, passed by
     // reference, destroyed at the semicolon.
-    __println("== 11: construction as a function argument ==");
+    println(String + "== 11: construction as a function argument ==");
     {
         sink(Class(12));
-        __println("-- end 11 (dtor 12 already ran) --");
+        println(String + "-- end 11 (dtor 12 already ran) --");
     }
 
     // form 1 and form 2 in one scope: the form-2 temporary (14) dies at its
     // semicolon, BEFORE the form-1 object (13) dies at scope end.
-    __println("== 12: form-1 and form-2 interacting ==");
+    println(String + "== 12: form-1 and form-2 interacting ==");
     {
         Class(13);
         Class(14).print();
-        __println("-- mid 12 (dtor 14 ran; dtor 13 at scope end) --");
+        println(String + "-- mid 12 (dtor 14 ran; dtor 13 at scope end) --");
     }
 
     // FORM 1 in a loop: each iteration constructs and destroys its own object at
     // the end of the loop body — no stack growth, balanced ctor/dtor per pass.
-    __println("== 13: form-1 in a loop ==");
+    println(String + "== 13: form-1 in a loop ==");
     {
         int i = 0;
         while (i < 3) {
             Class(i);
             i = i + 1;
         }
-        __println("-- end 13 --");
+        println(String + "-- end 13 --");
     }
 
     // multi-arg DIRECT construction into a named local.
-    __println("== 14: multi-arg construction-init ==");
+    println(String + "== 14: multi-arg construction-init ==");
     {
         Pair p = Pair(30, 40);
-        __println("p.a_= " + p.a_);
+        println(String + "p.a_= " + p.a_);
     }
 
     // move-init from a construction temporary — one ctor, one dtor (no temp).
-    __println("== 15: move-init from a construction ==");
+    println(String + "== 15: move-init from a construction ==");
     {
         Class y <-- Class(50);
-        __println("y= " + y.c_);
+        println(String + "y= " + y.c_);
     }
 
     // move-init from a returned temporary.
-    __println("== 16: move-init from a returned temp ==");
+    println(String + "== 16: move-init from a returned temp ==");
     {
         Class cls <-- fn(51);
-        __println("cls= " + cls.c_);
+        println(String + "cls= " + cls.c_);
     }
 
     // two FORM-2 temporaries in one statement: reverse destruction order at ';'.
-    __println("== 17: two temporaries in one call ==");
+    println(String + "== 17: two temporaries in one call ==");
     {
         sink2(Class(60), Class(61));
-        __println("-- end 17 (dtor 61,60 already ran) --");
+        println(String + "-- end 17 (dtor 61,60 already ran) --");
     }
 
     // a construction whose ARGUMENT is itself a construction's field.
-    __println("== 18: nested construction argument ==");
+    println(String + "== 18: nested construction argument ==");
     {
         Class(Class(70).c_).print();
-        __println("-- end 18 --");
+        println(String + "-- end 18 --");
     }
 
     // partial-arg and all-default construction of a class with field defaults.
-    __println("== 19: default-field construction ==");
+    println(String + "== 19: default-field construction ==");
     {
         Def(5);
         Def();
-        __println("-- end 19 (dtor 10,20 then 5,20) --");
+        println(String + "-- end 19 (dtor 10,20 then 5,20) --");
     }
 
     // a class with a CLASS-typed field: the inner ctor runs first, the wrapper is
     // torn down before the contained object.
-    __println("== 20: class-typed field ==");
+    println(String + "== 20: class-typed field ==");
     {
         Wrap(80);
-        __println("-- end 20 --");
+        println(String + "-- end 20 --");
     }
 
     // qualified nameless construction of a nested class (only the inner object).
-    __println("== 21: qualified nested-class construction ==");
+    println(String + "== 21: qualified nested-class construction ==");
     {
         Host:Inner(90);
-        __println("-- end 21 --");
+        println(String + "-- end 21 --");
     }
 
     // a field read used inside a larger expression.
-    __println("== 22: field read in a larger expression ==");
+    println(String + "== 22: field read in a larger expression ==");
     {
         int v = Class(100).c_ + 1;
-        __println("v= " + v);
-        __println("-- end 22 --");
+        println(String + "v= " + v);
+        println(String + "-- end 22 --");
     }
 
     // FORM 2 — a construction under `&&` whose LHS is FALSE: the short-circuit skips
     // the RHS, so the construction's ctor/dtor must NOT run (it is lifted into the
     // RHS's own conditional sub-seq, not the unconditional condition pre).
-    __println("== 23: && short-circuit, rhs construction SKIPPED ==");
+    println(String + "== 23: && short-circuit, rhs construction SKIPPED ==");
     {
         if (false && Class(23).get() > 0) {
-            __println("unreachable 23");
+            println(String + "unreachable 23");
         }
-        __println("-- end 23 (no ctor/dtor 23) --");
+        println(String + "-- end 23 (no ctor/dtor 23) --");
     }
 
     // FORM 2 — a construction under `&&` whose LHS is TRUE: the RHS is evaluated, so
     // the temp is built and destroyed inside the condition (ctor/dtor before the body).
-    __println("== 24: && rhs evaluated, ctor/dtor balanced ==");
+    println(String + "== 24: && rhs evaluated, ctor/dtor balanced ==");
     {
         if (true && Class(24).get() > 0) {
-            __println("body 24");
+            println(String + "body 24");
         }
-        __println("-- end 24 (ctor/dtor 24 ran before body) --");
+        println(String + "-- end 24 (ctor/dtor 24 ran before body) --");
     }
 
     // FORM 2 — a construction under `||` whose LHS is TRUE: the short-circuit skips
     // the RHS, so no ctor/dtor.
-    __println("== 25: || short-circuit, rhs construction SKIPPED ==");
+    println(String + "== 25: || short-circuit, rhs construction SKIPPED ==");
     {
         if (true || Class(25).get() > 0) {
-            __println("body 25");
+            println(String + "body 25");
         }
-        __println("-- end 25 (no ctor/dtor 25) --");
+        println(String + "-- end 25 (no ctor/dtor 25) --");
     }
 
     // FORM 2 — a construction under `||` whose LHS is FALSE: the RHS is evaluated.
-    __println("== 26: || rhs evaluated ==");
+    println(String + "== 26: || rhs evaluated ==");
     {
         if (false || Class(26).get() > 0) {
-            __println("body 26");
+            println(String + "body 26");
         }
-        __println("-- end 26 (ctor/dtor 26 ran before body) --");
+        println(String + "-- end 26 (ctor/dtor 26 ran before body) --");
     }
 
     // FORM 2 — a construction in the RHS of `&&` in a WHILE condition: rebuilt each
     // pass while the LHS holds, and SKIPPED on the exit test when the LHS is false
     // (no stray ctor 2).
-    __println("== 27: && in a while condition, rebuilt per pass, skipped on exit ==");
+    println(String + "== 27: && in a while condition, rebuilt per pass, skipped on exit ==");
     {
         int i = 0;
         while (i < 2 && Class(i).get() >= 0) {
-            __println("loop 27: " + i);
+            println(String + "loop 27: " + i);
             i = i + 1;
         }
-        __println("-- end 27 (no ctor/dtor on the exit test) --");
+        println(String + "-- end 27 (no ctor/dtor on the exit test) --");
     }
 
     // FORM 2 — a construction in the LHS of `&&`: the LHS runs UNCONDITIONALLY, so it
     // is lifted into the condition pre (ctor/dtor around the whole evaluation).
-    __println("== 28: lhs construction always runs ==");
+    println(String + "== 28: lhs construction always runs ==");
     {
         if (Class(28).get() > 0 && true) {
-            __println("body 28");
+            println(String + "body 28");
         }
-        __println("-- end 28 (ctor/dtor 28 ran before body) --");
+        println(String + "-- end 28 (ctor/dtor 28 ran before body) --");
     }
 
     // FORM 2 — a construction under a NESTED short-circuit: `(true && false)` is false,
     // so the outer `&&` skips its RHS construction.
-    __println("== 29: nested short-circuit skips the construction ==");
+    println(String + "== 29: nested short-circuit skips the construction ==");
     {
         if (true && false && Class(29).get() > 0) {
-            __println("unreachable 29");
+            println(String + "unreachable 29");
         }
-        __println("-- end 29 (no ctor/dtor 29) --");
+        println(String + "-- end 29 (no ctor/dtor 29) --");
     }
 
     // NON-CONDITION position — a construction in the RHS of `&&` in a DECL initializer
     // whose LHS is FALSE: the RHS is still conditionally evaluated, so it is skipped.
-    __println("== 30: && rhs construction in a decl initializer, SKIPPED (lhs false) ==");
+    println(String + "== 30: && rhs construction in a decl initializer, SKIPPED (lhs false) ==");
     {
         bool r = false && Class(30).get() > 0;
-        __println("r= " + r);
-        __println("-- end 30 (no ctor/dtor 30) --");
+        println(String + "r= " + r);
+        println(String + "-- end 30 (no ctor/dtor 30) --");
     }
 
     // NON-CONDITION position — same, LHS TRUE: the RHS construction runs and is torn
     // down inside the initializer's `&&` sub-seq.
-    __println("== 31: && rhs construction in a decl initializer, evaluated (lhs true) ==");
+    println(String + "== 31: && rhs construction in a decl initializer, evaluated (lhs true) ==");
     {
         bool r = true && Class(31).get() > 0;
-        __println("r= " + r);
-        __println("-- end 31 (ctor/dtor 31 ran) --");
+        println(String + "r= " + r);
+        println(String + "-- end 31 (ctor/dtor 31 ran) --");
     }
 
     // NON-CONDITION position — a construction in the RHS of `||` in a DECL initializer
     // whose LHS is FALSE: the RHS runs.
-    __println("== 32: || rhs construction in a decl initializer, evaluated (lhs false) ==");
+    println(String + "== 32: || rhs construction in a decl initializer, evaluated (lhs false) ==");
     {
         bool r = false || Class(32).get() > 100;
-        __println("r= " + r);
-        __println("-- end 32 (ctor/dtor 32 ran) --");
+        println(String + "r= " + r);
+        println(String + "-- end 32 (ctor/dtor 32 ran) --");
     }
 
     // FORM 2 — a construction in the RHS of `&&` in a FOR-LONG condition: rebuilt each
     // pass while the LHS holds, skipped on the exit test.
-    __println("== 33: && in a for-long condition, rebuilt per pass ==");
+    println(String + "== 33: && in a for-long condition, rebuilt per pass ==");
     {
         for (int i = 0) (i < 2 && Class(i).get() >= 0) { i = i + 1; } {
-            __println("loop 33: " + i);
+            println(String + "loop 33: " + i);
         }
-        __println("-- end 33 (no ctor/dtor on the exit test) --");
+        println(String + "-- end 33 (no ctor/dtor on the exit test) --");
     }
 
     {
         NoInitClass(int x_) {
-            _() { __println("NoInitClass:ctor"); }
-            ~() { __println("NoInitClass:dtor"); }
+            _() { println(String + "NoInitClass:ctor"); }
+            ~() { println(String + "NoInitClass:dtor"); }
         }
         NoInitClass;
         NoInitClass();
         NoInitClass(1);
         tuple = (NoInitClass, 7);
         NoInitClass array[2] = (NoInitClass, NoInitClass);
-        __println(tuple[0].x_ + " " + array[0].x_);
+        println(String + tuple[0].x_ + " " + array[0].x_);
     }
 
     // FORM 2 — a construction as the SOURCE OF A TRANSFER into LIVE storage. These four
@@ -501,24 +501,24 @@ int32 main() {
     // the source only has to be materialized first. It is built as a temporary (its ctor
     // runs), copied / moved into the target through the target's operator, and destroyed at
     // the SEMICOLON — the same lifetime any other construction temporary has.
-    __println("== 34: a construction transferred into live storage ==");
+    println(String + "== 34: a construction transferred into live storage ==");
     {
         Class w = Class(1);
         w = Class(11);                       // re-assign an existing variable
-        __println("34 assign: w= " + w.get());              // 11
+        println(String + "34 assign: w= " + w.get());              // 11
 
         Class m = Class(2);
         m <-- Class(22);                     // move onto an existing variable
-        __println("34 move: m= " + m.get());                // 22
+        println(String + "34 move: m= " + m.get());                // 22
 
         Class^ r = ^w;
         r^ = Class(33);                      // through a dereference store target
-        __println("34 deref: w= " + w.get());               // 33
+        println(String + "34 deref: w= " + w.get());               // 33
 
         Class arr[2] = (4, 5);
         arr[0] = Class(44);                  // into an array element
-        __println("34 element: arr= " + arr[0].get() + " " + arr[1].get());   // 44 5
-        __println("-- end 34 --");
+        println(String + "34 element: arr= " + arr[0].get() + " " + arr[1].get());   // 44 5
+        println(String + "-- end 34 --");
     }
 
     return 0;
@@ -565,7 +565,7 @@ int32 main() {
 //-EXPECT-ERROR: has no field 'nope'
 //void neg_unknown_field() {
 //    int x = Class(1).nope;
-//    __println("x= " + x);
+//    println(String + "x= " + x);
 //}
 
 /* constructing a name that is not a class. */

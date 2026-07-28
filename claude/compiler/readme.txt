@@ -131,7 +131,7 @@ TYPE REPRESENTATION (the carrier; not a stage)
     the read-only pool) and rejects — spell `(const char)[]` / deep
     `const char[]` for the alias, or the sized-array COPY `char s[3] =
     "hi"` for writable storage; the literal's context decay keeps its
-    const, and print's %c sees a char through any qualifier. A LEADING
+    const. A LEADING
     const MATERIALIZES DEEP — and RECURSIVELY (canon, mutable.sl top
     comment: const is a promise over the value AND anything it reaches,
     iteratively and recursively). materializeDeepConst at resolveDeclType
@@ -208,7 +208,7 @@ TYPE REPRESENTATION (the carrier; not a stage)
   * Structure is the single source of truth. Spellings are RENDERED on demand
     ONLY at genuine edges: diagnostics, ##type, the no-width commonType rule, and
     the classify primitive-name lexer. NEVER cache a canonical spelling — storing
-    a type-string is what killed v1. codegen + print + the classify/resolve
+    a type-string is what killed v1. codegen + the classify/resolve
     predicate+cast-rule cluster read structure off the handle (form/cat/bits);
     upstream stages that still compute spellings bridge at field boundaries via
     widen::spellOrEmpty (read) / widen::internOrNone (write).
@@ -2049,8 +2049,7 @@ STAGE FILES (.h / .cpp pairs)
             only a function is callable — every other kind reports
             type/constant/namespace/function and never slips through),
             duplicate decls, return-type mismatch, parameter-type mismatch,
-            duplicate definition, arity mismatch, multi-arg print intrinsic,
-            print intrinsic used as an expression, needs-qualifier /
+            duplicate definition, arity mismatch, needs-qualifier /
             not-visible-from-scope / has-no-member / is-not-a-namespace for
             namespace access, and (final pass) any function declared but
             never defined — anywhere, used or not, EXCEPT one declared in an
@@ -2739,7 +2738,8 @@ STAGE FILES (.h / .cpp pairs)
             default value per slot, each finalized via emitConstructed. delete of a
             class runs its complete dtor — see readme-classes.txt. kDeleteStmt: load the pointer, `call void
             @free(ptr)`, store null back to its alloca. malloc / free are declared in
-            the module preamble next to printf.
+            the module preamble (the only C symbols the compiler declares itself
+            — printing is a LIBRARY concern now, see lib/src/string.sl).
 
 PRODUCT FILES (.h / .cpp pairs)
 

@@ -16,12 +16,12 @@ in case of ambiguity, loop by value.
 
     /* iterate by value. */
     for (int x : arr) {
-        __println("x = " + x);
+        println(String + "x = " + x);
     }
 
     /* iterate by value with inference. */
     for (x : arr) {
-        __println("x = " + x);
+        println(String + "x = " + x);
     }
 
     /* iterate by reference with inference. */
@@ -125,26 +125,26 @@ int32 main() {
         iter^ = n * n;
         n = n + 1;
     }
-    __println("arr[0]= " + arr[0]);        // 0
-    __println("arr[3]= " + arr[3]);        // 9
+    println(String + "arr[0]= " + arr[0]);        // 0
+    println(String + "arr[3]= " + arr[3]);        // 9
 
     /* by value, typed loop variable. */
     int sum = 0;
     for (int x : arr) {
         sum = sum + x;
     }
-    __println("sum= " + sum);              // 30
+    println(String + "sum= " + sum);              // 30
 
     /* by value, typeless loop variable (inferred element type, fresh local). */
     for (y : arr) {
-        __println("y= " + y);              // 0, 1, 4, 9, 16
+        println(String + "y= " + y);              // 0, 1, 4, 9, 16
     }
 
     /* typeless loop variable reuses an enclosing local — observable after. */
     int last = 0;
     for (last : arr) {
     }
-    __println("last= " + last);            // 16
+    println(String + "last= " + last);            // 16
 
     /* break / continue work in a for-array body. */
     int found = -1;
@@ -154,7 +154,7 @@ int32 main() {
             break;
         }
     }
-    __println("found= " + found);          // 4
+    println(String + "found= " + found);          // 4
 
     /* a labeled for-array, broken by name. */
     int count = 0;
@@ -164,7 +164,7 @@ int32 main() {
             break scan;
         }
     } :scan;
-    __println("count= " + count);          // 3
+    println(String + "count= " + count);          // 3
 
     /* continue skips an element. */
     int csum = 0;
@@ -174,7 +174,7 @@ int32 main() {
         }
         csum = csum + x;
     }
-    __println("csum= " + csum);            // 0+1+9+16 = 26
+    println(String + "csum= " + csum);            // 0+1+9+16 = 26
 
     /* a naked continue. */
     int ncsum = 0;
@@ -184,14 +184,14 @@ int32 main() {
         }
         ncsum = ncsum + x;
     }
-    __println("ncsum= " + ncsum);          // 1+4+9+16 = 30
+    println(String + "ncsum= " + ncsum);          // 1+4+9+16 = 30
 
     /* by reference, read only (no write-back). */
     int rsum = 0;
     for (int^ p : arr) {
         rsum = rsum + p^;
     }
-    __println("rsum= " + rsum);            // 30
+    println(String + "rsum= " + rsum);            // 30
 
     /* non-int element types, by value: int64, char, float. */
     int64 big[3] = (100, 200, 300);
@@ -199,20 +199,20 @@ int32 main() {
     for (int64 v : big) {
         bsum = bsum + v;
     }
-    __println("bsum= " + bsum);            // 600
+    println(String + "bsum= " + bsum);            // 600
 
     char letters[3] = ('a', 'b', 'c');
     for (char c : letters) {
-        __print("" + c);
+        print(String + "" + c);
     }
-    __println("");                         // abc
+    println(String + "");                         // abc
 
     float fs[3] = (1.5, 2.5, 3.0);
     float fsum = 0.0;
     for (float f : fs) {
         fsum = fsum + f;
     }
-    __println("fsum= " + fsum);            // 7
+    println(String + "fsum= " + fsum);            // 7
 
     /* an alias element type, iterated by reference. */
     Cell cells[3] = (5, 6, 7);
@@ -220,7 +220,7 @@ int32 main() {
     for (Cell^ p : cells) {
         asum = asum + p^;
     }
-    __println("asum= " + asum);            // 18
+    println(String + "asum= " + asum);            // 18
 
     /* nested for-array. */
     int a2[2] = (10, 20);
@@ -231,7 +231,7 @@ int32 main() {
             xsum = xsum + x + y;
         }
     }
-    __println("xsum= " + xsum);            // 36 + 66 = 102
+    println(String + "xsum= " + xsum);            // 36 + 66 = 102
 
     /* a numbered break exits N enclosing for-arrays at once. */
     int firstpair = -1;
@@ -241,13 +241,13 @@ int32 main() {
             break 2;
         }
     }
-    __println("firstpair= " + firstpair);  // 10 + 1 = 11
+    println(String + "firstpair= " + firstpair);  // 10 + 1 = 11
 
     /* a typeless loop variable reuses a WIDER enclosing local (int -> int64). */
     int64 wlast = 0;
     for (wlast : arr) {
     }
-    __println("wlast= " + wlast);          // 16
+    println(String + "wlast= " + wlast);          // 16
 
     /* a single-element array. */
     int one[1];
@@ -256,50 +256,50 @@ int32 main() {
     for (v : one) {
         osum = osum + v;
     }
-    __println("osum= " + osum);            // 42
+    println(String + "osum= " + osum);            // 42
 
     /* nested for over 2d array. */
     int a3[2,3] = ((1,2), (3,4), (5,6));
-    __print("a3=(");
+    print(String + "a3=(");
     for (sub : a3) {
-        __print(" (");
+        print(String + " (");
         for (x : sub^) {
-            __print(" " + x);
+            print(String + " " + x);
         }
-        __print(" )");
+        print(String + " )");
     }
-    __println(" )");
+    println(String + " )");
 
     {
         Class(int x_) { }
         Class arr[3] = (1,2,3);
-        __print("arr=[");
+        print(String + "arr=[");
         for (ref : arr) {
-            __print(" " + ref^.x_);
+            print(String + " " + ref^.x_);
         }
-        __println(" ]");
+        println(String + " ]");
         /* the same forced reference spelled explicitly (`ref^ :`). */
-        __print("arr2=[");
+        print(String + "arr2=[");
         for (ref2^ : arr) {
-            __print(" " + ref2^.x_);
+            print(String + " " + ref2^.x_);
         }
-        __println(" ]");
+        println(String + " ]");
     }
 
     /* GLOBAL array iteration — the loop TOUCHES the lazy global (constructs it on
        the first element access), by value and by reference. */
     int gsum = 0;
     for (int v : garr) { gsum = gsum + v; }
-    __println("gsum= " + gsum);            // 20 (2+4+6+8)
+    println(String + "gsum= " + gsum);            // 20 (2+4+6+8)
     for (int^ p : garr) { p^ = p^ + 1; }
-    __println("garr= " + garr[0] + " " + garr[3]);   // 3 9
+    println(String + "garr= " + garr[0] + " " + garr[3]);   // 3 9
 
     /* a GLOBAL CLASS array — a non-primitive element forces a reference. */
-    __print("gboxes=[");
+    print(String + "gboxes=[");
     for (ref : gboxes) {
-        __print(" " + ref^.b_);
+        print(String + " " + ref^.b_);
     }
-    __println(" ]");                       // 0 0 0
+    println(String + " ]");                       // 0 0 0
 
     /* iterate by reference with INFERENCE (`ref^ :`) — fills like `int^ iter`. */
     int iarr[5];
@@ -308,7 +308,7 @@ int32 main() {
         iref^ = m * 3;
         m = m + 1;
     }
-    __println("iarr[4]= " + iarr[4]);      // 12
+    println(String + "iarr[4]= " + iarr[4]);      // 12
 
     /* `ref^ :` REUSES an enclosing var only if it IS a compatible reference —
        observable after the loop: it holds the LAST element's address. */
@@ -316,7 +316,7 @@ int32 main() {
     int^ rlast = ^z0;
     for (rlast^ : iarr) {
     }
-    __println("rlast^= " + rlast^);        // 12
+    println(String + "rlast^= " + rlast^);        // 12
 
     /* a `(const Elem)^` enclosing var is a compatible reuse — the loop reseats
        the binding; the const pointee makes the loop read-only. */
@@ -325,7 +325,7 @@ int32 main() {
     for (crd^ : iarr) {
         crsum = crsum + crd^;
     }
-    __println("crsum= " + crsum);          // 0+3+6+9+12 = 30
+    println(String + "crsum= " + crsum);          // 0+3+6+9+12 = 30
 
     /* 2-D rows spelled with infer-as-reference (the forced reference, made
        explicit); the inner loop derefs an array EXPRESSION (`sub2^`). */
@@ -335,7 +335,7 @@ int32 main() {
             rsum2 = rsum2 + v2^;
         }
     }
-    __println("rsum2= " + rsum2);          // 21
+    println(String + "rsum2= " + rsum2);          // 21
 
     /* a CONST array iterates by inferred reference — the element's const rides
        into the reference (`(const int)^`); reading is fine (a write is a
@@ -345,7 +345,7 @@ int32 main() {
     for (cr^ : cfix) {
         csum2 = csum2 + cr^;
     }
-    __println("csum2= " + csum2);          // 60
+    println(String + "csum2= " + csum2);          // 60
 
     /* a TYPELESS const array (runtime const INFERENCE) iterates the same way. */
     int seed[3] = (4, 5, 6);
@@ -354,11 +354,11 @@ int32 main() {
     for (cr2^ : cinf) {
         csum3 = csum3 + cr2^;
     }
-    __println("csum3= " + csum3);          // 15
+    println(String + "csum3= " + csum3);          // 15
 
     /* a GLOBAL array by inferred reference. */
     for (gr^ : garr) { gr^ = gr^ + 1; }
-    __println("garr2= " + garr[0] + " " + garr[3]);   // 4 10
+    println(String + "garr2= " + garr[0] + " " + garr[3]);   // 4 10
 
     return 0;
 }
@@ -419,7 +419,7 @@ int32 main() {
 //        arr[i] = i;
 //    }
 //    for (int8 x : arr) {
-//        __println("" + x);
+//        println(String + "" + x);
 //    }
 //    return 0;
 //}
@@ -430,7 +430,7 @@ int32 main() {
 //void neg_value_uninit() {
 //    int arr[5];
 //    for (int x : arr) {
-//        __println("" + x);
+//        println(String + "" + x);
 //    }
 //}
 
@@ -455,7 +455,7 @@ int32 main() {
 //    for (ref^ : arr) {
 //        ref^ = 1;
 //    }
-//    __println("ref= " + ref);
+//    println(String + "ref= " + ref);
 //}
 
 /* ...and a same-name ITERATOR rejects too (a reference is not an iterator). */
@@ -467,7 +467,7 @@ int32 main() {
 //    for (it^ : arr) {
 //        it^ = 9;
 //    }
-//    __println("it^= " + it^);
+//    println(String + "it^= " + it^);
 //}
 
 /* reusing a PLAIN reference over CONST elements would drop the const. */
@@ -478,7 +478,7 @@ int32 main() {
 //    int^ p = ^z;
 //    for (p^ : carr) {
 //    }
-//    __println("p^= " + p^);
+//    println(String + "p^= " + p^);
 //}
 
 /* writing through an inferred reference to CONST elements. */
@@ -494,7 +494,7 @@ int32 main() {
 //-EXPECT-ERROR: yields values; the for-loop variable cannot be a reference
 //void neg_ref_range() {
 //    for (r^ : 0..5) {
-//        __println("" + r^);
+//        println(String + "" + r^);
 //    }
 //}
 
@@ -503,6 +503,6 @@ int32 main() {
 //enum Dir ( kUp, kDown );
 //void neg_ref_enum() {
 //    for (r^ : Dir) {
-//        __println("" + r^);
+//        println(String + "" + r^);
 //    }
 //}

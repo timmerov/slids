@@ -42,61 +42,61 @@ import string;
 int32 main() {
 
     // -- decimal int --
-    int d1 = 0;                __println("d1= " + d1);
-    int d2 = 123;              __println("d2= " + d2);
-    int d3 = 1_000_000;        __println("d3= " + d3);
+    int d1 = 0;                println(String + "d1= " + d1);
+    int d2 = 123;              println(String + "d2= " + d2);
+    int d3 = 1_000_000;        println(String + "d3= " + d3);
 
     // -- hex (uint literal) --
-    uint h1 = 0xFF;            __println("h1= " + h1);
-    uint h2 = 0XFF;            __println("h2= " + h2);
-    uint h3 = 0xDEAD_BEEF;     __println("h3= " + h3);
-    uint h4 = 0xabcdef;        __println("h4= " + h4);
+    uint h1 = 0xFF;            println(String + "h1= " + h1);
+    uint h2 = 0XFF;            println(String + "h2= " + h2);
+    uint h3 = 0xDEAD_BEEF;     println(String + "h3= " + h3);
+    uint h4 = 0xabcdef;        println(String + "h4= " + h4);
 
     // -- binary (uint literal) --
-    uint b1 = 0b1010;          __println("b1= " + b1);
-    uint b2 = 0B1010;          __println("b2= " + b2);
-    uint b3 = 0b1111_0000;     __println("b3= " + b3);
+    uint b1 = 0b1010;          println(String + "b1= " + b1);
+    uint b2 = 0B1010;          println(String + "b2= " + b2);
+    uint b3 = 0b1111_0000;     println(String + "b3= " + b3);
 
     // -- float, dot form --
-    float64 f1 = 3.14;         __println("f1= " + f1);
-    float64 f2 = 3.0;          __println("f2= " + f2);
-    float64 f3 = 1_000.5;      __println("f3= " + f3);
-    float64 f4 = 3.1_4;        __println("f4= " + f4);
+    float64 f1 = 3.14;         println(String + "f1= " + f1);
+    float64 f2 = 3.0;          println(String + "f2= " + f2);
+    float64 f3 = 1_000.5;      println(String + "f3= " + f3);
+    float64 f4 = 3.1_4;        println(String + "f4= " + f4);
 
     // -- float, exponent form --
-    float64 e1 = 1e2;          __println("e1= " + e1);
-    float64 e2 = 1E2;          __println("e2= " + e2);
-    float64 e3 = 1e+2;         __println("e3= " + e3);
-    float64 e4 = 1e-2;         __println("e4= " + e4);
-    float64 e5 = 2.5e3;        __println("e5= " + e5);
-    float64 e6 = 1e1_0;        __println("e6= " + e6);
+    float64 e1 = 1e2;          println(String + "e1= " + e1);
+    float64 e2 = 1E2;          println(String + "e2= " + e2);
+    float64 e3 = 1e+2;         println(String + "e3= " + e3);
+    float64 e4 = 1e-2;         println(String + "e4= " + e4);
+    float64 e5 = 2.5e3;        println(String + "e5= " + e5);
+    float64 e6 = 1e1_0;        println(String + "e6= " + e6);
 
     // -- trailing _ accepted --
-    int t1 = 123_;             __println("t1= " + t1);
-    uint t2 = 0xFF_;           __println("t2= " + t2);
-    uint t3 = 0b1010_;         __println("t3= " + t3);
-    float64 t4 = 3.14_;        __println("t4= " + t4);
-    float64 t5 = 1e10_;        __println("t5= " + t5);
+    int t1 = 123_;             println(String + "t1= " + t1);
+    uint t2 = 0xFF_;           println(String + "t2= " + t2);
+    uint t3 = 0b1010_;         println(String + "t3= " + t3);
+    float64 t4 = 3.14_;        println(String + "t4= " + t4);
+    float64 t5 = 1e10_;        println(String + "t5= " + t5);
 
     // -- char literals --
-    char c1 = 'A';             __println("c1= " + c1);
-    int  c2 = '\0';            __println("c2= " + c2);
-    int  c3 = '\t';            __println("c3= " + c3);
-    int  c4 = '\n';            __println("c4= " + c4);
-    int  c5 = '\\';            __println("c5= " + c5);
-    int  c6 = '\'';            __println("c6= " + c6);
+    char c1 = 'A';             println(String + "c1= " + c1);
+    int  c2 = '\0';            println(String + "c2= " + c2);
+    int  c3 = '\t';            println(String + "c3= " + c3);
+    int  c4 = '\n';            println(String + "c4= " + c4);
+    int  c5 = '\\';            println(String + "c5= " + c5);
+    int  c6 = '\'';            println(String + "c6= " + c6);
 
     // -- string literals: the TYPE is `const char[N]` --
     // a string literal is STORAGE, not a pointer: N bytes in the constant pool, N
     // counting the terminating NUL. So its type carries its LENGTH, and every literal
     // of a different length is a different type. (What it converts INTO — the decay to
     // `char[]` at a parameter — is pointer/iterator.sl; the byte size is misc/sizeof.sl.)
-    char s1[6] = "hello";      __println("s1= " + ##type(s1));   // char[6]
-    char s2[1] = "";           __println("s2= " + ##type(s2));   // char[1]
+    char s1[6] = "hello";      println(String + "s1= " + ##type(s1));   // char[6]
+    char s2[1] = "";           println(String + "s2= " + ##type(s2));   // char[1]
     // an ESCAPE is one byte, so the length is the DECODED length, not the spelling's.
-    char s3[2] = "\0";         __println("s3= " + ##type(s3));   // char[2]
-    char s4[2] = "\\";         __println("s4= " + ##type(s4));   // char[2]
-    char s5[3] = "\t\n";       __println("s5= " + ##type(s5));   // char[3]
+    char s3[2] = "\0";         println(String + "s3= " + ##type(s3));   // char[2]
+    char s4[2] = "\\";         println(String + "s4= " + ##type(s4));   // char[2]
+    char s5[3] = "\t\n";       println(String + "s5= " + ##type(s5));   // char[3]
 
     //-EXPECT-ERROR: Malformed exponent: expected a digit
     // float bad1 = 1e;

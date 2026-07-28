@@ -301,29 +301,29 @@ int64 sum_big() {
 }
 
 int32 main() {
-    __println("count_colors() = " + count_colors());    // 3
-    __println("sum_colors() = " + sum_colors());        // 3
-    __println("count_via_int() = " + count_via_int());  // 3
-    __println("sum_levels() = " + sum_levels());        // 33
-    __println("empty_enum_body() = " + empty_enum_body());  // 0
-    __println("enum_break() = " + enum_break());        // 1
-    __println("enum_continue() = " + enum_continue());  // 2
-    __println("nested_enum() = " + nested_enum());      // 9
-    __println("sum_sparse() = " + sum_sparse());        // 6
-    __println("count_solo() = " + count_solo());        // 1
-    __println("sum_neg() = " + sum_neg());              // -3
-    __println("count_dir() = " + count_dir());          // 4
-    __println("count_letters() = " + count_letters());  // 4
-    __println("count_typeless() = " + count_typeless());    // 3
-    __println("sum_typeless() = " + sum_typeless());        // 3
-    __println("letters_typeless() = " + letters_typeless());  // 4
-    __println("dir_typeless() = " + dir_typeless());        // 4
-    __println("nested_typeless_diff() = " + nested_typeless_diff());  // 9
-    __println("enum_labeled_break() = " + enum_labeled_break());      // 2
-    __println("enum_numbered_break() = " + enum_numbered_break());    // 2
-    __println("enum_labeled_continue() = " + enum_labeled_continue());  // 3
-    __println("enum_typeless_reuse() = " + enum_typeless_reuse());    // 3
-    __println("sum_big() = " + sum_big());                  // 3000000000003
+    println(String + "count_colors() = " + count_colors());    // 3
+    println(String + "sum_colors() = " + sum_colors());        // 3
+    println(String + "count_via_int() = " + count_via_int());  // 3
+    println(String + "sum_levels() = " + sum_levels());        // 33
+    println(String + "empty_enum_body() = " + empty_enum_body());  // 0
+    println(String + "enum_break() = " + enum_break());        // 1
+    println(String + "enum_continue() = " + enum_continue());  // 2
+    println(String + "nested_enum() = " + nested_enum());      // 9
+    println(String + "sum_sparse() = " + sum_sparse());        // 6
+    println(String + "count_solo() = " + count_solo());        // 1
+    println(String + "sum_neg() = " + sum_neg());              // -3
+    println(String + "count_dir() = " + count_dir());          // 4
+    println(String + "count_letters() = " + count_letters());  // 4
+    println(String + "count_typeless() = " + count_typeless());    // 3
+    println(String + "sum_typeless() = " + sum_typeless());        // 3
+    println(String + "letters_typeless() = " + letters_typeless());  // 4
+    println(String + "dir_typeless() = " + dir_typeless());        // 4
+    println(String + "nested_typeless_diff() = " + nested_typeless_diff());  // 9
+    println(String + "enum_labeled_break() = " + enum_labeled_break());      // 2
+    println(String + "enum_numbered_break() = " + enum_numbered_break());    // 2
+    println(String + "enum_labeled_continue() = " + enum_labeled_continue());  // 3
+    println(String + "enum_typeless_reuse() = " + enum_typeless_reuse());    // 3
+    println(String + "sum_big() = " + sum_big());                  // 3000000000003
     return 0;
 }
 
@@ -335,7 +335,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_enum_descending() {
 //    for (Down d : Down) {
-//        __println(d);
+//        println(String + d);
 //    }
 //    return 0;
 //}
@@ -344,7 +344,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Invalid range.
 //int neg_enum_typeless_descending() {
 //    for (d : Down) {
-//        __println(d);
+//        println(String + d);
 //    }
 //    return 0;
 //}
@@ -353,7 +353,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: is not an enum
 //int neg_not_enum(int n) {
 //    for (int x : n) {
-//        __println(x);
+//        println(String + x);
 //    }
 //    return 0;
 //}
@@ -362,7 +362,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Unknown enum 'Nope'
 //int neg_unknown_enum() {
 //    for (Color x : Nope) {
-//        __println(x);
+//        println(String + x);
 //    }
 //    return 0;
 //}
@@ -371,7 +371,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: has no members to iterate
 //int neg_empty_enum() {
 //    for (Empty x : Empty) {
-//        __println(x);
+//        println(String + x);
 //    }
 //    return 0;
 //}

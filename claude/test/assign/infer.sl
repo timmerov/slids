@@ -69,80 +69,80 @@ int32 main() {
 
     /* inferred from an int literal -> int (the preferred spelling, not int32). */
     a = 42;
-    __println(##type(a) + " a = " + a);
+    println(String + ##type(a) + " a = " + a);
 
     /* inferred from a float literal -> float. */
     b = 3.5;
-    __println(##type(b) + " b = " + b);
+    println(String + ##type(b) + " b = " + b);
 
     /* inferred from a typed variable -> that variable's type, spelling kept. */
     int64 big = 7;
     c = big;
-    __println(##type(c) + " c = " + c);
+    println(String + ##type(c) + " c = " + c);
 
     /* inferred from an expression -> the expression's type. */
     d = big + 1;
-    __println(##type(d) + " d = " + d);
+    println(String + ##type(d) + " d = " + d);
 
     /* inferred from an alias-typed value -> the alias label rides along. */
     Integer e = 5;
     f = e;
-    __println(##type(f) + " f = " + f);
+    println(String + ##type(f) + " f = " + f);
 
     /* reuse: g is already in scope, so a typeless assign reassigns it. */
     int g = 1;
     g = 2;
-    __println(##type(g) + " g = " + g);
+    println(String + ##type(g) + " g = " + g);
 
     /* aug-assign on an inferred var (lvalue type re-read at classify). */
     aug = 10;
     aug += 5;
-    __println(##type(aug) + " aug = " + aug);
+    println(String + ##type(aug) + " aug = " + aug);
 
     /* the literal-kind matrix: uint / char / bool / int64-by-magnitude. */
     u = 0xFF;
-    __println(##type(u) + " u = " + u);
+    println(String + ##type(u) + " u = " + u);
     ch = 'Q';
-    __println(##type(ch) + " ch = " + ch);
+    println(String + ##type(ch) + " ch = " + ch);
     bo = true;
-    __println(##type(bo) + " bo = " + bo);
+    println(String + ##type(bo) + " bo = " + bo);
     big2 = 5000000000;
-    __println(##type(big2) + " big2 = " + big2);
+    println(String + ##type(big2) + " big2 = " + big2);
 
     /* an inferred var feeds another inference (write-back then read). */
     n1 = 42;
     n2 = n1;
-    __println(##type(n2) + " n2 = " + n2);
+    println(String + ##type(n2) + " n2 = " + n2);
 
     /* an alias rides through an inferred EXPRESSION (e is Integer). */
     fe = e + 1;
-    __println(##type(fe) + " fe = " + fe);
+    println(String + ##type(fe) + " fe = " + fe);
 
     /* inferred from a CONSTANT -> the constant's type (a typed const keeps width). */
     ci = kFive;
-    __println(##type(ci) + " ci = " + ci);
+    println(String + ##type(ci) + " ci = " + ci);
     cb = kByte;
-    __println(##type(cb) + " cb = " + cb);
+    println(String + ##type(cb) + " cb = " + cb);
 
     /* the typed-const width-keeping rides across families, not just int8. */
     cu = kU8;
-    __println(##type(cu) + " cu = " + cu);
+    println(String + ##type(cu) + " cu = " + cu);
     cs = kS16;
-    __println(##type(cs) + " cs = " + cs);
+    println(String + ##type(cs) + " cs = " + cs);
     cd = kD;
-    __println(##type(cd) + " cd = " + cd);
+    println(String + ##type(cd) + " cd = " + cd);
 
     /* literal default tiers: uint64-by-magnitude + negative literals. */
     ubig = 18446744073709551615;
-    __println(##type(ubig) + " ubig = " + ubig);
+    println(String + ##type(ubig) + " ubig = " + ubig);
     neg = -5;
-    __println(##type(neg) + " neg = " + neg);
+    println(String + ##type(neg) + " neg = " + neg);
     negbig = -3000000000;
-    __println(##type(negbig) + " negbig = " + negbig);
+    println(String + ##type(negbig) + " negbig = " + negbig);
 
     /* inferred from an ENUM member -> the enum type (label rides). */
     ec = Color:kGreen;
-    __println(##type(ec) + " ec = " + ec);
+    println(String + ##type(ec) + " ec = " + ec);
 
     /* reuse-across-scope: a typeless assign inside a block reuses the outer
        var and writes through, so it holds 2 after the block. */
@@ -150,39 +150,39 @@ int32 main() {
     {
         outer = 2;
     }
-    __println(##type(outer) + " outer = " + outer);
+    println(String + ##type(outer) + " outer = " + outer);
 
     /* an inferred var declared inside a block. */
     {
         blk = 7;
-        __println(##type(blk) + " blk = " + blk);
+        println(String + ##type(blk) + " blk = " + blk);
     }
 
     /* infer runtime const types for arrays tuples pointers. */
     {
         int arr1[3] = (1,2,3);
         const arr2 = arr1;
-        __println(##type(arr2) + " arr2 = [" + arr2[0] + "," + arr2[1] + "," + arr2[2] + "]");
+        println(String + ##type(arr2) + " arr2 = [" + arr2[0] + "," + arr2[1] + "," + arr2[2] + "]");
 
         const tuple1 = (4,5,6);
-        __println(##type(tuple1) + " tuple1 = (" + tuple1[0] + "," + tuple1[1] + "," + tuple1[2] + ")");
+        println(String + ##type(tuple1) + " tuple1 = (" + tuple1[0] + "," + tuple1[1] + "," + tuple1[2] + ")");
 
         const tuple2 = tuple1;
-        __println(##type(tuple2) + " tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
+        println(String + ##type(tuple2) + " tuple2 = (" + tuple2[0] + "," + tuple2[1] + "," + tuple2[2] + ")");
     }
 
     /* infer const SCALARS: a foldable init substitutes, a runtime init becomes a
        runtime const local — both spell const (no seam between them). */
     {
         const cf = 6;
-        __println(##type(cf) + " cf = " + cf);
+        println(String + ##type(cf) + " cf = " + cf);
         int rt = 7;
         const cr = rt;
-        __println(##type(cr) + " cr = " + cr);
+        println(String + ##type(cr) + " cr = " + cr);
     }
 
     /* ##type of a file-scope constant is const-qualified too. */
-    __println(##type(kFive) + " kFive = " + kFive);
+    println(String + ##type(kFive) + " kFive = " + kFive);
 
     /* infer references and iterators from addresses (canon head examples). */
     {
@@ -192,26 +192,26 @@ int32 main() {
 
         /* bare inference from an array-element address -> the ITERATOR int[]. */
         p = ^array[2];
-        __println(##type(p) + " p^ = " + p^);
+        println(String + ##type(p) + " p^ = " + p^);
 
         /* bare inference from a scalar address -> the reference int^. */
         q = ^y;
-        __println(##type(q) + " q^ = " + q^);
+        println(String + ##type(q) + " q^ = " + q^);
 
         /* infer-as-reference: `ref^ =` binds a reference; writes flow back. */
         ref^ = ^array[x];
         ref^ = 55;
-        __println(##type(ref) + " array[0] = " + array[0]);
+        println(String + ##type(ref) + " array[0] = " + array[0]);
 
         /* a reference-typed rhs: the fresh reference aliases the same target. */
         ref2^ = q;
         ref2^ = 8;
-        __println(##type(ref2) + " y = " + y);
+        println(String + ##type(ref2) + " y = " + y);
 
         /* const + infer-as-reference -> deep const (the explicit `const int^`
            twin's spelling); reading is fine, writing is a negative below. */
         const cref^ = ^array[2];
-        __println(##type(cref) + " cref^ = " + cref^);
+        println(String + ##type(cref) + " cref^ = " + cref^);
     }
 
     return 0;
@@ -243,7 +243,7 @@ negatives — one //-block uncommented per run.
 //    uint64 p = 1;
 //    int8 q = 2;
 //    x = p + q;
-//    __println("x= " + x);
+//    println(String + "x= " + x);
 //    return 0;
 //}
 
@@ -253,7 +253,7 @@ negatives — one //-block uncommented per run.
 //int32 neg_ref_from_value() {
 //    int y = 5;
 //    ref^ = y;
-//    __println("" + ref^);
+//    println(String + "" + ref^);
 //    return 0;
 //}
 
@@ -263,7 +263,7 @@ negatives — one //-block uncommented per run.
 //    int y = 5;
 //    const x = y;
 //    x = 6;
-//    __println("" + x);
+//    println(String + "" + x);
 //    return 0;
 //}
 
@@ -273,6 +273,6 @@ negatives — one //-block uncommented per run.
 //    int array[3] = (1,2,3);
 //    const cref^ = ^array[0];
 //    cref^ = 9;
-//    __println("" + array[0]);
+//    println(String + "" + array[0]);
 //    return 0;
 //}

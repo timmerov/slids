@@ -385,25 +385,25 @@ int shadow_label(int n) {
 }
 
 int32 main() {
-    __println("named_break(3) = " + named_break(3));            // 3
-    __println("numbered_break(3) = " + numbered_break(3));      // 3
-    __println("break_default(5) = " + break_default(5));        // 2
-    __println("for_default(5) = " + for_default(5));            // 2
-    __println("continue_numbered(3) = " + continue_numbered(3));    // 3
-    __println("sw_break_loop(4) = " + sw_break_loop(4));        // 1
-    __println("sw_continue_loop(4) = " + sw_continue_loop(4));  // 303
-    __println("shadow_label(2) = " + shadow_label(2));          // 2
-    __println("dowhile_label(5) = " + dowhile_label(5));        // 2
-    __println("ranged_label(3) = " + ranged_label(3));          // 1
-    __println("enum_label() = " + enum_label());                // 1
-    __println("longfor_label(3) = " + longfor_label(3));        // 1
-    __println("sw_break2(3) = " + sw_break2(3));                // 0
-    __println("break3(2) = " + break3(2));                      // 4
-    __println("nested_sw_break(4) = " + nested_sw_break(4));    // 1
-    __println("cont_from_sw(4) = " + cont_from_sw(4));          // 303
-    __println("cont_while(4) = " + cont_while(4));              // 3
-    __println("dowhile_da_ok(5) = " + dowhile_da_ok(5));        // 7
-    __println("unused_label(3) = " + unused_label(3));          // 3
+    println(String + "named_break(3) = " + named_break(3));            // 3
+    println(String + "numbered_break(3) = " + numbered_break(3));      // 3
+    println(String + "break_default(5) = " + break_default(5));        // 2
+    println(String + "for_default(5) = " + for_default(5));            // 2
+    println(String + "continue_numbered(3) = " + continue_numbered(3));    // 3
+    println(String + "sw_break_loop(4) = " + sw_break_loop(4));        // 1
+    println(String + "sw_continue_loop(4) = " + sw_continue_loop(4));  // 303
+    println(String + "shadow_label(2) = " + shadow_label(2));          // 2
+    println(String + "dowhile_label(5) = " + dowhile_label(5));        // 2
+    println(String + "ranged_label(3) = " + ranged_label(3));          // 1
+    println(String + "enum_label() = " + enum_label());                // 1
+    println(String + "longfor_label(3) = " + longfor_label(3));        // 1
+    println(String + "sw_break2(3) = " + sw_break2(3));                // 0
+    println(String + "break3(2) = " + break3(2));                      // 4
+    println(String + "nested_sw_break(4) = " + nested_sw_break(4));    // 1
+    println(String + "cont_from_sw(4) = " + cont_from_sw(4));          // 303
+    println(String + "cont_while(4) = " + cont_while(4));              // 3
+    println(String + "dowhile_da_ok(5) = " + dowhile_da_ok(5));        // 7
+    println(String + "unused_label(3) = " + unused_label(3));          // 3
     return 0;
 }
 

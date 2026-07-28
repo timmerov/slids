@@ -78,57 +78,57 @@ int32 iso() {
 int32 main() {
     /* typed init, then read. */
     int x = 5;
-    __println("x = " + x);
+    println(String + "x = " + x);
 
     /* declare-then-assign: y is written before it is read. */
     int y;
     y = x + 1;
-    __println("y = " + y);
+    println(String + "y = " + y);
 
     /* read both initialized locals. */
     int z = x + y;
-    __println("z = " + z);
+    println(String + "z = " + z);
 
     /* reassignment of an already-initialized local. */
     z = z + 100;
-    __println("z = " + z);
+    println(String + "z = " + z);
 
     /* aug-assign reads then writes an initialized local. */
     z += 1;
-    __println("z = " + z);
+    println(String + "z = " + z);
 
     /* an unread const is exempt from the unused-local sweep (consts only). */
     const int kUnreadConst = 99;
 
     /* a local initialized from a call result. */
     int q = add(x, y, 0);
-    __println("q = " + q);
+    println(String + "q = " + q);
 
     /* a sibling function whose locals share main's names resolves cleanly. */
     int i = iso();
-    __println("i = " + i);
+    println(String + "i = " + i);
 
     /* flow-sensitive: both branches initialize, so the post-merge read is ok. */
     int fa;
     if (x > 0) { fa = 10; } else { fa = 20; }
-    __println("fa = " + fa);                    // 10
+    println(String + "fa = " + fa);                    // 10
 
     /* a move counts as the initializing write of its target. */
     int mv;
     mv <-- x;
-    __println("mv = " + mv);                    // 5
+    println(String + "mv = " + mv);                    // 5
 
     /* a destructure counts as the initializing write for each target. */
     int da;
     int db;
     (da, db) = (30, 40);
-    __println("da = " + da + " db = " + db);    // 30 40
+    println(String + "da = " + da + " db = " + db);    // 30 40
 
     /* a const-EXPRESSION dim in a VAR-DECL's type (a tuple slot): folded + baked
        in constfold, so the slot array is sized and indexable. */
     const int kCols = 3;
     (int[kCols], int) vd = ((7, 8, 9), 10);
-    __println("vd = " + vd[0][2] + " " + vd[1] + " (" + ##type(vd) + ")"); // 9 10 ((int[3], int))
+    println(String + "vd = " + vd[0][2] + " " + vd[1] + " (" + ##type(vd) + ")"); // 9 10 ((int[3], int))
 
     /* PER-ELEMENT IMPLICIT WIDENING on aggregate-value assignment. classify
        validates SHAPE match (dims/arity) at every composite level; codegen walks
@@ -139,43 +139,43 @@ int32 main() {
     /* int8[N] -> int[N]: element-by-element sign-extend. */
     int8 s8[3] = (1, 2, 3);
     int i32a[3] = s8;
-    __println("i32a = " + i32a[0] + " " + i32a[1] + " " + i32a[2]);   // 1 2 3
+    println(String + "i32a = " + i32a[0] + " " + i32a[1] + " " + i32a[2]);   // 1 2 3
 
     /* same shape, assign-form (not just init). */
     int i32b[3] = (0, 0, 0);
     i32b = s8;
-    __println("i32b = " + i32b[0] + " " + i32b[1] + " " + i32b[2]);   // 1 2 3
+    println(String + "i32b = " + i32b[0] + " " + i32b[1] + " " + i32b[2]);   // 1 2 3
 
     /* (int8,int8) -> (int,int): per-slot sign-extend. */
     (int8, int8) ts = (10, 20);
     (int, int) ti = ts;
-    __println("ti = " + ti[0] + " " + ti[1]);                         // 10 20
+    println(String + "ti = " + ti[0] + " " + ti[1]);                         // 10 20
 
     /* uint8[N] -> int[N]: zero-extend. */
     uint8 u8[3] = (200, 201, 202);
     int wu[3] = u8;
-    __println("wu = " + wu[0] + " " + wu[1] + " " + wu[2]);           // 200 201 202
+    println(String + "wu = " + wu[0] + " " + wu[1] + " " + wu[2]);           // 200 201 202
 
     /* nested: tuple-of-array — recurse into slot 0 (array), widen each elem. */
     (int8[3], int8) ns = ((1, 2, 3), 4);
     (int[3], int) ni = ns;
-    __println("ni = " + ni[0][0] + " " + ni[0][2] + " " + ni[1]);     // 1 3 4
+    println(String + "ni = " + ni[0][0] + " " + ni[0][2] + " " + ni[1]);     // 1 3 4
 
     /* multi-dim array: dims match, leaf widens. */
     int8 m8[2][3] = ((1, 2, 3), (4, 5, 6));
     int m32[2][3] = m8;
-    __println("m32 = " + m32[0][0] + " " + m32[1][2]);                // 1 6
+    println(String + "m32 = " + m32[0][0] + " " + m32[1][2]);                // 1 6
 
     /* tuple-of-tuple. */
     ((int8, int8), (int8, int8)) nts = ((1, 2), (3, 4));
     ((int, int), (int, int)) nti = nts;
-    __println("nti = " + nti[0][0] + " " + nti[0][1]
+    println(String + "nti = " + nti[0][0] + " " + nti[0][1]
               + " " + nti[1][0] + " " + nti[1][1]);                   // 1 2 3 4
 
     /* int8 -> int64: a wider widening that still rides the leaf grid. */
     int8 ws[3] = (-1, 0, 1);
     int64 wd[3] = ws;
-    __println("wd = " + wd[0] + " " + wd[1] + " " + wd[2]);           // -1 0 1
+    println(String + "wd = " + wd[0] + " " + wd[1] + " " + wd[2]);           // -1 0 1
 
     /* SUB-ARRAY STORE through kStoreStmt: `matrix[i] = sub_aggregate`. The
        lvalue is a partial index; the slice's elem type may differ from the
@@ -185,7 +185,7 @@ int32 main() {
     matrix[0] = row8;
     matrix[1] = (9, 10);
     matrix[2] = row8;
-    __println("matrix = " + matrix[0][0] + " " + matrix[0][1] + " "
+    println(String + "matrix = " + matrix[0][0] + " " + matrix[0][1] + " "
               + matrix[1][0] + " " + matrix[2][1]);                   // 7 8 9 8
 
     /* DEREF STORE through kStoreStmt: `ref^ = aggregate`. The dst is the
@@ -194,44 +194,44 @@ int32 main() {
     int[3]^ pdst = ^dst_arr;
     int8 dsrc[3] = (4, 5, 6);
     pdst^ = dsrc;
-    __println("pdst^ = " + dst_arr[0] + " " + dst_arr[1] + " " + dst_arr[2]); // 4 5 6
+    println(String + "pdst^ = " + dst_arr[0] + " " + dst_arr[1] + " " + dst_arr[2]); // 4 5 6
 
     /* MOVE-INIT with aggregate widen: `dst <-- src` runs the same widen walk
        then null-leaves the source (no pointer leaves here, so a no-op tail). */
     int8 msrc[3] = (10, 20, 30);
     int mdst[3];
     mdst <-- msrc;
-    __println("mdst = " + mdst[0] + " " + mdst[1] + " " + mdst[2]);   // 10 20 30
+    println(String + "mdst = " + mdst[0] + " " + mdst[1] + " " + mdst[2]);   // 10 20 30
 
     /* RETURN value with aggregate widen: function returns int[3] but builds
        the value via an int8 local; the kReturnStmt arm walks per leaf. */
     int rret[3] = returns_widened();
-    __println("rret = " + rret[0] + " " + rret[1] + " " + rret[2]);   // 11 12 13
+    println(String + "rret = " + rret[0] + " " + rret[1] + " " + rret[2]);   // 11 12 13
 
     /* CALL SITE aggregate widen: pass an int8[3] arg to a function taking
        int[3]^. classify scores it cost 1 (shape match + per-leaf widen);
        codegen materializes a converted int[3] temp and passes its address. */
     int8 carg[3] = (21, 22, 23);
     int csum = sum_int3(carg);
-    __println("csum = " + csum);                                       // 66
+    println(String + "csum = " + csum);                                       // 66
 
     /* TYPED-no-name destructure discard: a typed slot with NO name drops its tuple
        position — a documented discard, same as an empty `,` slot. It still counts
        toward arity, so the 3-slot pattern matches a 3-tuple (the middle is dropped). */
     (int td, int, int te) = (1, 2, 3);
-    __println("td = " + td + " te = " + te);                           // 1 3
+    println(String + "td = " + td + " te = " + te);                           // 1 3
 
     /* COMPOSED nameless slot types: the wrapper chain spells a multi-modifier slot
        (ref-to-array, array-of-refs) inside a tuple TYPE — unspellable before the
        declarator unification (the single-suffix slot parser gave "Expected ')'"). */
     int sra_a[3] = (1, 2, 3);
     (int[3]^, int) sra = (^sra_a, 99);          // slot 0: reference TO an int[3]
-    __println("sra = " + sra[0]^[2] + " " + sra[1]);                   // 3 99
+    println(String + "sra = " + sra[0]^[2] + " " + sra[1]);                   // 3 99
 
     int sar_a = 5;
     int sar_b = 6;
     (int^[2], int) sar = ((^sar_a, ^sar_b), 77);   // slot 0: array OF 2 references
-    __println("sar = " + sar[0][1]^ + " " + sar[1]);                   // 6 77
+    println(String + "sar = " + sar[0][1]^ + " " + sar[1]);                   // 6 77
 
     /* redundant / nested type grouping collapses to the inner type at any depth —
        each `(T)` is a size-1 tuple (grouping; the comma is the tuple marker, there is
@@ -239,27 +239,27 @@ int32 main() {
        collapse (a deferred item is whether to warn on this pointless grouping). */
     ((((int)))) grp = 5;
     int grp1 = grp + 1;
-    __println("grp = " + grp1 + " (" + ##type(grp) + ")");             // 6 (int)
+    println(String + "grp = " + grp1 + " (" + ##type(grp) + ")");             // 6 (int)
     (((int[3]))) garr = (7, 8, 9);
-    __println("garr = " + garr[2] + " (" + ##type(garr) + ")");        // 9 (int[3])
+    println(String + "garr = " + garr[2] + " (" + ##type(garr) + ")");        // 9 (int[3])
 
     /* CONSTRUCTION-STYLE scalar init `Type name(value)` — for a NUMBER or POINTER
        target it equals `Type name = value`. The `(args)` form builds an explicit
        construction tuple; a size-1 tuple collapses to its element (the node-level
        1-tuple==scalar collapse — the `=`-grouping form gets it at parse). */
     int cn(42);
-    __println("cn = " + cn);                                           // 42
+    println(String + "cn = " + cn);                                           // 42
     int64 cn64(7);
-    __println("cn64 = " + cn64);                                       // 7
+    println(String + "cn64 = " + cn64);                                       // 7
     float32 cf(1.5);
-    __println("cf = " + cf);                                           // 1.5
+    println(String + "cf = " + cf);                                           // 1.5
     bool cb(true);
-    __println("cb = " + cb);                                           // true
+    println(String + "cb = " + cb);                                           // true
     char cc('A');
-    __println("cc = " + cc);                                           // A
+    println(String + "cc = " + cc);                                           // A
     int cpv = 9;
     int^ cpp(^cpv);                             // pointer target: element is a ref
-    __println("cpp = " + cpp^);                                        // 9
+    println(String + "cpp = " + cpp^);                                        // 9
 
     /* A CHAR ARRAY FROM A STRING LITERAL. A string literal is `const char[N]` — storage,
        N counting the terminating NUL — so this is an ordinary same-type array init, not
@@ -268,23 +268,23 @@ int32 main() {
        made) and one that is too long has no defined fill, so both are rejected — see
        the negatives below. */
     char greet[6] = "hello";              // 5 chars + NUL
-    __println("greet = " + greet[0] + greet[1] + greet[2] + greet[3] + greet[4]);
-    __println("greet nul = " + (greet[5] == '\0'));                    // true
-    __println("greet ty = " + ##type(greet));                          // char[6]
+    println(String + "greet = " + greet[0] + greet[1] + greet[2] + greet[3] + greet[4]);
+    println(String + "greet nul = " + (greet[5] == '\0'));                    // true
+    println(String + "greet ty = " + ##type(greet));                          // char[6]
 
     /* the array is ordinary storage, so it is MUTABLE — the literal it was built from
        is not, and this writes the copy. */
     greet[0] = 'H';
-    __println("greet2 = " + greet[0] + greet[1]);                      // He
+    println(String + "greet2 = " + greet[0] + greet[1]);                      // He
 
     /* the empty literal is not empty: it is the NUL alone. */
     char none[1] = "";
-    __println("none = " + (none[0] == '\0') + " " + ##type(none));     // true char[1]
+    println(String + "none = " + (none[0] == '\0') + " " + ##type(none));     // true char[1]
 
     /* the ELEMENT type need not be char — char is uint8, so a literal rides the ordinary
        per-element widen above, exactly like `uint8[3] -> int[3]`. Only the SIZE is fixed. */
     int codes[6] = "hello";
-    __println("codes = " + codes[0] + " " + codes[4] + " " + codes[5]);  // 104 111 0
+    println(String + "codes = " + codes[0] + " " + codes[4] + " " + codes[5]);  // 104 111 0
 
     {
         /* trivial statement uses x. */
@@ -341,7 +341,7 @@ negatives — definite-assignment violations (one //-block uncommented per run).
 //int32 neg_expr() {
 //    int u;
 //    int v = u + 1;
-//    __println("v = " + v);
+//    println(String + "v = " + v);
 //    return 0;
 //}
 
@@ -380,7 +380,7 @@ negatives — definite-assignment violations (one //-block uncommented per run).
 //-EXPECT-ERROR: Use of uninitialized variable 'u'
 //int32 neg_print() {
 //    int u;
-//    __println("u = " + u);
+//    println(String + "u = " + u);
 //    return 0;
 //}
 
@@ -457,7 +457,7 @@ on hasErrors), so exactly one diagnostic — not a doubled report.
 //int32 neg_compose() {
 //    int u;
 //    u = u + 1;
-//    __println("u = " + u);
+//    println(String + "u = " + u);
 //    return 0;
 //}
 
@@ -474,7 +474,7 @@ assignment.
 //int32 neg_class_init_int() {
 //    C v(1);
 //    int y = v;
-//    __println("y = " + y);
+//    println(String + "y = " + y);
 //    return 0;
 //}
 
@@ -485,7 +485,7 @@ assignment.
 //    C v(1);
 //    int y = 0;
 //    y = v;
-//    __println("y = " + y);
+//    println(String + "y = " + y);
 //    return 0;
 //}
 
@@ -497,7 +497,7 @@ assignment.
 //    A a(1);
 //    B b(2);
 //    a = b;
-//    __println("done");
+//    println(String + "done");
 //    return 0;
 //}
 

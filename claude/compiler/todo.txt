@@ -272,6 +272,10 @@ REACH GOALS
     the type-parameter patterns themselves (the C++-style two-phase split). The
     current behavior is pinned by the nonsense template in tmpl_function.sl.
 
+  * we need to import variadic c functions.
+    currently printf is imported exactly the way it is used in string.sl.
+    but that will be insufficient if someone wants to use printf two different
+    ways.
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 

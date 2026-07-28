@@ -187,33 +187,33 @@ int32 main() {
     /* nullptr flexes into any pointer type (implicit). */
     int32^ rnull = nullptr;
     void^  vnull = nullptr;
-    __println("rnull is null= " + (rnull == nullptr));   // true
-    __println("vnull is null= " + (vnull == nullptr));   // true
+    println(String + "rnull is null= " + (rnull == nullptr));   // true
+    println(String + "vnull is null= " + (vnull == nullptr));   // true
 
     /* any pointer -> void^ (implicit strip); void^ -> typed (explicit add). */
     void^ vp = ref;
     int32^ back = <int32^> vp;
-    __println("void round-trip= " + back^);              // 99
+    println(String + "void round-trip= " + back^);              // 99
 
     /* pointer <-> intptr. ptr->intptr implicit; intptr->ptr explicit. */
     intptr num = ref;
     int32^ fromnum = <int32^> num;
-    __println("intptr round-trip= " + fromnum^);         // 99
+    println(String + "intptr round-trip= " + fromnum^);         // 99
 
     /* the explicit form of the implicit ptr->intptr. */
     intptr num2 = <intptr> ref;
-    __println("same address= " + (num == num2));         // true
+    println(String + "same address= " + (num == num2));         // true
 
     /* iterator -> reference of the same pointee (implicit demote). */
     int32 buf[4];
     buf[0] = 7;
     int32[] it = ^buf[0];
     int32^ eref = it;
-    __println("demote= " + eref^);                       // 7
+    println(String + "demote= " + eref^);                       // 7
 
     /* reference -> iterator of the same pointee (explicit add). */
     int32[] it2 = <int32[]> eref;
-    __println("promote= " + it2^);                       // 7
+    println(String + "promote= " + it2^);                       // 7
 
     /* a const-EXPRESSION dim in a CAST target type — a pointer to a tuple whose
        slot is `int[kCast]` (`int32[N]^` array-then-`^` isn't a type; a tuple slot
@@ -222,25 +222,25 @@ int32 main() {
     const int kCast = 3;
     void^ avp = ^a;
     void^ aback = <(int32[kCast], int32)^> avp;          // target slot has a const dim
-    __println("castN= " + (avp == aback));               // true
+    println(String + "castN= " + (avp == aback));               // true
 
     /* buffer-class bridges any two pointers (explicit both ways). */
     int16 h = 1234;
     int16^ hp = ^h;
     int8^  raw = <int8^> hp;
     int16^ hp2 = <int16^> raw;
-    __println("buffer round-trip= " + hp2^);             // 1234
+    println(String + "buffer round-trip= " + hp2^);             // 1234
 
     /* two unrelated non-buffer pointers reinterpret by chaining via void^. */
     int32^ cp = <int32^> <void^> ref;
-    __println("chain= " + cp^);                          // 99
+    println(String + "chain= " + cp^);                          // 99
 
     /* a store into a pointer-typed slot obeys the same rules: an element of a
        references array, or a deref. */
     int32^ refs[2];
     refs[0] = ref;
     refs[1] = ^a;
-    __println("ref array= " + refs[1]^);                 // 99
+    println(String + "ref array= " + refs[1]^);                 // 99
 
     /* iterators are pointers too — they strip implicitly, same as references. */
     buf[1] = 8;
@@ -248,22 +248,22 @@ int32 main() {
     void^   viter = it1;                 // iterator -> void^ (implicit strip)
     intptr  inum  = it1;                 // iterator -> intptr (implicit strip)
     int32[] inull = nullptr;             // nullptr -> iterator (implicit)
-    __println("iter is null= " + (inull == nullptr));    // true
+    println(String + "iter is null= " + (inull == nullptr));    // true
 
     /* explicit iterator casts: <intptr> iter, intptr -> iter, iter -> ref. */
     intptr  xnum  = <intptr> it1;
     int32[] fromi = <int32[]> xnum;      // intptr -> iterator (explicit)
     int32^  iref  = <int32^> it1;        // iterator -> reference (explicit)
     int32[] backit = <int32[]> viter;    // void^ -> iterator (buffer -> any)
-    __println("iter explicit= " + fromi^);               // 8
-    __println("iter->ref= " + iref^);                    // 8
-    __println("void iter round-trip= " + backit^);       // 8
-    __println("iter addr= " + (inum == xnum));           // true
+    println(String + "iter explicit= " + fromi^);               // 8
+    println(String + "iter->ref= " + iref^);                    // 8
+    println(String + "void iter round-trip= " + backit^);       // 8
+    println(String + "iter addr= " + (inum == xnum));           // true
 
     /* uint8^ is a buffer-class pointer, like int8^. */
     uint8^ up    = <uint8^> ref;         // any -> uint8 buffer
     int32^ fromu = <int32^> up;          // uint8 buffer -> any
-    __println("uint8 round-trip= " + fromu^);            // 99
+    println(String + "uint8 round-trip= " + fromu^);            // 99
 
     /* bridge two UNRELATED non-buffer pointers (int16^ <-> int32^) by chaining
        through a buffer-class type. the reinterpreted value is meaningless, so
@@ -271,15 +271,15 @@ int32 main() {
     int32^ bvoid = <int32^> <void^> hp;  // via void^
     int32^ bu8   = <int32^> <uint8^> hp; // via uint8^
     intptr ha    = <intptr> hp;
-    __println("bridge void= " + (<intptr> bvoid == ha)); // true
-    __println("bridge uint8= " + (<intptr> bu8 == ha));  // true
+    println(String + "bridge void= " + (<intptr> bvoid == ha)); // true
+    println(String + "bridge uint8= " + (<intptr> bu8 == ha));  // true
 
     /* a cast in a larger expression (operand of ==), and a cast of a complex
        operand (an `^arr[i]` iterator, not a bare variable). */
-    __println("expr cast= " + (<intptr> ref == num));    // true
+    println(String + "expr cast= " + (<intptr> ref == num));    // true
     void^   cv = <void^> ^buf[1];
     int32[] ci = <int32[]> cv;
-    __println("complex operand= " + ci^);                // 8
+    println(String + "complex operand= " + ci^);                // 8
 
     /* a cast TO an ALIASED pointer type keeps the alias transparent: deref the
        cast result directly, so the cast expression's OWN type drives the load. (A
@@ -288,7 +288,7 @@ int32 main() {
     alias Pint = int32;
     int32 av = 77;
     int32^ ap = ^av;
-    __println("alias cast= " + (<Pint^> ap)^);           // 77
+    println(String + "alias cast= " + (<Pint^> ap)^);           // 77
 
     /* an ARRAY decays to a pointer — it is storage, addressed as ^arr[0]. A bare
        array implicitly casts to the ELEMENT pointer (size dropped); the explicit
@@ -297,13 +297,13 @@ int32 main() {
     int32 darr[5] = (10, 20, 30, 40, 50);
     int32[] dq = darr;                                   // implicit -> ^darr[0]
     int32^  dp = darr;                                   // implicit element-0 ref
-    __println("decay iter= " + dq^ + " " + dq[4]);       // 10 50
-    __println("decay ref= " + dp^);                      // 10
+    println(String + "decay iter= " + dq^ + " " + dq[4]);       // 10 50
+    println(String + "decay ref= " + dp^);                      // 10
     int32[] dqx = <int32[]> darr;                        // explicit element decay
     int32^  dpx = <int32^> darr;
-    __println("decay cast= " + dqx^ + " " + dpx^);       // 10 10
+    println(String + "decay cast= " + dqx^ + " " + dpx^);       // 10 10
     int32[5]^ dwhole = ^darr;                            // whole-array ref: ^arr, no cast
-    __println("decay whole= " + dwhole^[0] + " " + dwhole^[4]);   // 10 50
+    println(String + "decay whole= " + dwhole^[0] + " " + dwhole^[4]);   // 10 50
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
@@ -339,7 +339,7 @@ int32 main() {
        a bare array to `int32[5]^` is a compile error. */
     //-EXPECT-ERROR: Cannot assign 'int32[5]' to 'int32[5]^'
     //int32[5]^ badwhole = darr;
-    //__println("bad= " + badwhole^[0]);
+    //println(String + "bad= " + badwhole^[0]);
 
     //-EXPECT-ERROR: A void pointer must be a reference 'void^'
     //void[] bad = nullptr;

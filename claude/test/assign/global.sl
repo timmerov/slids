@@ -417,16 +417,16 @@ global garage(
 global depot(
     stock_ = 0
 ) {
-    _() { stock_ = 50; __println("depot:ctor"); }
-    ~() { __println("depot:dtor"); }
+    _() { stock_ = 50; println(String + "depot:ctor"); }
+    ~() { println(String + "depot:dtor"); }
 }
 
 /* A lazy group NEVER accessed: neither its ctor nor its dtor may run. */
 global unused(
     z_ = 0
 ) {
-    _() { __println("unused:ctor"); }
-    ~() { __println("unused:dtor"); }
+    _() { println(String + "unused:ctor"); }
+    ~() { println(String + "unused:dtor"); }
 }
 
 /* Reverse construction order: `front`'s ctor touches `back`, so `back` is built
@@ -434,30 +434,30 @@ global unused(
 global front(
     a_ = 0
 ) {
-    _() { __println("front:ctor"); back:b_ = 9; }
-    ~() { __println("front:dtor"); }
+    _() { println(String + "front:ctor"); back:b_ = 9; }
+    ~() { println(String + "front:dtor"); }
 }
 global back(
     b_ = 0
 ) {
-    _() { __println("back:ctor"); }
-    ~() { __println("back:dtor"); }
+    _() { println(String + "back:ctor"); }
+    ~() { println(String + "back:dtor"); }
 }
 
 /* DEEPER reverse-order teardown (beyond front->back's two levels): a 3-level lazy
    chain. lvl1's ctor touches lvl2, whose ctor touches lvl3 — so construction is
    lvl1 -> lvl2 -> lvl3 and teardown is lvl3 -> lvl2 -> lvl1 (LIFO). */
-global lvl1( q_ = 0 ) { _() { __println("lvl1:ctor"); lvl2:q_ = 1; } ~() { __println("lvl1:dtor"); } }
-global lvl2( q_ = 0 ) { _() { __println("lvl2:ctor"); lvl3:q_ = 1; } ~() { __println("lvl2:dtor"); } }
-global lvl3( q_ = 0 ) { _() { __println("lvl3:ctor"); } ~() { __println("lvl3:dtor"); } }
+global lvl1( q_ = 0 ) { _() { println(String + "lvl1:ctor"); lvl2:q_ = 1; } ~() { println(String + "lvl1:dtor"); } }
+global lvl2( q_ = 0 ) { _() { println(String + "lvl2:ctor"); lvl3:q_ = 1; } ~() { println(String + "lvl2:dtor"); } }
+global lvl3( q_ = 0 ) { _() { println(String + "lvl3:ctor"); } ~() { println(String + "lvl3:dtor"); } }
 
 /* LAZY ANONYMOUS group — a nameless lazy singleton: its member is BARE (no group
    qualifier), constructed on first access, torn down at exit (LIFO with the rest). */
 global (
     tank_ = 0
 ) {
-    _() { tank_ = 5; __println("tank:ctor"); }
-    ~() { __println("tank:dtor"); }
+    _() { tank_ = 5; println(String + "tank:ctor"); }
+    ~() { println(String + "tank:dtor"); }
 }
 
 /* NESTING — a global slots into a namespace / class exactly like a const. */
@@ -470,8 +470,8 @@ Bin() {
     global int cap_ = 4;                  /* class-namespaced: reached as Bin:cap_ */
     /* LAZY anon group in a class: bare member `Bin:fill_`, lazy ctor/dtor */
     global ( fill_ = 0 ) {
-        _() { fill_ = 6; __println("bin:ctor"); }
-        ~() { __println("bin:dtor"); }
+        _() { fill_ = 6; println(String + "bin:ctor"); }
+        ~() { println(String + "bin:dtor"); }
     }
     _() {}
     ~() {}
@@ -482,7 +482,7 @@ Bin() {
 void tick() {
     global int ticks_ = 0;
     ticks_ = ticks_ + 1;
-    __println("tick=" + ticks_);
+    println(String + "tick=" + ticks_);
 }
 
 /* CLASS-by-value global — a "global slid": lazily constructed (ctor on first access),
@@ -492,8 +492,8 @@ void tick() {
    parameters). A CONSTRUCTION EXPRESSION is not data — `= Widget(42)` is rejected here,
    though the local `Widget w = Widget(42)` is fine. See the negatives. */
 Widget(int id_ = 100, int tag_ = 7) {
-    _() { __println("widget:ctor"); }
-    ~() { __println("widget:dtor"); }
+    _() { println(String + "widget:ctor"); }
+    ~() { println(String + "widget:dtor"); }
 }
 global Widget w_(42);
 
@@ -535,7 +535,7 @@ Counter() {
     void bump() {
         global int hits_ = 0;
         hits_ = hits_ + 1;
-        __println("hits=" + hits_);
+        println(String + "hits=" + hits_);
     }
     _() {}
     ~() {}
@@ -547,11 +547,11 @@ Counter() {
    program exit, LIFO). Reached bare in the function, invisible outside. */
 void taggify() {
     global ( count_ = 0 ) {
-        _() { __println("tag:ctor"); }
-        ~() { __println("tag:dtor"); }
+        _() { println(String + "tag:ctor"); }
+        ~() { println(String + "tag:dtor"); }
     }
     count_ = count_ + 1;
-    __println("tag #" + count_);
+    println(String + "tag #" + count_);
 }
 
 /* CLASS-TYPED MEMBERS IN A GROUP — a group whose members are by-value class values.
@@ -561,12 +561,12 @@ void taggify() {
    named/anon x with-hooks/without. Two distinct classes so each member's ctor/dtor
    prints a distinguishable line. */
 Cog(int cn_ = 0) {
-    _() { __println("cog:ctor"); }
-    ~() { __println("cog:dtor"); }
+    _() { println(String + "cog:ctor"); }
+    ~() { println(String + "cog:dtor"); }
 }
 Gear(int gn_ = 0) {
-    _() { __println("gear:ctor"); }
-    ~() { __println("gear:dtor"); }
+    _() { println(String + "gear:ctor"); }
+    ~() { println(String + "gear:dtor"); }
 }
 
 /* (1) NAMED group WITH user ctor/dtor — construct c1_, g1_, then crate:ctor. */
@@ -574,8 +574,8 @@ global crate(
     Cog  c1_,
     Gear g1_
 ) {
-    _() { __println("crate:ctor"); }
-    ~() { __println("crate:dtor"); }
+    _() { println(String + "crate:ctor"); }
+    ~() { println(String + "crate:dtor"); }
 }
 
 /* (2) NAMED group WITHOUT hooks — still ONE group: touching c2_ constructs c2_ AND
@@ -592,8 +592,8 @@ global (
     Cog  c3_,
     Gear g3_
 ) {
-    _() { __println("packa:ctor"); }
-    ~() { __println("packa:dtor"); }
+    _() { println(String + "packa:ctor"); }
+    ~() { println(String + "packa:dtor"); }
 }
 
 /* (4) ANON group WITHOUT hooks — members promote bare (c4_, g4_); a hook-less anon
@@ -609,8 +609,8 @@ global (
 /* A class whose field is itself a class — exercises NESTED member construction (the
    field's ctor runs as part of constructing the outer class). */
 Nest(Cog inner_) {
-    _() { __println("nest:ctor"); }
-    ~() { __println("nest:dtor"); }
+    _() { println(String + "nest:ctor"); }
+    ~() { println(String + "nest:dtor"); }
 }
 
 /* (1a) MIXED members, hook-less: a foldable scalar stays STATIC (ungated); the class
@@ -626,8 +626,8 @@ global mix2(
     int sn_ = 3,
     Cog sc_
 ) {
-    _() { __println("mix2:ctor"); }
-    ~() { __println("mix2:dtor"); }
+    _() { println(String + "mix2:ctor"); }
+    ~() { println(String + "mix2:dtor"); }
 }
 
 /* (2a) INLINE ARRAY-of-class member — every element constructs/destructs element-wise. */
@@ -645,8 +645,8 @@ global arr2( int nums_[3] = (7, 8, 9) ) { }
 global dormant(
     Cog dc_
 ) {
-    _() { __println("dormant:ctor"); }
-    ~() { __println("dormant:dtor"); }
+    _() { println(String + "dormant:ctor"); }
+    ~() { println(String + "dormant:dtor"); }
 }
 
 /* (4) touch order is by DECLARATION, not by which member is touched: touching the
@@ -661,8 +661,8 @@ global rev1(
 global usem(
     Cog uc_
 ) {
-    _() { uc_.cn_ = 7; __println("usem:ctor cn=" + uc_.cn_); }
-    ~() { __println("usem:dtor"); }
+    _() { uc_.cn_ = 7; println(String + "usem:ctor cn=" + uc_.cn_); }
+    ~() { println(String + "usem:dtor"); }
 }
 
 /* (6a) a class-member NAMED group nested in a NAMESPACE — reached Ns:group:member. */
@@ -671,8 +671,8 @@ Yard {
         Cog  yc_,
         Gear yg_
     ) {
-        _() { __println("crate2:ctor"); }
-        ~() { __println("crate2:dtor"); }
+        _() { println(String + "crate2:ctor"); }
+        ~() { println(String + "crate2:dtor"); }
     }
 }
 
@@ -682,8 +682,8 @@ Vault() {
     global stash2(
         Cog vc_
     ) {
-        _() { __println("stash2:ctor"); }
-        ~() { __println("stash2:dtor"); }
+        _() { println(String + "stash2:ctor"); }
+        ~() { println(String + "stash2:dtor"); }
     }
     _() {}
     ~() {}
@@ -693,10 +693,10 @@ Vault() {
    shared lazy lifetime (ctor on first call, dtor at program exit). */
 void stow() {
     global ( Cog fc_ ) {
-        _() { __println("stow:ctor"); }
-        ~() { __println("stow:dtor"); }
+        _() { println(String + "stow:ctor"); }
+        ~() { println(String + "stow:dtor"); }
     }
-    __println("stow fc=" + fc_.cn_);
+    println(String + "stow fc=" + fc_.cn_);
 }
 
 /* (7a) CROSS-GROUP nesting with class members: chainA's ctor touches chainB, so chainB
@@ -704,14 +704,14 @@ void stow() {
 global chainA(
     Cog ac_
 ) {
-    _() { __println("chainA:ctor"); chainB:bc_.cn_ = 1; }
-    ~() { __println("chainA:dtor"); }
+    _() { println(String + "chainA:ctor"); chainB:bc_.cn_ = 1; }
+    ~() { println(String + "chainA:dtor"); }
 }
 global chainB(
     Cog bc_
 ) {
-    _() { __println("chainB:ctor"); }
-    ~() { __println("chainB:dtor"); }
+    _() { println(String + "chainB:ctor"); }
+    ~() { println(String + "chainB:dtor"); }
 }
 
 /* (7b) ARITY: a single-member group and a 3-member group (reverse-order teardown). */
@@ -728,9 +728,9 @@ global trio(
    yields its address. A scalar / array global has no gate — the address is just `@sym`
    / an element GEP. */
 Dial(int d_ = 0) {
-    void turn() { d_ = d_ + 1; __println("dial:turn " + d_); }
-    _() { __println("dial:ctor"); }
-    ~() { __println("dial:dtor"); }
+    void turn() { d_ = d_ + 1; println(String + "dial:turn " + d_); }
+    _() { println(String + "dial:ctor"); }
+    ~() { println(String + "dial:dtor"); }
 }
 global Dial dial_(20);                   /* first access is a METHOD CALL */
 global Dial knob_(5);                    /* first access is ADDRESS-OF */
@@ -752,98 +752,98 @@ int32 main() {
     //global;
 
     /* short-form: read, write, compound update */
-    __println("shots=" + shots_);            // 42
+    println(String + "shots=" + shots_);            // 42
     shots_ = shots_ + 1;
-    __println("shots=" + shots_);            // 43
+    println(String + "shots=" + shots_);            // 43
 
     tally_ = tally_ + 5;
-    __println("tally=" + tally_);            // 5
+    println(String + "tally=" + tally_);            // 5
 
-    __println("ready=" + ready_);            // false
+    println(String + "ready=" + ready_);            // false
     ready_ = true;
-    __println("ready=" + ready_);            // true
+    println(String + "ready=" + ready_);            // true
 
-    __println("ratio=" + ratio_);            // 2.5
+    println(String + "ratio=" + ratio_);            // 2.5
 
     /* bare (keyword-less) file-scope globals */
-    __println("bare=" + bare_);              // 100
+    println(String + "bare=" + bare_);              // 100
     bare_ = bare_ + 1;
-    __println("bare=" + bare_);              // 101
-    __println("loose=" + loose_);            // 7
+    println(String + "bare=" + bare_);              // 101
+    println(String + "loose=" + loose_);            // 7
 
     /* bare (keyword-less) NON-scalar globals: a postfix array and a tuple */
-    __println("barr=" + barr_[0] + "," + barr_[1] + "," + barr_[2]);   // 4,5,6
-    __println("btup=" + btup_[0] + "," + btup_[1]);                     // 3,true
+    println(String + "barr=" + barr_[0] + "," + barr_[1] + "," + barr_[2]);   // 4,5,6
+    println(String + "btup=" + btup_[0] + "," + btup_[1]);                     // 3,true
 
     /* anonymous group: its members are bare, like standalone globals */
-    __println("p=" + anon_p_);               // 11
+    println(String + "p=" + anon_p_);               // 11
     anon_p_ = anon_p_ + 1;
-    __println("p=" + anon_p_);               // 12
-    __println("q=" + anon_q_);               // 22
+    println(String + "p=" + anon_p_);               // 12
+    println(String + "q=" + anon_q_);               // 22
 
     /* compound globals (lazy): array (read + element write), tuple, class-by-value */
-    __println("grid=" + grid_[0] + "," + grid_[1] + "," + grid_[2]);   // 10,20,30
+    println(String + "grid=" + grid_[0] + "," + grid_[1] + "," + grid_[2]);   // 10,20,30
     grid_[1] = 99;
-    __println("grid1=" + grid_[1]);          // 99
-    __println("combo=" + combo_[0] + "," + combo_[1]);                 // 7,true
-    __println("greet=" + greet_);            // hello — the string-init array global
+    println(String + "grid1=" + grid_[1]);          // 99
+    println(String + "combo=" + combo_[0] + "," + combo_[1]);                 // 7,true
+    println(String + "greet=" + greet_);            // hello — the string-init array global
     greet_[0] = 'j';
-    __println("greet2=" + greet_);           // jello — writable storage, not the literal
-    __println("wid=" + w_.id_ + "," + w_.tag_);   // widget:ctor, then 42,7 (arg + default)
-    __println("wid2=" + wid2_.id_ + "," + wid2_.tag_);  // widget:ctor, then 42,7 — `= 42`
+    println(String + "greet2=" + greet_);           // jello — writable storage, not the literal
+    println(String + "wid=" + w_.id_ + "," + w_.tag_);   // widget:ctor, then 42,7 (arg + default)
+    println(String + "wid2=" + wid2_.id_ + "," + wid2_.tag_);  // widget:ctor, then 42,7 — `= 42`
                                                         // is the same field-fill
-    __println("wid3=" + wid3_.id_ + "," + wid3_.tag_);  // widget:ctor, then 7,9
-    __println("wgrid=" + wgrid_[0].id_ + "," + wgrid_[0].tag_
+    println(String + "wid3=" + wid3_.id_ + "," + wid3_.tag_);  // widget:ctor, then 7,9
+    println(String + "wgrid=" + wgrid_[0].id_ + "," + wgrid_[0].tag_
               + " " + wgrid_[1].id_ + "," + wgrid_[1].tag_);   // 1,2 3,4
-    __println("cfg=" + cfg_.id_ + "," + cfg_.tag_);     // 42,7 — copied from w_ in the
+    println(String + "cfg=" + cfg_.id_ + "," + cfg_.tag_);     // 42,7 — copied from w_ in the
                                                         // group's ctor
 
     /* scalar-kind breadth + const-into-global; and a pointer global (null) */
-    __println("fromconst=" + fromconst_);    // 8 (kBonus + 3, const substituted)
-    __println("f32=" + f32_);                // 1.5
-    __println("big=" + big_);                // 5000000000
-    __println("ch=" + ch_);                  // A
-    __println("hue=" + hue_);                // 1 (Hue:kGreen)
-    if (wp_ == nullptr) { __println("wp null"); }   // wp null
+    println(String + "fromconst=" + fromconst_);    // 8 (kBonus + 3, const substituted)
+    println(String + "f32=" + f32_);                // 1.5
+    println(String + "big=" + big_);                // 5000000000
+    println(String + "ch=" + ch_);                  // A
+    println(String + "hue=" + hue_);                // 1 (Hue:kGreen)
+    if (wp_ == nullptr) { println(String + "wp null"); }   // wp null
 
     /* shadowing: a local `shots_` hides the global; `::shots_` reaches it */
     {
         int shots_ = 7;
-        __println("local=" + shots_);        // 7
-        __println("global=" + ::shots_);     // 43
+        println(String + "local=" + shots_);        // 7
+        println(String + "global=" + ::shots_);     // 43
     }
 
     /* named group: qualified read + write, incl. the stacked member */
-    __println("cars=" + garage:cars_);       // 2
-    __println("open=" + garage:open_);       // true
-    __println("lifts=" + garage:lifts_);     // 1
+    println(String + "cars=" + garage:cars_);       // 2
+    println(String + "open=" + garage:open_);       // true
+    println(String + "lifts=" + garage:lifts_);     // 1
     garage:cars_ = garage:cars_ + 10;
-    __println("cars=" + garage:cars_);       // 12
+    println(String + "cars=" + garage:cars_);       // 12
 
     /* --- Stage 2: lazy groups --- */
 
     /* first access constructs `depot`; a repeat access does NOT re-run its ctor */
-    __println("depot before");
-    __println("stock=" + depot:stock_);      // depot:ctor, then 50
-    __println("stock=" + depot:stock_);      // 50 (ctor already ran)
+    println(String + "depot before");
+    println(String + "stock=" + depot:stock_);      // depot:ctor, then 50
+    println(String + "stock=" + depot:stock_);      // 50 (ctor already ran)
 
     /* reverse-order teardown: touching `front` builds `back` mid-ctor */
     front:a_ = 1;                            // front:ctor, then back:ctor
-    __println("back=" + back:b_);            // 9
+    println(String + "back=" + back:b_);            // 9
 
     /* lazy ANONYMOUS group: bare member, lazy ctor on first access */
-    __println("tank=" + tank_);              // tank:ctor, then 5
+    println(String + "tank=" + tank_);              // tank:ctor, then 5
 
     /* `unused` is never touched -> no unused:ctor / unused:dtor appears */
 
     /* --- nesting: a global slots into a namespace / class like a const --- */
-    __println("width=" + Space:width_);      // 8
+    println(String + "width=" + Space:width_);      // 8
     Space:width_ = 12;
-    __println("width=" + Space:width_);      // 12
-    __println("height=" + Space:height_);    // 5 (bare namespace global)
-    __println("depth=" + Space:depth_);      // 3 (anon group in a namespace)
-    __println("cap=" + Bin:cap_);            // 4
-    __println("fill=" + Bin:fill_);          // bin:ctor, then 6 (lazy anon in a class)
+    println(String + "width=" + Space:width_);      // 12
+    println(String + "height=" + Space:height_);    // 5 (bare namespace global)
+    println(String + "depth=" + Space:depth_);      // 3 (anon group in a namespace)
+    println(String + "cap=" + Bin:cap_);            // 4
+    println(String + "fill=" + Bin:fill_);          // bin:ctor, then 6 (lazy anon in a class)
 
     /* function- and method-internal statics: one persistent cell each, per scope */
     tick();                                  // tick=1
@@ -861,40 +861,40 @@ int32 main() {
 
     /* CLASS MEMBERS IN A GROUP — touch ONE member; the whole group constructs as a
        unit (members in declaration order), the user _() (if any) LAST. */
-    __println("c1=" + crate:c1_.cn_);        // cog:ctor, gear:ctor, crate:ctor, then 0
-    __println("c2=" + bundle:c2_.cn_);       // cog:ctor, gear:ctor, then 0
-    __println("c3=" + c3_.cn_);              // cog:ctor, gear:ctor, packa:ctor, then 0
-    __println("c4=" + c4_.cn_);              // cog:ctor, gear:ctor, then 0
+    println(String + "c1=" + crate:c1_.cn_);        // cog:ctor, gear:ctor, crate:ctor, then 0
+    println(String + "c2=" + bundle:c2_.cn_);       // cog:ctor, gear:ctor, then 0
+    println(String + "c3=" + c3_.cn_);              // cog:ctor, gear:ctor, packa:ctor, then 0
+    println(String + "c4=" + c4_.cn_);              // cog:ctor, gear:ctor, then 0
 
     /* --- gaps 1-7: deeper group-member coverage --- */
 
     /* (1a) mixed hook-less: reading the STATIC scalar must NOT construct the class */
-    __println("mn=" + mix1:mn_);             // 5 (static — no cog:ctor here)
-    __println("mc=" + mix1:mc_.cn_);         // cog:ctor, then 0
+    println(String + "mn=" + mix1:mn_);             // 5 (static — no cog:ctor here)
+    println(String + "mc=" + mix1:mc_.cn_);         // cog:ctor, then 0
 
     /* (1b) mixed hook-bearing: the scalar is gated -> touching it fires the group */
-    __println("sn=" + mix2:sn_);             // cog:ctor, mix2:ctor, then 3
+    println(String + "sn=" + mix2:sn_);             // cog:ctor, mix2:ctor, then 3
 
     /* (2a) inline array-of-class member: all 3 elements construct */
-    __println("pack=" + arr1:pack_[1].cn_);  // cog:ctor x3, then 0
+    println(String + "pack=" + arr1:pack_[1].cn_);  // cog:ctor x3, then 0
 
     /* (2b) nested class member: the Cog field constructs, then the Nest body */
-    __println("nest=" + nst1:nn_.inner_.cn_);// cog:ctor, nest:ctor, then 0
+    println(String + "nest=" + nst1:nn_.inner_.cn_);// cog:ctor, nest:ctor, then 0
 
     /* (2c) non-class aggregate member (constructed on touch, no ctor print, no dtor) */
-    __println("nums=" + arr2:nums_[1]);      // 8
+    println(String + "nums=" + arr2:nums_[1]);      // 8
 
     /* (4) touch the SECOND member -> still constructs rc_ before rg_ (decl order) */
-    __println("rev=" + rev1:rg_.gn_);        // cog:ctor, gear:ctor, then 0
+    println(String + "rev=" + rev1:rg_.gn_);        // cog:ctor, gear:ctor, then 0
 
     /* (5) the user ctor reads its member (fully constructed before the ctor runs) */
-    __println("use=" + usem:uc_.cn_);        // cog:ctor, usem:ctor cn=7, then 7
+    println(String + "use=" + usem:uc_.cn_);        // cog:ctor, usem:ctor cn=7, then 7
 
     /* (6a) class-member group in a namespace */
-    __println("y=" + Yard:crate2:yc_.cn_);   // cog:ctor, gear:ctor, crate2:ctor, then 0
+    println(String + "y=" + Yard:crate2:yc_.cn_);   // cog:ctor, gear:ctor, crate2:ctor, then 0
 
     /* (6b) class-member group in a class */
-    __println("v=" + Vault:stash2:vc_.cn_);  // cog:ctor, stash2:ctor, then 0
+    println(String + "v=" + Vault:stash2:vc_.cn_);  // cog:ctor, stash2:ctor, then 0
 
     /* (6c) class-member group in a function: ctor on the FIRST call only */
     stow();                                  // cog:ctor, stow:ctor, stow fc=0
@@ -904,8 +904,8 @@ int32 main() {
     chainA:ac_.cn_ = 0;                      // cog:ctor(ac), chainA:ctor, cog:ctor(bc), chainB:ctor
 
     /* (7b) arity: single-member and 3-member groups (touch the middle member) */
-    __println("solo=" + solo:sc1_.cn_);      // cog:ctor, then 0
-    __println("trio=" + trio:t2_.gn_);       // cog:ctor, gear:ctor, cog:ctor, then 0
+    println(String + "solo=" + solo:sc1_.cn_);      // cog:ctor, then 0
+    println(String + "trio=" + trio:t2_.gn_);       // cog:ctor, gear:ctor, cog:ctor, then 0
 
     /* (3) `dormant` is never touched -> no dormant:ctor / cog:ctor / dtor for it */
 
@@ -916,23 +916,23 @@ int32 main() {
        persists and a later read sees it (the method-on-global first-mutation bug). */
     dial_.turn();                            // dial:ctor, then dial:turn 21
     dial_.turn();                            // dial:turn 22
-    __println("dial=" + dial_.d_);           // 22
+    println(String + "dial=" + dial_.d_);           // 22
 
     /* ADDRESS-OF a LAZY class global: `^knob_` is the FIRST access, so it fires the
        construction gate (dial:ctor); a later method call does NOT re-construct. */
     Dial^ pk = ^knob_;                       // dial:ctor
     knob_.turn();                            // dial:turn 6 (already constructed)
-    __println("knob=" + pk^.d_);             // 6 (read through the reference)
+    println(String + "knob=" + pk^.d_);             // 6 (read through the reference)
 
     /* ADDRESS-OF a scalar global: write through `^addr_`; the global itself changes. */
     int^ pa = ^addr_;
     pa^ = pa^ + 7;
-    __println("addr=" + addr_);              // 57
+    println(String + "addr=" + addr_);              // 57
 
     /* ADDRESS-OF a global ARRAY element: `^grid_[2]` -> an int^ to the element. */
     int^ pe = ^grid_[2];
     pe^ = pe^ + 100;
-    __println("grid2=" + grid_[2]);          // 130
+    println(String + "grid2=" + grid_[2]);          // 130
 
     /* dial_ + knob_ are lazy classes constructed LAST (here), so they tear down FIRST
        at exit (LIFO): knob_ then dial_ (each a dial:dtor), ahead of the gap groups. */
@@ -1072,7 +1072,7 @@ int32 main() {
    its storage story (a pointer into what?) is the string-constant gap. */
 //-EXPECT-ERROR: String constants are not yet supported
 //global char[] giter_ = "iter";
-//int32 use_giter() { __println("gi = " + giter_); return 0; }
+//int32 use_giter() { println(String + "gi = " + giter_); return 0; }
 
 /* a POINTER global initialized to the ADDRESS of another global. `^shots_` is a
    link-time constant in C's model; it is still a READ of another global here, and the
@@ -1088,7 +1088,7 @@ int32 main() {
 /* every SCOPE a global can be declared in gets the same rule: a FUNCTION-INTERNAL
    static... */
 //-EXPECT-ERROR: is not a constant expression
-//void ncfunc() { global int ncs_ = shots_; __println("s=" + ncs_); }
+//void ncfunc() { global int ncs_ = shots_; println(String + "s=" + ncs_); }
 
 /* ...a NAMED GROUP member (the long form)... */
 //-EXPECT-ERROR: is not a constant expression

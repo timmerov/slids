@@ -31,7 +31,7 @@ to module-level functions exactly like a file-scope class's.
 import string;
 
 Shadowed(int x_) {
-    _() { __println("FILE:Shadowed: " + x_); }
+    _() { println(String + "FILE:Shadowed: " + x_); }
     ~() { }
 }
 
@@ -43,10 +43,10 @@ int32 main() {
 
     Function(int x_ = -1) {
         _() {
-            __println("main:Function:ctor: " + x_);
+            println(String + "main:Function:ctor: " + x_);
         }
         ~() {
-            __println("main:Function:dtor: " + x_);
+            println(String + "main:Function:dtor: " + x_);
         }
     }
 
@@ -54,10 +54,10 @@ int32 main() {
         NestedFunction obj(20);
         NestedFunction(int x_ = -1) {
             _() {
-                __println("foo:NestedFunction:ctor: " + x_);
+                println(String + "foo:NestedFunction:ctor: " + x_);
             }
             ~() {
-                __println("foo:NestedFunction:dtor: " + x_);
+                println(String + "foo:NestedFunction:dtor: " + x_);
             }
         }
     }
@@ -66,10 +66,10 @@ int32 main() {
         Function obj(30);
         Function(int x_ = -1) {
             _() {
-                __println("shadow:Function:ctor: " + x_);
+                println(String + "shadow:Function:ctor: " + x_);
             }
             ~() {
-                __println("shadow:Function:dtor: " + x_);
+                println(String + "shadow:Function:dtor: " + x_);
             }
         }
     }
@@ -78,10 +78,10 @@ int32 main() {
         Block obj(40);
         Block(int x_ = -1) {
             _() {
-                __println("main:Block:ctor: " + x_);
+                println(String + "main:Block:ctor: " + x_);
             }
             ~() {
-                __println("main:Block:dtor: " + x_);
+                println(String + "main:Block:dtor: " + x_);
             }
         }
     }
@@ -91,10 +91,10 @@ int32 main() {
         If obj(50);
         If(int x_ = -1) {
             _() {
-                __println("main:If:ctor: " + x_);
+                println(String + "main:If:ctor: " + x_);
             }
             ~() {
-                __println("main:If:dtor: " + x_);
+                println(String + "main:If:dtor: " + x_);
             }
         }
     }
@@ -102,10 +102,10 @@ int32 main() {
         Else obj(60);
         Else(int x_ = -1) {
             _() {
-                __println("main:Else:ctor: " + x_);
+                println(String + "main:Else:ctor: " + x_);
             }
             ~() {
-                __println("main:Else:dtor: " + x_);
+                println(String + "main:Else:dtor: " + x_);
             }
         }
     }
@@ -114,10 +114,10 @@ int32 main() {
         While obj(70);
         While(int x_ = -1) {
             _() {
-                __println("main:While:ctor: " + x_);
+                println(String + "main:While:ctor: " + x_);
             }
             ~() {
-                __println("main:While:dtor: " + x_);
+                println(String + "main:While:dtor: " + x_);
             }
         }
         break;
@@ -127,10 +127,10 @@ int32 main() {
         WhilePost obj(80);
         WhilePost(int x_ = -1) {
             _() {
-                __println("main:WhilePost:ctor: " + x_);
+                println(String + "main:WhilePost:ctor: " + x_);
             }
             ~() {
-                __println("main:WhilePost:dtor: " + x_);
+                println(String + "main:WhilePost:dtor: " + x_);
             }
         }
         break;
@@ -140,10 +140,10 @@ int32 main() {
         For obj(90);
         For(int x_ = -1) {
             _() {
-                __println("main:For:ctor: " + x_);
+                println(String + "main:For:ctor: " + x_);
             }
             ~() {
-                __println("main:For:dtor: " + x_);
+                println(String + "main:For:dtor: " + x_);
             }
         }
     }
@@ -153,10 +153,10 @@ int32 main() {
         Switch obj(100);
         Switch(int x_ = -1) {
             _() {
-                __println("main:Switch:ctor: " + x_);
+                println(String + "main:Switch:ctor: " + x_);
             }
             ~() {
-                __println("main:Switch:dtor: " + x_);
+                println(String + "main:Switch:dtor: " + x_);
             }
         }
     }
@@ -166,19 +166,19 @@ int32 main() {
     // field's ctor/dtor (the field's hooks fire even though Outer has none).
     {
         Inner(int v_) {
-            _() { __println("Inner:ctor: " + v_); }
-            ~() { __println("Inner:dtor: " + v_); }
+            _() { println(String + "Inner:ctor: " + v_); }
+            ~() { println(String + "Inner:dtor: " + v_); }
         }
         Outer(Inner i_) { }
         Outer o;
-        __println("outer.i = " + o.i_.v_);
+        println(String + "outer.i = " + o.i_.v_);
     }
 
     // a local class shadows a same-named FILE-SCOPE class (innermost wins; the
     // file-scope Shadowed is never reached).
     {
         Shadowed(int x_) {
-            _() { __println("LOCAL:Shadowed: " + x_); }
+            _() { println(String + "LOCAL:Shadowed: " + x_); }
             ~() { }
         }
         Shadowed s(8);
@@ -192,16 +192,16 @@ int32 main() {
             enum int Dir (kN, kS);
         }
         Geo:Real r = 1.25;
-        __println(##type(r) + " e=" + Geo:kE + " S=" + Geo:Dir:kS);
+        println(String + ##type(r) + " e=" + Geo:kE + " S=" + Geo:Dir:kS);
     }
 
     // sizeof + new / delete of a local class.
     {
         Heap(int x_) {
-            _() { __println("Heap:ctor: " + x_); }
-            ~() { __println("Heap:dtor: " + x_); }
+            _() { println(String + "Heap:ctor: " + x_); }
+            ~() { println(String + "Heap:dtor: " + x_); }
         }
-        __println("sizeof Heap = " + sizeof(Heap));
+        println(String + "sizeof Heap = " + sizeof(Heap));
         Heap^ hp = new Heap(11);
         delete hp;
     }
@@ -211,15 +211,15 @@ int32 main() {
     // transitively (Held's ctor before Holder's, dtors in reverse).
     {
         Holder(Held h_) {
-            _() { __println("Holder:ctor: " + h_.v_); }
-            ~() { __println("Holder:dtor: " + h_.v_); }
+            _() { println(String + "Holder:ctor: " + h_.v_); }
+            ~() { println(String + "Holder:dtor: " + h_.v_); }
         }
         Held(int v_) {
-            _() { __println("Held:ctor: " + v_); }
-            ~() { __println("Held:dtor: " + v_); }
+            _() { println(String + "Held:ctor: " + v_); }
+            ~() { println(String + "Held:dtor: " + v_); }
         }
         Holder hh(7);
-        __println("hh.h.v = " + hh.h_.v_);
+        println(String + "hh.h.v = " + hh.h_.v_);
     }
 
     // no-initializer aggregate-of-LOCAL-class default construction: the leaf class
@@ -228,20 +228,20 @@ int32 main() {
     // and new[] of a local class.
     {
         Loc(int x_ = 7) {
-            _() { __println("Loc:ctor: " + x_); }
-            ~() { __println("Loc:dtor: " + x_); }
+            _() { println(String + "Loc:ctor: " + x_); }
+            ~() { println(String + "Loc:dtor: " + x_); }
         }
 
         // array of local class, no initializer.
-        { Loc arr[2]; __println("arr: " + arr[0].x_ + " " + arr[1].x_); }
+        { Loc arr[2]; println(String + "arr: " + arr[0].x_ + " " + arr[1].x_); }
 
         // tuple of local class, no initializer.
-        { (Loc, Loc) tup; __println("tup: " + tup[0].x_ + " " + tup[1].x_); }
+        { (Loc, Loc) tup; println(String + "tup: " + tup[0].x_ + " " + tup[1].x_); }
 
         // a class leaf buried in MIXED arrays + tuples, no initializer.
         {
             ( Loc[2], Loc ) deep[2];
-            __println("deep: " + deep[0][0][0].x_ + " " + deep[0][0][1].x_ + " " + deep[0][1].x_
+            println(String + "deep: " + deep[0][0][0].x_ + " " + deep[0][0][1].x_ + " " + deep[0][1].x_
                       + " | " + deep[1][0][0].x_ + " " + deep[1][0][1].x_ + " " + deep[1][1].x_);
         }
 
@@ -249,7 +249,7 @@ int32 main() {
         {
             Loc arr[2] = (1, 2);
             (Loc, Loc) tup = (3, 4);
-            __println("init: " + arr[0].x_ + " " + arr[1].x_ + " " + tup[0].x_ + " " + tup[1].x_);
+            println(String + "init: " + arr[0].x_ + " " + arr[1].x_ + " " + tup[0].x_ + " " + tup[1].x_);
         }
 
         // new[] / delete of a local class (each element default-constructed).
@@ -260,12 +260,12 @@ int32 main() {
     // owner default-constructs each element, firing the field's hooks.
     {
         Cell(int v_ = 3) {
-            _() { __println("Cell:ctor: " + v_); }
-            ~() { __println("Cell:dtor: " + v_); }
+            _() { println(String + "Cell:ctor: " + v_); }
+            ~() { println(String + "Cell:dtor: " + v_); }
         }
         Grid(Cell cells_[2]) { }
         Grid grd;
-        __println("grid: " + grd.cells_[0].v_ + " " + grd.cells_[1].v_);
+        println(String + "grid: " + grd.cells_[0].v_ + " " + grd.cells_[1].v_);
     }
 
     return 0;
@@ -284,6 +284,6 @@ int32 main() {
 //-EXPECT-ERROR: Unresolved identifier 'outer'
 //void capbody() {
 //    int outer = 7;
-//    Cap(int x_) { _(){ __println("" + outer); } ~(){} }
+//    Cap(int x_) { _(){ println(String + "" + outer); } ~(){} }
 //    Cap c(1);
 //}

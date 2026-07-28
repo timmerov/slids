@@ -100,39 +100,39 @@ int32 main() {
 
     Space:Float press = 101.325;
     // should be Space:Float
-    __println(##type(press) + " pressure = " + press);
+    println(String + ##type(press) + " pressure = " + press);
 
     // should be const Space:Float
-    __println(##type(Space:kPi) + " pi = " + Space:kPi);
+    println(String + ##type(Space:kPi) + " pi = " + Space:kPi);
 
-    __println("count: " + Space:Count:kOne + " " + Space:Count:kTwo + " " + Space:Count:kThree);
+    println(String + "count: " + Space:Count:kOne + " " + Space:Count:kTwo + " " + Space:Count:kThree);
 
     // should be Time:Count
     Time:Count zero = Time:Count:kZero;
-    __println(##type(zero) + " zero = " + zero);
+    println(String + ##type(zero) + " zero = " + zero);
 
     /* a class holding a namespace (Box:Util) — qualified access, deep nesting,
        and a method that reaches the nested namespace's members bare. */
     Box b(3);
-    __println("scaled = " + b.scaled());
-    __println("Box:Util:kScale = " + Box:Util:kScale);
-    __println("Box:Util:Deep:kZ = " + Box:Util:Deep:kZ);
+    println(String + "scaled = " + b.scaled());
+    println(String + "Box:Util:kScale = " + Box:Util:kScale);
+    println(String + "Box:Util:Deep:kZ = " + Box:Util:Deep:kZ);
 
     /* a class in a namespace in a class — internal use and external qualified
        construction (Crate:Bin:Item). */
     Crate cr(7);
-    __println("crate first = " + cr.first());
+    println(String + "crate first = " + cr.first());
     Crate:Bin:Item di(55);
-    __println("Crate:Bin:Item = " + di.sku());
+    println(String + "Crate:Bin:Item = " + di.sku());
 
     /* a method signature forward-references a sibling class. */
     Caller ho(0);
     Widget wg(7);
-    __println("useW = " + ho.useW(wg));
+    println(String + "useW = " + ho.useW(wg));
 
     /* a class field typed by a host member alias. */
     Gauge gg(5);
-    __println("gauge = " + gg.show());
+    println(String + "gauge = " + gg.show());
 
     return 0;
 }
@@ -149,7 +149,7 @@ int32 main() {
 
 /* file-scope class: naked expression-statement. */
 //-EXPECT-ERROR: A class body holds the constructor
-//BareExpr(int x_) { __println("naked"); }
+//BareExpr(int x_) { println(String + "naked"); }
 
 /* file-scope class: naked variable declaration. */
 //-EXPECT-ERROR: A class body holds the constructor
@@ -162,7 +162,7 @@ int32 main() {
 /* hoisted class: naked expression-statement. */
 //-EXPECT-ERROR: A class body holds the constructor
 //BareHostExpr(int x_) {
-//    Mem(int y_) { __println("naked"); }
+//    Mem(int y_) { println(String + "naked"); }
 //}
 
 /* hoisted class: naked variable declaration. */
@@ -180,7 +180,7 @@ int32 main() {
 /* local class: naked expression-statement. */
 //-EXPECT-ERROR: A class body holds the constructor
 //int neg_bare_local_expr() {
-//    BareLoc(int x_) { __println("naked"); }
+//    BareLoc(int x_) { println(String + "naked"); }
 //    return 0;
 //}
 
@@ -206,7 +206,7 @@ int32 main() {
 
 /* file-scope class (Space): a member const is not visible bare. */
 //-EXPECT-ERROR: 'kPi' needs a namespace qualifier.
-//int neg_leak_const() { __println("" + kPi); return 0; }
+//int neg_leak_const() { println(String + "" + kPi); return 0; }
 
 /* file-scope class (Space): a member enum type is not visible bare. */
 //-EXPECT-ERROR: 'Count' needs a namespace qualifier.
@@ -214,16 +214,16 @@ int32 main() {
 
 /* file-scope class (Space): a member enum value is not visible bare. */
 //-EXPECT-ERROR: 'kOne' needs a namespace qualifier.
-//int neg_leak_enum_value() { __println("" + kOne); return 0; }
+//int neg_leak_enum_value() { println(String + "" + kOne); return 0; }
 
 /* file-scope class (Space): the enum keeps its name in the path — its members
    do not flatten into the class. */
 //-EXPECT-ERROR: 'Space' has no member 'kOne'.
-//int neg_leak_flatten() { __println("" + Space:kOne); return 0; }
+//int neg_leak_flatten() { println(String + "" + Space:kOne); return 0; }
 
 /* file-scope class (Space): the enum's own name is not a bare namespace. */
 //-EXPECT-ERROR: 'Count' is not a namespace.
-//int neg_leak_enum_bare_qual() { __println("" + Count:kOne); return 0; }
+//int neg_leak_enum_bare_qual() { println(String + "" + Count:kOne); return 0; }
 
 /* hoisted class (Host:Mem): a member alias is not visible bare. */
 //-EXPECT-ERROR: 'Float' needs a namespace qualifier.
@@ -237,7 +237,7 @@ int32 main() {
 //HostConst(int x_) {
 //    Mem(int y_) { const int kPi = 3; }
 //}
-//int neg_hoist_const() { __println("" + kPi); return 0; }
+//int neg_hoist_const() { println(String + "" + kPi); return 0; }
 
 /* hoisted class (Host:Mem): a member enum type is not visible bare. */
 //-EXPECT-ERROR: 'Count' needs a namespace qualifier.
@@ -251,14 +251,14 @@ int32 main() {
 //HostEnumVal(int x_) {
 //    Mem(int y_) { enum int Count (kZero, kOne, kTwo); }
 //}
-//int neg_hoist_enum_value() { __println("" + kOne); return 0; }
+//int neg_hoist_enum_value() { println(String + "" + kOne); return 0; }
 
 /* hoisted class (Host:Mem): the enum does not flatten into the hoisted class. */
 //-EXPECT-ERROR: 'Host:Mem' has no member 'kOne'.
 //Host(int x_) {
 //    Mem(int y_) { enum int Count (kZero, kOne, kTwo); }
 //}
-//int neg_hoist_flatten() { __println("" + Host:Mem:kOne); return 0; }
+//int neg_hoist_flatten() { println(String + "" + Host:Mem:kOne); return 0; }
 
 /* hoisted class: the hoisted name needs its host — bare `Mem` is not reachable. */
 //-EXPECT-ERROR: 'Mem' is not a namespace.
@@ -286,7 +286,7 @@ int32 main() {
 //-EXPECT-ERROR: 'kPi' needs a namespace qualifier.
 //int neg_local_const() {
 //    Loc(int x_) { const int kPi = 3; }
-//    __println("" + kPi);
+//    println(String + "" + kPi);
 //    return 0;
 //}
 
@@ -302,7 +302,7 @@ int32 main() {
 //-EXPECT-ERROR: 'kOne' needs a namespace qualifier.
 //int neg_local_enum_value() {
 //    Loc(int x_) { enum int Count (kZero, kOne, kTwo); }
-//    __println("" + kOne);
+//    println(String + "" + kOne);
 //    return 0;
 //}
 
@@ -310,7 +310,7 @@ int32 main() {
 //-EXPECT-ERROR: 'Loc' has no member 'kOne'.
 //int neg_local_flatten() {
 //    Loc(int x_) { enum int Count (kZero, kOne, kTwo); }
-//    __println("" + Loc:kOne);
+//    println(String + "" + Loc:kOne);
 //    return 0;
 //}
 
@@ -325,7 +325,7 @@ int32 main() {
 /* the nested namespace keeps its name in the path — its members do not flatten
    into the class. */
 //-EXPECT-ERROR: 'Box' has no member 'kScale'.
-//int neg_ns_no_flatten() { __println("" + Box:kScale); return 0; }
+//int neg_ns_no_flatten() { println(String + "" + Box:kScale); return 0; }
 
 /* a nested-namespace member is not visible bare in a method — it needs the
    namespace qualifier (Util:kScale), like a free function in that namespace. */

@@ -55,7 +55,7 @@ the header file declares the incomplete class.
 the private fields are hidden from the public api.
 
 header.slh:
-    String(...) { /*api*/ }
+    Rope(...) { /*api*/ }
 
 the library file completes the class and implements the api.
 only one source file completes the class.
@@ -69,10 +69,10 @@ all fields initialized normally.
 then it calls pctor instead of ctor.
 
 string.sl:
-    String(intptr size_, intptr cap_, char[] ptr_) {
+    Rope(intptr size_, intptr cap_, char[] ptr_) {
         /*implementation*/
     }
-    String s;
+    Rope s;
 
 the user file may re-open the incomplete class to add local api.
 the user file does not complete the class.
@@ -86,10 +86,10 @@ then the external ctor is called.
 
 main.sl:
     import string;
-    String(...) {
+    Rope(...) {
         /*author api*/
     }
-    String s;
+    Rope s;
 
 from the above we can observe the class does not need to be
 completed in a source file.
@@ -119,20 +119,22 @@ open -> size deferred to link-time __$sizeof(). is_open / public-prefix are the 
 
 /* --- the running spec example: one class grown across five re-opens --- */
 
+import string;
+
 Class(int incomplete = 1, ...) {           /* declare INCOMPLETE: 1 field + `...` */
-    void method1() { __println("method1"); }
+    void method1() { println(String + "method1"); }
 }
 Class(...) {                               /* re-open, no new fields, still incomplete */
-    void method2() { __println("method2"); }
+    void method2() { println(String + "method2"); }
 }
 Class(int still_incomplete = 2, ...) {     /* append a field, still incomplete */
-    void method3() { __println("method3"); }
+    void method3() { println(String + "method3"); }
 }
 Class(int completed_optional = 3) {        /* no `...` -> COMPLETE the class */
-    void method4() { __println("method4"); }
+    void method4() { println(String + "method4"); }
 }
 Class() {                                  /* re-open a COMPLETED class: no new fields */
-    void method5() { __println("method5"); }
+    void method5() { println(String + "method5"); }
 }
 
 /* --- an incomplete class WITH a lifecycle: the ctor is declared in the FIRST opening
@@ -140,11 +142,11 @@ Class() {                                  /* re-open a COMPLETED class: no new 
    into a single slid, so the earlier body sees the later field. --- */
 
 Gadget(int id = 0, ...) {
-    _() { __println("Gadget:ctor " + id + "/" + extra); }
-    ~() { __println("Gadget:dtor " + id); }
+    _() { println(String + "Gadget:ctor " + id + "/" + extra); }
+    ~() { println(String + "Gadget:dtor " + id); }
 }
 Gadget(int extra = 7) {
-    void show() { __println("Gadget " + id + "/" + extra); }
+    void show() { println(String + "Gadget " + id + "/" + extra); }
 }
 
 /* --- an empty class completed via `(...)` then `()`: 1 byte. --- */
@@ -156,17 +158,17 @@ Empty() { }
    local, each grown then completed in its own scope. --- */
 
 Space {
-    Widget(int w = 4, ...) { void w1() { __println("w1 w=" + w); } }
-    Widget(int h = 5)      { void w2() { __println("w2 h=" + h); } }
+    Widget(int w = 4, ...) { void w1() { println(String + "w1 w=" + w); } }
+    Widget(int h = 5)      { void w2() { println(String + "w2 h=" + h); } }
 }
 
 void locals() {
-    Local(int x = 9, ...) { void l1() { __println("l1 x=" + x); } }
-    Local(int y = 8)      { void l2() { __println("l2 y=" + y); } }
+    Local(int x = 9, ...) { void l1() { println(String + "l1 x=" + x); } }
+    Local(int y = 8)      { void l2() { println(String + "l2 y=" + y); } }
     Local lo;
     lo.l1();
     lo.l2();
-    __println("local=" + lo.x + "," + lo.y);
+    println(String + "local=" + lo.x + "," + lo.y);
 }
 
 /* --- APPENDED-FIELD variety: a typeless (inferred) field, a defaultless field
@@ -184,16 +186,16 @@ Infer(int d = kSeed + 5) { }       /* default names a const; completes -> 105 */
    the appended-field path). --- */
 
 Cell(int v = 0) {
-    _() { __println("Cell:ctor " + v); }
-    ~() { __println("Cell:dtor " + v); }
+    _() { println(String + "Cell:ctor " + v); }
+    ~() { println(String + "Cell:dtor " + v); }
 }
 Holder(int id = 0, ...) { }
-Holder(Cell cell) { void show() { __println("holder " + id + " cell=" + cell.v); } }
+Holder(Cell cell) { void show() { println(String + "holder " + id + " cell=" + cell.v); } }
 
 /* --- a VIRTUAL incomplete class (the re-open's `_$vptr` is skipped when appending). --- */
 
-Shape(int tag = 0, ...) { virtual void draw() { __println("draw tag=" + tag); } }
-Shape(int extra = 9)    { void more() { __println("more " + extra); } }
+Shape(int tag = 0, ...) { virtual void draw() { println(String + "draw tag=" + tag); } }
+Shape(int extra = 9)    { void more() { println(String + "more " + extra); } }
 
 /* --- non-field code-body members (const + enum) added across openings, alongside the
    field growth. --- */
@@ -201,12 +203,12 @@ Shape(int extra = 9)    { void more() { __println("more " + extra); } }
 Members(int a = 1, ...) { const int kK = 7; }
 Members(int b = 2) {
     enum E ( kZero, kOne );
-    void show() { __println("members " + a + "/" + b + " k=" + kK + " e=" + E:kOne); }
+    void show() { println(String + "members " + a + "/" + b + " k=" + kK + " e=" + E:kOne); }
 }
 
 /* --- an incomplete DERIVED class: the base is field 0, own incomplete fields follow. --- */
 
-Base(int b = 1) { void bm() { __println("bm " + b); } }
+Base(int b = 1) { void bm() { println(String + "bm " + b); } }
 Base : Der(int d = 2, ...) { }
 Base : Der(int e = 3)      { }
 
@@ -218,14 +220,14 @@ int32 main() {
     c.method3();
     c.method4();
     c.method5();
-    __println("defaults=" + c.incomplete + "," + c.still_incomplete + "," + c.completed_optional);
+    println(String + "defaults=" + c.incomplete + "," + c.still_incomplete + "," + c.completed_optional);
 
     /* full positional init (single-file has no privacy: every field is initializable) */
     Class cf(10, 20, 30);
-    __println("full=" + cf.incomplete + "," + cf.still_incomplete + "," + cf.completed_optional);
+    println(String + "full=" + cf.incomplete + "," + cf.still_incomplete + "," + cf.completed_optional);
 
     /* sizeof is the runtime __$sizeof() (three int fields) */
-    __println("sizeof(Class)=" + sizeof(Class));
+    println(String + "sizeof(Class)=" + sizeof(Class));
 
     /* a lifecycle incomplete class: the first opening's ctor sees the later field;
        the dtor fires at this block's exit */
@@ -235,7 +237,7 @@ int32 main() {
     }
 
     /* an empty completed incomplete class is 1 byte */
-    __println("sizeof(Empty)=" + sizeof(Empty));
+    println(String + "sizeof(Empty)=" + sizeof(Empty));
 
     /* namespace- and function-scoped incomplete classes */
     Space:Widget sw;
@@ -245,13 +247,13 @@ int32 main() {
 
     /* partial positional (first field set, rest default) and the `=` init-list form */
     Class cp(10);
-    __println("partial=" + cp.incomplete + "," + cp.still_incomplete + "," + cp.completed_optional);
+    println(String + "partial=" + cp.incomplete + "," + cp.still_incomplete + "," + cp.completed_optional);
     Class ce = (11, 22, 33);
-    __println("initlist=" + ce.incomplete + "," + ce.still_incomplete + "," + ce.completed_optional);
+    println(String + "initlist=" + ce.incomplete + "," + ce.still_incomplete + "," + ce.completed_optional);
 
     /* appended fields: typeless (inferred), defaultless (zero-init), default-from-const */
     Infer inf;
-    __println("infer=" + inf.a + "," + inf.b + "," + inf.c + "," + inf.d);
+    println(String + "infer=" + inf.a + "," + inf.b + "," + inf.c + "," + inf.d);
 
     /* an appended class-typed field default-constructs; its dtor fires at block exit */
     {
@@ -271,7 +273,7 @@ int32 main() {
     /* an incomplete derived class: base method + own appended fields */
     Der der;
     der.bm();
-    __println("der=" + der.d + "," + der.e);
+    println(String + "der=" + der.d + "," + der.e);
 
     return 0;
 }

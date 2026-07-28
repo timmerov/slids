@@ -246,51 +246,51 @@ int empty_else() {
 }
 
 int32 main() {
-    __println("both_arms(5) = " + both_arms(5));        // 10
-    __println("both_arms(-5) = " + both_arms(-5));      // 20
-    __println("one_arm_returns(5) = " + one_arm_returns(5));    // 99
-    __println("one_arm_returns(-5) = " + one_arm_returns(-5));  // 7
-    __println("guard_clause(5) = " + guard_clause(5));      // 100
-    __println("guard_clause(-2) = " + guard_clause(-2));    // -1
-    __println("band(-1) = " + band(-1));    // 0
-    __println("band(5) = " + band(5));      // 1
-    __println("band(50) = " + band(50));    // 2
-    __println("band(500) = " + band(500));  // 3
-    __println("chain_return(-5) = " + chain_return(-5));    // -1
-    __println("chain_return(5) = " + chain_return(5));      // 1
-    __println("chain_return(50) = " + chain_return(50));    // 2
-    __println("clamp_low(7) = " + clamp_low(7));    // 7
-    __println("clamp_low(-3) = " + clamp_low(-3));  // 0
-    __println("nested(1, 1) = " + nested(1, 1));     // 1
-    __println("nested(1, -1) = " + nested(1, -1));   // 2
-    __println("nested(-1, 0) = " + nested(-1, 0));   // 3
-    __println("arm_scope(3) = " + arm_scope(3));    // 5
-    __println("arm_scope(-3) = " + arm_scope(-3));  // 9
-    __println("sign(3) = " + sign(3));      // 1
-    __println("sign(-3) = " + sign(-3));    // -1
-    __println("empty_arms(3) = " + empty_arms(3));  // 7
-    __println("read_one_arm(5) = " + read_one_arm(5));      // 42
-    __println("read_one_arm(-5) = " + read_one_arm(-5));    // 1
-    __println("coerce_cond(7) = " + coerce_cond(7));    // 11
-    __println("coerce_cond(0) = " + coerce_cond(0));    // 10
-    __println("compound(1, 1) = " + compound(1, 1));    // 11
-    __println("compound(-1, 1) = " + compound(-1, 1));  // 110
-    __println("ppid_cond(5) = " + ppid_cond(5));    // 1006
-    __println("ppid_cond(0) = " + ppid_cond(0));    // 1
-    __println("always_then() = " + always_then());  // 1
-    __println("empty_else() = " + empty_else());    // 1
+    println(String + "both_arms(5) = " + both_arms(5));        // 10
+    println(String + "both_arms(-5) = " + both_arms(-5));      // 20
+    println(String + "one_arm_returns(5) = " + one_arm_returns(5));    // 99
+    println(String + "one_arm_returns(-5) = " + one_arm_returns(-5));  // 7
+    println(String + "guard_clause(5) = " + guard_clause(5));      // 100
+    println(String + "guard_clause(-2) = " + guard_clause(-2));    // -1
+    println(String + "band(-1) = " + band(-1));    // 0
+    println(String + "band(5) = " + band(5));      // 1
+    println(String + "band(50) = " + band(50));    // 2
+    println(String + "band(500) = " + band(500));  // 3
+    println(String + "chain_return(-5) = " + chain_return(-5));    // -1
+    println(String + "chain_return(5) = " + chain_return(5));      // 1
+    println(String + "chain_return(50) = " + chain_return(50));    // 2
+    println(String + "clamp_low(7) = " + clamp_low(7));    // 7
+    println(String + "clamp_low(-3) = " + clamp_low(-3));  // 0
+    println(String + "nested(1, 1) = " + nested(1, 1));     // 1
+    println(String + "nested(1, -1) = " + nested(1, -1));   // 2
+    println(String + "nested(-1, 0) = " + nested(-1, 0));   // 3
+    println(String + "arm_scope(3) = " + arm_scope(3));    // 5
+    println(String + "arm_scope(-3) = " + arm_scope(-3));  // 9
+    println(String + "sign(3) = " + sign(3));      // 1
+    println(String + "sign(-3) = " + sign(-3));    // -1
+    println(String + "empty_arms(3) = " + empty_arms(3));  // 7
+    println(String + "read_one_arm(5) = " + read_one_arm(5));      // 42
+    println(String + "read_one_arm(-5) = " + read_one_arm(-5));    // 1
+    println(String + "coerce_cond(7) = " + coerce_cond(7));    // 11
+    println(String + "coerce_cond(0) = " + coerce_cond(0));    // 10
+    println(String + "compound(1, 1) = " + compound(1, 1));    // 11
+    println(String + "compound(-1, 1) = " + compound(-1, 1));  // 110
+    println(String + "ppid_cond(5) = " + ppid_cond(5));    // 1006
+    println(String + "ppid_cond(0) = " + ppid_cond(0));    // 1
+    println(String + "always_then() = " + always_then());  // 1
+    println(String + "empty_else() = " + empty_else());    // 1
 
     /* a reference / iterator coerces to bool as an if condition (non-null true,
        null false). */
     {
         int rx = 5;
         int^ rref = ^rx;
-        if (rref) { __println("if-ref true"); }                              // true
+        if (rref) { println(String + "if-ref true"); }                              // true
         int^ rnull = nullptr;
-        if (rnull) { __println("dead"); } else { __println("if-null false"); }   // false
+        if (rnull) { println(String + "dead"); } else { println(String + "if-null false"); }   // false
         int ra[2] = (1, 2);
         int[] rit = ^ra[0];
-        if (rit) { __println("if-iter true"); }                             // true
+        if (rit) { println(String + "if-iter true"); }                             // true
     }
     return 0;
 }
@@ -319,7 +319,7 @@ negatives — one //-block uncommented per run.
 //        r = 1;
 //    } else {
 //        int other = 2;
-//        __println("other = " + other);
+//        println(String + "other = " + other);
 //    }
 //    return r;
 //}
@@ -388,7 +388,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Unreachable statement.
 //int neg_if_false() {
 //    if (false) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -398,7 +398,7 @@ negatives — one //-block uncommented per run.
 //int neg_if_true_else() {
 //    if (true) {
 //    } else {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -408,7 +408,7 @@ negatives — one //-block uncommented per run.
 //int neg_if_empty_else() {
 //    if () {
 //    } else {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -418,7 +418,7 @@ negatives — one //-block uncommented per run.
 //int neg_const_subst() {
 //    const bool DEBUG = false;
 //    if (DEBUG) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -427,7 +427,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Unreachable statement.
 //int neg_folded_false() {
 //    if (1 > 2) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -436,7 +436,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Unreachable statement.
 //int neg_int_false() {
 //    if (0) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -446,7 +446,7 @@ negatives — one //-block uncommented per run.
 //int neg_int_true_else() {
 //    if (5) {
 //    } else {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -455,7 +455,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Unreachable statement.
 //int neg_char_false() {
 //    if ('\0') {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -464,7 +464,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Unreachable statement.
 //int neg_float_false() {
 //    if (0.0) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -475,7 +475,7 @@ negatives — one //-block uncommented per run.
 //int neg_const_else_if(int x) {
 //    if (true) {
 //    } else if (x > 0) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -488,7 +488,7 @@ negatives — one //-block uncommented per run.
 //int neg_if_tuple() {
 //    (int, int) t = (1, 2);
 //    if (t) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -497,7 +497,7 @@ negatives — one //-block uncommented per run.
 //int neg_if_array() {
 //    int a[2] = (1, 2);
 //    if (a) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -507,7 +507,7 @@ negatives — one //-block uncommented per run.
 //    Box(int v_) { }
 //    Box b(1);
 //    if (b) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -519,7 +519,7 @@ negatives — one //-block uncommented per run.
 //    int x = 5;
 //    void^ p = ^x;
 //    if (p^) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}

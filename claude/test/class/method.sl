@@ -50,16 +50,16 @@ import string;
 Method(int x_) {
     _() {
         x_ = x_ + 1;
-        __println("Method:ctor: " + x_);
+        println(String + "Method:ctor: " + x_);
     }
     ~() {
         x_ = x_ + 1;
-        __println("Method:dtor: " + x_);
+        println(String + "Method:dtor: " + x_);
     }
 
     void print() {
         x_ = x_ + 1;
-        __println("Method:print: " + x_);
+        println(String + "Method:print: " + x_);
     }
 
     int get() {
@@ -68,11 +68,11 @@ Method(int x_) {
     }
 
     void const constfn() {
-        __println("Method:constfn: " + x_);
+        println(String + "Method:constfn: " + x_);
     }
 
     (const int)^ const op[](intptr idx) {
-        __println("Method:const_op[]: " + x_);
+        println(String + "Method:const_op[]: " + x_);
         return ^x_;
     }
 }
@@ -83,7 +83,7 @@ Pt(int x_, int y_) {
     void shift(int dx, int dy) {
         x_ = x_ + dx;
         y_ = y_ + dy;
-        __println("Pt:shift: " + x_ + "," + y_);
+        println(String + "Pt:shift: " + x_ + "," + y_);
     }
 }
 
@@ -92,7 +92,7 @@ Pt(int x_, int y_) {
 Host(int h_) {
     Inner(int n_) {
         int  dbl()  { return n_ + n_; }
-        void show() { __println("Inner:show: " + n_ + " dbl=" + dbl()); }
+        void show() { println(String + "Inner:show: " + n_ + " dbl=" + dbl()); }
     }
 }
 
@@ -102,19 +102,19 @@ int dbl(int a) { return a + a; }   // a free function, called from a method
    take a CLASS-typed param, and define a NESTED function. */
 B(int v_) { }
 Use(int u_) {
-    void scaleUp()    { u_ = dbl(u_); __println("Use:scaleUp: " + u_); }
+    void scaleUp()    { u_ = dbl(u_); println(String + "Use:scaleUp: " + u_); }
     int  peek()       { return u_; }                       // value method
-    void absorb(B^ b) { u_ = u_ + b^.v_; __println("Use:absorb: " + u_); }
+    void absorb(B^ b) { u_ = u_ + b^.v_; println(String + "Use:absorb: " + u_); }
     void viaNested()  { int sq(int a) { return a * a; }    // nested fn in a method
-                        u_ = sq(u_); __println("Use:viaNested: " + u_); }
+                        u_ = sq(u_); println(String + "Use:viaNested: " + u_); }
 }
 
 /* a method that returns its OWN class BY VALUE, so calls CHAIN (`obj.next().get()`).
    The intermediate result is materialized into a temp whose ADDRESS the next call
    needs; with hooks it dies at the semicolon. */
 Chain(int v_) {
-    _() { __println("Chain:ctor: " + v_); }
-    ~() { __println("Chain:dtor: " + v_); }
+    _() { println(String + "Chain:ctor: " + v_); }
+    ~() { println(String + "Chain:dtor: " + v_); }
     Chain next() { Chain r(v_ + 1); return r; }
     int   get()  { return v_; }
 }
@@ -134,18 +134,18 @@ Trin(int v_) {
    with arguments; a sibling calls a further sibling; `self.m()` still works as the
    explicit spelling. All bare calls sit next to bare FIELD reads of the same x_. */
 Sibs(int x_) {
-    _()  { __println("Sibs:ctor"); seed(); }            // ctor -> sibling
-    ~()  { bump(); __println("Sibs:dtor: " + x_); }     // dtor -> sibling
+    _()  { println(String + "Sibs:ctor"); seed(); }            // ctor -> sibling
+    ~()  { bump(); println(String + "Sibs:dtor: " + x_); }     // dtor -> sibling
     void seed()     { x_ = 100; }
     void bump()     { x_ = x_ + 1; }
     void add(int d) { x_ = x_ + d; }                    // sibling taking an arg
     int  peek()     { return x_; }                      // value-returning sibling
-    void report()   { __println("Sibs:report: " + peek()); }   // sibling -> sibling
+    void report()   { println(String + "Sibs:report: " + peek()); }   // sibling -> sibling
     void run() {
-        __println("Sibs:run x_=" + x_);   // bare FIELD read beside the bare calls
+        println(String + "Sibs:run x_=" + x_);   // bare FIELD read beside the bare calls
         add(5);                           // bare sibling STATEMENT, with an arg
         int v = peek();                   // bare sibling as an EXPRESSION
-        __println("Sibs:peek=" + v);
+        println(String + "Sibs:peek=" + v);
         report();                         // bare sibling that itself calls a sibling
         self.add(0);                      // explicit self.method() is still valid
     }
@@ -176,7 +176,7 @@ Flow(int x_) {
         if (get() < 3) { step(); }        // bare sibling in an if cond + body
         while (get() < 5) { step(); }      // bare sibling in a while cond + body
         tick();                            // value-returning sibling, result discarded
-        __println("Flow:run: " + get());   // 6
+        println(String + "Flow:run: " + get());   // 6
     }
 }
 
@@ -185,14 +185,14 @@ Rec(int x_) {
     int sum(int n)    { if (n <= 0) { return 0; } return n + sum(n - 1); }   // self
     int isEven(int n) { if (n == 0) { return 1; } return isOdd(n - 1); }     // mutual
     int isOdd(int n)  { if (n == 0) { return 0; } return isEven(n - 1); }
-    void run() { __println("Rec:run: sum4=" + sum(4) + " even4=" + isEven(4)); }  // 10, 1
+    void run() { println(String + "Rec:run: sum4=" + sum(4) + " even4=" + isEven(4)); }  // 10, 1
 }
 
 /* a bare sibling FORWARD-referenced — `foo` calls `bar`, declared later. */
 Fwd(int x_) {
     int  foo() { return bar() + 1; }   // bar declared AFTER foo
     int  bar() { return x_; }
-    void run() { __println("Fwd:run: " + foo()); }   // x_=41 -> 42
+    void run() { println(String + "Fwd:run: " + foo()); }   // x_=41 -> 42
 }
 
 /* a bare sibling call passing a bare FIELD as an arg, MULTIPLE args, and a non-int
@@ -200,7 +200,7 @@ Fwd(int x_) {
 Args(int x_) {
     int  add2(int a, int b)          { return a + b; }
     int  pick(bool hi, int a, int b) { if (hi) { return a; } return b; }
-    void run() { __println("Args:run: " + add2(x_, 5) + " " + pick(true, x_, 0)); }  // 14, 9
+    void run() { println(String + "Args:run: " + add2(x_, 5) + " " + pick(true, x_, 0)); }  // 14, 9
 }
 
 /* a method FORWARD DECLARATION followed by its definition — parity with a bare
@@ -211,13 +211,13 @@ FwdDecl(int x_) {
     int twice(int n);                       // forward declaration
     int twice(int n)        { return n * 2; }   // its definition
     int twice(int n, int k) { return n * k; }   // a distinct overload
-    void run() { __println("FwdDecl:run: " + twice(x_) + " " + twice(x_, 3)); }  // 10 15
+    void run() { println(String + "FwdDecl:run: " + twice(x_) + " " + twice(x_, 3)); }  // 10 15
 }
 
 Forward(int x_) {
     void print();
     void print() {
-        __println("Forward:print: " + x_);
+        println(String + "Forward:print: " + x_);
     }
 }
 
@@ -272,7 +272,7 @@ int32 main() {
     method1.print();
     // a value-returning method used as an EXPRESSION (not just a discarded statement).
     int x = method1.get();
-    __println("x = " + x);
+    println(String + "x = " + x);
 
     // a method with parameters, called as a statement.
     Pt p(1, 2);
@@ -286,7 +286,7 @@ int32 main() {
     {
         Loc(int v_) {
             int  trip() { return v_ + v_ + v_; }
-            void emit() { __println("Loc:emit: " + v_ + " trip=" + trip()); }
+            void emit() { println(String + "Loc:emit: " + v_ + " trip=" + trip()); }
         }
         Loc l(3);
         l.emit();
@@ -318,8 +318,8 @@ int32 main() {
     {
         Chain c(0);
         int chain = c.next().next().get();   // 2
-        __println("chain = " + chain);
-        __println("-- end chain (dtor 2,1 ran at stmt; dtor 0 next, at scope end) --");
+        println(String + "chain = " + chain);
+        println(String + "-- end chain (dtor 2,1 ran at stmt; dtor 0 next, at scope end) --");
     }
 
     // CHAINED method call as a STATEMENT (the result discarded): the intermediate
@@ -328,14 +328,14 @@ int32 main() {
     {
         Chain d(5);
         d.next().get();   // 6 discarded; the next() temp dies at the ';'
-        __println("-- mid chain-stmt (dtor 6 ran; dtor 5 at scope end) --");
+        println(String + "-- mid chain-stmt (dtor 6 ran; dtor 5 at scope end) --");
     }
 
     // chaining on a TRIVIAL class (no hooks): the receiver is still materialized, so
     // a deeper chain just yields the final value.
     Trin t(10);
-    __println("trin = " + t.step().step().get());   // 12
-    __println("trin-bare = " + t.run());            // bare step().step().get() -> 12
+    println(String + "trin = " + t.step().step().get());   // 12
+    println(String + "trin-bare = " + t.run());            // bare step().step().get() -> 12
 
     // SIBLING VISIBILITY: bare sibling-method calls (no self, no qualifier). The
     // ctor's seed() sets x_=100; run() does add(5)->105, peek()->105, report()->105;
@@ -345,11 +345,11 @@ int32 main() {
 
     // a bare sibling call inside a nested function: dbl()=10 plus the field x_=5.
     Nest nst(5);
-    __println("Nest:run = " + nst.run());            // 15
+    println(String + "Nest:run = " + nst.run());            // 15
 
     // self.method() reaching a method past a shadowing local.
     Shadow shd(0);
-    __println("Shadow:run = " + shd.run());          // 10
+    println(String + "Shadow:run = " + shd.run());          // 10
 
     // bare siblings inside control flow + a discarded value-call.
     Flow flw(0);
@@ -375,12 +375,12 @@ int32 main() {
 
     ArrayFieldAccessBug afab;
     afab.set(65);
-    __println("afab = " + afab.a_[0] + " " + afab.a_[1]);   // 65 0
+    println(String + "afab = " + afab.a_[0] + " " + afab.a_[1]);   // 65 0
 
     // an unrelated class qualifier still reaches STATICS (the wall below is
     // method calls only): QOut:kQ read from another class's method body.
     QIn qi(4);
-    __println("QIn:viaConst = " + qi.viaConst());     // 34
+    println(String + "QIn:viaConst = " + qi.viaConst());     // 34
 
     // param enforcement in methods: a plain method's receiver writes freely,
     // the mutable param writes into the caller's local.
@@ -388,18 +388,18 @@ int32 main() {
     qp.intoField(9);
     int sink = 0;
     qp.intoPtr(^sink);
-    __println("QPar = " + qp.q_ + " " + sink);        // 9 9
+    println(String + "QPar = " + qp.q_ + " " + sink);        // 9 9
 
     // const methods: field reads, const->const sibling chaining, a const
     // operator called from outside and on self.
     QCm qc(21);
-    __println("QCm = " + qc.gv() + " " + qc.dbl() + " " + qc[0] + " " + qc.via(0));   // 21 42 21 121
+    println(String + "QCm = " + qc.gv() + " " + qc.dbl() + " " + qc[0] + " " + qc.via(0));   // 21 42 21 121
     qc.setq(5);                                       // the plain writer still writes
-    __println("QCm-set = " + qc.gv());                // 5
+    println(String + "QCm-set = " + qc.gv());                // 5
     // const NEVER REQUIRED: a const-typed receiver may call a PLAIN method —
     // marking readers const is the author's option, not a gate.
     const QCm qk(7);
-    __println("QCm-const = " + qk.dbl() + " " + qk.rd());   // 14 7
+    println(String + "QCm-const = " + qk.dbl() + " " + qk.rd());   // 14 7
 
     return 0;
 }

@@ -199,7 +199,7 @@ void foo() {
     );
 
     Language lang = Language:kCPP;
-    __println("lang = " + lang);
+    println(String + "lang = " + lang);
 
     /*
     reach goal: drop the qualifier in context.
@@ -233,114 +233,114 @@ default type int (usable in int arithmetic).
 */
 int32 anon_local() {
     enum ( kLocalA, kLocalB, kLocalC );
-    __println("kLocalA = " + kLocalA);
-    __println("kLocalC = " + kLocalC);
+    println(String + "kLocalA = " + kLocalA);
+    println(String + "kLocalC = " + kLocalC);
     int sum = kLocalA + kLocalB + kLocalC;   // default int: plain int arithmetic
-    __println("local sum = " + sum);
+    println(String + "local sum = " + sum);
     return 0;
 }
 
 int32 main() {
 
     abc = Bonk1:kOops;
-    __println(##type(abc));
-    __println(##type(Bonk1));
-    __println(##type(Bonk1:kOops));
+    println(String + ##type(abc));
+    println(String + ##type(Bonk1));
+    println(String + ##type(Bonk1:kOops));
 
     /* file-scope anonymous enum: all three members, auto-incremented from 0. */
-    __println("kUnnamed1 = " + kUnnamed1);
-    __println("kUnnamed2 = " + kUnnamed2);
-    __println("kUnnamed3 = " + kUnnamed3);
+    println(String + "kUnnamed1 = " + kUnnamed1);
+    println(String + "kUnnamed2 = " + kUnnamed2);
+    println(String + "kUnnamed3 = " + kUnnamed3);
 
     int u = anon_local();
-    __println("u = " + u);
+    println(String + "u = " + u);
 
     enum float Consts (
         kPi = 3.14,
         kE = 2.718
     );
 
-    __println("kNorth = " + Direction:kNorth);
-    __println("kWest = " + Direction:kWest);
-    __println("kPi = " + Consts:kPi);
-    __println("kE = " + Consts:kE);
+    println(String + "kNorth = " + Direction:kNorth);
+    println(String + "kWest = " + Direction:kWest);
+    println(String + "kPi = " + Consts:kPi);
+    println(String + "kE = " + Consts:kE);
 
-    __println("kBase = " + Mapped:kBase);
-    __println("kNext = " + Mapped:kNext);
+    println(String + "kBase = " + Mapped:kBase);
+    println(String + "kNext = " + Mapped:kNext);
 
-    __println("kVal = "     + FromConst:kVal);
-    __println("kNextVal = " + FromConst:kNextVal);
-    __println("kFwd = "     + FwdConst:kFwd);
+    println(String + "kVal = "     + FromConst:kVal);
+    println(String + "kNextVal = " + FromConst:kNextVal);
+    println(String + "kFwd = "     + FwdConst:kFwd);
 
     /* block-scope sibling ref. */
     enum BlockSib ( b0, b1 = b0 );
-    __println("b0 = " + BlockSib:b0);
-    __println("b1 = " + BlockSib:b1);
+    println(String + "b0 = " + BlockSib:b0);
+    println(String + "b1 = " + BlockSib:b1);
 
-    __println("s0 = "   + Sib:s0);
-    __println("s1 = "   + Sib:s1);
-    __println("aA = "   + Arith:aA);
-    __println("aB = "   + Arith:aB);
-    __println("c0 = "   + Chain:c0);
-    __println("c1 = "   + Chain:c1);
-    __println("c2 = "   + Chain:c2);
-    __println("l0 = "   + Lit:l0);
-    __println("l1 = "   + Lit:l1);
-    __println("wBig = " + Wide:wBig);
-    __println("fA = "   + FConst:fA);
-    __println("fB = "   + FConst:fB);
-    __println("fF = "   + FFwd:fF);
-    __println("ra = "   + FA:ra + " rb = " + FA:rb);   // float-alias enum
-    __println("da = "   + FD:da + " db = " + FD:db);   // float64 enum
-    __println("kFromMember = " + kFromMember);
-    __println("q0 = "   + Fwd2:q0);
-    __println("q1 = "   + Fwd2:q1);
-    __println("off = "  + Flag:off);
-    __println("on = "   + Flag:on);
-    __println("cold = " + Temp:cold);
-    __println("mild = " + Temp:mild);
-    __println("m0 = "   + Multi:m0);
-    __println("m1 = "   + Multi:m1);
-    __println("m2 = "   + Multi:m2);
-    __println("m3 = "   + Multi:m3);
+    println(String + "s0 = "   + Sib:s0);
+    println(String + "s1 = "   + Sib:s1);
+    println(String + "aA = "   + Arith:aA);
+    println(String + "aB = "   + Arith:aB);
+    println(String + "c0 = "   + Chain:c0);
+    println(String + "c1 = "   + Chain:c1);
+    println(String + "c2 = "   + Chain:c2);
+    println(String + "l0 = "   + Lit:l0);
+    println(String + "l1 = "   + Lit:l1);
+    println(String + "wBig = " + Wide:wBig);
+    println(String + "fA = "   + FConst:fA);
+    println(String + "fB = "   + FConst:fB);
+    println(String + "fF = "   + FFwd:fF);
+    println(String + "ra = "   + FA:ra + " rb = " + FA:rb);   // float-alias enum
+    println(String + "da = "   + FD:da + " db = " + FD:db);   // float64 enum
+    println(String + "kFromMember = " + kFromMember);
+    println(String + "q0 = "   + Fwd2:q0);
+    println(String + "q1 = "   + Fwd2:q1);
+    println(String + "off = "  + Flag:off);
+    println(String + "on = "   + Flag:on);
+    println(String + "cold = " + Temp:cold);
+    println(String + "mild = " + Temp:mild);
+    println(String + "m0 = "   + Multi:m0);
+    println(String + "m1 = "   + Multi:m1);
+    println(String + "m2 = "   + Multi:m2);
+    println(String + "m3 = "   + Multi:m3);
 
     /* enums as namespace members + qualified type names. */
-    __println("Geo:Dir:north = " + Geo:Dir:north);
-    __println("Geo:Dir:west = "  + Geo:Dir:west);
-    __println("Geo:ax = "        + Geo:ax);
-    __println("Geo:corner = "    + Geo:corner);
-    __println("Geo:red = "       + Geo:red);
-    __println("Geo:blue = "      + Geo:blue);
-    __println("Ord:m = "         + Ord:m);
+    println(String + "Geo:Dir:north = " + Geo:Dir:north);
+    println(String + "Geo:Dir:west = "  + Geo:Dir:west);
+    println(String + "Geo:ax = "        + Geo:ax);
+    println(String + "Geo:corner = "    + Geo:corner);
+    println(String + "Geo:red = "       + Geo:red);
+    println(String + "Geo:blue = "      + Geo:blue);
+    println(String + "Ord:m = "         + Ord:m);
     Geo:Dir gx = Geo:Dir:south;   // a qualified type name in a declaration
-    __println("gx = " + gx);
+    println(String + "gx = " + gx);
 
-    __println("Key:a = "    + Key:a);
-    __println("Key:b = "    + Key:b);
-    __println("U:u0 = "     + U:u0);
-    __println("U:u1 = "     + U:u1);
-    __println("Small:sa = " + Small:sa);
-    __println("Small:sb = " + Small:sb);
-    __println("az = "       + az);
-    __println("bz = "       + bz);
-    __println("Ref:d = "    + Ref:d);
+    println(String + "Key:a = "    + Key:a);
+    println(String + "Key:b = "    + Key:b);
+    println(String + "U:u0 = "     + U:u0);
+    println(String + "U:u1 = "     + U:u1);
+    println(String + "Small:sa = " + Small:sa);
+    println(String + "Small:sb = " + Small:sb);
+    println(String + "az = "       + az);
+    println(String + "bz = "       + bz);
+    println(String + "Ref:d = "    + Ref:d);
     Outer:Inner:Deep dv = Outer:Inner:Deep:d1;   // 3-segment qualified type
-    __println("dv = "       + dv);
-    __println("deep0 = "    + Outer:Inner:Deep:d0);
+    println(String + "dv = "       + dv);
+    println(String + "deep0 = "    + Outer:Inner:Deep:d0);
 
     /* ##type — enum NAME -> underlying; MEMBER -> const <Enum>; a var inferred
        from a member keeps the enum label; an anonymous member has no label. */
-    __println("##type(Direction) = " + ##type(Direction));
-    __println("##type(Direction:kNorth) = " + ##type(Direction:kNorth));
+    println(String + "##type(Direction) = " + ##type(Direction));
+    println(String + "##type(Direction:kNorth) = " + ##type(Direction:kNorth));
     d2 = Direction:kEast;
-    __println("##type(d2) = " + ##type(d2) + ", d2 = " + d2);
-    __println("##type(kUnnamed1) = " + ##type(kUnnamed1));
+    println(String + "##type(d2) = " + ##type(d2) + ", d2 = " + d2);
+    println(String + "##type(kUnnamed1) = " + ##type(kUnnamed1));
 
     alias Direction;
-    __println("kNorth = " + kNorth);
+    println(String + "kNorth = " + kNorth);
 
     //-EXPECT-ERROR: 'kPi' needs a namespace qualifier
-    //__println("kPi = " + kPi);
+    //println(String + "kPi = " + kPi);
 
     return 0;
 }

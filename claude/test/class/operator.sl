@@ -352,21 +352,21 @@ DefaultMove(
     int^ p_,
     int[] q_
 ) {
-    _() { __println("ctor " + c_); }
-    ~() { __println("dtor " + c_); }
+    _() { println(String + "ctor " + c_); }
+    ~() { println(String + "dtor " + c_); }
 }
 
 void print(DefaultMove^ dm) {
-    __print(dm^.c_);
+    print(String + dm^.c_);
     if (dm^.p_ == nullptr) {
-        __print(" nullptr");
+        print(String + " nullptr");
     } else {
-        __print(" " + dm^.p_^);
+        print(String + " " + dm^.p_^);
     }
     if (dm^.q_ == nullptr) {
-        __println(" nullptr");
+        println(String + " nullptr");
     } else {
-        __println(" " + dm^.q_^);
+        println(String + " " + dm^.q_^);
     }
 }
 
@@ -389,8 +389,8 @@ Plain(
     char c_,
     int n_
 ) {
-    _() { __println("Plain ctor " + c_); }
-    ~() { __println("Plain dtor " + c_); }
+    _() { println(String + "Plain ctor " + c_); }
+    ~() { println(String + "Plain dtor " + c_); }
 }
 
 /* a class with an ARRAY of class — move/copy walks the elements (iterative AND
@@ -662,7 +662,7 @@ int32 main() {
     /* ---- a pointer-free class: move is a pure copy, source untouched ---- */
     Plain pl('p', 9);
     Plain pl2 <-- pl;
-    __println("pl.n_ = " + pl.n_);    // 9 (nothing nulled)
+    println(String + "pl.n_ = " + pl.n_);    // 9 (nothing nulled)
 
     /* ---- a class with an array-of-class field: move walks the elements ---- */
     Holder h((('a', ^a, ^d[0]), ('b', ^b, ^d[1])));
@@ -681,14 +681,14 @@ int32 main() {
     OpDefs od(7);
     od = 3;                       // op=(int)       -> v_ = 3
     od += 10;                     // op+=(int)      -> v_ = 13
-    __println("od = " + od.v_);   // od = 13
+    println(String + "od = " + od.v_);   // od = 13
     OpDefs oe(50);
     od <-- oe;                    // op<--(OpDefs^)  -> od.v_ = 50
-    __println("od = " + od.v_);   // od = 50
+    println(String + "od = " + od.v_);   // od = 50
     OpDefs of(1);
     od <--> of;                   // op<-->         -> od.v_ = 1, of.v_ = 50
-    __println("od = " + od.v_);   // od = 1
-    __println("of = " + of.v_);   // of = 50
+    println(String + "od = " + od.v_);   // od = 1
+    println(String + "of = " + of.v_);   // of = 50
 
     /* ---- the og/oh tests lived here. They exercised the TARGET-KEYED chain fuse
        (`og = m + n` / `oh = m + n + r` -> og.op+(m,n); og.op+=(r)), which has been
@@ -712,49 +712,49 @@ int32 main() {
     /* ---- stage 4: comparison returns a built-in; index / deref return references
        (canon 87-119). OpDefs' op[]/op^ back onto the scalar v_. ---- */
     bool eq = (oh == 113);        // oh.op==(int) -> true
-    __println("eq = " + eq);      // eq = true
+    println(String + "eq = " + eq);      // eq = true
     int oi = oh[0];               // (oh.op[](0))^ -> v_ = 113
-    __println("oi = " + oi);      // oi = 113
+    println(String + "oi = " + oi);      // oi = 113
     oh[0] = 7;                    // (oh.op[](0))^ = 7   (writes v_)
     int oj = oh^;                 // (oh.op^())^ -> 7
-    __println("oj = " + oj);      // oj = 7
+    println(String + "oj = " + oj);      // oj = 7
 
     /* ---- unary arity-0: +/-/~/! on a class dispatch the arity-0 operator, which
        returns a built-in — both as a bool value and in a condition (canon 98-107). ---- */
     OpDefs un(5);
     bool uplus = +un;             // un.op+() -> v_ > 0 -> true
-    __println("uplus = " + uplus);    // uplus = true
+    println(String + "uplus = " + uplus);    // uplus = true
     bool uminus = -un;            // un.op-() -> v_ < 0 -> false
-    __println("uminus = " + uminus);  // uminus = false
+    println(String + "uminus = " + uminus);  // uminus = false
     bool utilde = ~un;            // un.op~() -> v_ == 0 -> false
-    __println("utilde = " + utilde);  // utilde = false
+    println(String + "utilde = " + utilde);  // utilde = false
     bool ubang = !un;             // un.op!() -> v_ == 0 -> false
-    __println("ubang = " + ubang);    // ubang = false
+    println(String + "ubang = " + ubang);    // ubang = false
     OpDefs uz(0);
-    if (!uz) { __println("uz-cond fired"); }   // uz.op!() -> v_ == 0 -> true -> fires
+    if (!uz) { println(String + "uz-cond fired"); }   // uz.op!() -> v_ == 0 -> true -> fires
 
     /* ---- convert fallback: int8 has no exact op=; it WIDENS to the op=(int64) overload
        (a single overload dispatches with no ambiguity). ---- */
     Widen wc(0);
     int8 wb = 7;
     wc = wb;                      // int8 widens to int64 -> wc.op=(int64); which_ = 7+1000
-    __println("wc = " + wc.which_);   // wc = 1007
+    println(String + "wc = " + wc.which_);   // wc = 1007
 
     /* ---- decl-init op= (fresh var): `Widen wd = 5` is default-construct THEN wd.op=(int64)
        (5 widens) -> which_ = 5+1000, NOT construction (which_ would be 5). Proves the
        operator is dispatched at the declaration site, same as the existing-var path. ---- */
     Widen wd = 5;
-    __println("wd = " + wd.which_);   // wd = 1005
+    println(String + "wd = " + wd.which_);   // wd = 1005
 
     /* ---- decl-init op= — SAME-TYPE source dispatches the user op=(Copy^) (+100, so
        distinct from a default copy), and a NAMED convertible lvalue widens into op=
        (vs wd's literal). Both prove default-construct-then-op= at the declaration. ---- */
     Copy cb(5);
     Copy ca = cb;                 // same-type lvalue -> ca.op=(Copy^); v_ = 5+100
-    __println("ca = " + ca.v_);   // ca = 105
+    println(String + "ca = " + ca.v_);   // ca = 105
     int16 wn = 9;
     Widen we = wn;                // named int16 lvalue widens -> we.op=(int64); which_ = 9+1000
-    __println("we = " + we.which_);   // we = 1009
+    println(String + "we = " + we.which_);   // we = 1009
 
     /* ---- decl-init MOVE / SWAP (fresh var). `<--` dispatches op<-- (default-construct
        then move); `<-->` default-constructs then op<--> (the fresh default flows back
@@ -762,21 +762,21 @@ int32 main() {
        init operator; a class RVALUE source on `=` elides/moves instead (not shown). ---- */
     OpDefs omsrc(77);
     OpDefs omv <-- omsrc;             // omv.op<--(OpDefs^) -> omv.v_ = 77
-    __println("omv = " + omv.v_);     // omv = 77
+    println(String + "omv = " + omv.v_);     // omv = 77
     OpDefs ossrc(88);
     OpDefs osw <--> ossrc;            // default-construct osw(0); osw.op<-->(ossrc)
-    __println("osw = " + osw.v_ + " ossrc = " + ossrc.v_);   // osw = 88 ossrc = 0
+    println(String + "osw = " + osw.v_ + " ossrc = " + ossrc.v_);   // osw = 88 ossrc = 0
 
     /* ---- destructure MOVE / SWAP: each slot binds via op<-- / op<--> against the
        source (declaring slots default-construct first; reusing slots exchange). ---- */
     (OpDefs, OpDefs) dsrc = (11, 22);
     (da, db) <-- dsrc;                // da.op<--(dsrc[0])=11, db.op<--(dsrc[1])=22
-    __println("da = " + da.v_ + " db = " + db.v_);   // da = 11 db = 22
+    println(String + "da = " + da.v_ + " db = " + db.v_);   // da = 11 db = 22
     (OpDefs, OpDefs) ssrc = (33, 44);
     OpDefs sa(1);
     OpDefs sb(2);
     (sa, sb) <--> ssrc;              // per-slot swap: sa<->ssrc[0], sb<->ssrc[1]
-    __println("sa = " + sa.v_ + " sb = " + sb.v_
+    println(String + "sa = " + sa.v_ + " sb = " + sb.v_
             + " s0 = " + ssrc[0].v_ + " s1 = " + ssrc[1].v_);   // sa=33 sb=44 s0=1 s1=2
 
     /* ---- destructure COPY dispatches per-slot op=, same by-slot rule as move/swap:
@@ -784,20 +784,20 @@ int32 main() {
        op=(int)) proves the dispatch — without it, int -> OpDefs would not convert. ---- */
     (int, int) dcs = (11, 22);
     (OpDefs dca, OpDefs dcb) = dcs;   // dca.op=(11), dcb.op=(22)
-    __println("dca = " + dca.v_ + " dcb = " + dcb.v_);   // dca = 11 dcb = 22
+    println(String + "dca = " + dca.v_ + " dcb = " + dcb.v_);   // dca = 11 dcb = 22
 
     /* ---- op= onto a COMPLEX lvalue (field / deref / index) dispatches the target
        type's user op=, same rule as a bare-name target (shared dispatchAssignInit
        funnel). Without dispatch each would fail to convert int -> OpDefs. ---- */
     Box sbox;
     sbox.b_ = 31;                 // field store  -> sbox.b_.op=(int) -> v_ = 31
-    __println("sf = " + sbox.b_.v_);   // sf = 31
+    println(String + "sf = " + sbox.b_.v_);   // sf = 31
     OpDefs^ sbp = ^sbox.b_;
     sbp^ = 41;                    // deref store  -> op=(int) -> v_ = 41
-    __println("sd = " + sbox.b_.v_);   // sd = 41
+    println(String + "sd = " + sbox.b_.v_);   // sd = 41
     OpDefs sarr[2];
     sarr[1] = 51;                 // index store  -> op=(int) -> v_ = 51
-    __println("si = " + sarr[1].v_);   // si = 51
+    println(String + "si = " + sarr[1].v_);   // si = 51
 
     /* ---- decl-init op= from a COMPLEX-lvalue source (field / index / deref). Each is a
        bare lvalue → dispatches the user op=(Copy^) copy (+100), NOT an elide (elide is
@@ -805,19 +805,19 @@ int32 main() {
        bare-lvalue predicate; only kIdentExpr (`ca = cb`) was exercised before. ---- */
     CBox cbx( Copy(5) );
     Copy cfld = cbx.c_;           // FIELD lvalue  -> op= copy -> 5 + 100
-    __println("cfld = " + cfld.v_);   // cfld = 105
+    println(String + "cfld = " + cfld.v_);   // cfld = 105
     Copy carr[2] = ( Copy(6), Copy(7) );
     Copy cidx = carr[0];          // INDEX lvalue  -> op= copy -> 6 + 100
-    __println("cidx = " + cidx.v_);   // cidx = 106
+    println(String + "cidx = " + cidx.v_);   // cidx = 106
     Copy cbase(8);
     Copy^ cptr = ^cbase;
     Copy cder = cptr^;            // DEREF lvalue  -> op= copy -> 8 + 100
-    __println("cder = " + cder.v_);   // cder = 108
+    println(String + "cder = " + cder.v_);   // cder = 108
 
     /* ---- NON-EXACT class-RVALUE decl-init: mkSrc() returns Src; Dst differs, so it does
        NOT elide — it dispatches the convert op=(Src^) (+300). ---- */
     Dst cv = mkSrc();             // rvalue, non-exact -> op=(Src^) -> 9 + 300
-    __println("cv = " + cv.d_);   // cv = 309
+    println(String + "cv = " + cv.d_);   // cv = 309
 
     /* ---- class-producing operators dispatch on the LHS OPERAND's class: build a temp then
        run `_$optmp.op<sym>(lhs, rhs)`. Covers decl-init, aliasing (lhs among the operands),
@@ -827,60 +827,60 @@ int32 main() {
     Sum sma(3);
     Sum smb(4);
     Sum smd = sma + smb;          // decl-init binary -> _$optmp.op+(sma,smb); smd = 7
-    __println("smd = " + smd.s_);     // smd = 7
+    println(String + "smd = " + smd.s_);     // smd = 7
     sma = sma + smb;              // aliasing -> temp then sma <- 7 (reads OLD sma)
-    __println("sma = " + sma.s_);     // sma = 7
+    println(String + "sma = " + sma.s_);     // sma = 7
     Sum smn = sma + smb;          // sma=7, smb=4 -> 11
     Sum smt = smn + sma;          // nested-in-decl: smn=11, sma=7 -> 18
-    __println("smt = " + smt.s_);     // smt = 18
+    println(String + "smt = " + smt.s_);     // smt = 18
     Sum smu = -smb;               // arity-1 unary -> smu.op-(smb) -> -4
-    __println("smu = " + smu.s_);     // smu = -4
+    println(String + "smu = " + smu.s_);     // smu = -4
     Sum shf(2);
     Sum shg(3);
     Sum shr = shf << shg;         // class shift binary -> shr.op<<(shf,shg) = 2<<3 = 16
-    __println("shr = " + shr.s_);     // shr = 16
+    println(String + "shr = " + shr.s_);     // shr = 16
     Sum sla = shf && shg;         // class logical binary -> shf.op&&: 2 & 3 = 2
     Sum slo = shf || shg;         // 2 | 3 = 3
     Sum slx = shf ^^ shg;         // 2 ^ 3 = 1
-    __println("sla = " + sla.s_);     // sla = 2
-    __println("slo = " + slo.s_);     // slo = 3
-    __println("slx = " + slx.s_);     // slx = 1
+    println(String + "sla = " + sla.s_);     // sla = 2
+    println(String + "slo = " + slo.s_);     // slo = 3
+    println(String + "slx = " + slx.s_);     // slx = 1
 
     /* ---- no-context positions (result class taken from the operand): a class op as a
        CALL ARG and in an INFERRED decl-init (`x = a+b`, type from the rhs). ---- */
     int scarg = useSum(sma + smb);    // call-arg binary -> temp.op+(sma,smb)=11; useSum -> 11
-    __println("scarg = " + scarg);    // scarg = 11
+    println(String + "scarg = " + scarg);    // scarg = 11
     int scneg = useSum(-smb);         // call-arg unary -> temp.op-(smb)=-4; useSum -> -4
-    __println("scneg = " + scneg);    // scneg = -4
+    println(String + "scneg = " + scneg);    // scneg = -4
     sib = sma + smb;                  // inferred decl-init binary -> Sum sib = 11
-    __println("sib = " + sib.s_);     // sib = 11
+    println(String + "sib = " + sib.s_);     // sib = 11
     siu = -smb;                       // inferred decl-init unary  -> Sum siu = -4
-    __println("siu = " + siu.s_);     // siu = -4
+    println(String + "siu = " + siu.s_);     // siu = -4
 
     /* ---- op[] over a backing FIELD array (`^field[i]` resolve) — read and write ---- */
     Arr barr( (100, 200, 300) );
-    __println("ar1 = " + barr[1]);    // ar1 = 200
+    println(String + "ar1 = " + barr[1]);    // ar1 = 200
     barr[2] = 7;                      // write through the op[] reference
-    __println("ar2 = " + barr[2]);    // ar2 = 7
+    println(String + "ar2 = " + barr[2]);    // ar2 = 7
 
     /* ---- `^obj[i]` — the address of a class-indexed element IS the op[]
        call's returned reference (`^X^` cancels; the addr-of does not re-wrap).
        Read and write through the taken reference. ---- */
     int^ are = ^barr[1];
-    __println("ar3 = " + are^);       // ar3 = 200
+    println(String + "ar3 = " + are^);       // ar3 = 200
     are^ = 42;
-    __println("ar4 = " + barr[1]);    // ar4 = 42
+    println(String + "ar4 = " + barr[1]);    // ar4 = 42
 
     /* ---- out-of-line operators ---- */
     Ool oola(4);
     Ool oolb(4);
     Ool oolc(9);
-    if (oola == oolb) { __println("ool eq"); }    // out-of-line op== -> 1
-    if (oola == oolc) { __println("ool bad"); }    // -> 0, no print
+    if (oola == oolb) { println(String + "ool eq"); }    // out-of-line op== -> 1
+    if (oola == oolc) { println(String + "ool bad"); }    // -> 0, no print
     oola = 12;                                      // out-of-line op=(int)
-    __println("ool = " + oola.n_);                  // ool = 12
+    println(String + "ool = " + oola.n_);                  // ool = 12
     oola += 3;                                      // out-of-line produce-self op+= (no ret type)
-    __println("ool2 = " + oola.n_);                 // ool2 = 15
+    println(String + "ool2 = " + oola.n_);                 // ool2 = 15
 
     /* ---- COVERAGE: every OpDefs binary operator token dispatches to its op<sym>. A token
        that did NOT dispatch would take the built-in path and change the value (the
@@ -892,92 +892,92 @@ int32 main() {
        op=(int). Values are unchanged from the old int-lhs form because base.v_ == 8. ---- */
     OpDefs base(8);
     int n = 5;
-    OpDefs badd = base + n;    __println("badd = " + badd.v_);    // op+  -> 8+5 = 13
-    OpDefs bsub = base - n;    __println("bsub = " + bsub.v_);    // op-  -> 8-5 = 3
-    OpDefs bmul = base * n;    __println("bmul = " + bmul.v_);    // op*  -> 40
-    OpDefs bdiv = base / n;    __println("bdiv = " + bdiv.v_);    // op/  -> 1
-    OpDefs bmod = base % n;    __println("bmod = " + bmod.v_);    // op%  -> 3
-    OpDefs band = base & n;    __println("band = " + band.v_);    // op&  -> v_=a^.v_ = 8
-    OpDefs bor  = base | n;    __println("bor = " + bor.v_);      // op|  -> 8
-    OpDefs bxor = base ^ n;    __println("bxor = " + bxor.v_);    // op^  -> 8
-    OpDefs bshl = base << n;   __println("bshl = " + bshl.v_);    // op<< -> 8
-    OpDefs bshr = base >> n;   __println("bshr = " + bshr.v_);    // op>> -> 8
-    OpDefs blan = base && n;   __println("blan = " + blan.v_);    // op&& -> 8
-    OpDefs blor = base || n;   __println("blor = " + blor.v_);    // op|| -> 8
-    OpDefs blxr = base ^^ n;   __println("blxr = " + blxr.v_);    // op^^ -> 8
+    OpDefs badd = base + n;    println(String + "badd = " + badd.v_);    // op+  -> 8+5 = 13
+    OpDefs bsub = base - n;    println(String + "bsub = " + bsub.v_);    // op-  -> 8-5 = 3
+    OpDefs bmul = base * n;    println(String + "bmul = " + bmul.v_);    // op*  -> 40
+    OpDefs bdiv = base / n;    println(String + "bdiv = " + bdiv.v_);    // op/  -> 1
+    OpDefs bmod = base % n;    println(String + "bmod = " + bmod.v_);    // op%  -> 3
+    OpDefs band = base & n;    println(String + "band = " + band.v_);    // op&  -> v_=a^.v_ = 8
+    OpDefs bor  = base | n;    println(String + "bor = " + bor.v_);      // op|  -> 8
+    OpDefs bxor = base ^ n;    println(String + "bxor = " + bxor.v_);    // op^  -> 8
+    OpDefs bshl = base << n;   println(String + "bshl = " + bshl.v_);    // op<< -> 8
+    OpDefs bshr = base >> n;   println(String + "bshr = " + bshr.v_);    // op>> -> 8
+    OpDefs blan = base && n;   println(String + "blan = " + blan.v_);    // op&& -> 8
+    OpDefs blor = base || n;   println(String + "blor = " + blor.v_);    // op|| -> 8
+    OpDefs blxr = base ^^ n;   println(String + "blxr = " + blxr.v_);    // op^^ -> 8
 
     /* compound assignment: each op<op>=(int) dispatches (op-= subtracts; the rest set v_=a) */
     OpDefs cc(100);
-    cc -= 10;   __println("cc1 = " + cc.v_);    // op-=  -> 90
-    cc *= 7;    __println("cc2 = " + cc.v_);    // op*=  -> 7
-    cc /= 3;    __println("cc3 = " + cc.v_);    // op/=  -> 3
-    cc %= 9;    __println("cc4 = " + cc.v_);    // op%=  -> 9
-    cc &= 5;    __println("cc5 = " + cc.v_);    // op&=  -> 5
-    cc |= 6;    __println("cc6 = " + cc.v_);    // op|=  -> 6
-    cc ^= 8;    __println("cc7 = " + cc.v_);    // op^=  -> 8
-    cc <<= 2;   __println("cc8 = " + cc.v_);    // op<<= -> 2
-    cc >>= 4;   __println("cc9 = " + cc.v_);    // op>>= -> 4
-    cc &&= 1;   __println("cc10 = " + cc.v_);   // op&&= -> 1
-    cc ||= 11;  __println("cc11 = " + cc.v_);   // op||= -> 11
-    cc ^^= 12;  __println("cc12 = " + cc.v_);   // op^^= -> 12
+    cc -= 10;   println(String + "cc1 = " + cc.v_);    // op-=  -> 90
+    cc *= 7;    println(String + "cc2 = " + cc.v_);    // op*=  -> 7
+    cc /= 3;    println(String + "cc3 = " + cc.v_);    // op/=  -> 3
+    cc %= 9;    println(String + "cc4 = " + cc.v_);    // op%=  -> 9
+    cc &= 5;    println(String + "cc5 = " + cc.v_);    // op&=  -> 5
+    cc |= 6;    println(String + "cc6 = " + cc.v_);    // op|=  -> 6
+    cc ^= 8;    println(String + "cc7 = " + cc.v_);    // op^=  -> 8
+    cc <<= 2;   println(String + "cc8 = " + cc.v_);    // op<<= -> 2
+    cc >>= 4;   println(String + "cc9 = " + cc.v_);    // op>>= -> 4
+    cc &&= 1;   println(String + "cc10 = " + cc.v_);   // op&&= -> 1
+    cc ||= 11;  println(String + "cc11 = " + cc.v_);   // op||= -> 11
+    cc ^^= 12;  println(String + "cc12 = " + cc.v_);   // op^^= -> 12
 
     /* comparison: each op<cmp>(int) returns a built-in bool */
     OpDefs cq(50);
-    bool cne = (cq != 40);  __println("cne = " + cne);   // op!= -> true
-    bool clt = (cq < 40);   __println("clt = " + clt);   // op<  -> false
-    bool cgt = (cq > 40);   __println("cgt = " + cgt);   // op>  -> true
-    bool cle = (cq <= 50);  __println("cle = " + cle);   // op<= -> true
-    bool cge = (cq >= 60);  __println("cge = " + cge);   // op>= -> false
+    bool cne = (cq != 40);  println(String + "cne = " + cne);   // op!= -> true
+    bool clt = (cq < 40);   println(String + "clt = " + clt);   // op<  -> false
+    bool cgt = (cq > 40);   println(String + "cgt = " + cgt);   // op>  -> true
+    bool cle = (cq <= 50);  println(String + "cle = " + cle);   // op<= -> true
+    bool cge = (cq >= 60);  println(String + "cge = " + cge);   // op>= -> false
 
     /* ---- shift / logical binary in the NON-decl-init positions (aliasing / call-arg /
        inferred), mirroring the op+ Slice-B coverage; shf=2, shg=3 (Sum, above). ---- */
     Sum sha(5);
     sha = sha << shg;                 // aliasing shift  -> op<<(old 5, 3) = 40
-    __println("sha = " + sha.s_);     // sha = 40
+    println(String + "sha = " + sha.s_);     // sha = 40
     int qsh = useSum(shf << shg);     // call-arg shift  -> 2<<3 = 16
-    __println("qsh = " + qsh);        // qsh = 16
+    println(String + "qsh = " + qsh);        // qsh = 16
     ish = shf << shg;                 // inferred shift  -> Sum, 16
-    __println("ish = " + ish.s_);     // ish = 16
+    println(String + "ish = " + ish.s_);     // ish = 16
     Sum sga(6);
     sga = sga && shg;                 // aliasing logical -> op&&(old 6, 3) = 6 & 3 = 2
-    __println("sga = " + sga.s_);     // sga = 2
+    println(String + "sga = " + sga.s_);     // sga = 2
     int qlg = useSum(shf && shg);     // call-arg logical -> 2 & 3 = 2
-    __println("qlg = " + qlg);        // qlg = 2
+    println(String + "qlg = " + qlg);        // qlg = 2
     ilg = shf && shg;                 // inferred logical -> Sum, 2
-    __println("ilg = " + ilg.s_);     // ilg = 2
+    println(String + "ilg = " + ilg.s_);     // ilg = 2
 
     /* ---- op^ deref WRITE: `x^ = v` -> `(x.op^())^ = v` writes through the reference
        (the write side of canon 121-128; op[] write is covered above). ---- */
     OpDefs dw(0);
     dw^ = 77;                         // (dw.op^())^ = 77  -> writes v_
-    __println("dw = " + dw.v_);       // dw = 77
+    println(String + "dw = " + dw.v_);       // dw = 77
 
     /* ---- a binary operator whose SECOND param differs from the first (Mixed^, int64)
        dispatches. param0 is still the enclosing class; only the rhs type varies. ---- */
     int64 big = 100;
     Mixed mbase(8);
     Mixed mx = mbase + big;           // mx.op+(Mixed^, int64) -> 8 + 100 = 108
-    __println("mx = " + mx.v_);       // mx = 108
+    println(String + "mx = " + mx.v_);       // mx = 108
 
     /* ---- a CONSTRUCTION as the LEFT operand of a class binary whose class has only the
        2-arg op+ (no op+= to collapse into). The three spellings of the same rvalue must all
        dispatch to the same operator. ---- */
     Head ha(3);
     Head hc = Head(7) + ha;           // construction on the LEFT  — the declined collapse
-    __println("hc = " + hc.v_);       // hc = 10
+    println(String + "hc = " + hc.v_);       // hc = 10
     Head hk = mkHead() + ha;          // a CALL rvalue on the left — same operator
-    __println("hk = " + hk.v_);       // hk = 10
+    println(String + "hk = " + hk.v_);       // hk = 10
     Head hr = ha + Head(7);           // the construction on the RIGHT
-    __println("hr = " + hr.v_);       // hr = 10
+    println(String + "hr = " + hr.v_);       // hr = 10
     Head hb(4);
     Head hn = Head(7) + ha + hb;      // the declined head, continued
-    __println("hn = " + hn.v_);       // hn = 14
+    println(String + "hn = " + hn.v_);       // hn = 14
 
     /* the same declined collapse when the SECOND operand is a PRIMITIVE (Mixed has the
        2-arg op+(Mixed^, int64) and no op+=) — the 2-arg operator is ranked over a primitive
        rhs, a different road through the overload core than Head's class-to-class one. */
     Mixed mh = Mixed(8) + big;        // construction head, primitive rhs -> 8 + 100
-    __println("mh = " + mh.v_);       // mh = 108
+    println(String + "mh = " + mh.v_);       // mh = 108
 
     /* ---- v1 PHASE-2 OPERAND COERCION (one level): a bare int RHS operand that no operator
        accepts is coerced via op=(int64) into a Coerce temp, then the class-operators apply.
@@ -985,15 +985,15 @@ int32 main() {
     Coerce cz(10);
     int cx = 5;
     Coerce cr = cz + cx;              // real operand: cx coerced -> Coerce(5); op+ -> 15
-    __println("cr = " + cr.v_);       // cr = 15
+    println(String + "cr = " + cr.v_);       // cr = 15
     Coerce ce(100);
     int cn = 7;
     Coerce cc2 = ce + "x=" + cn;      // "x=" fuses op+=(char[]) (+1)=101; cn coerced, op+= -> 108
-    __println("cc2 = " + cc2.v_);     // cc2 = 108
+    println(String + "cc2 = " + cc2.v_);     // cc2 = 108
     Coerce cw(20);
     int8 c8 = 3;
     Coerce cwr = cw + c8;             // int8 WIDENS via op=(int64) -> Coerce(3); op+ -> 23
-    __println("cwr = " + cwr.v_);     // cwr = 23
+    println(String + "cwr = " + cwr.v_);     // cwr = 23
 
     /* ---- THE SAME ONE LEVEL AT EVERY DISPATCH SITE, not just the binary chain. The rule
        is about a PARAMETER wanting a class the argument can be built into, so it reaches
@@ -1005,33 +1005,33 @@ int32 main() {
     Coerce xq(10);
     int xi = 5;
     xq += xi;                         // xq.op+=( (Coerce = 5) ) -> 15
-    __println("xq = " + xq.v_);       // xq = 15
+    println(String + "xq = " + xq.v_);       // xq = 15
     int8 xq8 = 4;
     xq += xq8;                        // the WIDEN leg: int8 -> op=(int64) -> 19
-    __println("xq8 = " + xq.v_);      // xq8 = 19
+    println(String + "xq8 = " + xq.v_);      // xq8 = 19
 
     /* comparison — reached through the method-call rewrite, so it exercises a different
        road than the binary chain does. */
     Coerce xcm(19);
-    __println("xeq = " + (xcm == 19));   // xeq = true
-    __println("xne = " + (xcm == 20));   // xne = false
-    __println("xlt = " + (xcm < 20));    // xlt = true
+    println(String + "xeq = " + (xcm == 19));   // xeq = true
+    println(String + "xne = " + (xcm == 20));   // xne = false
+    println(String + "xlt = " + (xcm < 20));    // xlt = true
 
     /* a METHOD taking the class, single candidate and overloaded. */
     Coerce xm(100);
-    __println("xmm = " + xm.plus(5));    // xmm = 105
-    __println("xmk = " + xm.pick(7));    // xmk = 7   (ranker picks pick(Coerce^))
-    __println("xms = " + xm.pick("s"));  // xms = 1   (the direct match still wins)
+    println(String + "xmm = " + xm.plus(5));    // xmm = 105
+    println(String + "xmk = " + xm.pick(7));    // xmk = 7   (ranker picks pick(Coerce^))
+    println(String + "xms = " + xm.pick("s"));  // xms = 1   (the direct match still wins)
 
     /* a FREE FUNCTION taking the class, single candidate and overloaded. */
-    __println("cfp = " + freePlus(9));       // cfp = 1009
-    __println("cfk = " + freePick(9));       // cfk = 2009
-    __println("cfks = " + freePick("s"));    // cfks = 1
+    println(String + "cfp = " + freePlus(9));       // cfp = 1009
+    println(String + "cfk = " + freePick(9));       // cfk = 2009
+    println(String + "cfks = " + freePick("s"));    // cfks = 1
 
     /* ALREADY the class: no wrap, and this is what bounds the rule to ONE level — a
        coerced operand is a Coerce, so it can never coerce again. */
     Coerce xdir(3);
-    __println("xdir = " + freePlus(^xdir));   // xdir = 1003
+    println(String + "xdir = " + freePlus(^xdir));   // xdir = 1003
 
     return 0;
 }
@@ -1060,7 +1060,7 @@ negatives — one //-block uncommented per run.
 //int neg_nobuild_method() {
 //    NoBuild nb(1);
 //    int64 r = nb.take(2);
-//    __println("r" + r);
+//    println(String + "r" + r);
 //    return 0;
 //}
 
@@ -1089,7 +1089,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: No matching overload for 'twoWay'
 //int neg_ambiguous_target() {
 //    int64 r = twoWay(5);
-//    __println("r" + r);
+//    println(String + "r" + r);
 //    return 0;
 //}
 

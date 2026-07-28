@@ -55,62 +55,62 @@ int32 main() {
         arr[i] = i * i;            // 0, 1, 4, 9, 16
     }
     int[] it = ^arr[1];
-    __println("it^= " + it^);              // 1
+    println(String + "it^= " + it^);              // 1
 
     /* additive arithmetic steps by element. */
     int[] it3 = it + 2;
-    __println("it3^= " + it3^);            // arr[3] = 9
-    __println("it[2]= " + it[2]);          // arr[3] = 9
+    println(String + "it3^= " + it3^);            // arr[3] = 9
+    println(String + "it[2]= " + it[2]);          // arr[3] = 9
 
     /* ++ / -- step one element. */
     ++it;
-    __println("it^= " + it^);              // arr[2] = 4
+    println(String + "it^= " + it^);              // arr[2] = 4
     --it;
-    __println("it^= " + it^);              // arr[1] = 1
+    println(String + "it^= " + it^);              // arr[1] = 1
 
     /* += / -= step by n elements in place. */
     it += 2;
-    __println("it^= " + it^);              // arr[3] = 9
+    println(String + "it^= " + it^);              // arr[3] = 9
     it -= 2;
-    __println("it^= " + it^);              // arr[1] = 1
+    println(String + "it^= " + it^);              // arr[1] = 1
 
     /* the difference is in elements. */
     intptr d = it3 - it;
-    __println("d= " + d);                  // 2
+    println(String + "d= " + d);                  // 2
 
     /* comparison — array-element addresses are ordered. */
-    __println("it<it3= " + (it < it3));    // true
-    __println("it==it3= " + (it == it3));  // false
-    __println("it>=it= " + (it >= it));    // true
+    println(String + "it<it3= " + (it < it3));    // true
+    println(String + "it==it3= " + (it == it3));  // false
+    println(String + "it>=it= " + (it >= it));    // true
 
     /* a char iterator from a string literal. */
     (const char)[] str = "Hello, World!";
     (const char)[] e = ^str[1];
-    __println("e^= " + e^);                // e
+    println(String + "e^= " + e^);                // e
     (const char)[] r = e + 8;
-    __println("r^= " + r^);                // r  (index 9)
+    println(String + "r^= " + r^);                // r  (index 9)
     ++e;
     --r;
-    __println("e^= " + e^);                // l  (index 2)
-    __println("r^= " + r^);                // o  (index 8)
+    println(String + "e^= " + e^);                // l  (index 2)
+    println(String + "r^= " + r^);                // o  (index 8)
     intptr diff = r - e;
-    __println("diff= " + diff);            // 6
+    println(String + "diff= " + diff);            // 6
 
     /* iter - n and int + iter (additive arithmetic, both directions). */
     int[] back = it3 - 1;                  // arr[3] -> arr[2]
-    __println("back^= " + back^);          // 4
+    println(String + "back^= " + back^);          // 4
     int[] fwd = 1 + it;                    // arr[1] -> arr[2]
-    __println("fwd^= " + fwd^);            // 4
+    println(String + "fwd^= " + fwd^);            // 4
 
     /* iterator subscript as an lvalue — write through it. */
     int[] w = ^arr[0];
     w[2] = 100;
-    __println("arr[2]= " + arr[2]);        // 100
+    println(String + "arr[2]= " + arr[2]);        // 100
 
     /* a null iterator compares to nullptr. */
     int[] none = nullptr;
-    __println("none==nullptr= " + (none == nullptr));  // true
-    __println("none!=nullptr= " + (none != nullptr));  // false
+    println(String + "none==nullptr= " + (none == nullptr));  // true
+    println(String + "none!=nullptr= " + (none != nullptr));  // false
 
     /* A STRING LITERAL DECAYS like any other array. Its type is `const char[N]`
        (lex/literal.sl owns that), so reaching a `char[]` is the ordinary
@@ -120,24 +120,24 @@ int32 main() {
 
     /* to a REFERENCE (`char^`), not just an iterator. */
     (const char)^ cref = "abc";
-    __println("cref^= " + cref^);          // a
+    println(String + "cref^= " + cref^);          // a
 
     /* through a PARAMETER — the case every string-taking function depends on. A
        non-mutable iterator param munges to `(const char)[]`, and the decayed literal
        matches it. */
-    __println("first= " + firstChar("xyz"));      // x
-    __println("len= " + litLen("hello"));         // 5
+    println(String + "first= " + firstChar("xyz"));      // x
+    println(String + "len= " + litLen("hello"));         // 5
 
     /* the decayed pointer is an ordinary iterator: arithmetic and comparison apply. */
     (const char)[] lit = "abcdef";
-    __println("lit[3]= " + lit[3]);        // d
+    println(String + "lit[3]= " + lit[3]);        // d
     (const char)[] lend = lit + 5;
-    __println("lend^= " + lend^);          // f
-    __println("litdiff= " + (lend - lit)); // 5
+    println(String + "lend^= " + lend^);          // f
+    println(String + "litdiff= " + (lend - lit)); // 5
 
     /* two literals are distinct storage, so their addresses differ; a literal is
        never null. */
-    __println("lit!=null= " + (lit != nullptr));  // true
+    println(String + "lit!=null= " + (lit != nullptr));  // true
 
     return 0;
 }

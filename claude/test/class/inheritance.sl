@@ -85,13 +85,13 @@ import string;
 
 A(int x_) {
     int gx() { return x_; }
-    _() { __println("A:ctor " + x_); }
-    ~() { __println("A:dtor " + x_); }
+    _() { println(String + "A:ctor " + x_); }
+    ~() { println(String + "A:dtor " + x_); }
 }
 A : B(int y_) {
     int by() { return y_; }
-    _() { __println("B:ctor " + y_); }
-    ~() { __println("B:dtor " + y_); }
+    _() { println(String + "B:ctor " + y_); }
+    ~() { println(String + "B:dtor " + y_); }
 }
 
 /* STAGE 2a — the derived opens the base scope: base alias / const / enum resolve BARE
@@ -171,8 +171,8 @@ Mb : Md(int r_) {
    whose base has them gets both synthesized to chain the base's. */
 Sb(int s_) {
     int sv() { return s_; }
-    _() { __println("Sb:ctor " + s_); }
-    ~() { __println("Sb:dtor " + s_); }
+    _() { println(String + "Sb:ctor " + s_); }
+    ~() { println(String + "Sb:dtor " + s_); }
 }
 Sb : SynD(int d_) { int dv() { return d_; } }   // no _()/~(): both synthesized
 
@@ -189,84 +189,84 @@ int32 main() {
 
     {
         B b = (1, 2);     // A from 1, B:y_=2
-        __println("--");
+        println(String + "--");
     }                     // A:ctor 1 / B:ctor 2 / -- / B:dtor 2 / A:dtor 1
 
     Q q;                  // q_ defaults to kBonus=100
-    __println("Q.total = " + q.total());   // 100 + 100 + 9 = 209
+    println(String + "Q.total = " + q.total());   // 100 + 100 + 9 = 209
 
     // STAGE 2b — the user's canon: base statics in the signature, the `Base:` qualifier
     // (incl. `Base:self`) in the method.
     Derived der = (1, 10, 11);             // Base:a_=1, Derived:a_=10, b_=11
-    __println("der.method = " + der.method());   // 1 + 1 + 1 + 10 + 11 = 24
+    println(String + "der.method = " + der.method());   // 1 + 1 + 1 + 10 + 11 = 24
 
     // STAGE 3 — pointer casts. (b2 has A:x_=5, B:y_=7.)
     {
         B b2 = (5, 7);
         A^ ap = ^b2;                       // derived -> base, IMPLICIT
-        __println("up.gx = " + ap^.gx());  // 5  (base method through a base ptr)
+        println(String + "up.gx = " + ap^.gx());  // 5  (base method through a base ptr)
         B^ bp = <B^> ap;                   // base -> derived, EXPLICIT
-        __println("down.y_ = " + bp^.y_);  // 7  (derived field through the downcast)
+        println(String + "down.y_ = " + bp^.y_);  // 7  (derived field through the downcast)
     }                                      // A:ctor 5 / B:ctor 7 / ... / B:dtor 7 / A:dtor 5
 
     // COVERAGE — additional working cases.
     {
-        __println("sizeof B = " + sizeof(B));        // 8 (A:int + B:int)
+        println(String + "sizeof B = " + sizeof(B));        // 8 (A:int + B:int)
         B b3 = (5, 7);
-        __println("upcast_arg = " + upcast_arg(^b3));  // 5  (derived passed as base ptr)
+        println(String + "upcast_arg = " + upcast_arg(^b3));  // 5  (derived passed as base ptr)
         Holder h( B(3, 4) );                          // a derived as a class FIELD
-        __println("holder.v = " + h.v());             // 4
+        println(String + "holder.v = " + h.v());             // 4
         OvD od = (1, 2);
-        __println("ovd = " + od.g(3) + " " + od.g(3, 4));   // 3 7 (derived's own overload)
+        println(String + "ovd = " + od.g(3) + " " + od.g(3, 4));   // 3 7 (derived's own overload)
         {
             A : L(int l_) { int lv() { return l_; } _(){} ~(){} }   // a LOCAL derived class
             L lc = (1, 9);
-            __println("local.lv = " + lc.lv());       // 9
+            println(String + "local.lv = " + lc.lv());       // 9
         }
     }
 
     // STAGE 4 — transitive chain: FLAT construction + bare/qualified inherited members.
     G3 g = (1, 2, 3);                             // flat: g1_=1, g2_=2, g3_=3
-    __println("g.total = " + g.total());          // 50 + 1+2+3 + 1 + 1 + 1 = 59
-    __println("g.gm = " + g.gm());                // 1 (grandparent method on a G3 receiver)
+    println(String + "g.total = " + g.total());          // 50 + 1+2+3 + 1 + 1 + 1 = 59
+    println(String + "g.gm = " + g.gm());                // 1 (grandparent method on a G3 receiver)
     {
         G1^ gp = ^g;                              // transitive cast: derived -> GRANDbase
-        __println("g.up.gm = " + gp^.gm());       // 1
+        println(String + "g.up.gm = " + gp^.gm());       // 1
     }
 
     // STAGE 5 — base statics via qualifier + data-less base.
     Sd sd = (1, 2);
-    __println("sd.viaQual = " + sd.viaQual());    // 7 + 70 + 3 + 5 = 85
+    println(String + "sd.viaQual = " + sd.viaQual());    // 7 + 70 + 3 + 5 = 85
     Md md = (7);                                  // data-less base splices 0 fields
-    __println("md.info = " + md.info());          // 4 + 7 = 11
+    println(String + "md.info = " + md.info());          // 4 + 7 = 11
 
     // COVERAGE — copy of a derived (base sub-object copied), and `new Derived[n]`.
     {
         B src = (5, 7);
         B cp = src;
-        __println("copy.gx = " + cp.gx());        // 5 (base field copied)
+        println(String + "copy.gx = " + cp.gx());        // 5 (base field copied)
         B[] heap = new B[2];
         delete heap;
-        __println("newarr ok");
+        println(String + "newarr ok");
     }
 
     // COVERAGE — synthesized ctor/dtor: derived omits both; the base's still run.
     {
         SynD sy = (5, 6);                             // Sb:ctor 5 ... Sb:dtor 5
-        __println("syn = " + sy.sv() + " " + sy.dv());   // 5 6
+        println(String + "syn = " + sy.sv() + " " + sy.dv());   // 5 6
     }
 
     // COVERAGE — a derived field shadows a same-named base field.
     {
         Fd fd = (10, 20);
-        __println("fd shadow = " + fd.fd_get() + " " + fd.base_get());   // 20 10
+        println(String + "fd shadow = " + fd.fd_get() + " " + fd.base_get());   // 20 10
     }
 
     // COVERAGE — sizeof a transitive chain, and a SINGLE heap derived (base ctor runs).
-    __println("sizeof G3 = " + sizeof(G3));           // 12 (three int fields, flat)
+    println(String + "sizeof G3 = " + sizeof(G3));           // 12 (three int fields, flat)
     {
         B^ hp = new B(8, 9);                          // A:ctor 8 / B:ctor 9
-        __println("heap.gx = " + hp^.gx());           // 8 (base field through the ptr)
+        println(String + "heap.gx = " + hp^.gx());           // 8 (base field through the ptr)
         delete hp;                                    // B:dtor 9 / A:dtor 8
     }
 
@@ -280,8 +280,8 @@ Base(int a_) {
     const int kSeven = 7;
     enum ( kEight = 8 );
 
-    _() { __println("Base:ctor: " + a_); }
-    ~() { __println("Base:dtor: " + a_); }
+    _() { println(String + "Base:ctor: " + a_); }
+    ~() { println(String + "Base:dtor: " + a_); }
 
     int method() {
         return a_;
@@ -289,8 +289,8 @@ Base(int a_) {
 }
 
 Base : Derived(Integer a_ = kSeven, int b_ = kEight) {
-    _() { __println("Derived:ctor: " + a_ + " " + b_); }
-    ~() { __println("Derived:dtor: " + a_ + " " + b_); }
+    _() { println(String + "Derived:ctor: " + a_ + " " + b_); }
+    ~() { println(String + "Derived:dtor: " + a_ + " " + b_); }
 
     int method() {
         return Base:a_ + Base:self.a_ + Base:method() + a_ + b_;

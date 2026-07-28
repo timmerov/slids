@@ -205,10 +205,10 @@ IdxVec makeVec() {
 // container is constructed ONCE and destructed at loop-scope exit, not leaked.
 Obj(int a_ = 70, int b_ = 80) {
     _() {
-        __println("  Obj:ctor");
+        println(String + "  Obj:ctor");
     }
     ~() {
-        __println("  Obj:dtor");
+        println(String + "  Obj:dtor");
     }
     int size() {
         return 2;
@@ -308,117 +308,117 @@ global IdxVec gvec = (11, 22, 33);
 int32 main() {
     // ---- size/op[] ----
     IdxVec v;
-    __println("op[] by value:");
+    println(String + "op[] by value:");
     for (int x : v) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("op[] by reference (x10):");
+    println(String + "op[] by reference (x10):");
     for (int^ r : v) {
         r^ = r^ * 10;
     }
     for (int x : v) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- begin/end/next returning a value ----
     Count c;
-    __println("begin/end/next (value):");
+    println(String + "begin/end/next (value):");
     for (int i : c) {
-        __println("  " + i);
+        println(String + "  " + i);
     }
 
     // ---- begin/end/next returning a reference ----
     Buf3 b;
-    __println("begin/end/next (ref) by value:");
+    println(String + "begin/end/next (ref) by value:");
     for (int x : b) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("begin/end/next (ref) by reference (+100):");
+    println(String + "begin/end/next (ref) by reference (+100):");
     for (int^ r : b) {
         r^ = r^ + 100;
     }
     for (int x : b) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- both protocols: the loop-var shape selects ----
     Both both;
-    __println("both, value loop var -> op[] (3 elements):");
+    println(String + "both, value loop var -> op[] (3 elements):");
     for (int x : both) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("both, ref loop var -> begin/end/next (2 elements, +1000):");
+    println(String + "both, ref loop var -> begin/end/next (2 elements, +1000):");
     for (int^ r : both) {
         r^ = r^ + 1000;
     }
     for (int x : both) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- expression containers: a deref, a construction, a call ----
     IdxVec base;
     IdxVec^ bp = ^base;
-    __println("container via ptr^:");
+    println(String + "container via ptr^:");
     for (int x : bp^) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("container via construction:");
+    println(String + "container via construction:");
     for (int x : IdxVec(40, 50, 60)) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("container via call:");
+    println(String + "container via call:");
     for (int x : makeVec()) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- a spilled rvalue container is built once, destructed at loop exit ----
-    __println("spilled container lifetime:");
-    __println("before");
+    println(String + "spilled container lifetime:");
+    println(String + "before");
     for (int x : makeObj()) {
-        __println("  x=" + x);
+        println(String + "  x=" + x);
     }
-    __println("after");
+    println(String + "after");
 
     // ---- nested for-class: the synthesized locals get unique names per loop ----
     IdxVec n1;
     IdxVec n2;
-    __println("nested:");
+    println(String + "nested:");
     for (int i : n1) {
         for (int j : n2) {
-            __println("  " + i + "," + j);
+            println(String + "  " + i + "," + j);
         }
     }
 
     // ---- inferred loop-variable type ----
     IdxVec iv;
-    __println("inferred (primitive -> by value):");
+    println(String + "inferred (primitive -> by value):");
     for (x : iv) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("inferred (begin/end/next value):");
+    println(String + "inferred (begin/end/next value):");
     Count ic;
     for (i : ic) {
-        __println("  " + i);
+        println(String + "  " + i);
     }
-    __println("inferred (class element -> by reference):");
+    println(String + "inferred (class element -> by reference):");
     PairVec pv;
     for (r : pv) {
-        __println("  " + r^.x_ + "," + r^.y_);
+        println(String + "  " + r^.x_ + "," + r^.y_);
     }
 
     // ---- both protocols + CLASS elements: no tie, the reference infers ----
     BothPair bpc;
-    __println("bothpair inferred -> begin/end/next (1 element):");
+    println(String + "bothpair inferred -> begin/end/next (1 element):");
     for (e : bpc) {
-        __println("  " + e^.x_ + "," + e^.y_);
+        println(String + "  " + e^.x_ + "," + e^.y_);
     }
-    __println("bothpair explicit ref -> begin/end/next (1 element):");
+    println(String + "bothpair explicit ref -> begin/end/next (1 element):");
     for (Pair^ e : bpc) {
-        __println("  " + e^.x_ + "," + e^.y_);
+        println(String + "  " + e^.x_ + "," + e^.y_);
     }
-    __println("bothpair ref^ -> begin/end/next (1 element):");
+    println(String + "bothpair ref^ -> begin/end/next (1 element):");
     for (e2^ : bpc) {
-        __println("  " + e2^.x_ + "," + e2^.y_);
+        println(String + "  " + e2^.x_ + "," + e2^.y_);
     }
 
     // ---- infer-as-reference (`ref^ :`) selects the reference interpretation ----
@@ -426,109 +426,109 @@ int32 main() {
     // selects begin/end/next — the author spells the reference to get one, so
     // the old "must be written explicitly" rejection is repealed.
     Both bi;
-    __println("both, bare inferred -> op[] (3 elements):");
+    println(String + "both, bare inferred -> op[] (3 elements):");
     for (x : bi) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("both, ref^ inferred -> begin/end/next (2 elements, +100):");
+    println(String + "both, ref^ inferred -> begin/end/next (2 elements, +100):");
     for (r^ : bi) {
         r^ = r^ + 100;
     }
     for (x : bi) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("ref^ over size/op[] (x10):");
+    println(String + "ref^ over size/op[] (x10):");
     IdxVec rv;
     for (r^ : rv) {
         r^ = r^ * 10;
     }
     for (x : rv) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("ref^ over begin/end/next-ref (+7):");
+    println(String + "ref^ over begin/end/next-ref (+7):");
     Buf3 rb;
     for (r^ : rb) {
         r^ = r^ + 7;
     }
     for (x : rb) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("ref^ over class elements (same as bare):");
+    println(String + "ref^ over class elements (same as bare):");
     PairVec rpv;
     for (e^ : rpv) {
-        __println("  " + e^.x_ + "," + e^.y_);
+        println(String + "  " + e^.x_ + "," + e^.y_);
     }
 
     // ---- a malformed protocol is ignored when another is usable ----
-    __println("malformed-but-unused (uses begin/end/next):");
+    println(String + "malformed-but-unused (uses begin/end/next):");
     Mixed mx;
     for (int x : mx) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- loop-variable widening (int -> int64) ----
-    __println("widening to int64:");
+    println(String + "widening to int64:");
     for (int64 x : iv) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- break / continue ----
-    __println("break at 2:");
+    println(String + "break at 2:");
     for (int x : iv) {
         if (x == 2) {
             break;
         }
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("continue at 2:");
+    println(String + "continue at 2:");
     for (int x : iv) {
         if (x == 2) {
             continue;
         }
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("labeled break to the outer loop:");
+    println(String + "labeled break to the outer loop:");
     for (int i : n1) {
         for (int x : iv) {
             if (x == 2) {
                 break outer;
             }
-            __println("  " + i + "," + x);
+            println(String + "  " + i + "," + x);
         }
     } :outer;
 
     // ---- empty iteration (size 0) skips the body ----
-    __println("empty:");
+    println(String + "empty:");
     Empty ev;
     for (int x : ev) {
-        __println("  SHOULD NOT APPEAR " + x);
+        println(String + "  SHOULD NOT APPEAR " + x);
     }
-    __println("empty done");
+    println(String + "empty done");
 
     // ---- inherited protocol ----
-    __println("inherited size/op[]:");
+    println(String + "inherited size/op[]:");
     IdxDerived d;
     for (int x : d) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- an array-element container and a global container ----
     IdxVec arr[2];
-    __println("array-element container:");
+    println(String + "array-element container:");
     for (int x : arr[0]) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
-    __println("global container:");
+    println(String + "global container:");
     for (int x : gvec) {
-        __println("  " + x);
+        println(String + "  " + x);
     }
 
     // ---- low: a by-ref write into a spilled (discarded) container just runs ----
-    __println("by-ref write into a spilled container:");
+    println(String + "by-ref write into a spilled container:");
     for (int^ r : makeVec()) {
         r^ = 0;
     }
-    __println("spilled write done");
+    println(String + "spilled write done");
 
     return 0;
 }

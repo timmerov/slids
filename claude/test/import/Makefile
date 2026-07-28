@@ -11,6 +11,12 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
+# The library: string.slh on every compile's import path (`import string;` for
+# println(String + ...)); every binary links the merged build/lib/libslids.o.
+LIB       = ../../lib
+LIB_BUILD = ../../build/lib
+IFLAGS    = -I $(LIB)/hdr
+
 # The runnable programs (each has an exp.<name> golden). `consumer` is the cross-TU
 # import test; `math` is a standalone TU binding libm's C functions via `= import`
 # blocks — it links `-lm` and has no sibling `.sl`. `tmpl_test` is the cross-TU
@@ -60,13 +66,14 @@ positives: all
 
 consumer: $(BIN_DIR)/consumer
 
-$(BIN_DIR)/consumer: $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(OBJS)))
+$(BIN_DIR)/consumer: $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(OBJS))) \
+		$(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
 
 # math is a single self-contained TU; its `= import` decls bind libm, so it links -lm.
 math: $(BIN_DIR)/math
 
-$(BIN_DIR)/math: $(BUILD_DIR)/math.o
+$(BIN_DIR)/math: $(BUILD_DIR)/math.o $(LIB_BUILD)/libslids.o
 	$(CXX) $^ -lm -o $@
 
 # The cross-TU template programs: each consumer links the template sources,
@@ -82,14 +89,20 @@ TMPL_LIBS = \
 tmpl_test: $(BIN_DIR)/tmpl_test
 
 $(BIN_DIR)/tmpl_test: $(BUILD_DIR)/tmpl_test.o \
-		$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(TMPL_LIBS)))
+		$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(TMPL_LIBS))) \
+		$(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
 
 tmpl_test2: $(BIN_DIR)/tmpl_test2
 
 $(BIN_DIR)/tmpl_test2: $(BUILD_DIR)/tmpl_test2.o \
-		$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(TMPL_LIBS)))
+		$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(TMPL_LIBS))) \
+		$(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
+
+# Built by lib's own Makefile (make.sh order); self-heals a standalone build.
+$(LIB_BUILD)/libslids.o:
+	$(MAKE) -C $(LIB)
 
 # THE POST-COMPILE PRE-LINK STAGE: a template source compiles AFTER its
 # consumers, reading the demand pool (.sli files) they dumped beside their
@@ -100,11 +113,11 @@ $(BIN_DIR)/tmpl_test2: $(BUILD_DIR)/tmpl_test2.o \
 $(BUILD_DIR)/tmpl_lib.ll: tmpl_lib.sl $(BUILD_DIR)/tmpl_test.ll \
 		$(BUILD_DIR)/tmpl_test2.ll $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/tmpl_lib.d --instantiate $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/tmpl_lib.d $(IFLAGS) --instantiate $(BUILD_DIR)
 
 $(BUILD_DIR)/tmpl_lib2.ll: tmpl_lib2.sl $(BUILD_DIR)/tmpl_lib.ll $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/tmpl_lib2.d --instantiate $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/tmpl_lib2.d $(IFLAGS) --instantiate $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
@@ -116,7 +129,7 @@ $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 # first compile and governs every build after.
 $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS)
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 

@@ -173,7 +173,7 @@ void fn_local_class() {
     nested_fn(obj);
 
     void nested_fn(LocalClass^ lc) {
-        __println("fn_local_class:nested_fn: " + obj.x_);
+        println(String + "fn_local_class:nested_fn: " + obj.x_);
     }
 
     LocalClass(int x_) { }
@@ -182,10 +182,10 @@ void fn_local_class() {
 /* A class whose ctor/dtor PRINT, so a temporary inside a nested body is COUNTABLE
    and its lifetime is visible. Its operators let a chain run there too. */
 Acc(int v_) {
-    _() { __println("Acc:ctor: " + v_); }
-    ~() { __println("Acc:dtor: " + v_); }
+    _() { println(String + "Acc:ctor: " + v_); }
+    ~() { println(String + "Acc:dtor: " + v_); }
     op=(Acc^ r)           { v_ = r^.v_; }
-    op<--(mutable Acc^ r) { __println("Acc:op<--: " + r^.v_); v_ = r^.v_; }
+    op<--(mutable Acc^ r) { println(String + "Acc:op<--: " + r^.v_); v_ = r^.v_; }
     op+=(Acc^ r)          { v_ += r^.v_; }
     op+(Acc^ x, Acc^ y)   { v_ = x^.v_ + y^.v_; }
 }
@@ -450,51 +450,51 @@ int local_class_method(int x) {
 }
 
 int32 main() {
-    __println("basic(5) = " + basic(5));              // 10
-    __println("read_cap(5) = " + read_cap(5));        // 15
-    __println("write_cap(5) = " + write_cap(5));      // 10
-    __println("recurse(5) = " + recurse(5));          // 120
-    __println("call_before(7) = " + call_before(7));  // 7
-    __println("void_nested(5) = " + void_nested(5));      // 1
-    __println("void_nested(-5) = " + void_nested(-5));    // -1
-    __println("with_def(5) = " + with_def(5));            // 15
-    __println("fwd_nested(5) = " + fwd_nested(5));        // 6
+    println(String + "basic(5) = " + basic(5));              // 10
+    println(String + "read_cap(5) = " + read_cap(5));        // 15
+    println(String + "write_cap(5) = " + write_cap(5));      // 10
+    println(String + "recurse(5) = " + recurse(5));          // 120
+    println(String + "call_before(7) = " + call_before(7));  // 7
+    println(String + "void_nested(5) = " + void_nested(5));      // 1
+    println(String + "void_nested(-5) = " + void_nested(-5));    // -1
+    println(String + "with_def(5) = " + with_def(5));            // 15
+    println(String + "fwd_nested(5) = " + fwd_nested(5));        // 6
     fn_local_class();                                     // 42 then 37
 
     // the four desugar passes, inside a nested body, each crossing a capture.
-    __println("nested_ppid(5) = " + nested_ppid(5));      // 507
-    __println("nested_temp() = " + nested_temp());        // 9
-    __println("nested_agg() = " + nested_agg());          // 6
-    __println("nested_chain() = " + nested_chain());      // 303
+    println(String + "nested_ppid(5) = " + nested_ppid(5));      // 507
+    println(String + "nested_temp() = " + nested_temp());        // 9
+    println(String + "nested_agg() = " + nested_agg());          // 6
+    println(String + "nested_chain() = " + nested_chain());      // 303
     {
         Acc n = nested_nrvo();
-        __println("nested_nrvo() = " + n.v_);             // 3, built in the caller's slot
+        println(String + "nested_nrvo() = " + n.v_);             // 3, built in the caller's slot
     }
 
     // a nested function may live in ANY scope of its host, not just the body's top level.
-    __println("block_nested(5) = " + block_nested(5));    // 506
-    __println("loop_nested(2) = " + loop_nested(2));      // 20+30+40 = 90
-    __println("if_nested(4) = " + if_nested(4));          // 8
-    __println("if_nested(-4) = " + if_nested(-4));        // 8
-    __println("switch_nested(1) = " + switch_nested(1));  // 10
-    __println("for_nested(10) = " + for_nested(10));      // 10+11+12 = 33
-    __println("fwd_in_block(5) = " + fwd_in_block(5));    // 7
+    println(String + "block_nested(5) = " + block_nested(5));    // 506
+    println(String + "loop_nested(2) = " + loop_nested(2));      // 20+30+40 = 90
+    println(String + "if_nested(4) = " + if_nested(4));          // 8
+    println(String + "if_nested(-4) = " + if_nested(-4));        // 8
+    println(String + "switch_nested(1) = " + switch_nested(1));  // 10
+    println(String + "for_nested(10) = " + for_nested(10));      // 10+11+12 = 33
+    println(String + "fwd_in_block(5) = " + fwd_in_block(5));    // 7
 
     // a nested function in a METHOD / OPERATOR / CTOR -- incl. inheriting self.
     {
         Meth mo(1);                                          // ctor: 1 + seed() = 8
-        __println("Meth ctor nested = " + mo.v_);            // 8
-        __println("Meth use_local(5) = " + mo.use_local(5)); // 6
-        __println("Meth use_field() = " + mo.use_field());   // 108  (inherits self)
-        __println("Meth use_self() = " + mo.use_self());     // 208  (inherits self)
-        __println("Meth in_block(5) = " + mo.in_block(5));   // 506
+        println(String + "Meth ctor nested = " + mo.v_);            // 8
+        println(String + "Meth use_local(5) = " + mo.use_local(5)); // 6
+        println(String + "Meth use_field() = " + mo.use_field());   // 108  (inherits self)
+        println(String + "Meth use_self() = " + mo.use_self());     // 208  (inherits self)
+        println(String + "Meth in_block(5) = " + mo.in_block(5));   // 506
         Meth mp(2);                                          // ctor: 2 + seed() = 9
         mo += mp;                                            // 8 + 9 = 17
-        __println("Meth op+= nested = " + mo.v_);            // 17
+        println(String + "Meth op+= nested = " + mo.v_);            // 17
     }
     Space:Inner si(7);
-    __println("ns-class method nested = " + si.go(3));               // 7 + 3 = 10
-    __println("local_class_method(5) = " + local_class_method(5));   // 5 + 5 + 100 = 110
+    println(String + "ns-class method nested = " + si.go(3));               // 7 + 3 = 10
+    println(String + "local_class_method(5) = " + local_class_method(5));   // 5 + 5 + 100 = 110
     return 0;
 }
 

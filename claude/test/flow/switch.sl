@@ -476,20 +476,20 @@ int continue_terminator(int v) {
    scope, so its dtor fires at the body's `}` when (and only when) that clause is
    taken — no cross-clause lifetime, no constructed-flag. */
 Tracer(int id_) {
-    _() { __println("Tracer ctor " + id_); }
-    ~() { __println("Tracer dtor " + id_); }
+    _() { println(String + "Tracer ctor " + id_); }
+    ~() { println(String + "Tracer dtor " + id_); }
 }
 void clause_scope(int v) {
     switch (v) {
         0: {
             Tracer t(0);
-            __println("clause 0 body");
+            println(String + "clause 0 body");
         }
         default: {
-            __println("default body");
+            println(String + "default body");
         }
     }
-    __println("after switch");
+    println(String + "after switch");
 }
 
 /* a label-list shared body with a trailing continue: 1 or 2 run the shared body,
@@ -539,74 +539,74 @@ int empty_continue(int v) {
 }
 
 int32 main() {
-    __println("basic(1) = " + basic(1));                    // 20
-    __println("basic(5) = " + basic(5));                    // 99
-    __println("fallthrough(0) = " + fallthrough(0));        // 111
-    __println("fallthrough(1) = " + fallthrough(1));        // 110
-    __println("fallthrough(2) = " + fallthrough(2));        // 100
-    __println("fallthrough(9) = " + fallthrough(9));        // 1000
-    __println("stacked(3) = " + stacked(3));                // 34
-    __println("stacked(4) = " + stacked(4));                // 34
-    __println("stacked(5) = " + stacked(5));                // 0
-    __println("stacked_terminator(3) = " + stacked_terminator(3));  // 1
-    __println("stacked_terminator(0) = " + stacked_terminator(0));  // 0
-    __println("no_default(0) = " + no_default(0));          // 0
-    __println("no_default(9) = " + no_default(9));          // 7
-    __println("default_middle(0) = " + default_middle(0));  // 1
-    __println("default_middle(1) = " + default_middle(1));  // 100
-    __println("default_middle(5) = " + default_middle(5));  // 109
-    __println("switch_in_while(3) = " + switch_in_while(3));    // 21
-    __println("switch_continue(4) = " + switch_continue(4));    // 3
-    __println("nested_switch(0, 0) = " + nested_switch(0, 0));  // 1
-    __println("nested_switch(0, 5) = " + nested_switch(0, 5));  // 2
-    __println("nested_switch(5, 0) = " + nested_switch(5, 0));  // 9
-    __println("char_scrutinee('a') = " + char_scrutinee('a'));  // 1
-    __println("char_scrutinee('z') = " + char_scrutinee('z'));  // 0
-    __println("bool_scrutinee(true) = " + bool_scrutinee(true));    // 1
-    __println("bool_scrutinee(false) = " + bool_scrutinee(false));  // 0
-    __println("dir_switch(Dir:S) = " + dir_switch(Dir:S));          // 2
-    __println("dir_switch(Dir:W) = " + dir_switch(Dir:W));          // 0
-    __println("anon_enum_switch(kGreen) = " + anon_enum_switch(kGreen));  // 2
-    __println("da_exhaustive(0) = " + da_exhaustive(0));    // 1
-    __println("da_exhaustive(9) = " + da_exhaustive(9));    // 3
-    __println("empty_body(7) = " + empty_body(7));          // 5
-    __println("expr_scrutinee(1, 2) = " + expr_scrutinee(1, 2));    // 1
-    __println("expr_scrutinee(5, 5) = " + expr_scrutinee(5, 5));    // 0
-    __println("dir_assign(Dir:N) = " + dir_assign(Dir:N));          // 1
-    __println("dir_assign(Dir:E) = " + dir_assign(Dir:E));          // 9
-    __println("ppid_scrutinee() = " + ppid_scrutinee());            // 106
-    __println("neg_labels(-1) = " + neg_labels(-1));                // 1
-    __println("neg_labels(-2) = " + neg_labels(-2));                // 2
-    __println("neg_labels(0) = " + neg_labels(0));                  // 9
-    __println("uint_scrutinee(1) = " + uint_scrutinee(1));          // 2
-    __println("i64_scrutinee(100) = " + i64_scrutinee(100));        // 1
-    __println("i64_scrutinee(5) = " + i64_scrutinee(5));            // 0
-    __println("letter_switch(Letter:b) = " + letter_switch(Letter:b));  // 2
-    __println("letter_switch(Letter:c) = " + letter_switch(Letter:c));  // 0
-    __println("const_label(42) = " + const_label(42));              // 1
-    __println("const_label(0) = " + const_label(0));                // 0
+    println(String + "basic(1) = " + basic(1));                    // 20
+    println(String + "basic(5) = " + basic(5));                    // 99
+    println(String + "fallthrough(0) = " + fallthrough(0));        // 111
+    println(String + "fallthrough(1) = " + fallthrough(1));        // 110
+    println(String + "fallthrough(2) = " + fallthrough(2));        // 100
+    println(String + "fallthrough(9) = " + fallthrough(9));        // 1000
+    println(String + "stacked(3) = " + stacked(3));                // 34
+    println(String + "stacked(4) = " + stacked(4));                // 34
+    println(String + "stacked(5) = " + stacked(5));                // 0
+    println(String + "stacked_terminator(3) = " + stacked_terminator(3));  // 1
+    println(String + "stacked_terminator(0) = " + stacked_terminator(0));  // 0
+    println(String + "no_default(0) = " + no_default(0));          // 0
+    println(String + "no_default(9) = " + no_default(9));          // 7
+    println(String + "default_middle(0) = " + default_middle(0));  // 1
+    println(String + "default_middle(1) = " + default_middle(1));  // 100
+    println(String + "default_middle(5) = " + default_middle(5));  // 109
+    println(String + "switch_in_while(3) = " + switch_in_while(3));    // 21
+    println(String + "switch_continue(4) = " + switch_continue(4));    // 3
+    println(String + "nested_switch(0, 0) = " + nested_switch(0, 0));  // 1
+    println(String + "nested_switch(0, 5) = " + nested_switch(0, 5));  // 2
+    println(String + "nested_switch(5, 0) = " + nested_switch(5, 0));  // 9
+    println(String + "char_scrutinee('a') = " + char_scrutinee('a'));  // 1
+    println(String + "char_scrutinee('z') = " + char_scrutinee('z'));  // 0
+    println(String + "bool_scrutinee(true) = " + bool_scrutinee(true));    // 1
+    println(String + "bool_scrutinee(false) = " + bool_scrutinee(false));  // 0
+    println(String + "dir_switch(Dir:S) = " + dir_switch(Dir:S));          // 2
+    println(String + "dir_switch(Dir:W) = " + dir_switch(Dir:W));          // 0
+    println(String + "anon_enum_switch(kGreen) = " + anon_enum_switch(kGreen));  // 2
+    println(String + "da_exhaustive(0) = " + da_exhaustive(0));    // 1
+    println(String + "da_exhaustive(9) = " + da_exhaustive(9));    // 3
+    println(String + "empty_body(7) = " + empty_body(7));          // 5
+    println(String + "expr_scrutinee(1, 2) = " + expr_scrutinee(1, 2));    // 1
+    println(String + "expr_scrutinee(5, 5) = " + expr_scrutinee(5, 5));    // 0
+    println(String + "dir_assign(Dir:N) = " + dir_assign(Dir:N));          // 1
+    println(String + "dir_assign(Dir:E) = " + dir_assign(Dir:E));          // 9
+    println(String + "ppid_scrutinee() = " + ppid_scrutinee());            // 106
+    println(String + "neg_labels(-1) = " + neg_labels(-1));                // 1
+    println(String + "neg_labels(-2) = " + neg_labels(-2));                // 2
+    println(String + "neg_labels(0) = " + neg_labels(0));                  // 9
+    println(String + "uint_scrutinee(1) = " + uint_scrutinee(1));          // 2
+    println(String + "i64_scrutinee(100) = " + i64_scrutinee(100));        // 1
+    println(String + "i64_scrutinee(5) = " + i64_scrutinee(5));            // 0
+    println(String + "letter_switch(Letter:b) = " + letter_switch(Letter:b));  // 2
+    println(String + "letter_switch(Letter:c) = " + letter_switch(Letter:c));  // 0
+    println(String + "const_label(42) = " + const_label(42));              // 1
+    println(String + "const_label(0) = " + const_label(0));                // 0
     char hi = (char=255);   // an int literal never matches char; convert explicitly
-    __println("char_max(255) = " + char_max(hi));                   // 1
-    __println("last_continue(0) = " + last_continue(0));            // 1
-    __println("last_continue(5) = " + last_continue(5));            // 9
-    __println("last_continue_return(0) = " + last_continue_return(0));   // 1
-    __println("last_continue_return(5) = " + last_continue_return(5));   // 9
-    __println("continue_terminator(0) = " + continue_terminator(0));     // 11
-    __println("continue_terminator(5) = " + continue_terminator(5));     // 10
+    println(String + "char_max(255) = " + char_max(hi));                   // 1
+    println(String + "last_continue(0) = " + last_continue(0));            // 1
+    println(String + "last_continue(5) = " + last_continue(5));            // 9
+    println(String + "last_continue_return(0) = " + last_continue_return(0));   // 1
+    println(String + "last_continue_return(5) = " + last_continue_return(5));   // 9
+    println(String + "continue_terminator(0) = " + continue_terminator(0));     // 11
+    println(String + "continue_terminator(5) = " + continue_terminator(5));     // 10
     clause_scope(0);    // Tracer ctor 0 / clause 0 body / Tracer dtor 0 / after switch
     clause_scope(9);    // default body / after switch
-    __println("list_continue(1) = " + list_continue(1));            // 11
-    __println("list_continue(2) = " + list_continue(2));            // 11
-    __println("list_continue(3) = " + list_continue(3));            // 10
-    __println("list_continue(9) = " + list_continue(9));            // 100
-    __println("default_in_list(0) = " + default_in_list(0));        // 1
-    __println("default_in_list(1) = " + default_in_list(1));        // 2
-    __println("default_in_list(9) = " + default_in_list(9));        // 1
-    __println("into_default(0) = " + into_default(0));              // 51
-    __println("into_default(1) = " + into_default(1));              // 2
-    __println("into_default(9) = " + into_default(9));              // 50
-    __println("empty_continue(0) = " + empty_continue(0));          // 7
-    __println("empty_continue(9) = " + empty_continue(9));          // 7
+    println(String + "list_continue(1) = " + list_continue(1));            // 11
+    println(String + "list_continue(2) = " + list_continue(2));            // 11
+    println(String + "list_continue(3) = " + list_continue(3));            // 10
+    println(String + "list_continue(9) = " + list_continue(9));            // 100
+    println(String + "default_in_list(0) = " + default_in_list(0));        // 1
+    println(String + "default_in_list(1) = " + default_in_list(1));        // 2
+    println(String + "default_in_list(9) = " + default_in_list(9));        // 1
+    println(String + "into_default(0) = " + into_default(0));              // 51
+    println(String + "into_default(1) = " + into_default(1));              // 2
+    println(String + "into_default(9) = " + into_default(9));              // 50
+    println(String + "empty_continue(0) = " + empty_continue(0));          // 7
+    println(String + "empty_continue(9) = " + empty_continue(9));          // 7
     return 0;
 }
 

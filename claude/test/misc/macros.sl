@@ -33,66 +33,66 @@ deferred:
 import string;
 
 void dump( (char[], char[], char[], char[], int^)^ tuple ) {
-    __println(tuple^[0] + ":" + tuple^[1] + ": " + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
+    println(String + tuple^[0] + ":" + tuple^[1] + ": " + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }
 
 int32 main() {
 
     // ##file — short filename, no directory path.
-    __println(##file);                  // macros.sl
+    println(String + ##file);                  // macros.sl
 
     // ##line — the line where the macro appears, as a string.
-    __println(##line);                  // 34
+    println(String + ##line);                  // 34
 
     // ##func — the enclosing function's name, unmangled.
-    __println(##func);                  // main
+    println(String + ##func);                  // main
 
     // ##name(x) — reproduces the argument's lexed text verbatim. It is NOT
     // parsed and NOT type-checked: whitespace is dropped and the names need
     // not exist. So a complex postfix expression round-trips as-is.
-    __println(##name(a + b));           // a+b
-    __println(##name(obj.field[2]));    // obj.field[2]
+    println(String + ##name(a + b));           // a+b
+    println(String + ##name(obj.field[2]));    // obj.field[2]
 
     // ##type(x) — the operand's inferred type. The operand IS a real,
     // resolved expression.
     int   n    = 7;
     int64 big  = 7;
     bool  flag = true;
-    __println(##type(n));               // int
-    __println(##type(big));             // int64
-    __println(##type(flag));            // bool
-    __println(##type(n + 1));           // int
+    println(String + ##type(n));               // int
+    println(String + ##type(big));             // int64
+    println(String + ##type(flag));            // bool
+    println(String + ##type(n + 1));           // int
 
     // ##name reproduces a real local's spelling without reading it; the value
     // read happens through ##type above, so `n` is not flagged unused.
-    __println(##name(n + 1));           // n+1
+    println(String + ##name(n + 1));           // n+1
 
     // ##type(x) is UNEVALUATED — it reads only x's declared type, so an
     // uninitialized local needs no definite assignment. The operand is still
     // read-marked (not swept as unused); ##type does not COUNT as an assignment.
     int u;
-    __println(##type(u));               // int
+    println(String + ##type(u));               // int
 
     // ##date / ##time — the moment THIS file is compiled (not slidsc's build
     // time). Their values are the compile timestamp, so they are not pinned in
     // macros.exp; here we confirm only that each lowers to a usable char[].
     (const char)[] today = ##date;
     (const char)[] now   = ##time;
-    __println(##type(today));           // char[]
-    __println(##type(now));             // char[]
+    println(String + ##type(today));           // char[]
+    println(String + ##type(now));             // char[]
 
     alias Integer = int;
     alias Whole   = Integer;     // chained alias -> fully resolved
     enum Status ( ok );
-    __println("Integer type = " + ##type(Integer));   // int  (alias name -> underlying)
-    __println("Whole type = " + ##type(Whole));        // int  (chain resolved)
-    __println("Status type = " + ##type(Status));      // int  (enum name -> underlying)
+    println(String + "Integer type = " + ##type(Integer));   // int  (alias name -> underlying)
+    println(String + "Whole type = " + ##type(Whole));        // int  (chain resolved)
+    println(String + "Status type = " + ##type(Status));      // int  (enum name -> underlying)
 
     // a namespace-qualified type name resolves the same way; a qualified VALUE
     // keeps the value path (its const-qualified type).
     Geo { enum Dir ( kN ); const int kSize = 3; }
-    __println("Geo:Dir type = " + ##type(Geo:Dir));    // int        (qualified enum type)
-    __println("Geo:kSize type = " + ##type(Geo:kSize)); // const int  (qualified value)
+    println(String + "Geo:Dir type = " + ##type(Geo:Dir));    // int        (qualified enum type)
+    println(String + "Geo:kSize type = " + ##type(Geo:kSize)); // const int  (qualified value)
 
     int x = 42;
     dump(#x);
@@ -106,13 +106,13 @@ int32 main() {
 
 //-EXPECT-ERROR: 'Splat' is not a value or an alias
 //int32 neg_undefined() {
-//    __println(##type(Splat));
+//    println(String + ##type(Splat));
 //    return 0;
 //}
 
 //-EXPECT-ERROR: 'Ns' is a namespace, not a value or an alias
 //Ns { const int kX = 1; }
 //int32 neg_namespace() {
-//    __println(##type(Ns));
+//    println(String + ##type(Ns));
 //    return 0;
 //}

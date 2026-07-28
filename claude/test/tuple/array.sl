@@ -106,7 +106,7 @@ int[3] widenArr() {                          // int[3] returned from an int8[3] 
 // prints once per call — proves a side-effecting array index in a by-slot copy /
 // move SOURCE is evaluated ONCE (hoisted to a temp), not once per slot.
 int pick() {
-    __println("pick");
+    println(String + "pick");
     return 1;
 }
 
@@ -116,17 +116,17 @@ int32 main() {
     for (i : 0..5) {
         arr[i] = i * i;
     }
-    __println("arr[0]= " + arr[0]);              // 0
-    __println("arr[3]= " + arr[3]);              // 9
-    __println("arr[4]= " + arr[4]);              // 16
+    println(String + "arr[0]= " + arr[0]);              // 0
+    println(String + "arr[3]= " + arr[3]);              // 9
+    println(String + "arr[4]= " + arr[4]);              // 16
 
     /* write through a subscript lvalue. */
     arr[2] = 100;
-    __println("arr[2]= " + arr[2]);              // 100
+    println(String + "arr[2]= " + arr[2]);              // 100
 
     /* ^arr[i] is an iterator to that element; deref reads it. */
     int[] iter = ^arr[3];
-    __println("iter^= " + iter^);                // 9
+    println(String + "iter^= " + iter^);                // 9
 
     /* two-dimensional, standard row-major: int[5][3] is 5 rows of 3, indexed
        twodim[row][col] (row 0..5, col 0..3). */
@@ -136,15 +136,15 @@ int32 main() {
             twodim[y][x] = x * x + y;
         }
     }
-    __println("twodim[0][0]= " + twodim[0][0]);  // 0
-    __println("twodim[0][2]= " + twodim[0][2]);  // 4
-    __println("twodim[4][0]= " + twodim[4][0]);  // 4
-    __println("twodim[4][2]= " + twodim[4][2]);  // 8
-    __println("twodim[3][1]= " + twodim[3][1]);  // 4
+    println(String + "twodim[0][0]= " + twodim[0][0]);  // 0
+    println(String + "twodim[0][2]= " + twodim[0][2]);  // 4
+    println(String + "twodim[4][0]= " + twodim[4][0]);  // 4
+    println(String + "twodim[4][2]= " + twodim[4][2]);  // 8
+    println(String + "twodim[3][1]= " + twodim[3][1]);  // 4
 
     /* ^twodim[row][col] is an iterator to that element. */
     int[] it2 = ^twodim[3][1];
-    __println("it2^= " + it2^);                  // 4
+    println(String + "it2^= " + it2^);                  // 4
 
     /* the comma form transposes: grid[x,y] == grid[y][x], and a comma
        declaration int[3,5] == int[5][3]. */
@@ -154,9 +154,9 @@ int32 main() {
             grid[x,y] = x * x + y;               // == grid[y][x]
         }
     }
-    __println("grid[2,3]= " + grid[2,3]);        // x=2,y=3 -> 7
-    __println("grid[3][2]= " + grid[3][2]);      // same element, chained -> 7
-    __println("grideq= " + (grid[2,3] == grid[3][2]));   // true
+    println(String + "grid[2,3]= " + grid[2,3]);        // x=2,y=3 -> 7
+    println(String + "grid[3][2]= " + grid[3][2]);      // same element, chained -> 7
+    println(String + "grideq= " + (grid[2,3] == grid[3][2]));   // true
 
     /* const-EXPRESSION dimensions: a const, sizeof, an arithmetic expression, and
        a const dim in a multi-dim array. They fold in constfold and bake into the
@@ -164,44 +164,44 @@ int32 main() {
     const int N = 4;
     int ca[N];                                   // int[4]
     ca[3] = 7;
-    __println("ca[3]= " + ca[3] + " size= " + sizeof(ca));      // 7, 16
+    println(String + "ca[3]= " + ca[3] + " size= " + sizeof(ca));      // 7, 16
     int sa[sizeof(int)];                         // int[4]
     sa[3] = 8;
-    __println("sa size= " + sizeof(sa));                        // 16
+    println(String + "sa size= " + sizeof(sa));                        // 16
     int ea[N + 1];                               // int[5]
     ea[4] = 9;
-    __println("ea[4]= " + ea[4] + " size= " + sizeof(ea));      // 9, 20
+    println(String + "ea[4]= " + ea[4] + " size= " + sizeof(ea));      // 9, 20
     int cg[N][3];                                // int[4][3] (4 rows of 3)
     cg[3][2] = 5;
-    __println("cg[3][2]= " + cg[3][2] + " size= " + sizeof(cg)); // 5, 48
+    println(String + "cg[3][2]= " + cg[3][2] + " size= " + sizeof(cg)); // 5, 48
 
     /* an array may be SET from a homogeneous tuple — element-wise, the tuple
        aggregate elided, each slot widening into the element type. */
     int t1[3] = (1, 2, 3);
-    __println("t1= " + t1[0] + " " + t1[1] + " " + t1[2]);       // 1 2 3
+    println(String + "t1= " + t1[0] + " " + t1[1] + " " + t1[2]);       // 1 2 3
     t1 = (4, 5, 6);                              // whole-array assign from a tuple
-    __println("t1b= " + t1[0] + " " + t1[1] + " " + t1[2]);      // 4 5 6
+    println(String + "t1b= " + t1[0] + " " + t1[1] + " " + t1[2]);      // 4 5 6
 
     /* multi-dim from a nested tuple: the literal's shape (rows × cols) must match
        the declared dimensions; it lowers row-major. */
     int td[3][2] = ((1,2), (3,4), (5,6));
-    __println("td[0][0]= " + td[0][0]);          // 1
-    __println("td[0][1]= " + td[0][1]);          // 2
-    __println("td[1][0]= " + td[1][0]);          // 3
-    __println("td[2][1]= " + td[2][1]);          // 6
+    println(String + "td[0][0]= " + td[0][0]);          // 1
+    println(String + "td[0][1]= " + td[0][1]);          // 2
+    println(String + "td[1][0]= " + td[1][0]);          // 3
+    println(String + "td[2][1]= " + td[2][1]);          // 6
     td = ((10,11), (12,13), (14,15));            // multi-dim whole-array assign
-    __println("td2[0][0]= " + td[0][0]);         // 10
-    __println("td2[2][1]= " + td[2][1]);         // 15
+    println(String + "td2[0][0]= " + td[0][0]);         // 10
+    println(String + "td2[2][1]= " + td[2][1]);         // 15
 
     /* a comma-declared array from a tuple: int[2,3] == int[3][2] (3 rows of 2). */
     int ct[2,3] = ((1,2), (3,4), (5,6));
-    __println("ct= " + ct[0][0] + " " + ct[2][1]);  // 1 6
+    println(String + "ct= " + ct[0][0] + " " + ct[2][1]);  // 1 6
 
     /* per-slot WIDENING: int8 / int leaves widen into the int64 element type. */
     int8 e0 = 5;
     int e1 = 9;
     int64 wv[2] = (e0, e1);
-    __println("wv= " + wv[0] + " " + wv[1]);     // 5 9
+    println(String + "wv= " + wv[0] + " " + wv[1]);     // 5 9
 
     /* three-dimensional, standard row-major: a[i][j][k] = i,j,k flat row-major. */
     int a3[2][3][4];
@@ -212,20 +212,20 @@ int32 main() {
             }
         }
     }
-    __println("a3[0][0][0]= " + a3[0][0][0]);     // 0
-    __println("a3[1][2][3]= " + a3[1][2][3]);     // 123
-    __println("a3[0][1][2]= " + a3[0][1][2]);     // 12
-    __println("a3comma= " + a3[3,2,1]);           // == a3[1][2][3] -> 123
+    println(String + "a3[0][0][0]= " + a3[0][0][0]);     // 0
+    println(String + "a3[1][2][3]= " + a3[1][2][3]);     // 123
+    println(String + "a3[0][1][2]= " + a3[0][1][2]);     // 12
+    println(String + "a3comma= " + a3[3,2,1]);           // == a3[1][2][3] -> 123
 
     /* a 3-D array from a fully-nested tuple — shape (2 × 2 × 2). */
     int n3[2][2][2] = (((1,2), (3,4)), ((5,6), (7,8)));
-    __println("n3= " + n3[0][0][0] + " " + n3[1][1][1] + " " + n3[1][0][1]);  // 1 8 6
+    println(String + "n3= " + n3[0][0][0] + " " + n3[1][1][1] + " " + n3[1][0][1]);  // 1 8 6
 
     /* a comma subscript composes with addr-of: ^a[i,j] == ^a[j][i]. */
     int g2[2][3];
     g2[1][2] = 7;
     int[] cit = ^g2[2,1];                        // == ^g2[1][2]
-    __println("commaiter= " + cit^);             // 7
+    println(String + "commaiter= " + cit^);             // 7
 
     /* an iterator walks the flat row-major layout across element boundaries. */
     int seq[5][3];
@@ -235,30 +235,30 @@ int32 main() {
         }
     }
     int[] it = ^seq[0][1];                        // x=1,y=0 -> 1
-    __println("it= " + it^);                      // 1
+    println(String + "it= " + it^);                      // 1
     it = it + 1;                                  // -> seq[0][2] -> x=2,y=0 -> 4
-    __println("itnext= " + it^);                  // 4
+    println(String + "itnext= " + it^);                  // 4
     it = it + 1;                                  // -> seq[1][0] -> x=0,y=1 -> 1
-    __println("itwrap= " + it^);                  // 1
+    println(String + "itwrap= " + it^);                  // 1
 
     /* assign an array from a tuple variable. */
     (int8,int8,int8,int8) t4 = (1, 2, 3, 4);
     int a4[4] = t4;
-    __print("a4 = (");
+    print(String + "a4 = (");
     for (x : a4) {
-        __print(" " + x);
+        print(String + " " + x);
     }
-    __println(" )");
+    println(String + " )");
 
     /* array of aliased type and named constant size. */
     alias Integer = int;
     const intptr n5 = 5;
     Integer a5[n5] = (10,9,8,7,6);
-    __print("a5 = (");
+    print(String + "a5 = (");
     for (x : a5) {
-        __print(" " + x);
+        print(String + " " + x);
     }
-    __println(" )");
+    println(String + " )");
 
     /* assign a sub array. */
     int a6[2,3] = ((1,2), (3,4), (5,6));
@@ -266,25 +266,25 @@ int32 main() {
     a6[0] = a6[2];
     a6[1] = tuple;
     a6[2] = (9,10);
-    __print("a6 = (");
+    print(String + "a6 = (");
     for (y : 0..3) {
-        __print(" (");
+        print(String + " (");
         for (x : 0..2) {
-            __print(" " + a6[x,y]);
+            print(String + " " + a6[x,y]);
         }
-        __print(" )");
+        print(String + " )");
     }
-    __println(" )");
+    println(String + " )");
 
     /* an alias-of-array as the ELEMENT type: `Vec2 va[3]` is a nested array; the
        index walk descends into the element, no flattening (alias preserved). */
     alias Vec2 = int[2];
     Vec2 va[3] = ((1,2), (3,4), (5,6));
-    __println("va= " + va[0][0] + " " + va[2][1] + " " + va[1][0]);          // 1 6 3
+    println(String + "va= " + va[0][0] + " " + va[2][1] + " " + va[1][0]);          // 1 6 3
 
     /* reading a nested-array ELEMENT as a whole sub-array value. */
     int row[2] = va[0];
-    __println("row= " + row[0] + " " + row[1]);                             // 1 2
+    println(String + "row= " + row[0] + " " + row[1]);                             // 1 2
 
     /* a REFERENCE to a SIZED array carries the size in the type (vs the unsized
        iterator `int[]`). A `(`-led grouped-const element type and an alias-led
@@ -293,22 +293,22 @@ int32 main() {
        address (`int[3]^`). */
     int base3[3] = (1, 2, 3);
     (const int)[3]^ grp = ^base3;
-    __println("grp= " + grp^[0] + " " + grp^[2]);                           // 1 3
+    println(String + "grp= " + grp^[0] + " " + grp^[2]);                           // 1 3
     Integer[3]^ ali = ^base3;
-    __println("ali= " + ali^[0] + " " + ali^[2]);                           // 1 3
+    println(String + "ali= " + ali^[0] + " " + ali^[2]);                           // 1 3
 
     {
         // a size-1 array initialized from a bare SCALAR: size-1 tuples collapse to
         // their element, so the lone element's initializer is spelled bare. The
         // grouping-paren form `(2)` collapses to the same scalar.
         int arr[1] = 2;
-        __println(arr[0]);                                                  // 2
+        println(String + arr[0]);                                                  // 2
         int brr[1] = (2);
-        __println(brr[0]);                                                  // 2
+        println(String + brr[0]);                                                  // 2
         // a multi-dimensional unit array (one element total) takes the bare scalar
         // too — wrapped one 1-tuple per dim.
         int m11[1][1] = 7;
-        __println(m11[0][0]);                                               // 7
+        println(String + m11[0][0]);                                               // 7
     }
 
     /* array arithmetic — element-wise, an array is a homogeneous tuple. An
@@ -317,27 +317,27 @@ int32 main() {
         int aa[3] = (1, 2, 3);
         int bb[3] = (10, 20, 30);
         int sum[3] = aa + bb;                 // array + array -> array: (11,22,33)
-        __println("aa+bb= " + sum[0] + " " + sum[1] + " " + sum[2]);   // 11 22 33
+        println(String + "aa+bb= " + sum[0] + " " + sum[1] + " " + sum[2]);   // 11 22 33
         aa += bb;                             // array op= array
-        __println("aa+=bb= " + aa[0] + " " + aa[1] + " " + aa[2]);     // 11 22 33
+        println(String + "aa+=bb= " + aa[0] + " " + aa[1] + " " + aa[2]);     // 11 22 33
 
         // multi-dim: element-wise over the whole shape, and op= on a sub-array row.
         int mm[2][2] = ((1,2),(3,4));
         int nn[2][2] = ((10,20),(30,40));
         mm += nn;
-        __println("mm+=nn= " + mm[0][0] + " " + mm[1][1]);            // 11 44
+        println(String + "mm+=nn= " + mm[0][0] + " " + mm[1][1]);            // 11 44
         mm[0] += (100, 200);                  // op= on a sub-array (array += tuple)
-        __println("mm[0]+= " + mm[0][0] + " " + mm[0][1]);            // 111 222
+        println(String + "mm[0]+= " + mm[0][0] + " " + mm[0][1]);            // 111 222
 
         // float elements (the float instr path per element).
         float32 fa[2] = (1.5, 2.5);
         fa += (0.25, 0.25);
-        __println("fa+= " + fa[0] + " " + fa[1]);                     // 1.75 2.75
+        println(String + "fa+= " + fa[0] + " " + fa[1]);                     // 1.75 2.75
 
         // bitwise, element-wise.
         int bw[2] = (12, 12);
         bw &= (10, 6);
-        __println("bw&= " + bw[0] + " " + bw[1]);                     // 8 4
+        println(String + "bw&= " + bw[0] + " " + bw[1]);                     // 8 4
 
         // UNARY, element-wise — an operation on an array is the operation BY ELEMENT,
         // and a unary is an operation. It used to type the result as the array and then
@@ -345,10 +345,10 @@ int32 main() {
         // TAKEN APART and each element negates on its own.
         int ua[3] = (1, 2, 3);
         int un[3] = -ua;
-        __println("-ua= " + un[0] + " " + un[1] + " " + un[2]);       // -1 -2 -3
+        println(String + "-ua= " + un[0] + " " + un[1] + " " + un[2]);       // -1 -2 -3
         int um[2][2] = ((1,2),(3,4));
         int umn[2][2] = -um;                                          // multi-dim recurses
-        __println("-um= " + umn[0][0] + " " + umn[1][1]);             // -1 -4
+        println(String + "-um= " + umn[0][0] + " " + umn[1][1]);             // -1 -4
     }
 
     /* SCALAR distribution over an array — broadcast a scalar to every element (an
@@ -357,18 +357,18 @@ int32 main() {
     {
         int sb[3] = (1, 2, 3);
         int sr[3] = sb + 10;                  // array + scalar -> array: (11,12,13)
-        __println("arr+s= " + sr[0] + " " + sr[1] + " " + sr[2]);     // 11 12 13
+        println(String + "arr+s= " + sr[0] + " " + sr[1] + " " + sr[2]);     // 11 12 13
         sb += 10;                             // array += scalar
-        __println("arr+=s= " + sb[0] + " " + sb[1] + " " + sb[2]);    // 11 12 13
+        println(String + "arr+=s= " + sb[0] + " " + sb[1] + " " + sb[2]);    // 11 12 13
         int sl[3] = (10, 20, 30);
         int sd[3] = 100 - sl;                 // scalar on the LEFT: (90,80,70)
-        __println("s-arr= " + sd[0] + " " + sd[1] + " " + sd[2]);     // 90 80 70
+        println(String + "s-arr= " + sd[0] + " " + sd[1] + " " + sd[2]);     // 90 80 70
         int8 n8[3] = (1, 2, 3);
         n8 += 1;                              // narrow element stays int8 (flex)
-        __println("arr8+=s= " + n8[0] + " " + n8[1] + " " + n8[2]);   // 2 3 4
+        println(String + "arr8+=s= " + n8[0] + " " + n8[1] + " " + n8[2]);   // 2 3 4
         int md[2][2] = ((1,2),(3,4));
         md += 10;                             // multi-dim broadcast: ((11,12),(13,14))
-        __println("md+=s= " + md[0][0] + " " + md[1][1]);             // 11 14
+        println(String + "md+=s= " + md[0][0] + " " + md[1][1]);             // 11 14
     }
 
     /* by-slot COPY within array form. A same-type whole-array copy is a single
@@ -377,15 +377,15 @@ int32 main() {
     {
         int8 s8v[3] = (1, 2, 3);
         int w3[3] = s8v;                      // array <- array value, per-elem widen
-        __println("w3= " + w3[0] + " " + w3[1] + " " + w3[2]);        // 1 2 3
+        println(String + "w3= " + w3[0] + " " + w3[1] + " " + w3[2]);        // 1 2 3
         int8 s8b[3] = (4, 5, 6);
         w3 = s8b;                             // assign form
-        __println("w3a= " + w3[0] + " " + w3[1] + " " + w3[2]);       // 4 5 6
+        println(String + "w3a= " + w3[0] + " " + w3[1] + " " + w3[2]);       // 4 5 6
 
         // nested: a multi-dim leaf-widen copy recurses to each scalar leaf.
         int8 m8[2][2] = ((1,2), (3,4));
         int wm[2][2] = m8;
-        __println("wm= " + wm[0][0] + " " + wm[0][1] + " "
+        println(String + "wm= " + wm[0][0] + " " + wm[0][1] + " "
                   + wm[1][0] + " " + wm[1][1]);                       // 1 2 3 4
     }
 
@@ -396,12 +396,12 @@ int32 main() {
         int mvs[3] = (7, 8, 9);
         int mvd[3] = (0, 0, 0);
         mvd <-- mvs;                          // move
-        __println("mvd<--= " + mvd[0] + " " + mvd[1] + " " + mvd[2]); // 7 8 9
+        println(String + "mvd<--= " + mvd[0] + " " + mvd[1] + " " + mvd[2]); // 7 8 9
 
         int swa[3] = (1, 2, 3);
         int swb[3] = (4, 5, 6);
         swa <--> swb;                         // swap two arrays
-        __println("swap= " + swa[0] + " " + swa[2] + " "
+        println(String + "swap= " + swa[0] + " " + swa[2] + " "
                   + swb[0] + " " + swb[2]);                           // 4 6 1 3
 
         // an array with POINTER leaves: move copies the pointers and NULLS the
@@ -411,19 +411,19 @@ int32 main() {
         int^ pa[2] = (^px, ^py);
         int^ pb[2] = (^px, ^px);
         pb <-- pa;
-        __println("pmove= " + pb[0]^ + " " + pb[1]^);                // 5 6
-        __println("paNull= " + !pa[0] + " " + !pa[1]);               // true true
+        println(String + "pmove= " + pb[0]^ + " " + pb[1]^);                // 5 6
+        println(String + "paNull= " + !pa[0] + " " + !pa[1]);               // true true
 
         // SUB-ARRAY rows are swap/move operands too — a partial index addresses the
         // whole row (the swap/move uses allow_partial). swap exchanges two rows;
         // move overwrites one row from another array value.
         int g[3][2] = ((1,2), (3,4), (5,6));
         g[0] <--> g[2];                       // swap rows 0 and 2
-        __println("rowswap= " + g[0][0] + " " + g[0][1] + " "
+        println(String + "rowswap= " + g[0][0] + " " + g[0][1] + " "
                   + g[2][0] + " " + g[2][1]);                        // 5 6 1 2
         int row[2] = (9, 9);
         g[1] <-- row;                         // move a value into a sub-array row
-        __println("rowmove= " + g[1][0] + " " + g[1][1]);            // 9 9
+        println(String + "rowmove= " + g[1][0] + " " + g[1][1]);            // 9 9
 
         /* leaf-widen MOVE / RETURN — NOT-identical arrays (same form, differing
            leaf types). Lowered BY SLOT (per-element widening), like the leaf-widen
@@ -431,9 +431,9 @@ int32 main() {
         int8 wsrc[3] = (5, 6, 7);
         int wdst[3] = (0, 0, 0);
         wdst <-- wsrc;                        // leaf-widen array move
-        __println("awmove= " + wdst[0] + " " + wdst[1] + " " + wdst[2]); // 5 6 7
+        println(String + "awmove= " + wdst[0] + " " + wdst[1] + " " + wdst[2]); // 5 6 7
         int wret[3] = widenArr();             // leaf-widen array return
-        __println("awret= " + wret[0] + " " + wret[1] + " " + wret[2]);  // 1 2 3
+        println(String + "awret= " + wret[0] + " " + wret[1] + " " + wret[2]);  // 1 2 3
     }
 
     /* shift on arrays — element-wise (an array is a homogeneous tuple). A scalar
@@ -442,18 +442,18 @@ int32 main() {
     {
         int sh[3] = (1, 2, 3);
         sh = sh << 1;                          // broadcast: (2,4,6)
-        __println("sh<<= " + sh[0] + " " + sh[1] + " " + sh[2]);     // 2 4 6
+        println(String + "sh<<= " + sh[0] + " " + sh[1] + " " + sh[2]);     // 2 4 6
         sh >>= 1;                              // (1,2,3)
-        __println("sh>>= " + sh[0] + " " + sh[1] + " " + sh[2]);     // 1 2 3
+        println(String + "sh>>= " + sh[0] + " " + sh[1] + " " + sh[2]);     // 1 2 3
         int pc[3] = (1, 2, 3);
         int ps[3] = pc << (3, 2, 1);           // per-element count: (8,8,6)
-        __println("pshift= " + ps[0] + " " + ps[1] + " " + ps[2]);   // 8 8 6
+        println(String + "pshift= " + ps[0] + " " + ps[1] + " " + ps[2]);   // 8 8 6
         int aa[3] = (1, 2, 3);
         aa <<= (3, 2, 1);                      // aug-assign with a per-element count
-        __println("aa<<= " + aa[0] + " " + aa[1] + " " + aa[2]);     // 8 8 6
+        println(String + "aa<<= " + aa[0] + " " + aa[1] + " " + aa[2]);     // 8 8 6
         int msh[2][2] = ((1,2),(3,4));
         msh <<= 1;                             // multi-dim: ((2,4),(6,8))
-        __println("msh= " + msh[0][0] + " " + msh[1][1]);            // 2 8
+        println(String + "msh= " + msh[0][0] + " " + msh[1][1]);            // 2 8
     }
 
     /* a side-effecting array index in a by-slot copy / move SOURCE is evaluated
@@ -461,19 +461,19 @@ int32 main() {
     {
         int8 seg[2][3] = ((1,2,3), (4,5,6));
         int sx[3] = seg[pick()];               // leaf-widen copy from seg[pick()]
-        __println("sx= " + sx[0] + " " + sx[1] + " " + sx[2]);       // 4 5 6
+        println(String + "sx= " + sx[0] + " " + sx[1] + " " + sx[2]);       // 4 5 6
         int sd[3] = (0, 0, 0);
         sd <-- seg[pick()];                    // leaf-widen move from seg[pick()]
-        __println("sd= " + sd[0] + " " + sd[1] + " " + sd[2]);       // 4 5 6
+        println(String + "sd= " + sd[0] + " " + sd[1] + " " + sd[2]);       // 4 5 6
 
         // codegen single-move paths: a SAME-type move and move-init from a side-
         // effecting index also evaluate the source ONCE.
         int seg2[2][3] = ((1,2,3), (4,5,6));
         int sm[3] = (0, 0, 0);
         sm <-- seg2[pick()];                   // same-type move
-        __println("sm= " + sm[0] + " " + sm[1] + " " + sm[2]);       // 4 5 6
+        println(String + "sm= " + sm[0] + " " + sm[1] + " " + sm[2]);       // 4 5 6
         int si[3] <-- seg2[pick()];            // same-type move-init
-        __println("si= " + si[0] + " " + si[1] + " " + si[2]);       // 4 5 6
+        println(String + "si= " + si[0] + " " + si[1] + " " + si[2]);       // 4 5 6
     }
 
     /* AN ARRAY STAYS AN ARRAY through the explode. The slots ride in a tuple literal, so an
@@ -487,18 +487,18 @@ int32 main() {
         int md[2][3] = ((1,2,3), (4,5,6));
         int me[2][3] = ((10,20,30), (40,50,60));
         int mf[2][3] = md + me;                // multi-dim: the dims fold back in
-        __println("mf= " + mf[0][0] + " " + mf[1][2]);               // 11 66
+        println(String + "mf= " + mf[0][0] + " " + mf[1][2]);               // 11 66
 
         int8 wa[2] = (1, 2);
         int wb[2] = (10, 20);
         int wc[2] = wa + wb;                   // int8[2] + int[2] -> int[2] (WIDENED element)
-        __println("wc= " + wc[0] + " " + wc[1]);                     // 11 22
+        println(String + "wc= " + wc[0] + " " + wc[1]);                     // 11 22
 
         int la[2] = (1, 2);
         int lb[2] = (10, 20);
         int lc[2] = (0, 0);
         lc = la + lb;                          // a LIVE target, not a decl
-        __println("lc= " + lc[0] + " " + lc[1]);                     // 11 22
+        println(String + "lc= " + lc[0] + " " + lc[1]);                     // 11 22
     }
 
     return 0;

@@ -133,41 +133,41 @@ int32 main() {
     /* the canon example: T infers from the scalar operand. */
     Vec v1(1.0, 2.0);
     Vec v2 = v1 * 3;
-    __println("a1 = " + v2.x_ + "," + v2.y_);
+    println(String + "a1 = " + v2.x_ + "," + v2.y_);
     Vec v3 = v1 * 2.5;
-    __println("a2 = " + v3.x_ + "," + v3.y_);
+    println(String + "a2 = " + v3.x_ + "," + v3.y_);
 
     /* plain beats template on op+=: int takes the plain, int64 the template. */
     Acc acc;
-    acc += 2; __println("b1 = " + acc.t_);
+    acc += 2; println(String + "b1 = " + acc.t_);
     int64 big = 7;
-    acc += big; __println("b2 = " + acc.t_);
+    acc += big; println(String + "b2 = " + acc.t_);
 
     /* a template comparison and a template op[]. */
     Cell cell(4, 9);
-    if (cell == 4) { __println("c1 = eq"); }
+    if (cell == 4) { println(String + "c1 = eq"); }
     int8 idx = 1;
-    int c2 = cell[idx]; __println("c2 = " + c2);
+    int c2 = cell[idx]; println(String + "c2 = " + c2);
     cell[0] = 40;
-    __println("c3 = " + cell.c_);
+    println(String + "c3 = " + cell.c_);
 
     /* the class operand rides the convention. */
     Sum sum;
     Pt pt(21);
-    sum += pt; __println("d1 = " + sum.s_);
+    sum += pt; println(String + "d1 = " + sum.s_);
 
     /* the spaced `<`-family spelling. */
     Ord ord(5);
-    if (ord < 9) { __println("e1 = lt"); }
+    if (ord < 9) { println(String + "e1 = lt"); }
 
     /* the out-of-line template operator. */
     Ool oo(6);
     Ool o2 = oo * 4;
-    __println("f1 = " + o2.v_);
+    println(String + "f1 = " + o2.v_);
 
     /* per class-template flavor. */
     Box<int> bx(10);
-    bx += 3; __println("g1 = " + bx.get());
+    bx += 3; println(String + "g1 = " + bx.get());
 
     return 0;
 }

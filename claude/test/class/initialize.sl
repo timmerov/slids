@@ -118,7 +118,7 @@ MyFirstClass(
 }
 
 void print(MyFirstClass^ cls) {
-    __println("MyFirstClass: a=" + cls^.a_ + " b=" + cls^.b_);
+    println(String + "MyFirstClass: a=" + cls^.a_ + " b=" + cls^.b_);
 }
 
 // gap 1: non-int field types. f_ has no default (zero 0.0); flag_/ch_ default.
@@ -153,7 +153,7 @@ TupleClass( (int,int) t_, (char,char,char) s_ ) {
 }
 
 void print(TupleClass^ tpl) {
-    __println("TupleClass: "
+    println(String + "TupleClass: "
         "t=(" + tpl^.t_[0] + "," + tpl^.t_[1] + ") " +
         "b=(" + tpl^.s_[0] + "," + tpl^.s_[1] + "," + tpl^.s_[2] + ")");
 }
@@ -168,7 +168,7 @@ Super(
 }
 
 void print(Super^ s) {
-    __println("Super: "
+    println(String + "Super: "
         "c2=(" + s^.c2_.a_ + "," + s^.c2_.b_ + ") " +
         "c3=(" + s^.c3_.a_ + "," + s^.c3_.b_ + ") " +
         "c4=(" + s^.c4_.a_ + "," + s^.c4_.b_ + ")");
@@ -186,7 +186,7 @@ Trip(Three t1_, Three t2_, Three t3_) {
 }
 
 void print(Trip^ tr) {
-    __println("Trip: "
+    println(String + "Trip: "
         "t1=(" + tr^.t1_.a_ + "," + tr^.t1_.b_ + "," + tr^.t1_.c_ + ") " +
         "t2=(" + tr^.t2_.a_ + "," + tr^.t2_.b_ + "," + tr^.t2_.c_ + ") " +
         "t3=(" + tr^.t3_.a_ + "," + tr^.t3_.b_ + "," + tr^.t3_.c_ + ")");
@@ -201,7 +201,7 @@ Bag(Three items_[2]) {
 }
 
 void print(Bag^ bg) {
-    __println("Bag: "
+    println(String + "Bag: "
         "i0=(" + bg^.items_[0].a_ + "," + bg^.items_[0].b_ + "," + bg^.items_[0].c_ + ") " +
         "i1=(" + bg^.items_[1].a_ + "," + bg^.items_[1].b_ + "," + bg^.items_[1].c_ + ")");
 }
@@ -212,7 +212,7 @@ Zeros(int xs_[2], (bool, int) pair_, bool flag_) {
 }
 
 void print(Zeros^ z) {
-    __println("Zeros: "
+    println(String + "Zeros: "
         "xs=" + z^.xs_[0] + "," + z^.xs_[1] + " " +
         "pair=" + z^.pair_[0] + "," + z^.pair_[1] + " " +
         "flag=" + z^.flag_);
@@ -233,7 +233,7 @@ int[3] makeArr() {
 // prints once per call — used to prove a side-effecting index in an aggregate
 // source is evaluated ONCE (spilled to a temp), not once per field.
 int pick() {
-    __println("pick");
+    println(String + "pick");
     return 1;
 }
 
@@ -284,31 +284,31 @@ int32 main() {
 
     // gap 1 + gap 8: non-int fields, read directly off the value (no `^`).
     Mixed mx0;
-    __println("mx0: f=" + mx0.f_ + " flag=" + mx0.flag_ + " ch=" + mx0.ch_);
+    println(String + "mx0: f=" + mx0.f_ + " flag=" + mx0.flag_ + " ch=" + mx0.ch_);
     Mixed mx1(1.5, false, 'A');
-    __println("mx1: f=" + mx1.f_ + " flag=" + mx1.flag_ + " ch=" + mx1.ch_);
+    println(String + "mx1: f=" + mx1.f_ + " flag=" + mx1.flag_ + " ch=" + mx1.ch_);
 
     // gap 1: pointer field zero-constructs to nullptr.
     Ptr pz;
     if (pz.p_ == nullptr) {
-        __println("pz.p_ is null");
+        println(String + "pz.p_ is null");
     }
 
     // gap 2: int8 field from a fitting literal default / arg.
     Narrow nw0;
-    __println("nw0: small=" + nw0.small_);
+    println(String + "nw0: small=" + nw0.small_);
     Narrow nw1(7);
-    __println("nw1: small=" + nw1.small_);
+    println(String + "nw1: small=" + nw1.small_);
 
     // gap 3: default variety.
     Defs df0;
-    __println("df0: neg=" + df0.neg_ + " base=" + df0.base_ + " last=" + df0.last_);
+    println(String + "df0: neg=" + df0.neg_ + " base=" + df0.base_ + " last=" + df0.last_);
     Defs df1(7, 8, 9);
-    __println("df1: neg=" + df1.neg_ + " base=" + df1.base_ + " last=" + df1.last_);
+    println(String + "df1: neg=" + df1.neg_ + " base=" + df1.base_ + " last=" + df1.last_);
 
     // gap 4: nested class field, read through two field accesses.
     Outer ot;
-    __println("ot.inner: a=" + ot.inner_.a_ + " b=" + ot.inner_.b_);
+    println(String + "ot.inner: a=" + ot.inner_.a_ + " b=" + ot.inner_.b_);
 
     /* pass the tuple to the field. */
     Outer ot2( (13,17) );
@@ -331,17 +331,17 @@ int32 main() {
 
     // gap 5: one-field and three-field classes.
     One one0;
-    __println("one0: x=" + one0.x_);
+    println(String + "one0: x=" + one0.x_);
     Three th0;
-    __println("th0: a=" + th0.a_ + " b=" + th0.b_ + " c=" + th0.c_);
+    println(String + "th0: a=" + th0.a_ + " b=" + th0.b_ + " c=" + th0.c_);
     Three th1(10, 20, 30);
-    __println("th1: a=" + th1.a_ + " b=" + th1.b_ + " c=" + th1.c_);
+    println(String + "th1: a=" + th1.a_ + " b=" + th1.b_ + " c=" + th1.c_);
 
     // test 1: init a class from a pointer — a pointer is a size-1 tuple, filling
     // the (pointer) first field.
     int pv = 5;
     Ptr px = ^pv;
-    __println("px.p_^ = " + px.p_^);
+    println(String + "px.p_^ = " + px.p_^);
 
     /* test 3: init a class from another class via the lhs class assignment
        operator. deferred — not yet implemented; `= cls4` currently tries to feed
@@ -357,41 +357,41 @@ int32 main() {
     // place; an rvalue source (function return) is materialized once.
     int arr[3] = (1, 2, 3);
     Three ta = arr;                 // array variable
-    __println("ta: a=" + ta.a_ + " b=" + ta.b_ + " c=" + ta.c_);
+    println(String + "ta: a=" + ta.a_ + " b=" + ta.b_ + " c=" + ta.c_);
     (int,int,int) tv = (4, 5, 6);
     Three tu = tv;                  // tuple variable
-    __println("tu: a=" + tu.a_ + " b=" + tu.b_ + " c=" + tu.c_);
+    println(String + "tu: a=" + tu.a_ + " b=" + tu.b_ + " c=" + tu.c_);
     Three tr = makeTriple();        // function return (rvalue, materialized once)
-    __println("tr: a=" + tr.a_ + " b=" + tr.b_ + " c=" + tr.c_);
+    println(String + "tr: a=" + tr.a_ + " b=" + tr.b_ + " c=" + tr.c_);
     int8 s8[3] = (9, 8, 7);
     Three tw = s8;                  // leaf-widen: int8 elements into int fields
-    __println("tw: a=" + tw.a_ + " b=" + tw.b_ + " c=" + tw.c_);
+    println(String + "tw: a=" + tw.a_ + " b=" + tw.b_ + " c=" + tw.c_);
 
     // more tuple-like sources: an op result, a sub-array row, a constant, and an
     // array-returning function.
     int oa[3] = (1, 2, 3);
     int ob[3] = (10, 20, 30);
     Three top = oa + ob;            // op result (rvalue) -> 11,22,33
-    __println("top: a=" + top.a_ + " b=" + top.b_ + " c=" + top.c_);
+    println(String + "top: a=" + top.a_ + " b=" + top.b_ + " c=" + top.c_);
     int grid[2][3] = ((1,2,3), (4,5,6));
     Three trow = grid[1];           // sub-array row (lvalue) -> 4,5,6
-    __println("trow: a=" + trow.a_ + " b=" + trow.b_ + " c=" + trow.c_);
+    println(String + "trow: a=" + trow.a_ + " b=" + trow.b_ + " c=" + trow.c_);
 
     // a side-effecting index in the source is evaluated ONCE (the source is spilled
     // to a temp), not once per field — "pick" prints exactly once.
     Three tse = grid[pick()];       // pick() -> row 1 = (4,5,6)
-    __println("tse: a=" + tse.a_ + " b=" + tse.b_ + " c=" + tse.c_);
+    println(String + "tse: a=" + tse.a_ + " b=" + tse.b_ + " c=" + tse.c_);
     const int cag[3] = (7, 8, 9);
     Three tcon = cag;               // constant source -> 7,8,9
-    __println("tcon: a=" + tcon.a_ + " b=" + tcon.b_ + " c=" + tcon.c_);
+    println(String + "tcon: a=" + tcon.a_ + " b=" + tcon.b_ + " c=" + tcon.c_);
     Three tret = makeArr();         // array-returning function (rvalue) -> 70,71,72
-    __println("tret: a=" + tret.a_ + " b=" + tret.b_ + " c=" + tret.c_);
+    println(String + "tret: a=" + tret.a_ + " b=" + tret.b_ + " c=" + tret.c_);
 
     // a PARTIAL aggregate source fills the leading fields; the rest take their
     // defaults / zeros (an array/tuple value spreads like a tuple).
     int pa[2] = (5, 6);
     Three tpart = pa;               // a_=5, b_=6, c_ defaults to 3
-    __println("tpart: a=" + tpart.a_ + " b=" + tpart.b_ + " c=" + tpart.c_);
+    println(String + "tpart: a=" + tpart.a_ + " b=" + tpart.b_ + " c=" + tpart.c_);
 
     // a NESTED aggregate source recurses into class-typed fields (each slot builds
     // a sub-class), exactly like the tuple-literal form.
@@ -402,7 +402,7 @@ int32 main() {
     // an RVALUE source behaves exactly like an lvalue: a function return is spilled
     // to a temp once, then spread — including partial fill and recursion.
     Three trvp = makePair();        // rvalue partial: a_=50, b_=51, c_ defaults to 3
-    __println("trvp: a=" + trvp.a_ + " b=" + trvp.b_ + " c=" + trvp.c_);
+    println(String + "trvp: a=" + trvp.a_ + " b=" + trvp.b_ + " c=" + trvp.c_);
     Trip trvr = makeNest();         // rvalue recursive into class-typed fields
     print(^trvr);
 
@@ -420,7 +420,7 @@ int32 main() {
     // test 7: a `^` self-reference field links to its own type (cycle broken).
     Link la(1, nullptr);
     Link lb(2, ^la);
-    __println("lb.next_^.v_ = " + lb.next_^.v_);
+    println(String + "lb.next_^.v_ = " + lb.next_^.v_);
 
     // 3x1: the `=` form spreads three scalars across the three class fields.
     Trip tg = (71, 72, 73);
@@ -439,7 +439,7 @@ int32 main() {
 
     // gap 2: an array-typed field filled by slot from its init tuple.
     Arr ar((10, 20, 30));
-    __println("Arr: " + ar.xs_[0] + "," + ar.xs_[1] + "," + ar.xs_[2]);
+    println(String + "Arr: " + ar.xs_[0] + "," + ar.xs_[1] + "," + ar.xs_[2]);
 
     // gap 3: an inline array of a class type, each element constructed.
     Bag bg(( (1,2,3), (4,5,6) ));

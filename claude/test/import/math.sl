@@ -16,6 +16,8 @@ which has no slids type.
 */
 
 /* math namespace. */
+import string;
+
 math {
     const float64 kPi64 = 3.14;
     const float32 kPi32 = 3.14;
@@ -213,15 +215,15 @@ int32 main() {
         angle = math:kPi64/2.0/3.0;
         x = math:cos(angle);
         y = math:sin(angle);
-        __println(##type(x) + " x = " + x);
-        __println(##type(y) + " y = " + y);
+        println(String + ##type(x) + " x = " + x);
+        println(String + ##type(y) + " y = " + y);
     }
     {
         float32 angle = math:kPi32/2.0/3.0;
         float32 x = math:cosf(angle);
         float32 y = math:sinf(angle);
-        __println(##type(x) + " x = " + x);
-        __println(##type(y) + " y = " + y);
+        println(String + ##type(x) + " x = " + x);
+        println(String + ##type(y) + " y = " + y);
     }
     /* the f-variant via alias: `alias cos = cosf` routes a float32 arg to cosf (else
        math:cos(float32) would pick cos(float64) and narrow into the float32 result). */
@@ -229,16 +231,16 @@ int32 main() {
         float32 angle = math:kPi32/2.0/3.0;
         float32 x = math:cos(angle);
         float32 y = math:sin(angle);
-        __println(##type(x) + " x = " + x);
-        __println(##type(y) + " y = " + y);
+        println(String + ##type(x) + " x = " + x);
+        println(String + ##type(y) + " y = " + y);
     }
 
     /* the same import mechanism at CLASS scope (Powers:sqrt) and BLOCK scope (a
        function-local `import`) — a foreign import works wherever a definition may live. */
-    __println("sqrt2 = " + Powers:sqrt(2.0));   // class-scope
+    println(String + "sqrt2 = " + Powers:sqrt(2.0));   // class-scope
     {
         import { float64 cbrt(float64 x); }     // block-local
-        __println("cbrt27 = " + cbrt(27.0));
+        println(String + "cbrt27 = " + cbrt(27.0));
     }
 
     return 0;

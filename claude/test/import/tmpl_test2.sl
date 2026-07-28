@@ -5,6 +5,8 @@ transfers and lifecycle across the seam, and the remaining instantiation
 forms.
 */
 
+import string;
+
 import tmpl_lib;
 import library;
 
@@ -41,58 +43,58 @@ int32 main() {
     /* overlap with tmpl_test's demands (the union dedups to one body set),
        plus a flavor only this consumer wants. */
     Vector<int> a(1, 2);
-    __println("a = " + a.sum());
+    println(String + "a = " + a.sum());
     Vector<int16> v16(3, 4);
-    int16 s16 = v16.sum(); __println("s16 = " + s16);
+    int16 s16 = v16.sum(); println(String + "s16 = " + s16);
 
     /* transfers across the seam: the external __$copy / __$move / __$swap. */
     Vector<int> b = a;
     b.push(10);
-    __println("t1 = " + a.sum() + " " + b.sum());
+    println(String + "t1 = " + a.sum() + " " + b.sum());
     Vector<int> m(7, 8);
     b <-- m;
-    __println("t2 = " + b.sum());
+    println(String + "t2 = " + b.sum());
     Vector<int> s1(1, 1);
     s1 <--> b;
-    __println("t3 = " + s1.sum() + " " + b.sum());
+    println(String + "t3 = " + s1.sum() + " " + b.sum());
 
     /* the USER op= declared in the header IS the flavor's canonical copy. */
     Acc<int> ax(5);
     Acc<int> ay = ax;
-    __println("u1 = " + ax.get() + " " + ay.get());
+    println(String + "u1 = " + ax.get() + " " + ay.get());
 
     /* destructor balance through external hooks: a copy... */
     {
         Traced<int> c1(1);
         Traced<int> c2 = c1;
-        __println("copied " + c2.get());
+        println(String + "copied " + c2.get());
     }
     /* ...an array... */
     {
         Traced<int8> ta[2];
-        __println("array");
+        println(String + "array");
     }
     /* ...and a temp, dead at its semicolon. */
-    int tg = Traced<int>(9).get(); __println("tg = " + tg);
+    int tg = Traced<int>(9).get(); println(String + "tg = " + tg);
 
     /* the virtual flavor: direct, and dispatched through the base pointer
        into the local derived class. */
     VShape<int> vs(7);
-    int r1 = vs.vid(); __println("r1 = " + r1);
+    int r1 = vs.vid(); println(String + "r1 = " + r1);
     MyDer md(3, 4);
     VShape<int>^ vp = ^md;
-    int r2 = vp^.vid(); __println("r2 = " + r2);
-    int r2b = md.trio(); __println("r2b = " + r2b);
+    int r2 = vp^.vid(); println(String + "r2 = " + r2);
+    int r2b = md.trio(); println(String + "r2b = " + r2b);
 
     /* the instance-qualified const through an already-demanded flavor. */
-    int y4 = Vector<int16>:kTag; __println("y4 = " + y4);
+    int y4 = Vector<int16>:kTag; println(String + "y4 = " + y4);
 
     /* the header's nested alias template from the SECOND consumer — the
        outer T bound by a different flavor here (type-level, no demand). */
     Vector<int16>:Duo<int> y5 = (6, 700);
     int16 y50 = y5[0];
     int y51 = y5[1];
-    __println("y5 = " + y50 + " " + y51);
+    println(String + "y5 = " + y50 + " " + y51);
 
     /* the SECOND consumer's flavors of the header-incomplete template: the
        shared flavor dedups across the seam; a fresh one demands its own. */
@@ -100,19 +102,19 @@ int32 main() {
     g2.add(3);
     Grow<int64> g3;
     g3.add(400);
-    __println("y6 = " + g2.total() + " " + g3.total());
+    println(String + "y6 = " + g2.total() + " " + g3.total());
 
     /* two type parameters — a comma in the demand spelling. */
     TPair<int, int8> tp(300, 5);
-    int r3 = tp.kk(); __println("r3 = " + r3);
-    int8 r4 = tp.vv(); __println("r4 = " + r4);
+    int r3 = tp.kk(); println(String + "r3 = " + r3);
+    int8 r4 = tp.vv(); println(String + "r4 = " + r4);
 
     /* a POINTER type argument in the demand (`tdiff<Bird^>` — the read-only
        carrier; canon B). */
     Bird b1(1, 2);
     Bird b2(3, 4);
     bool pb = tdiff(^b1, ^b2);
-    __println("pb = " + pb);
+    println(String + "pb = " + pb);
     b2.chirp();
 
     /* NESTED arguments from the SECOND consumer: the shared flavor
@@ -121,38 +123,38 @@ int32 main() {
        must not split at the nested list's comma. */
     Box<Vector<int>> nb2;
     nb2.p_ = ^a;
-    __println("nz1 = " + nb2.p_^.sum());
+    println(String + "nz1 = " + nb2.p_^.sum());
     Box<TPair<int, int8>> nbt;
     nbt.p_ = ^tp;
-    __println("nz2 = " + nbt.p_^.kk() + " " + nbt.p_^.vv());
+    println(String + "nz2 = " + nbt.p_^.kk() + " " + nbt.p_^.vv());
 
     /* the namespace-member template, qualified. */
-    int nq = Spc2:nsq(5); __println("nq = " + nq);
+    int nq = Spc2:nsq(5); println(String + "nq = " + nq);
 
     /* an ALIAS argument canonicalizes to the same demand and flavor. */
     Vector<Integer2> va(10, 1);
-    __println("va = " + va.sum());
+    println(String + "va = " + va.sum());
 
     /* the sibling's own flavor use, and its use of ANOTHER library's
        template (the mixed-role TU). */
-    int w2 = viaW2(); __println("w2 = " + w2);
-    int ow = viaOwn(); __println("ow = " + ow);
+    int w2 = viaW2(); println(String + "w2 = " + w2);
+    int ow = viaOwn(); println(String + "ow = " + ow);
 
     /* the remaining instantiation forms of an aggregated flavor: the global,
        new, an array, a tuple slot; sizeof folds from the header's layout. */
     gv2.push(5);
-    __println("g1 = " + gv2.sum());
+    println(String + "g1 = " + gv2.sum());
     Vector<int>^ np = new Vector<int>;
     np^.push(3);
-    __println("n1 = " + np^.sum());
+    println(String + "n1 = " + np^.sum());
     Vector<int8> varr[2];
     varr[0].push(1);
     varr[1].push(2);
-    int8 va2 = varr[0].sum() + varr[1].sum(); __println("va2 = " + va2);
+    int8 va2 = varr[0].sum() + varr[1].sum(); println(String + "va2 = " + va2);
     (Vector<int>, int) vt = (a, 5);
-    int r5 = vt[0].sum() + vt[1]; __println("r5 = " + r5);
+    int r5 = vt[0].sum() + vt[1]; println(String + "r5 = " + r5);
     intptr zd = sizeof(Vector<int8>) - 2 * sizeof(int8);
-    __println("zd = " + zd);
+    println(String + "zd = " + zd);
 
     /* inline-local flavors of the VIRTUAL and USER-op= templates: the vtable
        and the canonical copy emit internal here, riding the class-linkage
@@ -160,17 +162,17 @@ int32 main() {
     Lok lk(4);
     VShape<Lok^> vl(^lk);
     Lok^ vr = vl.vid();
-    __println("vv = " + vr^.kv());
+    println(String + "vv = " + vr^.kv());
     Ucp<Lok> uc;
     uc.u_ = ^lk;
-    __println("u2 = " + uc.un());
+    println(String + "u2 = " + uc.un());
     Ucp<Lok> ud = uc;
-    __println("u3 = " + ud.un());
+    println(String + "u3 = " + ud.un());
 
     /* a source-side member NOT declared in the header is not part of a
        consumer's interface. */
     //-EXPECT-ERROR: priv2
-    //int q1 = a.priv2(); __println("q1 = " + q1);
+    //int q1 = a.priv2(); println(String + "q1 = " + q1);
 
     return 0;
 }

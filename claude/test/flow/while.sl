@@ -441,42 +441,42 @@ int do_true_terminator(int n) {
 }
 
 int32 main() {
-    __println("sum_to(5) = " + sum_to(5));      // 15
-    __println("sum_to(0) = " + sum_to(0));      // 0
-    __println("first_over(10) = " + first_over(10));    // 4
-    __println("first_over(0) = " + first_over(0));      // 1
-    __println("sum_odds(5) = " + sum_odds(5));  // 9
-    __println("sum_odds(6) = " + sum_odds(6));  // 9
-    __println("countdown(3) = " + countdown(3));    // 29
-    __println("grid(3, 4) = " + grid(3, 4));    // 12
-    __println("never_runs() = " + never_runs());    // 5
-    __println("drain(4) = " + drain(4));        // 4
-    __println("count_to(5) = " + count_to(5));  // 5
-    __println("bounded_sum(5) = " + bounded_sum(5));    // 10
-    __println("do_once(0) = " + do_once(0));    // 1
-    __println("do_once(3) = " + do_once(3));    // 3
-    __println("last_val(3) = " + last_val(3));  // 1
-    __println("last_val(0) = " + last_val(0));  // 0
-    __println("do_break(3) = " + do_break(3));  // 3
-    __println("do_break(0) = " + do_break(0));  // 1
-    __println("do_continue(5) = " + do_continue(5));    // 9
-    __println("do_countdown(3) = " + do_countdown(3));  // 39
-    __println("do_const_false(5) = " + do_const_false(5));  // 6
-    __println("while_true(4) = " + while_true(4));  // 4
-    __println("while_true_terminator(4) = " + while_true_terminator(4));    // 4
-    __println("while_empty_terminator(3) = " + while_empty_terminator(3));  // 6
-    __println("do_true_terminator(5) = " + do_true_terminator(5));  // 105
-    __println("nested_break(3, 5) = " + nested_break(3, 5));    // 6
-    __println("nested_continue(2, 3) = " + nested_continue(2, 3));  // 4
-    __println("break_in_block(10) = " + break_in_block(10));    // 3
-    __println("break_in_block(2) = " + break_in_block(2));      // 2
-    __println("or_cond(3, 5) = " + or_cond(3, 5));      // 5
-    __println("or_cond(2, 0) = " + or_cond(2, 0));      // 2
-    __println("xor_cond(4) = " + xor_cond(4));  // 4
-    __println("do_cond_reads_body(3) = " + do_cond_reads_body(3));  // 4
-    __println("do_body_local(5) = " + do_body_local(5));    // 10
-    __println("do_empty_cond(0) = " + do_empty_cond(0));    // 0
-    __println("do_empty_cond(4) = " + do_empty_cond(4));    // 4
+    println(String + "sum_to(5) = " + sum_to(5));      // 15
+    println(String + "sum_to(0) = " + sum_to(0));      // 0
+    println(String + "first_over(10) = " + first_over(10));    // 4
+    println(String + "first_over(0) = " + first_over(0));      // 1
+    println(String + "sum_odds(5) = " + sum_odds(5));  // 9
+    println(String + "sum_odds(6) = " + sum_odds(6));  // 9
+    println(String + "countdown(3) = " + countdown(3));    // 29
+    println(String + "grid(3, 4) = " + grid(3, 4));    // 12
+    println(String + "never_runs() = " + never_runs());    // 5
+    println(String + "drain(4) = " + drain(4));        // 4
+    println(String + "count_to(5) = " + count_to(5));  // 5
+    println(String + "bounded_sum(5) = " + bounded_sum(5));    // 10
+    println(String + "do_once(0) = " + do_once(0));    // 1
+    println(String + "do_once(3) = " + do_once(3));    // 3
+    println(String + "last_val(3) = " + last_val(3));  // 1
+    println(String + "last_val(0) = " + last_val(0));  // 0
+    println(String + "do_break(3) = " + do_break(3));  // 3
+    println(String + "do_break(0) = " + do_break(0));  // 1
+    println(String + "do_continue(5) = " + do_continue(5));    // 9
+    println(String + "do_countdown(3) = " + do_countdown(3));  // 39
+    println(String + "do_const_false(5) = " + do_const_false(5));  // 6
+    println(String + "while_true(4) = " + while_true(4));  // 4
+    println(String + "while_true_terminator(4) = " + while_true_terminator(4));    // 4
+    println(String + "while_empty_terminator(3) = " + while_empty_terminator(3));  // 6
+    println(String + "do_true_terminator(5) = " + do_true_terminator(5));  // 105
+    println(String + "nested_break(3, 5) = " + nested_break(3, 5));    // 6
+    println(String + "nested_continue(2, 3) = " + nested_continue(2, 3));  // 4
+    println(String + "break_in_block(10) = " + break_in_block(10));    // 3
+    println(String + "break_in_block(2) = " + break_in_block(2));      // 2
+    println(String + "or_cond(3, 5) = " + or_cond(3, 5));      // 5
+    println(String + "or_cond(2, 0) = " + or_cond(2, 0));      // 2
+    println(String + "xor_cond(4) = " + xor_cond(4));  // 4
+    println(String + "do_cond_reads_body(3) = " + do_cond_reads_body(3));  // 4
+    println(String + "do_body_local(5) = " + do_body_local(5));    // 10
+    println(String + "do_empty_cond(0) = " + do_empty_cond(0));    // 0
+    println(String + "do_empty_cond(4) = " + do_empty_cond(4));    // 4
 
     /* a reference / iterator as a while condition — pre-condition and post-condition
        (do-while). non-null enters; null skips / exits. */
@@ -485,18 +485,18 @@ int32 main() {
         int^ wref = ^wx;
         int wc = 0;
         while (wref) { wc = wc + 1; wref = nullptr; }
-        __println("while-ref ran " + wc);                   // 1
+        println(String + "while-ref ran " + wc);                   // 1
         int[] wnone = nullptr;
-        while (wnone) { __println("dead"); }
-        __println("while-null skipped");
+        while (wnone) { println(String + "dead"); }
+        println(String + "while-null skipped");
         int[] pn = nullptr;
         int pc = 0;
         while { pc = pc + 1; } (pn);
-        __println("do-while-null ran " + pc);               // 1
+        println(String + "do-while-null ran " + pc);               // 1
     }
 
-    __println("stack leak detected: " + stack_leak_pre());
-    __println("stack leak detected: " + stack_leak_post());
+    println(String + "stack leak detected: " + stack_leak_pre());
+    println(String + "stack leak detected: " + stack_leak_post());
 
     return 0;
 }
@@ -604,7 +604,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: Unreachable statement.
 //int neg_while_false() {
 //    while (false) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -645,7 +645,7 @@ negatives — one //-block uncommented per run.
 //int neg_while_tuple() {
 //    (int, int) t = (1, 2);
 //    while (t) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -654,7 +654,7 @@ negatives — one //-block uncommented per run.
 //int neg_while_array() {
 //    int a[2] = (1, 2);
 //    while (a) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -664,7 +664,7 @@ negatives — one //-block uncommented per run.
 //    Box(int v_) { }
 //    Box b(1);
 //    while (b) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -675,7 +675,7 @@ negatives — one //-block uncommented per run.
 //int neg_do_while_tuple() {
 //    (int, int) t = (1, 2);
 //    while {
-//        __println("dead");
+//        println(String + "dead");
 //    } (t);
 //    return 0;
 //}
@@ -686,7 +686,7 @@ negatives — one //-block uncommented per run.
 //    int x = 5;
 //    void^ p = ^x;
 //    while (p^) {
-//        __println("dead");
+//        println(String + "dead");
 //    }
 //    return 0;
 //}
@@ -696,7 +696,7 @@ negatives — one //-block uncommented per run.
 //    int x = 5;
 //    void^ p = ^x;
 //    while {
-//        __println("dead");
+//        println(String + "dead");
 //    } (p^);
 //    return 0;
 //}

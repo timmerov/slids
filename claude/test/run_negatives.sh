@@ -16,7 +16,7 @@
 # Example:
 #   //-EXPECT-ERROR: cannot infer loop type variable
 #   //for (x : (Simple(1), Simple(2))) {
-#   //    __println("...");
+#   //    println(String + "...");
 #   //}
 #
 # Parallelization:

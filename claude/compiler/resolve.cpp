@@ -61,10 +61,6 @@ int retargetTemplateByArity(parse::Tree const& tree, int tid,
 
 namespace {
 
-bool isPrintIntrinsic(std::string const& name) {
-    return name == "__println" || name == "__print";
-}
-
 // A fixed-size array type spelling (`int[5]`, `int[3][5]`), distinct from
 // `int[]` (iterator) and `int^` (reference).
 bool isArrayType(widen::TypeRef t) {
@@ -2340,14 +2336,6 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             return;
         }
         case parse::Kind::kCallExpr: {
-            if (isPrintIntrinsic(e.name)) {
-                diagnostic::report(diag, {e.file_id, e.tok,
-                    "'" + e.name + "' cannot be used as an expression.", {}});
-                for (auto& ch : e.children) {
-                    if (ch) resolveExpr(tree, *ch, diag);
-                }
-                return;
-            }
             resolveUserCall(tree, e, diag);
             return;
         }
@@ -4305,17 +4293,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kCallStmt: {
-            if (isPrintIntrinsic(s.name)) {
-                if (s.children.size() != 1) {
-                    diagnostic::report(diag, {s.file_id, s.tok,
-                        "'" + s.name + "' takes exactly one argument.", {}});
-                }
-                for (auto& ch : s.children) {
-                    if (ch) resolveExpr(tree, *ch, diag);
-                }
-            } else {
-                resolveUserCall(tree, s, diag);
-            }
+            resolveUserCall(tree, s, diag);
             return Completion::Normal;
         }
         case parse::Kind::kMethodCallStmt: {

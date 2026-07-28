@@ -248,7 +248,7 @@ Vector<T>(
         ) (i < end) {
             ++i; ptr += sizeof(T);
         } {
-            //__println("Vector<T>: placement new.");
+            //println(String + "Vector<T>: placement new.");
             new(ptr) T;
         }
     }
@@ -264,7 +264,7 @@ Vector<T>(
         ) (i < end) {
             ++i; ++ptr;
         } {
-            //__println("Vector<T>: inline dtor.");
+            //println(String + "Vector<T>: inline dtor.");
             ptr^.~();
         }
     }

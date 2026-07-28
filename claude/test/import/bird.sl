@@ -23,6 +23,8 @@ reason `void Bird:chirp()` does. the hooks below are deliberately in the BLOCK r
 form and the method in the EXTERNAL form: same file, both spellings, both non-sibling.
 */
 
+import string;
+
 import library;
 
 /* a header-declared global DEFINED in this NON-SIBLING source (library.sl declares it
@@ -31,13 +33,13 @@ int from_bird = 77;
 
 Bird() {
     _() {
-        __println("Bird:ctor: " + a + " " + b);
+        println(String + "Bird:ctor: " + a + " " + b);
     }
     ~() {
-        __println("Bird:dtor: " + a + " " + b);
+        println(String + "Bird:dtor: " + a + " " + b);
     }
 }
 
 void Bird:chirp() {
-    __println("Bird:chirp: " + a + " " + b);
+    println(String + "Bird:chirp: " + a + " " + b);
 }

@@ -21,7 +21,7 @@ use the const keyword before the method name to make self not-mutable.
 
     Self(int x_) {
         void const method() {
-            __println("self is const.");
+            println(String + "self is const.");
         }
     }
 
@@ -68,12 +68,12 @@ Self(int x_) {
     }
 
     void print() {
-        __println("Self:print");
+        println(String + "Self:print");
     }
 
     void shadow_print() {
         void print() {
-            __println("Self:shadow_print:print");
+            println(String + "Self:shadow_print:print");
             self.print();
         }
         print();
@@ -84,11 +84,11 @@ int32 main() {
 
     Self s(47);
     ref = s.this();
-    __println("ref = " + ref^.x_);
+    println(String + "ref = " + ref^.x_);
 
     int shadow = s.shadow_x();
-    __println("shadow = " + shadow);
-    __println("s.x_ = " + s.x_);
+    println(String + "shadow = " + shadow);
+    println(String + "s.x_ = " + s.x_);
 
     s.shadow_print();
 

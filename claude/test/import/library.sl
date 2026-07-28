@@ -42,6 +42,8 @@ from slidsc. so the hook bodies below are in the sibling because that is what WO
 because the model requires it.
 */
 
+import string;
+
 import library;
 
 /* PRIVATE to this TU — same names as consumer.sl's, distinct bodies: a free function, a
@@ -52,53 +54,53 @@ import library;
    would fail. Widget also covers the CLASS half — a `.sl`-local class's methods are
    internal, whereas a header class's stay external so importers link to them. */
 void note() {
-    __println("library: note");
+    println(String + "library: note");
 }
 
 Util {
     void tag() {
-        __println("library: Util:tag");
+        println(String + "library: Util:tag");
     }
 }
 
 Widget() {
     void hum() {
-        __println("library: Widget:hum");
+        println(String + "library: Widget:hum");
     }
 }
 
 int priv_ = 6;   /* .sl-LOCAL (not in the header) — PRIVATE, same name as consumer's */
 
 void hello_world() {
-    String hw(nullptr, 42);
+    Rope hw(nullptr, 42);
     hw.set("Hello, World!");
-    __println(hw.get() + " " + hw.tag());
+    println(String + hw.get() + " " + hw.tag());
     // DEFINER-side default construction (no initializer): this TU owns the layout, so it
     // fills the field DEFAULTS at the site (str_=null, tag_=7) and calls @String__$pctor
     // directly — the site-fill path, distinct from an importer's @String__$ctor default-fill.
-    String dc;
-    __println("dc tag: " + dc.tag());
+    Rope dc;
+    println(String + "dc tag: " + dc.tag());
     note();
     Widget lw; lw.hum();
-    __println("library priv: " + priv_);   // library's own internal priv_
+    println(String + "library priv: " + priv_);   // library's own internal priv_
 }
 
 Animal() {
     _() {
-        __println("Animal:ctor: " + a + " " + b);
+        println(String + "Animal:ctor: " + a + " " + b);
     }
     ~() {
-        __println("Animal:dtor: " + a + " " + b);
+        println(String + "Animal:dtor: " + a + " " + b);
     }
     op=(Animal^ rhs) {
         a = rhs^.a;
         b = rhs^.b;
-        __println("Animal:op=: " + a + " " + b);
+        println(String + "Animal:op=: " + a + " " + b);
     }
 }
 
 void Animal:print() {
-    __println("Animal:print: " + a + " " + b);
+    println(String + "Animal:print: " + a + " " + b);
 }
 
 /* Counter's USER operators — declared in the header, so DEFINING them here is legal (the
@@ -159,22 +161,22 @@ int Animal:sum(int x, int y) {
 
 Space {
     void goodbye_world() {
-        __println("Goodbye, World!");
+        println(String + "Goodbye, World!");
         Util:tag();
     }
 
     Vegetable() {
         _() {
-            __println("Vegetable:ctor: " + a + " " + b);
+            println(String + "Vegetable:ctor: " + a + " " + b);
         }
     }
     Vegetable:~() {
-        __println("Vegetable:dtor: " + a + " " + b);
+        println(String + "Vegetable:dtor: " + a + " " + b);
     }
 }
 
 void Space:Vegetable:print() {
-    __println("Vegetable:print: " + a + " " + b);
+    println(String + "Vegetable:print: " + a + " " + b);
 }
 
 global Query(who_ = 1) { }
@@ -182,10 +184,10 @@ global what_ = 2;
 int where_ = 3;
 global Query(when_ = 4) {
     _() {
-        __println("Query:ctor");
+        println(String + "Query:ctor");
     }
     ~() {
-        __println("Query:dtor");
+        println(String + "Query:dtor");
     }
 }
 
@@ -198,7 +200,7 @@ global int nums[3] = (7, 8, 9);
 /* from_bird is DEFINED in bird.sl, not here — this TU only declares it (via the header). */
 
 /* complete the incomplete class */
-String(char[] str_ = nullptr, int tag_ = 7) {
+Rope(char[] str_ = nullptr, int tag_ = 7) {
     _() {}
     ~() { delete str_; }
 
@@ -212,14 +214,14 @@ String(char[] str_ = nullptr, int tag_ = 7) {
     int tag() { return tag_; }
 }
 
-/* define Tagged, the class deriving from the incomplete String (see the header). THIS TU
-   completes String, so here the layout is fully known: mark_ / pad_ / extra_ are ordinary
+/* define Tagged, the class deriving from the incomplete Rope (see the header). THIS TU
+   completes Rope, so here the layout is fully known: mark_ / pad_ / extra_ are ordinary
    struct GEPs, and the base's fields are reachable by name. What this TU owes an importer
    is the FOLDED offset table (@Tagged__$offsets) and the runtime size — both emitted off
    the real struct, so the two halves cannot disagree about where a field landed. */
-String : Tagged() {
-    _() { __println("Tagged:ctor: " + mark_); }
-    ~() { __println("Tagged:dtor: " + mark_); }
+Rope : Tagged() {
+    _() { println(String + "Tagged:ctor: " + mark_); }
+    ~() { println(String + "Tagged:dtor: " + mark_); }
 
     int mark() { return mark_; }
     void bump() { mark_ = mark_ + 10; }
@@ -229,7 +231,7 @@ String : Tagged() {
 }
 
 /* the base by reference: consumer.sl calls this with a Tagged. */
-int strtag(String^ s) {
+int strtag(Rope^ s) {
     return s^.tag();
 }
 
@@ -270,25 +272,25 @@ them (above) is legal. this file is the sibling, and it is still not allowed.
 //int mismatch_ = 5;
 
 //-EXPECT-ERROR: cannot add a constructor
-//NoCtor:_() { __println("compile error."); }
+//NoCtor:_() { println(String + "compile error."); }
 
 //-EXPECT-ERROR: cannot add a destructor
-//NoCtor:~() { __println("compile error."); }
+//NoCtor:~() { println(String + "compile error."); }
 
 //-EXPECT-ERROR: cannot add a copy operator
-//NoCtor:op=(NoCtor^ rhs) { __println("compile error."); }
+//NoCtor:op=(NoCtor^ rhs) { println(String + "compile error."); }
 
 //-EXPECT-ERROR: cannot add a move operator
-//NoCtor:op<--(mutable NoCtor^ rhs) { __println("compile error."); }
+//NoCtor:op<--(mutable NoCtor^ rhs) { println(String + "compile error."); }
 
 //-EXPECT-ERROR: cannot add a swap operator
-//NoCtor:op<-->(mutable NoCtor^ rhs) { __println("compile error."); }
+//NoCtor:op<-->(mutable NoCtor^ rhs) { println(String + "compile error."); }
 
 /* the block re-open form is the same violation. */
 //-EXPECT-ERROR: cannot add a constructor
 //NoCtor() {
-//    _() { __println("compile error."); }
-//    ~() { __println("compile error."); }
+//    _() { println(String + "compile error."); }
+//    ~() { println(String + "compile error."); }
 //}
 
 /* a `.sl` may add an ordinary method to a header class, but NOT a virtual one. the first
