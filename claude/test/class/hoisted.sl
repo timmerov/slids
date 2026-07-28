@@ -36,6 +36,8 @@ a namespace qualifier"). Hoisted classes are kept distinct via def_id like local
 classes; identity rides the handle, never a spelling.
 */
 
+import string;
+
 Outer(int x_ = -1) {
     alias Outerger = int;
 

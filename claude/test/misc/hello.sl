@@ -2,6 +2,8 @@
 hello, world canonical code example.
 */
 
+import string;
+
 int32 main() {
 
     __println("Hello, World!");

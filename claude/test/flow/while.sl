@@ -69,6 +69,8 @@ the SAME stack address across iterations (reused), so no per-iteration leak.
 */
 
 /* basic counting loop; sum 1..n. n <= 0 runs zero times. */
+import string;
+
 int sum_to(int n) {
     int i = 1;
     int s = 0;

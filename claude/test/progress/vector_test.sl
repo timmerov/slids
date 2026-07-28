@@ -2,6 +2,8 @@
 use a template class declared in a header.
 */
 
+import string;
+
 import vector;
 
 global int g_count = 0;

@@ -37,6 +37,8 @@ forms covered:
 malformed exponent cases follow the //-EXPECT-ERROR pattern.
 */
 
+import string;
+
 int32 main() {
 
     // -- decimal int --

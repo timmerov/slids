@@ -28,6 +28,8 @@ to module-level functions exactly like a file-scope class's.
 */
 
 /* a file-scope class, shadowed by a same-named LOCAL class in main. */
+import string;
+
 Shadowed(int x_) {
     _() { __println("FILE:Shadowed: " + x_); }
     ~() { }

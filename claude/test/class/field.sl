@@ -28,6 +28,8 @@ construction: an omitted field takes its default (def below), a partial init tup
 overrides the lead and defaults the rest (part below).
 */
 
+import string;
+
 const int K = 5;
 
 Class(

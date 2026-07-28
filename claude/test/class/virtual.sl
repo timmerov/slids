@@ -149,6 +149,8 @@ brand-new virtual method — all virtual methods must be in the original declara
 */
 
 /* STAGE 1 — a virtual class parses, compiles, and runs. */
+import string;
+
 Vc(int x_) {
     _() {}
     virtual ~() { __println("Vc:dtor"); }

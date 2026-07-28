@@ -90,6 +90,8 @@ deferred to later landings:
   - array-init-via-tuple, for-tuple, #x, class init
 */
 
+import string;
+
 enum Dir ( kN, kE, kS, kW );
 
 /* landing 4 — tuple params / returns + tuple references */

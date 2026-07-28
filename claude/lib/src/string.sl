@@ -128,7 +128,6 @@ String (
         clear();
         reserve(kNumberBufferSize);
         size_ = stdc:strfromd(storage_, capacity_, "%g", x);
-        size_ = 0;
     }
 
     /* overload += to append a string. */

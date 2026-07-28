@@ -17,6 +17,8 @@ rename functions:
 use case is importing c functions with stupid names.
 */
 
+import string;
+
 alias Integer = int;
 alias Float = float;
 alias Whole = Integer;        // chained to another alias

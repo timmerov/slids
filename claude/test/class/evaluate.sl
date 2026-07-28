@@ -220,6 +220,8 @@ deliberately NOT correct yet (still-broken / deferred):
     local never reaches it. Untested on purpose: a golden here would pin the wrong answer.
 */
 
+import string;
+
 Class(int a_) {
     _() { __println("Class:ctor: " + a_); }
     ~() { __println("Class:dtor: " + a_); }

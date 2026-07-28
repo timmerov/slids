@@ -84,6 +84,8 @@ the same way a literal var-decl init flexes into its declared type.
 ident args widen via widen::convert.
 */
 
+import string;
+
 // forward declaration (signature only); the definition is at the bottom of the
 // file, and it is both called and forward-referenced before that definition.
 int32 fwd_decl(int32 n);

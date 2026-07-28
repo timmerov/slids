@@ -32,6 +32,8 @@ every type position (parseType owns the `Name<args>` form). nested uses
 before the alias name joins the cycle set (composition, not a cycle; Nest<T>).
 */
 
+import string;
+
 alias Plain = int;
 
 /* a two-parameter alias template; ##type shows the use as written. */

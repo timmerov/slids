@@ -55,6 +55,8 @@ claude says:
   classes (Phase 5).
 */
 
+import string;
+
 alias Big = int64;
 
 Simple(int x_ = -2) {

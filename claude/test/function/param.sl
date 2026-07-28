@@ -43,6 +43,8 @@ claude says:
   call omitted a rejected default). Arity is the range [required, total].
 */
 
+import string;
+
 int one() {
     return 1;
 }

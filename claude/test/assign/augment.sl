@@ -52,6 +52,8 @@ through the SAME path the binary op uses (a shared aggregateArithType), so
 classify. Coverage in tuple/anon.sl, tuple/array.sl, tuple/combined.sl.
 */
 
+import string;
+
 int32 main() {
 
     // -- signed int arith --

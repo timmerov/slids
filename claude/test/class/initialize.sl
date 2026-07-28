@@ -109,6 +109,8 @@ through an array, or around a longer cycle) is infinite-size and rejected — a
 `^` reference field breaks the cycle.
 */
 
+import string;
+
 MyFirstClass(
     int a_,
     int b_ = 1

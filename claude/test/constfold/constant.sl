@@ -91,6 +91,8 @@ examples:
   ~0xFF                    -> uint64              (weak no-width -> 64-bit complement)
 */
 
+import string;
+
 const float kPi = 2.14 + 1.0;
 const int kFortyTwo = 6 * 7;
 const float64 kPlanck = 6.626;
@@ -214,11 +216,13 @@ int32 main() {
     const kDemote = kByte + 200;          // 200 weak, exceeds int8 -> widens to int
     __println(##type(kDemote) + " kDemote = " + kDemote);   // const int 205
 
-    /* compile errors — typeless const initialized from a non-constant local */
-
-    //-EXPECT-ERROR: Initializer for 'kBad' is not a constant expression
-    //int yVar = 7;
-    //const kBad = yVar + 1;
+    /* a typeless const from a non-constant local no longer errors — it is a
+       RUNTIME const local (const inference, test/assign/infer.sl): nothing
+       folds, but the value is const (a write rejects — pinned there). A TYPED
+       scalar const from a runtime rhs still errors (kFromVar above). */
+    int yVar = 7;
+    const kRuntime = yVar + 1;
+    __println(##type(kRuntime) + " kRuntime = " + kRuntime);   // const int 8
 
     /* the arithmetic convenience (fold.sl 43-46): a float / integer-class
        literal mix folds on the FLOAT path for + - * / % — the integer

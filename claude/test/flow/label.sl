@@ -77,6 +77,8 @@ SESSION 6 — labels on loops (switch labels deferred / "distant future"):
   in a long-for update clause. No labels on switch this round.
 */
 
+import string;
+
 enum Dir ( N, S, E, W );
 
 /* a label on a DO-WHILE sits between the body `}` and the `(cond)`. */

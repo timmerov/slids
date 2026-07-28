@@ -178,6 +178,8 @@ claude says:
   qualifier, so those rules and their test cases are held until const lands.
 */
 
+import string;
+
 int32 main() {
     int32 a = 99;
     int32^ ref = ^a;

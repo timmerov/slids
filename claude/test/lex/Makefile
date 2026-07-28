@@ -11,6 +11,12 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
+# The library: headers on every compile's import path; every binary links
+# the merged library object build/lib/libslids.o.
+LIB       = ../../lib
+LIB_BUILD = ../../build/lib
+IFLAGS    = -I $(LIB)/hdr
+
 SAMPLES = \
 	brackets \
 	comments \
@@ -32,17 +38,25 @@ define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)
 
 $(BIN_DIR)/$(1): $(BUILD_DIR)/$(1).o
-	$(CXX) $$< -o $$@
+	$(CXX) $$^ -o $$@
 
 $(BUILD_DIR)/$(1).o: $(BUILD_DIR)/$(1).ll
 	$(LLC) $(LLCFLAGS) $$< -o $$@
 
 $(BUILD_DIR)/$(1).ll: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $$< -o $$@
+	$(SLIDSC) $$< -o $$@ $(IFLAGS)
 endef
 
 $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
+
+# Every sample links the library (an extra prerequisite onto the template
+# rule; $^ in the link recipe picks it up).
+$(addprefix $(BIN_DIR)/,$(SAMPLES)): $(LIB_BUILD)/libslids.o
+
+# Built by lib's own Makefile (make.sh order); self-heals a standalone build.
+$(LIB_BUILD)/libslids.o:
+	$(MAKE) -C $(LIB)
 
 # Header dependencies — re-lex importer when its .slh change
 $(BUILD_DIR)/importer.ll: importee1.slh importee2.slh

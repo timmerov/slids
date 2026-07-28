@@ -55,6 +55,8 @@ covered here:
 deferred (not landed): inferring from classes / functions.
 */
 
+import string;
+
 alias Integer = int;
 const int kFive = 5;
 const int8 kByte = 9;

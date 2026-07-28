@@ -61,6 +61,8 @@ claude says:
   read of `u` still errors.
 */
 
+import string;
+
 int32 foo() {
     return 0;
 }

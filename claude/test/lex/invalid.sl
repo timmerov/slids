@@ -2,6 +2,8 @@
 ensure the lexer rejects invalid characters.
 */
 
+import string;
+
 //-EXPECT-ERROR: Unexpected character: '@'
 // @
 

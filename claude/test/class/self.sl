@@ -53,6 +53,8 @@ so self does double duty: it names the receiver, and it reaches members
 that a local or nested-function name would otherwise shadow.
 */
 
+import string;
+
 Self(int x_) {
     Self^ this() {
         return ^self;

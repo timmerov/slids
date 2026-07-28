@@ -85,6 +85,9 @@ this rule recurses through the pointer type down to the leaf.
 for example: argument type int^ is an exact match to parameter type
 const (const int)^.
 
+char is a special case. char widens to integer types. but integer types do not
+widen or match char. only char matches char.
+
 the convenience convention plays no part in matching.
 ie syntax is pass-by-value but the semantics are pass-by-reference.
 
@@ -141,6 +144,8 @@ claude says:
 */
 
 /* arity overload — same name, different parameter counts. */
+import string;
+
 int32 area(int32 s) {
     return s * s;
 }

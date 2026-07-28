@@ -66,6 +66,8 @@ tuple VALUE element whose type / arity doesn't match the declared element.
 
 /* CROSS-FORM RETURN — the function's return type and the returned VALUE differ in
    form; the return seam converts by slot, form-agnostically (both directions). */
+import string;
+
 (int[2], int[2]) retTOA() {              // returns tuple-of-arrays
     (int, int) a[2] = ((1,2), (3,4));    // body builds an array-of-tuples value
     return a;

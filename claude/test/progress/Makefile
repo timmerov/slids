@@ -11,6 +11,15 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
+# The library: string.slh / dump.slh (+ the template source dump.sl beside its
+# header) live in lib/hdr; the merged libslids.o lands in build/lib (lib's
+# Makefile owns it — make.sh builds lib/ before test/). Consumers here compile
+# with -I so `import string;` / `import dump;` resolve.
+LIB       = ../../lib
+LIB_HDR   = $(LIB)/hdr
+LIB_BUILD = ../../build/lib
+IFLAGS    = -I $(LIB_HDR)
+
 # The runnable programs (a work-in-progress sandbox). `string_test` and
 # `vector_test` exercise their libraries; `galaxy` is the scratch sandbox — it
 # consumes all of them (dump + math + string + vector).
@@ -32,13 +41,13 @@ positives: all
 
 string_test: $(BIN_DIR)/string_test
 
-# string_test links its own object plus the library's string.o (its sibling definitions).
-$(BIN_DIR)/string_test: $(BUILD_DIR)/string_test.o $(BUILD_DIR)/string.o
+# string_test links its own object plus the library (its sibling definitions).
+$(BIN_DIR)/string_test: $(BUILD_DIR)/string_test.o $(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
 
 vector_test: $(BIN_DIR)/vector_test
 
-$(BIN_DIR)/vector_test: $(BUILD_DIR)/vector_test.o $(BUILD_DIR)/vector.o
+$(BIN_DIR)/vector_test: $(BUILD_DIR)/vector_test.o $(BUILD_DIR)/vector.o $(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
 
 # galaxy consumes every library: dump + string + vector are slids TUs linked in;
@@ -46,22 +55,32 @@ $(BIN_DIR)/vector_test: $(BUILD_DIR)/vector_test.o $(BUILD_DIR)/vector.o
 galaxy: $(BIN_DIR)/galaxy
 
 $(BIN_DIR)/galaxy: $(BUILD_DIR)/galaxy.o $(BUILD_DIR)/dump.o \
-		$(BUILD_DIR)/string.o $(BUILD_DIR)/vector.o
+		$(LIB_BUILD)/libslids.o $(BUILD_DIR)/vector.o
 	$(CXX) $^ -lm -o $@
+
+# The library's libslids.o is built by lib's own Makefile (make.sh order). This
+# rule self-heals a standalone `make -C test/progress` from scratch; it does
+# NOT track staleness — lib/ owns rebuilds of its own sources.
+$(LIB_BUILD)/libslids.o:
+	$(MAKE) -C $(LIB)
 
 # THE POST-COMPILE PRE-LINK STAGE (the test/import shape): a template source
 # compiles AFTER its consumers, reading the demand pool (each consumer's .sli,
 # dumped beside its .ll) with --instantiate, so every demanded flavor is
 # emitted once, externally, by the library's own TU. vector has TWO consumers
-# (vector_test + galaxy); dump's consumer is galaxy.
+# (vector_test + galaxy); dump's consumer is galaxy. dump.sl lives beside its
+# header in lib/hdr, but its OBJECT is per-demand-pool, so it is built here.
 $(BUILD_DIR)/vector.ll: vector.sl $(BUILD_DIR)/vector_test.ll \
 		$(BUILD_DIR)/galaxy.ll $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d --instantiate $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d $(IFLAGS) --instantiate $(BUILD_DIR)
 
-$(BUILD_DIR)/dump.ll: dump.sl $(BUILD_DIR)/galaxy.ll $(SLIDSC)
+# dump compiles from lib/hdr, but the demand pool's PROVENANCE imports name the
+# consumer's own headers (galaxy imports vector/math) — so the consumer's
+# directory joins the import path alongside lib/hdr.
+$(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(BUILD_DIR)/galaxy.ll $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d --instantiate $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
@@ -73,7 +92,7 @@ $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 # first compile and governs every build after.
 $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS)
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 

@@ -354,6 +354,8 @@ every type (scalar / array / tuple / class). Nothing is deferred.
 */
 
 /* SHORT form — explicit type and inferred type, across scalar kinds. */
+import string;
+
 global int shots_ = 42;
 global tally_ = 0;            /* type inferred: int */
 global bool ready_ = false;

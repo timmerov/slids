@@ -106,6 +106,8 @@ claude says:
   an enum yields values, so `ref^ :` rejects there.
 */
 
+import string;
+
 alias Cell = int;
 
 /* GLOBAL arrays — iterated like a local; the loop touches the lazy global on the

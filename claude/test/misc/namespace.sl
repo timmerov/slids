@@ -15,6 +15,8 @@ namespaces may not be instantiated.
 */
 
 /* open in global scope. */
+import string;
+
 Space {
     const int kOne = 1;
     int foo() {

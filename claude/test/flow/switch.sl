@@ -148,6 +148,8 @@ ANALYSIS:
 */
 
 /* a named enum whose members are referenced by qualified name in case labels. */
+import string;
+
 enum Dir ( N, S, E, W );
 
 /* an anonymous enum → bare int consts, also usable as case labels. */

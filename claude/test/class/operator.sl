@@ -345,6 +345,8 @@ TEST PLAN
   are already below. One //-EXPECT-ERROR per negative, matching the v2 messages.
 */
 
+import string;
+
 DefaultMove(
     char c_,
     int^ p_,

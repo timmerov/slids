@@ -128,6 +128,8 @@ not covered (residual): swap-OPERAND ppid (`x++ <--> y++`) — parses, but the s
 lvalue check rejects a bumped operand (would need the target lowering on both operands).
 */
 
+import string;
+
 int32 show2(int32 a, int32 b) {
     __println("show " + a + " " + b);
     return 0;

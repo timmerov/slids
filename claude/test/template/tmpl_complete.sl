@@ -37,6 +37,8 @@ its synthesized transfer ops twice (invalid IR at llc).
 
 /* incomplete primary; an appending re-open; a closing re-open that adds a
    method reading fields from BOTH earlier openings. */
+import string;
+
 Grow<T>(T a_ = 1, ...) {
     T ga() { return a_; }
 }

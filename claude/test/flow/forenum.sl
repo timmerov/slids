@@ -44,6 +44,8 @@ should we check for contiguousness?
 lean no.
 */
 
+import string;
+
 enum Color ( red, green, blue );
 enum Level ( low = 10, mid, high );
 

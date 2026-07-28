@@ -112,6 +112,8 @@ design (explicit-types round; typeless/reuse + labels deferred):
 */
 
 /* basic long-for: body runs before update, so the body sees i = 0..n-1. */
+import string;
+
 int sum_for(int n) {
     int s = 0;
     for (int i = 0) (i < n) { ++i; } {

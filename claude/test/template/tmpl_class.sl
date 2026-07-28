@@ -66,6 +66,8 @@ nested uses (`Pair<Vec<int>>`) landed with the `>>` closer split
 
 /* the workhorse: fields and methods on T, a user binary operator, and a member
    const (read from outside via the instance-qualified spelling). */
+import string;
+
 Vec<T>(T x_ = 0, T y_ = 0) {
     const int kVid = 3;
     T sum() { return x_ + y_; }

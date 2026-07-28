@@ -6343,6 +6343,34 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
     }
     if (!viable) return false;
 
+    // ARRAY -> ELEMENT POINTER decay for the chain's rhs OPERAND. Ranking treats
+    // the decay as a rung, but only RANKS — the node itself is never rewritten
+    // (the direct call/assign paths rewrite through checkValueAssign, which a
+    // chain never runs), so a `char[6]` local reaching `op+=(char[])` / the
+    // collapsed head's `op=(char[])` was emitted as a whole-array load — invalid
+    // IR. Rewrite it here through the ONE decay funnel, keyed on the param of
+    // whichever operator can consume the rhs (aug / seed / binary — the roles
+    // pick among these, and their rhs params agree on the decayed shape).
+    if (isArrayType(e.children[1]->inferred_type)) {
+        struct Consumer { int id; int slot; };
+        Consumer consumers[] = {{aug_id, 1}, {eq_rhs_id, 1}, {bin_id, 2}};
+        for (Consumer c : consumers) {
+            if (c.id < 0) continue;
+            if ((int)tree.entries[c.id].param_types.size() <= c.slot) continue;
+            widen::TypeRef pt = tree.entries[c.id].param_types[c.slot];
+            if (!isPtrLikeType(pt)) continue;
+            widen::TypeRef pointee = pointeeType(pt);
+            if (pointee != widen::kNoType
+                && widen::deepStrip(pointee)
+                       == widen::deepStrip(
+                              arrayFirstElem(e.children[1]->inferred_type))) {
+                wrapArrayAsElemAddr(*e.children[1]);
+                inferExpr(tree, *e.children[1], pt, diag);
+                break;
+            }
+        }
+    }
+
     // Park the accumulator's construction value: the class's DEFAULT field-init tuple,
     // built by the ONE construction funnel (classifyClassInit) so a chain accumulator is
     // constructed exactly like any other default-constructed local.

@@ -78,6 +78,8 @@ claude says:
 */
 
 /* a nested function using only its own parameter (no capture). */
+import string;
+
 int basic(int x) {
     int dbl(int a) {
         return a + a;

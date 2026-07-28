@@ -25,6 +25,8 @@ note: `intptr p = ^a;` takes the address as an integer; comparing intptr p,q is
 the address-identity check. a pointer flows into an intptr lvalue via ptrtoint.
 */
 
+import string;
+
 Empty() {
     _() { __println("Empty:ctor"); }
     ~() { __println("Empty:dtor"); }

@@ -30,6 +30,8 @@ candidate is "No matching overload" — the same wording as a free function.
 - a single (non-overloaded) method keeps its detailed arity / cast errors.
 */
 
+import string;
+
 Calc(int base_) {
     // arity overload
     int area(int s) { return s * s; }

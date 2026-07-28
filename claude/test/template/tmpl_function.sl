@@ -79,6 +79,8 @@ forces the template). templates declare anywhere a function does — file
 scope, namespaces, blocks.
 */
 
+import string;
+
 T add<T>(T a, T b) {
     return a + b;
 }

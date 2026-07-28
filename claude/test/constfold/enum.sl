@@ -57,6 +57,8 @@ tbd: the constant list restarts at 0 ?
 the first constant must have an assigned value ?
 */
 
+import string;
+
 enum (
     kUnnamed1,
     kUnnamed2,

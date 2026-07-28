@@ -56,6 +56,8 @@ policy is untested-by-design and unspec'd.
 params arrive initialized; reading them is fine. an unread param (unused) is
 NOT flagged — only body-declared locals are swept, params are exempt.
 */
+import string;
+
 int32 add(int a, int b, int unused_param) {
     int s = a + b;
     return s;

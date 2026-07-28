@@ -2,6 +2,8 @@
 define a vector class declared in a header file.
 */
 
+import string;
+
 import vector;
 
 Vector<T>(

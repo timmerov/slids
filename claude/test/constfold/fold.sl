@@ -194,6 +194,8 @@ of an unsigned literal reports the small nominal, and ~'A' yields a char (value
 190) rather than rejecting.
 */
 
+import string;
+
 int32 main() {
     // D1 — float binary fold (+ - * / %)
     __println("f_add= " + (1.5 + 2.5));               // 4

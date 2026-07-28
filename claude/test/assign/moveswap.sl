@@ -100,6 +100,8 @@ negatives: swap of mismatched types; move into a constant; swap of an
 uninitialized operand; a non-lvalue swap operand; a narrowing move.
 */
 
+import string;
+
 int32 main() {
 
     /* ---- move: primitive is a copy (source unchanged) ---- */

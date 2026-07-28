@@ -18,6 +18,8 @@ returns.
 */
 
 /* a trailing block whose last statement returns satisfies return-correctness. */
+import string;
+
 int32 trailing_block() {
     {
         return 7;

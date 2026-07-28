@@ -129,6 +129,8 @@ caveats:
     `(const int)^ r` (a leading `const int x` would be the named constant).
 */
 
+import string;
+
 // parameter munge: `mutable char[]` opts out (-> char[]); plain `char[]`
 // defaults to a const element (-> (const char)[]); the primitive is by value.
 void munge(mutable char[] dst, char[] src, int count) {
@@ -456,6 +458,12 @@ int32 main() {
         __println(cr.id_);                // 5
     }                                     // Res.dtor here
 
+    // a typeless const aggregate is a runtime deep-const local (const
+    // inference) — it no longer mis-routes to the substitution path.
+    const infagg = (1, 2, 3);
+    __println(##type(infagg));            // (const int, const int, const int)
+    __println(infagg[0]);                 // 1
+
     return 0;
 }
 
@@ -634,10 +642,7 @@ one at a time and asserts the marked error substring.
 //-EXPECT-ERROR: requires global storage
 //Held(int z_) { const int neg_member_arr[2] = (1, 2); }
 
-// a TYPELESS const aggregate should infer as a const VARIABLE (like the typed
-// form), but the form is unknown at resolve so it stays on the substitution path
-// and mis-reports "not a constant expression". deferred until typeless-const
-// inference distinguishes a foldable scalar from an aggregate.
-//-EXPECT-ERROR-DEFERRED: typeless const aggregate mis-routed to the substitution path
-//int main() { const a = (1, 2, 3); __println(a[0]); return 0; }
+// (the parked "typeless const aggregate mis-routed to the substitution path"
+// case became a POSITIVE in main — const inference routes it to a runtime
+// deep-const local now.)
 

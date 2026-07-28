@@ -32,6 +32,8 @@ claude says:
   reference has no sequence position. references support NO arithmetic.
 */
 
+import string;
+
 int32 main() {
     int x = 5;
     int^ ref = ^x;

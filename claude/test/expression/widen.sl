@@ -11,6 +11,8 @@ char, int, and intptr are treated as strongly typed with their implementation
 dependent types - usually uint8, int32, and int64.
 bool is a strange case. it can be either strong typed or weak typed -
 depending on the situation.
+char is a special case. char widens to integer types. but integer types do not
+widen or match char. only char matches char.
 at most one of the operands is a constant literal - a weak operand.
 widening rules specific to constant literals are found in constfold/constant.sl.
 
@@ -214,6 +216,8 @@ notes / corrections still pending:
   "bool is a strange case / can be weak / strange cases" wording (lines ~10, 1e,
   2d) can be tightened to match.
 */
+
+import string;
 
 int32 main() {
 

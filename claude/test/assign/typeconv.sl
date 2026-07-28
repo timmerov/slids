@@ -101,6 +101,8 @@ value.
    assignment to a temporary of that class (header lines 8-9): it dispatches the
    class's op= — a value source through op=(int), a pointer source through
    op=(int^). The temp is destroyed at the end of the phrase. */
+import string;
+
 Amt(int cents_) {
     _() {}
     ~() {}

@@ -75,6 +75,8 @@ qualified construction (`Space:Nested(args)`) and a class-typed field (the inner
 ctor runs first, torn down last) both work.
 */
 
+import string;
+
 Class(int c_) {
     _() {
         __println("Class:ctor: " + c_);

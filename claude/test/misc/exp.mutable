@@ -74,3 +74,5 @@ Res.ctor
 const Res
 5
 Res.dtor
+(const int, const int, const int)
+1

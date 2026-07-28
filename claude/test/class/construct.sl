@@ -107,6 +107,8 @@ alongside the loop context, gated by completion so we never emit after a
 terminator.
 */
 
+import string;
+
 CtorDtor(int c_) {
     _() {
         __println("CtorDtor:ctor: " + c_);

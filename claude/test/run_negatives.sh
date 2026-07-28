@@ -73,7 +73,10 @@ if [ "${1:-}" = "--worker" ]; then
     else
         compile_file="$case_file"
     fi
-    err=$("$SLIDSC" "$compile_file" -o "$case_dir/out.ll" -I . 2>&1)
+    # -I .: the case's own directory (real headers beside the source).
+    # -I <lib/hdr>: the library headers (`import string;` in every test).
+    err=$("$SLIDSC" "$compile_file" -o "$case_dir/out.ll" -I . \
+          -I "$(dirname "$SLIDSC")/../lib/hdr" 2>&1)
     rc=$?
     # Strip rendered source-context lines so the marker substring can't match
     # its own appearance in the listing slidsc prints with each diagnostic.

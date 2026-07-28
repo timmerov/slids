@@ -39,6 +39,8 @@ int is signed i32 throughout (sdiv/srem/ashr, slt..), confirmed against the IR.
 Nothing open here.
 */
 
+import string;
+
 int32 main() {
 
     int u = 5;

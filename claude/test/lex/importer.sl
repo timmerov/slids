@@ -2,6 +2,8 @@
 test the lexer's ability to import a file.
 */
 
+import string;
+
 import importee1;
 import importee2;
 

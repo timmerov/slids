@@ -77,6 +77,8 @@ defining) a member template.
 */
 
 /* the workhorse: explicit + inferred calls, field read/write, memoization. */
+import string;
+
 Jar(int n_ = 0) {
     T scaled<T>(T v) { return v * n_; }
     void grow<T>(T by) { n_ = n_ + by; }

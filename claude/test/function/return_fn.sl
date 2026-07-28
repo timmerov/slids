@@ -224,6 +224,8 @@ balance is visible in the golden; Op additionally prints copy/move so a FIRED op
 (existing-var only) is distinct from an elided decl-init.
 */
 
+import string;
+
 // A hook class — prints id on ctor + dtor so ctor/dtor balance is visible.
 Class(int id_) {
     _() { __println("ctor " + id_); }

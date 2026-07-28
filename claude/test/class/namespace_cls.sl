@@ -28,6 +28,8 @@ Time:Count (type) and Time:Count:kZero (value) both resolve.
 alias Space; is rejected — a class is a type, not an importable namespace.
 */
 
+import string;
+
 Space(int x_) {
     alias Float = float;
     const Float kPi = 3.14;

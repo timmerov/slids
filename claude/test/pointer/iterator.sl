@@ -46,6 +46,8 @@ claude says:
 - iterators compare with all six ops against a same-pointee pointer.
 */
 
+import string;
+
 int32 main() {
     /* an int iterator seeded from an array element. */
     int arr[5];

@@ -30,6 +30,8 @@ deferred:
 ##value(expr)
 */
 
+import string;
+
 void dump( (char[], char[], char[], char[], int^)^ tuple ) {
     __println(tuple^[0] + ":" + tuple^[1] + ": " + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);
 }

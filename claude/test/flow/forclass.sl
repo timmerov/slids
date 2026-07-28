@@ -111,6 +111,8 @@ normal local variable shadowing rules for scopes apply to these scopes.
           |--loop-var--------|
 */
 
+import string;
+
 // size/op[] — op[] returns a reference to a field; iterated by value (a copy) or
 // by reference (write-through). Three int elements.
 IdxVec(int a_ = 1, int b_ = 2, int c_ = 3) {

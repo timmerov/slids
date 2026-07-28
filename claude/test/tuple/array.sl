@@ -96,6 +96,8 @@ claude says:
   (`(int,int) a[3] = ((1,2),(3,4),(5,6))`).
 */
 
+import string;
+
 int[3] widenArr() {                          // int[3] returned from an int8[3] value
     int8 v[3] = (1, 2, 3);
     return v;                                 // leaf-widen return — lowered by slot
