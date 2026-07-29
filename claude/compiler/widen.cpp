@@ -1143,6 +1143,14 @@ bool slidOpaque(TypeRef ref) {
     return get(ref).opaque;
 }
 
+void setSlidComputedLayout(TypeRef ref, bool computed_layout) {
+    arena().types[ref].computed_layout = computed_layout;
+}
+
+bool slidComputedLayout(TypeRef ref) {
+    return get(ref).computed_layout;
+}
+
 void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout) {
     arena().types[ref].runtime_layout = runtime_layout;
 }

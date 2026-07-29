@@ -176,6 +176,9 @@ REACH GOALS
 
   * integrate llvm c++ api. something something debugger.
 
+  * optimize sizes of incomplete classes.
+    optimize offsets to incomplete fields.
+
   * b = (obj < x) desugars to b = obj.op<(x) regardless of x.
     if x is not a class or obj.op<(x) is not defined then we could try transposing
     the comparison:

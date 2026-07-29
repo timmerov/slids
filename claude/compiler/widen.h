@@ -119,7 +119,25 @@ struct Type {
     // `opaque` (the size is a runtime call too). True in EVERY TU that sees the header,
     // exactly like `opaque`, so both halves agree on the layout rule.
     bool runtime_layout = false;
+    // kSlid: the class embeds one or more fields whose SIZE is not a compile-time
+    // constant (an opaque class field, or a field of a class that is itself
+    // computed_layout). Unlike runtime_layout — where a completer knows the whole
+    // struct and folds the offset table — NO TU can fold this one: the field list
+    // lives here and the embedded size lives in another module. So the offsets past
+    // the first such field, and the class's own size, are computed AT RUN TIME into
+    // a cached table (codegen's `__$layout`). Every field UP TO AND INCLUDING the
+    // first non-static one still has a compile-time offset: an opaque field is laid
+    // out at the fixed OPAQUE ALIGNMENT (kOpaqueAlign), the same over-alignment every
+    // opaque alloca already uses, so the round-up before it is a constant.
+    bool computed_layout = false;
 };
+
+// The alignment an OPAQUE class is laid out at. Its real alignment belongs to the
+// completer, so a layout that must place one without asking over-aligns to the
+// platform maximum — the same value every opaque `alloca` already uses. Making this
+// a fixed convention is what keeps the offset of the FIRST non-static field a
+// compile-time constant (and is why no `__$alignof` export is needed).
+constexpr int kOpaqueAlign = 16;
 
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
 // spell(intern(s)) == s for every well-formed spelling; intern(s) is stable.
@@ -188,6 +206,13 @@ bool slidOpaque(TypeRef ref);
 // it to emit / consult the `__$offsets` table instead of a struct GEP.
 void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout);
 bool slidRuntimeLayout(TypeRef ref);
+
+// Set/read whether the class's layout must be computed at run time (see
+// Type::computed_layout). Resolve marks it when a field's size is not static; codegen
+// emits the `__$layout` filler + the cached table and reads the flag to decide, per
+// field, between a constant GEP and a table load.
+void setSlidComputedLayout(TypeRef ref, bool computed_layout);
+bool slidComputedLayout(TypeRef ref);
 
 // Set whether each hook's BODY is written in this TU (see Type::ctor_here). Resolve
 // decides it in registerClassBody, where every OPENING of the class is visible — the

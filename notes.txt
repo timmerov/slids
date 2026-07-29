@@ -1,10 +1,15 @@
 
 agenda:
-fix integer types widening to and matching char issues. char literals need
-their own kind apparently.
-replace __println with println(String) in test files.
-replace __println with stdc:print? in string.sl.
-remove _println from slidsc.
+an incomplete class fails as a class field, array type, tuple slot,
+probably more.
+these should be valid:
+Class(String str_) { }
+String names[3];
+(int, String) tuple = (1, "hi");
+ptr = new String[3];
+global String s;
+Vector<String> vec; vec.append("segfaults");
+
 
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.

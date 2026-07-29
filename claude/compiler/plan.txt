@@ -1747,6 +1747,35 @@ Phase 8 — namespaces + cross-TU
       aggregate (field/array/tuple), a bare opaque global, `new C[n]`. A bare local, a pointer,
       and single `new C` are fine. Canon test/import String / Mix (all field kinds) / Flat (POD).
       Detail: readme-classes.txt OPAQUE CLASSES. [[project_opaque_classes]]
+      A CLASS-TEMPLATE INSTANCE IS NEVER OPAQUE — FIXED 2026-07-28. The opaque flag asks "can this
+      TU see the layout", and for a template instance the answer is always yes: it only exists
+      because a loaded opening completed the template, and for a header template that completing
+      re-open is TEMPLATE CONTENT, which survives the strip applied to a loaded template source and
+      so reaches the completer and every importer identically — the uniformity the flag requires.
+      A plain header class is the mirror (its completion IS stripped) and stays opaque. Before the
+      fix `Vector<int>` / `Grow<int>` were opaque in every consumer purely because the header spelled
+      `...`, so a consumer could not embed a flavor by value even holding its full definition — the
+      failure test/progress galaxy.sl hit on `Vector<float64> ins_`. One term in registerClassBody.
+      Canon test/import tmpl_test.sl Holder + tmpl_test2.sl Pair2 (the second consumer, pinning
+      cross-TU layout agreement). [[project_opaque_classes]]
+    - COMPUTED LAYOUT — embedding an opaque class BY VALUE (IN PROGRESS 2026-07-28, not landed).
+      The by-value rejection is a limitation, not a law: the layout is a LINK-TIME fact and the
+      `__$offsets` path already proves such a layout can be consulted at run time. What is missing
+      is a folder — for a DERIVED class the completer knows both halves, for an EMBEDDING class no
+      TU does, so the values must be COMPUTED and cached. THE PARTITION: fields are statically
+      placeable up to AND INCLUDING the first non-static one; only fields after it need the cache.
+      An opaque field lays out at widen::kOpaqueAlign (16, the over-alignment every opaque alloca
+      already uses), which makes that round-up a constant and removes any need for an `__$alignof`
+      export. ARRAYS OF AN OPAQUE CLASS ARE REQUIRED TOO (`String s_[3]`, user) — a runtime STRIDE
+      off the same cached size, the same mechanism rather than a separate rejection. LANDED SO FAR
+      (inert, suite green): widen::Type.computed_layout + accessors + kOpaqueAlign. REMAINING:
+      (1) resolve — split checkClassByValueAcyclic (its stack walk flattens arrays/tuples, so it
+      cannot tell a direct field from an array element) + a computed_layout fixpoint;
+      (2) codegen for ONE non-static field (no cache: all offsets constant, size = const +
+      `@Op__$sizeof()`); (3) the cached table for two or more (mutable `@C__$offsets` + idempotent
+      lazy `@C__$layout()`, ordering self-solving via the field classes' `__$sizeof()`). Hazard:
+      hooks, transfer ops, and new/delete all branch on slidOpaque and must learn which regime
+      they are in, each with three linkage variants. Detail: readme-classes.txt COMPUTED LAYOUT.
     - DERIVING FROM AN OPAQUE CLASS (LANDED 2026-07-21). `Base : Derived` where Base is an
       imported incomplete class. The base sub-object KEEPS SLOT 0 — every upcast stays a no-op,
       which is the whole reason the base stays first — but its size is a runtime fact, so the

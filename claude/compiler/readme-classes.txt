@@ -1557,10 +1557,23 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   OPAQUE CLASSES (cross-TU incomplete — LANDED). An INCOMPLETE class (trailing `...`, above)
   declared in a `.slh` is OPAQUE to an importer: it can name the class and its methods but not
   its fields, size, or offsets, because the completing fields live only in the sibling `.sl`.
-  widen::Type.opaque records it, set in registerClassBody as `header_class && declared_incomplete`
-  (ClassInfo.declared_incomplete is the PERSISTENT flag — is_open is cleared by the closing
-  re-open, opaque must not be). A `.sl`-LOCAL incomplete class is never opaque: it is complete
-  within its own TU, so nobody sees it incompletely. Opaque changes three things — its size is a
+  widen::Type.opaque records it, set in registerClassBody as `header_class && declared_incomplete
+  && !tmpl_instance` (ClassInfo.declared_incomplete is the PERSISTENT flag — is_open is cleared by
+  the closing re-open, opaque must not be). A `.sl`-LOCAL incomplete class is never opaque: it is
+  complete within its own TU, so nobody sees it incompletely.
+    A CLASS-TEMPLATE INSTANCE IS NEVER OPAQUE, however incomplete its header spelling (landed
+    2026-07-28). The flag answers "can this TU see the layout", and for an instance the answer is
+    always yes: an instance only EXISTS because a loaded opening completed the template
+    (instantiateClassTemplate refuses an open one), and for a header template that completing
+    re-open is TEMPLATE CONTENT — which survives the strip resolve applies to a loaded template
+    source, so it reaches the completer and every importer identically. That uniformity is the
+    requirement here; the flag may ride only facts every TU computes alike. A plain header class
+    is the exact mirror and stays opaque: `library.sl` IS loaded into an importer (its `.d` proves
+    it) but `Rope`'s completing re-open is a plain class and gets stripped, so only the sibling
+    ever sees those fields. Consequence: `Grow<int>` / `Vector<int>` lower to real structs in a
+    consumer, with constant field offsets and embeddable BY VALUE, while `Rope` keeps the runtime
+    path. Canon test/import tmpl_test.sl (Holder) + tmpl_test2.sl (Pair2 — the SECOND consumer,
+    pinning that two independent TUs compute the same layout). Opaque changes three things — its size is a
   RUNTIME function, its construction is SPLIT across the seam, and its layout-needing uses are
   REJECTED in an importer.
     SIZE. `@C__$sizeof` becomes EXTERNAL: the completer `define`s it (the folded GEP-null/ptrtoint
@@ -1646,6 +1659,47 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     a method the SIBLING compiled against the real struct (if table and struct disagreed the write
     and the read would pass each other), base methods on a derived receiver, a base field read by
     a derived method, the upcast, `new`, copy/move/swap/assign, and six negatives.
+
+  COMPUTED LAYOUT — embedding an opaque class BY VALUE (IN PROGRESS, not landed).
+    The rejection above is a limitation, not a law: a class embedding an opaque one has a layout
+    that is a LINK-TIME fact, and the `__$offsets` machinery already proves such a layout can be
+    consulted at run time (Tagged's field access is a table load + byte GEP today). The difference
+    is who can fold the table. For a DERIVED class the completer can — `Tagged` ships in the same
+    header as `Rope`, so `library.sl` sees both. For an EMBEDDING class nobody can: the field list
+    lives in the consumer and the embedded size lives in another module, so the values must be
+    COMPUTED at run time and cached.
+    THE PARTITION (the reason this is worth doing rather than making every access a load). Fields
+    are statically placeable up to AND INCLUDING the first one whose size is not a compile-time
+    constant; only fields AFTER it need the cache. An opaque field is laid out at a fixed
+    OPAQUE ALIGNMENT (widen::kOpaqueAlign = 16) — the same over-alignment every opaque `alloca`
+    already uses — which is what makes the round-up before it a constant, and is why no
+    `__$alignof` export is needed: offset(op2) = offset(op1) + round_up(sizeof(op1), 16) needs
+    only the size, which is already exported. FIELD ORDER IS NOT SPEC'D (slids_reference.md pins
+    only source-level positional meaning for tuple literals), so a later pass may REORDER
+    statically-sized fields first and make the static prefix maximal — that is a separate landing,
+    and its cost is the class-IS-a-tuple identity: every positional consumer would need a
+    declared<->layout map.
+    ARRAYS OF AN OPAQUE CLASS MUST WORK TOO (`String s_[3]` is required syntax, user 2026-07-28).
+    An array indexes at a runtime STRIDE — `base + i * round_up(sizeof(T), kOpaqueAlign)` — off
+    the same cached value, so it is the same mechanism, NOT the separate rejection an earlier
+    reading of this section assumed. The rejections that genuinely survive are the ones with no
+    table to consult: a bare opaque GLOBAL (static storage, no runtime size), and an initializer
+    list at a site that cannot place the fields.
+    STATE. Landed so far, inert: widen::Type.computed_layout + setSlidComputedLayout /
+    slidComputedLayout, and widen::kOpaqueAlign with the convention documented. Nothing sets or
+    reads the flag, so behaviour is unchanged and the suite is green. REMAINING, in the order it
+    should be taken: (1) resolve — split checkClassByValueAcyclic's opaque rejection, which today
+    cannot tell a direct field from an array element because collectByValueClasses flattens
+    arrays and tuples, then add a computed_layout fixpoint beside propagateRuntimeLayout;
+    (2) codegen for the SINGLE non-static field case, where no cache is needed at all (every
+    offset constant, size = const + `@Op__$sizeof()`); (3) the cached table for two or more —
+    `@C__$offsets` becomes a MUTABLE global filled by an idempotent `@C__$layout()` (lazy, guarded
+    by a done flag, calling its field classes' `__$sizeof()` so ordering solves itself, the shape
+    VarInfo::touch_symbol already uses), with `@C__$sizeof()` ensuring layout then returning the
+    computed size. Each of (1)-(3) keeps the suite green on its own. The hazard to respect: the
+    ctor/dtor hooks, the synthesized transfer ops, and new/delete all branch on slidOpaque today
+    and each must learn WHICH layout regime it is in — and every piece has three linkage variants
+    that must keep agreeing across the seam.
 
   OPEN. cross-TU globals (LANDED — see readme.txt); multi-header modules. (Overloads across a
   `.slh` now LINK — every function/method mangles to an Itanium `_Z...` symbol off its signature,
