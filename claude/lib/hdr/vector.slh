@@ -50,6 +50,11 @@ Vector<T>(...) {
     */
     void resize(intptr new_size);
 
+    /*
+    remove all elments.
+    */
+    void clear();
+
     /* add the element at the end. */
     void append(T element);
 

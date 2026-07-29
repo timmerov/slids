@@ -78,16 +78,21 @@ const float64 kRotationPeriod = kRotationPeriodYr * kSecondsPerYear;
 
 /* we assume the entire galaxy rotates as a rigid disk. */
 const float64 kAngularVelocity = 2.0 * math:kPi64 / kRotationPeriod;
-const float64 kAngularVelocity2 = kAngularVelocity * kAngularVelocity;
 
 /* separate the mass of the galaxy into rings. */
 Ring(
     /* radius from center of galaxy. */
     float64 radius_,
+
     /* total mass of the ring. */
     float64 mass_,
+
+    /* angular velocity. */
+    float64 velocity_,
+
     /* number of slices. */
     int slices_,
+
     /* inward and spinward acceleration. */
     float64 inward_,
     float64 spinward_
@@ -143,6 +148,7 @@ Galaxy(
             ring = ^rings_[i];
             ring^.radius_ = radius;
             ring^.slices_ = slices;
+            ring^.velocity_ = kAngularVelocity;
         }
         //dump(#sum_radius);
         dump(#total_slices);
@@ -183,8 +189,8 @@ Galaxy(
             ring^.inward_ = inward;
             ring^.spinward_ = spinward;
 
-            ins_.resize(0);
-            spins_.resize(0);
+            ins_.clear();
+            spins_.clear();
         }
     }
 
@@ -202,9 +208,13 @@ Galaxy(
         on_r = on_ring^.radius_;
         by_r = by_ring^.radius_;
 
+        /* angular velocity of the on ring. */
+        on_velocity = on_ring^.velocity_;
+        on_velocity2 = on_velocity * on_velocity;
+
         /* centripetal acceleration is outward - negative. */
-        in = kAngularVelocity2 * on_r;
-        ins_.append(-in);
+        in = - on_velocity2 * on_r;
+        ins_.append(in);
 
         /* gravity of central bulge. */
         r2 = on_r * on_r;

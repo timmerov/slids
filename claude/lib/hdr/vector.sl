@@ -149,6 +149,13 @@ Vector<T>(
         shrink(new_size);
     }
 
+    /*
+    remove all elments.
+    */
+    void clear() {
+        resize(0);
+    }
+
     /* add the element at the end. */
     void append(T element) {
         insert(size_, element);

@@ -1,7 +1,7 @@
 /*
 test loop over range.
 
-    for (var : range) {body}
+    for ( var : range ) { body }
 
 var and range are required.
 body may be empty.
@@ -50,6 +50,8 @@ desugars to:
     }
 
 start, end, step are evaluated once at the start of the loop.
+
+the loop variable may be inferred from the common type of the range types.
 
 for the purposes of shadowing variables, there are 3 scopes counting the
 enclosing scope:
@@ -269,7 +271,8 @@ int ppid_operand(int n) {
     return c * 10 + n;
 }
 
-/* a typeless ranged loop var — its type is inferred from `start` (int here). */
+/* a typeless ranged loop var — its type is the common type of the range
+   expressions (every one of them int here). */
 int range_typeless(int n) {
     int s = 0;
     for (i : 0..n) {
@@ -336,6 +339,37 @@ int range_typeless_alias(Span lo, Span hi) {
         c = c + 1;
     }
     return c;
+}
+
+/* THE COMMON-TYPE RULE: a typeless loop var takes the common type of the range
+   expressions, not the type of `start` alone. Here the literal start widens into
+   the bound's intptr, so `i` is intptr — inferring int from the literal instead
+   would reject the bound as a narrowing. */
+int range_typeless_common(intptr sz) {
+    int c = 0;
+    for (i : 0..sz) {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* the STEP is a range expression too, so it joins the common type: an int64 step
+   widens the loop var even though both bounds are int. */
+int range_typeless_common_step(int n, int64 by) {
+    int c = 0;
+    for (i : 1..<=n+by) {
+        c = c + 1;
+    }
+    return c;
+}
+
+/* the inferred SPELLING, pinned: `intptr` SURVIVES the common type rather than
+   flattening to int64 — an operand's explicit width name wins. */
+void range_typeless_common_spell(intptr sz) {
+    for (i : 0..sz) {
+        println(String + "common spell = " + ##type(i));
+        break;
+    }
 }
 
 /* a labeled break from the inner loop exits the OUTER ranged-for. */
@@ -478,6 +512,9 @@ int32 main() {
     println(String + "range_runtime_empty(5, 0) = " + range_runtime_empty(5, 0));  // 0
     println(String + "range_char_bound() = " + range_char_bound());            // 4
     println(String + "range_int_bound_wide(5) = " + range_int_bound_wide(5));  // 5
+    println(String + "range_typeless_common(4) = " + range_typeless_common(4));            // 4
+    println(String + "range_typeless_common_step(10, 2) = " + range_typeless_common_step(10, 2));  // 5
+    range_typeless_common_spell(3);                                                        // intptr
     return 0;
 }
 
@@ -557,11 +594,13 @@ negatives — one //-block uncommented per run.
 //    return 0;
 //}
 
-/* a typeless loop var infers int from `start`, so an int64 bound narrows — same
-   rejection as the explicit `for (int i : 0..hi)`. */
+/* an EXPLICITLY-typed loop var pins the type, so a wider bound still narrows. The
+   common-type rule reaches only the INFERRING form — that is the one with a type
+   left to choose. (Its typeless twin, `for (i : 0..hi)`, now infers int64 from the
+   common type of the range expressions and compiles: range_typeless_common.) */
 //-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int'; use an explicit type conversion.
-//int neg_range_typeless_narrow(int64 hi) {
-//    for (i : 0..hi) {
+//int neg_range_explicit_narrow(int64 hi) {
+//    for (int i : 0..hi) {
 //        println(String + i);
 //    }
 //    return 0;

@@ -2236,7 +2236,23 @@ STAGE FILES (.h / .cpp pairs)
             before the rest; for a ranged/enum for (range_dotdot_tok set) the
             loop-var type is then stamped onto any typeless `_$end`/`_$step`
             (children[4..]) so their bounds flex into it — matching an
-            explicitly-typed range. Empty-range check (ranged-for only, gated on
+            explicitly-typed range. In the kForRangedStmt arm a FRESH TYPELESS
+            loop var takes widen::commonType(start, end, step) — the
+            binary-operator rule, so the var lands where `start + end` already
+            lands, and the spelling survives (`intptr` is not flattened to
+            int64). That is what lets `for (i : 0..sz)` over an `intptr sz`
+            widen the literal start instead of pinning the var to int and
+            rejecting the bound. TYPELESS-ONLY: an explicit type and a REUSED
+            local keep their declared type, so an explicit `for (int i : 0..hi)`
+            over an int64 still narrow-rejects. ORDER MATTERS — inferExpr has no
+            re-entry guard and some arms REWRITE their node (a sizeof becomes a
+            call, a PPID carries a bump), so for the inferring form the bound and
+            step are inferred ONCE up front and context-free (to learn their own
+            types) and are NOT re-inferred after; the var is typed from `start` by
+            the ordinary typeless path, then RE-STAMPED (node return_type + entry
+            slids_type, clearing alias_label, which described `start`) once the
+            common type is known. Every other form keeps the original order.
+            Empty-range check (ranged-for only, gated on
             range_dotdot_tok): if a ranged-for's start and end both fold to literals
             and `start cmp end` is false, the body can never run -> "Invalid range."
             caret on the `..` (rangeFirstTestFalse compares the two literals; no

@@ -193,7 +193,24 @@ Phase 2 — declarations + flow (LANDED)
     name resolves to; the after-set is S' so a reused var is observable after;
     classify propagates the loop-var type onto a typeless ranged `_$end`/`_$step`;
     reuse requires a compatible type, else the normal assignment conversion rejects
-    it). All four for shapes obey NORMAL lexical scoping — a for-var may shadow an
+    it).
+    A TYPELESS RANGED VAR TAKES THE COMMON TYPE OF THE RANGE EXPRESSIONS (LANDED
+    2026-07-29; canon line in forrange.sl — "the loop variable may be inferred from the
+    common type of the range types", TYPES plural, so START, END *and* STEP all vote). It
+    used to take the type of `start` alone, which pinned `for (i : 0..sz)` over an
+    `intptr sz` to int from the literal and then REJECTED the bound as a narrowing —
+    the reported bug. widen::commonType IS the binary-operator rule, so the loop var
+    lands where `start + end` already lands; and the SPELLING survives (`intptr` and
+    `int64` are both signed/64 but distinct handles, and spellCommon honors an operand's
+    explicit width name), so `i` is intptr, not int64. TYPELESS-ONLY: an explicitly-typed
+    var and a REUSED enclosing local keep their declared type — they have no type left to
+    choose — so `for (int i : 0..hi)` over an int64 still narrow-rejects (the stale
+    typeless negative was REPURPOSED to that explicit form, keeping the coverage rather
+    than dropping it). One term in classify's kForRangedStmt arm; desugar needed nothing,
+    since it reads the loop var's ENTRY type to build `_$end`/`_$step`. Canon
+    test/flow/forrange.sl range_typeless_common (+ _step, + _spell pinning the spelling
+    via ##type). [[project_range_common_type]]
+    All four for shapes obey NORMAL lexical scoping — a for-var may shadow an
     enclosing const/fn/class. FOR-ARRAY + FOR-TUPLE landed in Phase 4 (`for (var :
     arr)` / `for (v : tuple)` — see Phase 4); for-class LANDED (Phase 5). Session 5 (switch) LANDED, then REDESIGNED —
     kSwitchStmt + kCaseClause (a label-list + a mandatory `{ }` body; trailing

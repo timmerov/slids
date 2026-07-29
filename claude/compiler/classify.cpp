@@ -7683,13 +7683,67 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // the synthesized `_$end`/`_$step` inherit the loop var's type).
             assert(s.children.size() == 4
                 && "kForRangedStmt needs var+end+step+body");
+            // A FRESH TYPELESS loop var takes the COMMON TYPE of the range
+            // expressions, not the type of `start` alone: `for (i : 0..sz)` over an
+            // `intptr sz` gives `i` intptr and widens the literal start into it,
+            // rather than pinning `i` to int from the literal and then rejecting the
+            // bound as a narrowing. widen::commonType IS the binary-operator rule, so
+            // the loop var lands on the type `start + end` already produces — down to
+            // the spelling, since spellCommon keeps an operand's explicit width name
+            // (`intptr` survives; it is not flattened to int64). An EXPLICITLY-typed
+            // var and a REUSED enclosing local keep their declared type: only the
+            // inferring form has a type to choose.
+            //
+            // ORDER — every node here is inferred EXACTLY ONCE. inferExpr has no
+            // re-entry guard and some arms REWRITE their node (a sizeof becomes a
+            // call, a PPID carries a bump), so for the inferring form the bound and
+            // step are inferred UP FRONT and context-free (to learn their own types)
+            // and are not re-inferred below; the loop var is then typed from `start`
+            // by the ordinary typeless-decl path and RE-STAMPED once the common type
+            // is known. Every other form keeps the original order (type the var, then
+            // flow its type in as the bound/step context).
+            bool infer_var = s.children[0]->kind == parse::Kind::kVarDeclStmt
+                && s.children[0]->return_type == widen::kNoType
+                && !s.children[0]->children.empty();
+            if (infer_var) {
+                inferExpr(tree, *s.children[1], widen::kNoType, diag);
+                if (s.children[2]) inferExpr(tree, *s.children[2], widen::kNoType, diag);
+            }
             classifyStmt(tree, *s.children[0], fn_return_type, diag);
             widen::TypeRef lvt = widen::kNoType;
             if (s.children[0]->resolved_entry_id >= 0) {
                 lvt = parse::entryType(tree, s.children[0]->resolved_entry_id);
             }
-            inferExpr(tree, *s.children[1], lvt, diag);
-            if (s.children[2]) inferExpr(tree, *s.children[2], lvt, diag);
+            if (infer_var && lvt != widen::kNoType && !isPtrLikeType(lvt)) {
+                // Fold the bound (and step) in. commonType fails on an operand no
+                // built-in type covers (a class, a pointer) — leave the start-inferred
+                // type alone there and let the checks below report it as they did.
+                widen::TypeRef common = lvt;
+                bool ok = true;
+                widen::TypeRef bounds[2] = {
+                    s.children[1]->inferred_type,
+                    s.children[2] ? s.children[2]->inferred_type : widen::kNoType};
+                for (widen::TypeRef t : bounds) {
+                    if (t == widen::kNoType || isPtrLikeType(t)) continue;
+                    widen::TypeRef next;
+                    if (!widen::commonType(common, t, next)) { ok = false; break; }
+                    common = next;
+                }
+                if (ok && common != lvt) {
+                    // The alias label came from `start`; it does not describe the
+                    // widened type, so drop it and let the type spell itself. (A
+                    // range whose operands share one alias never lands here —
+                    // commonType returns that same handle, so nothing is re-stamped.)
+                    s.children[0]->return_type = common;
+                    tree.entries[s.children[0]->resolved_entry_id].slids_type = common;
+                    tree.entries[s.children[0]->resolved_entry_id].alias_label.clear();
+                    lvt = common;
+                }
+            }
+            if (!infer_var) {
+                inferExpr(tree, *s.children[1], lvt, diag);
+                if (s.children[2]) inferExpr(tree, *s.children[2], lvt, diag);
+            }
             // Bound + step must coerce to the loop-var type at codegen; catch
             // narrowing at classify so widen::convert can assert there.
             if (lvt != widen::kNoType && !isPtrLikeType(lvt)) {
