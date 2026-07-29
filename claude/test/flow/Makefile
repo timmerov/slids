@@ -52,10 +52,18 @@ $(BUILD_DIR)/$(1).o: $(BUILD_DIR)/$(1).ll
 
 $(BUILD_DIR)/$(1).ll: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $$< -o $$@ $(IFLAGS)
+	$(SLIDSC) $$< -o $$@ -MF $(BUILD_DIR)/$(1).d $(IFLAGS)
 endef
 
 $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
+
+# slidsc writes a `.d` alongside each `.ll` (-MF): the make rule naming every
+# `.slh` that compile imported, transitively. Editing a header re-triggers the
+# compiles that actually read it — no hand-maintained header list. On the first
+# build no `.d` exists yet (the wildcard is empty, so -include no-ops); they land
+# after the first compile and govern every build after. `clean` wipes them with
+# the rest of BUILD_DIR.
+-include $(wildcard $(BUILD_DIR)/*.d)
 
 # Every sample links the library (an extra prerequisite onto the template
 # rule; $^ in the link recipe picks it up).

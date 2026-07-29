@@ -1,0 +1,15 @@
+local = 7
+wrote = 8
+global = 40
+same = true
+elem = 11
+whole = 12
+field = 2
+nested field = 1
+field of elem = 2
+deref field = 2
+deref wrote = 20
+cancel = true
+deref elem = 12
+deref nested = 2
+deref of elem field = 1

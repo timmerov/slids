@@ -2500,6 +2500,23 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     resolveExpr(tree, *base->children[1], diag, unevaluated);
                 base = base->children[0].get();
             }
+            // A chain rooted at a DEREF — `^p^`, `^p^.f`, `^p^[i]`, `^p^.f[i]` — IS
+            // addressable: the storage is the POINTEE, which the pointer already
+            // reaches, so there is an address to hand back. Resolve the deref as an
+            // ordinary READ (that recurses into the pointer operand, read-marking it
+            // and checking definite assignment) and stop here: none of the ident
+            // bookkeeping below applies, because no NAMED variable is being aliased.
+            // The pointee is reached through a pointer either way, so taking its
+            // address aliases nothing new; the pointer itself is only read.
+            // Everything downstream was already built for this — classify's
+            // kAddrOfExpr is operand-driven (it wraps whatever the operand inferred,
+            // and its `^X^` CANCEL rule collapses the bare `^p^` to `p`), and
+            // codegen's emitLvalueAddr / emitElementAddr both accept a deref base.
+            // Resolve was the only stage refusing.
+            if (base->kind == parse::Kind::kDerefExpr) {
+                resolveExpr(tree, *base, diag, unevaluated);
+                return;
+            }
             if (base->kind != parse::Kind::kIdentExpr) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "The operand of '^' must be a variable or array element.",
