@@ -11,7 +11,22 @@ puts it in scope.
 */
 
 import string;
+import vector;
 
+VectorClass(
+    Vector<int> vec1_,
+    Vector<int> vec2_,
+    Vector<int> vec3_
+) {
+}
+/*
+StringClass(
+    String str1_,
+    String str2_,
+    String str3_
+) {
+}
+*/
 int32 main() {
 
     //print("Hello, World!");

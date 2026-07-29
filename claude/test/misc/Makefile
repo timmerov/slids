@@ -15,8 +15,9 @@ BUILD_DIR = ../../build/test/$(DIR)
 # binary links the merged library object build/lib/libslids.o (extra
 # prerequisite below).
 LIB       = ../../lib
+LIB_HDR   = $(LIB)/hdr
 LIB_BUILD = ../../build/lib
-IFLAGS    = -I $(LIB)/hdr
+IFLAGS    = -I $(LIB_HDR)
 
 SAMPLES = \
 	alias \
@@ -56,6 +57,24 @@ $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
 # Every sample links the library (an extra prerequisite onto the template
 # rule; $^ in the link recipe picks it up).
 $(addprefix $(BIN_DIR)/,$(SAMPLES)): $(LIB_BUILD)/libslids.o
+
+# THE POST-COMPILE PRE-LINK STAGE (the test/import + test/progress shape). vector is a
+# TEMPLATE library: a consumer only DEMANDS a flavor, and the flavor's synthesized hooks
+# (`__$ctor` / `__$dtor` / the transfer ops) are emitted ONCE, externally, by the
+# library's own TU compiled against the demand pool. So vector.sl compiles AFTER its
+# consumer here, reading the .sli slidsc dumps beside the consumer's .ll.
+$(BUILD_DIR)/vector.ll: $(LIB_HDR)/vector.sl $(BUILD_DIR)/bug.ll $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ $(IFLAGS) --instantiate $(BUILD_DIR)
+
+# The library TU is not a SAMPLE, so it needs its own .ll -> .o step (the samples get
+# theirs from SAMPLE_RULES).
+$(BUILD_DIR)/vector.o: $(BUILD_DIR)/vector.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+# bug is this directory's only consumer of a template library, so it alone links the
+# aggregated flavors (an extra prerequisite; the template rule's `$^` picks it up).
+$(BIN_DIR)/bug: $(BUILD_DIR)/vector.o
 
 # Built by lib's own Makefile (make.sh order); self-heals a standalone build.
 $(LIB_BUILD)/libslids.o:

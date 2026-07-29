@@ -28,6 +28,24 @@ import library;
 //-EXPECT-ERROR: must have a body
 //T bad<T>(T v);
 
+/* THE INCOMPLETE HEADER TEMPLATE IS NOT OPAQUE. `Grow<T>(...)` declares no fields, but
+   the completing re-open lives in the template SOURCE — which every importer loads and
+   whose template content survives the strip — so the flavor's layout is known in every
+   TU that can name it. A flavor therefore embeds BY VALUE like any ordinary class: two
+   of them here, so the second field's offset genuinely depends on the first's real size,
+   and a trailing primitive proves the layout continues past them. A PLAIN opaque class
+   (library.slh's Rope) is the opposite and still cannot be embedded — its completing
+   re-open is stripped from the loaded source, so only its sibling ever sees the fields
+   (consumer.sl's negatives). */
+Holder(
+    Grow<int> a_,
+    Grow<int> b_,
+    int tag_ = 9
+) {
+    int sum() { return a_.total() + b_.total() + tag_; }
+    intptr counts() { return a_.count() + b_.count(); }
+}
+
 int32 main() {
 
     /* two flavors of the class template; a repeated flavor is one body. */
@@ -79,13 +97,26 @@ int32 main() {
 
     /* the header-declared INCOMPLETE template (`Grow<T>(...)`): the source's
        completing re-open supplied the fields, so the flavor has the FULL
-       layout here — methods work and sizeof folds. */
+       layout here — methods work and the size is the real one. (A class's
+       sizeof is always the `__$sizeof()` helper in this compiler, opaque or
+       not — the layout is LLVM's; what changed is that the helper is emitted
+       HERE off a real struct instead of imported from the completer.) */
     Grow<int> gr;
     gr.add(5);
     gr.add(7);
     println(String + "y4 = " + gr.total() + " " + gr.count());
     intptr y5 = sizeof(Grow<int64>) - 2 * sizeof(int64);
     println(String + "y5 = " + y5);
+
+    /* a flavor EMBEDDED BY VALUE, twice: the second field sits past the first at a
+       constant offset this TU can compute, and the fields are independent. */
+    Holder h;
+    h.a_.add(3);
+    h.a_.add(4);
+    h.b_.add(10);
+    println(String + "y6 = " + h.sum() + " " + h.counts());
+    intptr y7 = sizeof(Holder) - 2 * sizeof(Grow<int>);
+    println(String + "y7 = " + y7);
 
     /* the template METHOD across the seam, inferred and explicit. */
     Gauge g(7);

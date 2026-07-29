@@ -75,7 +75,11 @@ alias TRef<T> = T^;
 
 /* a header-declared INCOMPLETE template — interface only, not even fields;
    the source's completing re-open (no trailing `...`) supplies the field
-   list and the bodies. Consumers get the FULL layout (sizeof folds). */
+   list and the bodies. Consumers get the FULL LAYOUT: a real struct, constant
+   field offsets, embeddable BY VALUE — because the completing re-open is
+   TEMPLATE content, which survives the strip every importer applies to a
+   loaded template source. A plain incomplete header class (library.slh's Rope)
+   gets the opposite answer for the same reason: its completion is stripped. */
 Grow<T>(...) {
     void add(T v);
     T total();

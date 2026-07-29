@@ -6437,7 +6437,20 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // importer cannot see — its size is a runtime function, not a folded constant. True in
     // the completer too (it must export the size for importers). A `.sl`-local incomplete
     // class is complete within its own TU (no importer), so it is never opaque.
-    widen::setSlidOpaque(widen::strip(type), header_class && info.declared_incomplete);
+    //
+    // A class-template INSTANCE is NEVER opaque, however incomplete its header spelling.
+    // The flag must answer "can this TU see the layout", and the answer is yes: an instance
+    // only EXISTS because a loaded opening completed the template (instantiateClassTemplate
+    // refuses an open one), and for a header template that completing re-open is TEMPLATE
+    // CONTENT — which survives the template-source strip, so it reaches the completer and
+    // every importer identically. That uniformity is the whole requirement here: the flag
+    // may ride only facts every TU computes the same way. A plain header class is the
+    // opposite case and stays opaque — its completing re-open is stripped from the loaded
+    // source, so only its own sibling ever sees the fields.
+    bool tmpl_instance = node.resolved_entry_id >= 0
+        && !tree.entries[node.resolved_entry_id].tmpl_args.empty();
+    widen::setSlidOpaque(widen::strip(type),
+                         header_class && info.declared_incomplete && !tmpl_instance);
     // A source file cannot ADD an implicitly-invoked member to a class declared in a
     // HEADER. The five are called without the author naming them, so every importing TU
     // emits those calls off the header ALONE: one that exists only in some `.sl` would

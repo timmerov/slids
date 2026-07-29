@@ -38,6 +38,15 @@ Lok(int k_ = 0) {
 /* an aggregated flavor as a GLOBAL (registry-constructed, external hooks). */
 global Vector<int> gv2;
 
+/* the header-incomplete template embedded BY VALUE in the SECOND consumer — the
+   cross-TU half of tmpl_test.sl's Holder. */
+Pair2(
+    Grow<int> x_,
+    Grow<int> y_
+) {
+    int both() { return x_.total() + y_.total(); }
+}
+
 int32 main() {
 
     /* overlap with tmpl_test's demands (the union dedups to one body set),
@@ -103,6 +112,16 @@ int32 main() {
     Grow<int64> g3;
     g3.add(400);
     println(String + "y6 = " + g2.total() + " " + g3.total());
+
+    /* the SECOND consumer embeds the same flavor BY VALUE and must compute the SAME
+       layout as the first: the opaque answer rides only facts every TU sees alike (the
+       header's field-less `...` plus the template source's completing re-open), so two
+       independent TUs cannot disagree about where a field sits. */
+    Pair2 p2;
+    p2.x_.add(6);
+    p2.y_.add(11);
+    println(String + "y6b = " + p2.both() + " "
+            + (sizeof(Pair2) - 2 * sizeof(Grow<int>)));
 
     /* two type parameters — a comma in the demand spelling. */
     TPair<int, int8> tp(300, 5);
