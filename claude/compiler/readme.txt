@@ -807,7 +807,17 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     plan-declarator.txt): Required (var-decl / param / for-var, name-anchored
     `int x[3]`), Forbidden (return / alias-RHS / cast / conversion / sizeof / enum
     underlying), ListSlot (a tuple-TYPE slot — anonymous; a named slot is "too many
-    names"), BindSlot (a destructure slot). reject_top_dim (set from the policy:
+    names"), BindSlot (a destructure slot). AN EMPTY SLOT SPLITS ON DECLARE-vs-SUPPLY:
+    a list that SUPPLIES values may omit one (`Class c(,2,3)` takes the field default;
+    `(x,,z) = t` discards a tuple position), a list that DECLARES names may not —
+    there is no name to omit. So parseParamList (fields / parameters / a `global (…)`
+    group) and parseDestructureSlots are separate loops with opposite answers, and a
+    TRAILING comma is the sharpest case: meaningful in the destructure loop (`(x,)` is
+    two slots), an error in parseParamList. It is also the only empty-slot position
+    parseParamList had to be taught — leading and interior ones already fail on the
+    Required name policy, while a trailing one slipped past because that loop's only
+    emptiness test is its top condition, which cannot distinguish an empty list from
+    one with another item coming. reject_top_dim (set from the policy:
     Required / BindSlot, which bind a name) rejects a TOP-LEVEL sized dim — the size
     goes on the NAME; a dim nested in a `^` (`int[3]^`) or hidden behind an alias is
     always allowed. parseType is now internal (called only by parseDeclarator + its

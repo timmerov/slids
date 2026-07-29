@@ -1224,6 +1224,24 @@ Phase 5 — classes
     cannot know the target is a class) and classifies through buildClassFromValue's op= dispatch, a
     SECOND defaulting path. Deferred as its own todo. Canon construct.sl (Defs/Pod empty-slot block +
     trailing-comma negative).
+    THE DECLARE-vs-SUPPLY SPLIT, and the hole it left (2026-07-28). An empty slot is legal in a
+    list that SUPPLIES values — a construction `Class c(,2,3)`, a destructure `(x,,z) = t` — and
+    illegal in one that DECLARES names, because there is no name to omit. The three list parsers
+    therefore answer differently ON PURPOSE: parseDestructureSlots takes empty slots anywhere
+    INCLUDING trailing (`(x,)` is two slots, the second discarded); parseCallArgs takes leading and
+    interior ones but already rejected a trailing comma ("a trailing comma is not an empty slot");
+    parseParamList — class FIELD lists, function/method PARAMETER lists, and a `global (…)` group's
+    members — takes none. parseParamList was the one that never enforced it: a leading or interior
+    empty slot already failed on parseDeclarator's Required name policy, but a TRAILING comma was
+    consumed and forgotten, because that loop's ONLY emptiness test is its top condition, which
+    cannot tell "the list is empty" (the legitimate `()`) from "another item follows". So
+    `Class(int x, )` compiled as `Class(int x)` — and it is exactly a half-typed `(int x, ...)`,
+    the INCOMPLETE form, so accepting it silently turned an incomplete class into a complete one.
+    Fixed at the one place the comma is consumed, careted at the COMMA (the token to delete), with
+    the message naming what the CALLER declares — "field" / "parameter" / "global variable" (a
+    method's list is a function's, so those two share a noun). Negatives in the four owning canon
+    files: class/field.sl (plus an interior-comma case pinning that the rest already errored),
+    class/method.sl, function/param.sl, assign/global.sl.
     THE SLOT-WISE EXPLODE (2026-07-13) — A TUPLE DESUGARS TO THE OPERATION BY SLOT,
     ITERATIVELY AND RECURSIVELY. The user's rule, and it is not cleanup: it is the invariant
     that keeps every operation in the family that can express a class. There was no tuple

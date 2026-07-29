@@ -132,7 +132,22 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
   * A class IS a named tuple. `Name(field-list){body}` (grammar parseClassDef: an
     identifier directly followed by `(` at file scope — a function is `Type name(`).
     The field list reuses the param-list parser (kParam nodes, defaults in
-    children[0]). resolve registerClass builds a ClassInfo (field names / types /
+    children[0]) — parseParamList, shared with function/method parameter lists and a
+    `global (…)` group's members. AN EMPTY SLOT IS LEGAL WHEN SUPPLYING VALUES AND
+    ILLEGAL WHEN DECLARING NAMES: a construction `Class c(,2,3)` and a destructure
+    `(x,,z) = t` both mean "take the default / discard this position", but a
+    DECLARATION list has no name to omit, so every slot must be spelled. That split
+    is why parseParamList and parseDestructureSlots are separate loops and must not
+    share a rule — in the destructure loop a trailing `,` is MEANINGFUL (`(x,)` is
+    two slots, the second discarded), in parseParamList it separates nothing. The
+    trailing case is the only one parseParamList had to be taught: a leading or
+    interior empty slot already fails on parseDeclarator's Required name policy,
+    while a trailing comma slipped through because the loop's ONLY emptiness test is
+    its top condition, which cannot tell "the list is empty" (the legitimate `()`)
+    from "another item follows". Checked where the comma is consumed, careted at the
+    COMMA (the token to delete), and the message names what the caller declares —
+    "field" / "parameter" / "global variable". resolve registerClass builds a
+    ClassInfo (field names / types /
     the stable kParam nodes / def location) and interns the kSlid type CARRYING its
     field slot types (widen::internSlid) — so the whole tuple aggregate path
     (construct, store, slot access, llvmForRef -> literal struct) is reused and
