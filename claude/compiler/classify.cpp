@@ -2043,11 +2043,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // un-typeable operand); fall to 0 silently rather than cascade.
                 size = ty.empty() ? 0 : widen::typeByteSize(ty);
                 if (size < 0) {
-                    // A class's size is not a compile-time constant — it is the
-                    // real struct layout LLVM owns. Rewrite to a call to the class's
-                    // `<Name>__$sizeof()` helper (GEP-null/ptrtoint, the v1 design);
-                    // codegen emits that function per class. Result is a runtime
-                    // intptr, NOT foldable (so it can't init a const).
+                    // A class's size is not a compile-time constant of THIS stage —
+                    // it is the real struct layout LLVM owns (or, imported opaque /
+                    // computed, a link-time / convention value). Rewrite to the
+                    // `<Name>__$sizeof` call SHAPE with the class handle riding in
+                    // param_types[0]; codegen intercepts that shape and emits the
+                    // size as a VALUE (an llc constant, an absolute-symbol
+                    // relocation, or the convention expression) — no function.
+                    // Result is a runtime intptr, NOT foldable (can't init a const).
                     widen::TypeRef st = e.return_type != widen::kNoType
                         ? widen::strip(e.return_type)
                         : widen::strip(e.children[0]->inferred_type);
@@ -2059,6 +2062,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         e.return_type = iptr;   // emitCall reads this for the ret llty
                         e.children.clear();
                         e.param_types.clear();
+                        e.param_types.push_back(st);   // the class, for emitSizeValue
                         e.inferred_type = iptr;
                         return;
                     }
@@ -2118,18 +2122,23 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Cannot allocate '" + elem + "'.", {}});
             }
-            // `new C[n]` of an imported OPAQUE class: the array indexes and constructs its
-            // elements at a STATIC stride this TU does not have (only the completer knows
-            // the element size). A single `new C` is fine — it needs no stride, just the
-            // runtime __$sizeof() for the one object. So reject only the array form, the
-            // heap twin of the rejected stack `C a[n]`. (A pointer `C^` is always allowed.)
+            // `new C[n]` of an imported OPAQUE class — or of a COMPUTED-layout class
+            // (no static LLVM element type in ANY TU): the heap-array machinery
+            // (cookie, broadcast fill, delete's element loop) runs on a static
+            // element type, so reject the array form. A single `new C` is fine — no
+            // stride, just the size value for the one object. A completer's own
+            // opaque class is unaffected (its element type is the real struct), and
+            // the stack `C a[n]` LOCAL now lays out at the convention stride and is
+            // legal. (A pointer `C^` is always allowed.)
             if (is_array && widen::form(es) == widen::Type::Form::kSlid
-                && widen::slidOpaque(es)
-                && widen::slidLinkage(es) == widen::Type::Linkage::kDeclare) {
+                && ((widen::slidOpaque(es)
+                     && widen::slidLinkage(es) == widen::Type::Linkage::kDeclare)
+                    || widen::slidComputedLayout(es))) {
                 diagnostic::report(diag, {e.file_id, e.name_tok,
-                    "Cannot allocate an array of imported incomplete class '" + elem
-                    + "'; its element stride is not known here (allocate a single '"
-                    + elem + "' with 'new " + elem + "', or hold each by pointer).", {}});
+                    "Cannot allocate an array of incomplete class '" + elem
+                    + "'; its element stride is not a static layout here (allocate a "
+                    "single '" + elem + "' with 'new " + elem
+                    + "', or hold each by pointer).", {}});
             }
             // (The abstract-class check is not here: `new Class` builds its object through
             // constructClass -> classifyClassInit below, where the check lives.)

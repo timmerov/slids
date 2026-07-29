@@ -13,6 +13,7 @@ dc tag: 7
 library: note
 library: Widget:hum
 library priv: 6
+library crate: 55 7
 Animal:ctor: 1 2
 Animal:print: 1 2
 sum1: 11
@@ -65,6 +66,24 @@ move tag: 7
 swap tag: 7
 assign tag: 7
 return tag: 7
+sack: 2 packed 7 5
+sack post: 50
+duo: 3 55 0 7 9
+trio: 1 zero one 7 4
+rope arr: 7 mid
+tuple slot: 7 12
+sack copy: 60 7
+sack move: 61
+sack swap: 62
+sack assign: 63
+sack new: 70 7
+crate direct->method: 33
+crate method->direct: 44 id=1 rope=7
+Tagged:ctor: 3
+tcase: 3 8
+mcase: 11 4 6
+sizeof ok: 1
+Tagged:dtor: 3
 Tagged:dtor: 24
 Tagged:dtor: 24
 Tagged:dtor: 3

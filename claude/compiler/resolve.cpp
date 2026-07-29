@@ -6802,9 +6802,8 @@ void propagateRuntimeLayout(parse::Tree& tree, std::vector<parse::Node*> const& 
 // recurse forever otherwise: a SIGSEGV, not a diagnostic). A `^` / `[]` field
 // breaks the cycle. Now that the two-phase makes a class's own name known while
 // its fields resolve, this is reachable (`Foo(Foo f_)`, mutual `A(B)`/`B(A)`).
-// The SAME by-value walk also rejects embedding an imported OPAQUE class (its layout
-// is unknown here, so the enclosing class's offsets are uncomputable — the silent
-// mis-size an importer would otherwise emit).
+// (Embedding an imported OPAQUE class by value used to be rejected here; it is
+// legal now — the enclosing class gets a COMPUTED LAYOUT.)
 void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
                               diagnostic::Sink& diag) {
     if (node.resolved_entry_id < 0) return;
@@ -6846,15 +6845,13 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
                 "size); use a reference '^' field.", {}});
             return;
         }
-        if (isImportOpaque(cur)) {
-            auto cit = tree.classes.find(cur);
-            std::string oname = cit != tree.classes.end() ? cit->second.name : "?";
-            diagnostic::report(diag, {node.file_id, node.name_tok,
-                "Class '" + node.name + "' embeds imported incomplete class '" + oname
-                + "' by value; its layout is private to the module that completes it — "
-                "use a reference '" + oname + "^'.", {}});
-            return;
-        }
+        // (Embedding an imported OPAQUE class by value is LEGAL now — the enclosing
+        // class becomes a COMPUTED LAYOUT: every TU lays it out by the kOpaqueAlign
+        // convention off the completer's exported absolute `__$size16`. The walk
+        // does not descend into an opaque class's fields — an importer can't see
+        // them, and the completer separately rejects an EXPORTED layout it cannot
+        // fold; see checkOpaqueExportFoldable.)
+        if (isImportOpaque(cur)) continue;
         if (!seen.insert(cur).second) continue;
         auto cit = tree.classes.find(cur);
         if (cit == tree.classes.end()) continue;
@@ -6863,28 +6860,68 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
     }
 }
 
-// The imported OPAQUE class that materializing `t` BY VALUE as an AGGREGATE MEMBER would
-// need the (hidden) layout of, or kNoType. A bare opaque local/global is fine — only an
-// array element, tuple slot, or by-value class field of one is illegal in an importer.
-// So the top-level type is NOT itself flagged; its aggregate members are. A pointer /
-// iterator breaks the walk. `seen` bounds recursion through class fields (cycles are
-// rejected elsewhere, but a self-referential graph must not loop here).
+// The COMPLETER of an opaque class exports its layout as ABSOLUTE symbols
+// (`__$sizeof`/`__$size16`, plus `__$off<k>` for a runtime-layout class) — values
+// llc folds off the real struct. The fold needs every by-value field (the base
+// included) to have a static layout HERE. A field embedding an IMPORTED
+// incomplete class, or a computed-layout class, would make the export itself a
+// cross-module expression — and an ELF symbol table cannot hold a relocation —
+// so reject it at the completer (an importer cannot even see the hidden field).
+void checkOpaqueExportFoldable(parse::Tree& tree, parse::Node& node,
+                               diagnostic::Sink& diag) {
+    if (node.resolved_entry_id < 0) return;
+    widen::TypeRef self = widen::strip(node.return_type);
+    if (widen::form(self) != widen::Type::Form::kSlid) return;
+    if (!widen::slidOpaque(self)) return;
+    if (widen::slidLinkage(self) != widen::Type::Linkage::kDefine) return;
+    auto it = tree.classes.find(self);
+    if (it == tree.classes.end()) return;
+    for (widen::TypeRef ft : it->second.field_types) {
+        std::vector<widen::TypeRef> leaves;
+        collectByValueClasses(ft, leaves);
+        for (widen::TypeRef l : leaves) {
+            if (l == self) continue;   // the cycle check reports that one
+            if (!isImportOpaque(l) && !widen::slidComputedLayout(l)) continue;
+            auto lit = tree.classes.find(l);
+            std::string lname = lit != tree.classes.end() ? lit->second.name : "?";
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "Class '" + node.name + "' is incomplete in its header, but its "
+                "exported layout cannot be a link-time constant: it embeds '" + lname
+                + "', whose size lives in another module — use a reference '"
+                + lname + "^'.", {}});
+            return;
+        }
+    }
+}
+
+// The OPAQUE class (ANY linkage — the layout convention is universal) that `t`
+// embeds BY VALUE as an aggregate member, or kNoType. The top-level type is NOT
+// itself flagged — a bare opaque instance is its own regime — only array
+// elements, tuple slots, and by-value class fields are. Used to attribute the
+// GLOBAL rejection (convention-laid-out storage has no static lowering). A
+// pointer / iterator breaks the walk. `seen` bounds recursion through class
+// fields (cycles are rejected elsewhere, but a self-referential graph must not
+// loop here).
 widen::TypeRef aggregateEmbedsOpaque(widen::TypeRef t, std::set<widen::TypeRef>& seen) {
     widen::TypeRef s = widen::strip(t);
     using F = widen::Type::Form;
     F form = widen::form(s);
+    auto opaqueClass = [](widen::TypeRef r) {
+        return widen::form(r) == widen::Type::Form::kSlid && widen::slidOpaque(r);
+    };
     if (form == F::kArray) {
         widen::TypeRef e = widen::strip(widen::get(s).elem);
-        if (isImportOpaque(e)) return e;
+        if (opaqueClass(e)) return e;
         return aggregateEmbedsOpaque(e, seen);
     }
     // A tuple, or a NON-opaque class (whose real fields are visible here): scan slots. An
-    // opaque class's own placeholder slots are not its fields, so don't descend into them.
-    if (form == F::kTuple || (form == F::kSlid && !isImportOpaque(s))) {
+    // opaque class's own slots are not the walk's business (hidden or partial), so don't
+    // descend into them.
+    if (form == F::kTuple || (form == F::kSlid && !widen::slidOpaque(s))) {
         if (form == F::kSlid && !seen.insert(s).second) return widen::kNoType;
         for (widen::TypeRef sl : widen::get(s).slots) {
             widen::TypeRef ss = widen::strip(sl);
-            if (isImportOpaque(ss)) return ss;
+            if (opaqueClass(ss)) return ss;
             widen::TypeRef r = aggregateEmbedsOpaque(ss, seen);
             if (r != widen::kNoType) return r;
         }
@@ -6954,6 +6991,11 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
     widen::TypeRef s = widen::strip(ft);
     F f = widen::form(s);
     if (f == F::kSlid) {
+        // An OPAQUE field always contributes BOTH needs, hooks or not: its
+        // construction/destruction is a routed obligation (an importer cannot
+        // fill or tear down fields it can't see — the POD-opaque rule), so the
+        // container must own hooks that route it.
+        if (widen::slidOpaque(s)) return true;
         auto it = tree.classes.find(s);
         if (it == tree.classes.end()) return false;
         return ctor ? it->second.needs_ctor : it->second.needs_dtor;
@@ -9101,6 +9143,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // is resolved + slotted (the transitive needs-fixpoint runs below over tree.classes).
     for (parse::Node* c : all_classes) checkClassByValueAcyclic(tree, *c, diag);
 
+    // Pass 1a-export — a completer whose opaque class embeds another module's
+    // incomplete (or computed-layout) class cannot fold the absolute symbols it
+    // must export; reject with the completer's attribution.
+    for (parse::Node* c : all_classes) checkOpaqueExportFoldable(tree, *c, diag);
+
     // Pass 1a-alias-validate — now that enums, namespaces, and classes exist,
     // validate each alias target (an alias may name any of them). An alias
     // TEMPLATE builds (and thereby checks) its PATTERN instead — the node's
@@ -9547,19 +9594,21 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (ch) mungeParamTypes(tree, *ch, diag);
     }
 
-    // A variable (local or global) whose type EMBEDS an imported opaque class by value in
-    // an aggregate — `String a[3]`, `(String, int) t` — needs a static size/stride this TU
-    // does not have. A bare `String h` LOCAL is fine (Slice 2 sizes it at runtime); a class
-    // FIELD is caught at the class definition (checkClassByValueAcyclic). A GLOBAL is the
-    // exception: its storage is STATIC (sized at compile time), so the runtime-alloca trick
-    // has no analogue — even a BARE opaque global is illegal. Runs last: every class's
-    // opaque flag and every variable type is final.
+    // A GLOBAL whose storage has no static lowering is rejected: a global's
+    // storage is STATIC (sized at compile/link of its own TU), and the
+    // runtime-sized-alloca trick locals use has no analogue. That is a bare
+    // imported-opaque global (size lives elsewhere), and any CONVENTION-laid-out
+    // type — a computed-layout class, or a tuple/array embedding an opaque class
+    // by value (EVEN in that class's completer: the convention lowers those to
+    // the placeholder in every TU so the layout agrees across the seam). LOCALS
+    // of all of these are legal now — a runtime-sized alloca plus convention
+    // offsets (COMPUTED LAYOUT); a bare opaque global in its COMPLETER stays
+    // legal too (real struct). Runs last: every class's opaque flag and every
+    // variable type is final.
     for (parse::Entry const& e : tree.entries) {
-        if (e.kind != parse::EntryKind::kLocalVar
-            && e.kind != parse::EntryKind::kGlobalVar)
-            continue;
+        if (e.kind != parse::EntryKind::kGlobalVar) continue;
         widen::TypeRef s = widen::strip(e.slids_type);
-        if (e.kind == parse::EntryKind::kGlobalVar && isImportOpaque(s)) {
+        if (isImportOpaque(s)) {
             auto oit = tree.classes.find(s);
             std::string oname = oit != tree.classes.end() ? oit->second.name : "?";
             diagnostic::report(diag, {e.file_id, e.tok,
@@ -9568,16 +9617,19 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 "use a reference '" + oname + "^'.", {}});
             continue;
         }
+        bool convention = widen::slidComputedLayout(s)
+            || ((widen::form(s) == widen::Type::Form::kTuple
+                 || widen::form(s) == widen::Type::Form::kArray)
+                && widen::sizeIsDynamic(s));
+        if (!convention) continue;
         std::set<widen::TypeRef> seen;
         widen::TypeRef op = aggregateEmbedsOpaque(e.slids_type, seen);
-        if (op == widen::kNoType) continue;
-        auto oit = tree.classes.find(op);
+        auto oit = op != widen::kNoType ? tree.classes.find(op) : tree.classes.end();
         std::string oname = oit != tree.classes.end() ? oit->second.name : "?";
-        std::string what = e.kind == parse::EntryKind::kGlobalVar ? "Global" : "Variable";
         diagnostic::report(diag, {e.file_id, e.tok,
-            what + " '" + e.name + "' embeds imported incomplete class '" + oname
-            + "' by value; its layout is private to the module that completes it — "
-            "use a reference '" + oname + "^'.", {}});
+            "Global '" + e.name + "' embeds incomplete class '" + oname
+            + "' by value; its layout is not a static fact of this module and a "
+            "global needs static storage — use a reference '" + oname + "^'.", {}});
     }
 
     parse::popFrame(tree);

@@ -1143,12 +1143,175 @@ bool slidOpaque(TypeRef ref) {
     return get(ref).opaque;
 }
 
-void setSlidComputedLayout(TypeRef ref, bool computed_layout) {
-    arena().types[ref].computed_layout = computed_layout;
+bool sizeIsDynamic(TypeRef ref) {
+    Type const& t = get(strip(ref));
+    if (t.form == Type::Form::kSlid) {
+        // An opaque class is the dynamic LEAF — true in every TU, never
+        // recursed into (its slot list is per-TU: an importer sees only the
+        // public prefix, so the walk may ride only the universal flag).
+        if (t.opaque) return true;
+        for (TypeRef slot : t.slots) if (sizeIsDynamic(slot)) return true;
+        return false;
+    }
+    if (t.form == Type::Form::kArray) return sizeIsDynamic(t.elem);
+    if (t.form == Type::Form::kTuple) {
+        for (TypeRef slot : t.slots) if (sizeIsDynamic(slot)) return true;
+        return false;
+    }
+    return false;   // primitives, pointers/iterators (break the walk), void…
 }
 
 bool slidComputedLayout(TypeRef ref) {
-    return get(ref).computed_layout;
+    TypeRef s = strip(ref);
+    if (form(s) != Type::Form::kSlid || get(s).opaque) return false;
+    return sizeIsDynamic(s);
+}
+
+// The slot-walk core shared by staticByteSize (numeric) and the convention layout
+// below. A class lowers to the same literal struct as a tuple (an EMPTY class is
+// the 1-byte `{ i8 }`), so one natural-alignment walk serves both forms.
+long long staticByteAlign(TypeRef ref) {
+    TypeRef s = strip(ref);
+    Type const& t = get(s);
+    if (t.form == Type::Form::kSlid || t.form == Type::Form::kTuple) {
+        if (t.form == Type::Form::kSlid) {
+            if (sizeIsDynamic(s)) return -1;
+            if (t.slots.empty()) return 1;             // empty class = { i8 }
+        }
+        long long a = 1;
+        for (TypeRef f : t.slots) {
+            long long fa = staticByteAlign(f);
+            if (fa < 0) return -1;
+            if (fa > a) a = fa;
+        }
+        return a;
+    }
+    // Arrays recurse HERE (typeByteAlign's array arm bottoms out in
+    // typeByteAlign for a class element, which answers -1); every other form is
+    // typeByteAlign's answer.
+    if (t.form == Type::Form::kArray) return staticByteAlign(t.elem);
+    return typeByteAlign(s);
+}
+
+long long staticByteSize(TypeRef ref) {
+    TypeRef s = strip(ref);
+    Type const& t = get(s);
+    if (t.form == Type::Form::kSlid || t.form == Type::Form::kTuple) {
+        if (t.form == Type::Form::kSlid) {
+            if (sizeIsDynamic(s)) return -1;
+            if (t.slots.empty()) return 1;             // empty class = { i8 }
+        }
+        long long off = 0, align = 1;
+        for (TypeRef f : t.slots) {
+            long long fs = staticByteSize(f);
+            long long fa = staticByteAlign(f);
+            if (fs < 0 || fa < 0) return -1;
+            off = (off + fa - 1) / fa * fa;
+            off += fs;
+            if (fa > align) align = fa;
+        }
+        return (off + align - 1) / align * align;
+    }
+    if (t.form == Type::Form::kArray) {
+        long long elem = staticByteSize(t.elem);
+        if (elem < 0) return -1;
+        long long total = elem;
+        for (int d : t.dims) total *= d;
+        return total;
+    }
+    return typeByteSize(s);
+}
+
+namespace {
+
+// Round a LayoutExpr's CONSTANT part up to `a`. Every symbolic term is a multiple
+// of kOpaqueAlign, so for a ≤ kOpaqueAlign this rounds the whole value.
+void roundCst(LayoutExpr& e, long long a) {
+    e.cst = (e.cst + a - 1) / a * a;
+}
+
+void addTerm(LayoutExpr& e, TypeRef leaf, long long mult) {
+    for (auto& t : e.terms)
+        if (t.first == leaf) { t.second += mult; return; }
+    e.terms.push_back({leaf, mult});
+}
+
+void addExpr(LayoutExpr& e, LayoutExpr const& o, long long mult) {
+    e.cst += o.cst * mult;
+    for (auto const& t : o.terms) addTerm(e, t.first, t.second * mult);
+}
+
+}  // namespace
+
+LayoutExpr layoutSizeExpr(TypeRef ref, bool round16) {
+    TypeRef s = strip(ref);
+    Type const& t = get(s);
+    LayoutExpr e;
+    if (!sizeIsDynamic(s)) {
+        e.cst = staticByteSize(s);
+        assert(e.cst >= 0 && "layoutSizeExpr: static type with no size");
+        if (round16) roundCst(e, kOpaqueAlign);
+        return e;
+    }
+    if (t.form == Type::Form::kSlid && t.opaque) {
+        // The dynamic LEAF: the completer's exported rounded size. The TRUE size
+        // is unknowable here, so the convention only ever deals in the rounded
+        // one — every position it feeds is kOpaqueAlign-aligned anyway.
+        addTerm(e, s, 1);
+        return e;
+    }
+    if (t.form == Type::Form::kSlid || t.form == Type::Form::kTuple) {
+        // A computed class lays out its slots exactly like a tuple.
+        std::vector<TypeRef> slots = t.slots;   // copy: recursion is arena-safe
+        for (TypeRef f : slots) {
+            LayoutExpr fe;
+            if (sizeIsDynamic(f)) {
+                roundCst(e, kOpaqueAlign);
+                fe = layoutSizeExpr(f, /*round16=*/true);
+            } else {
+                roundCst(e, staticByteAlign(f));
+                fe = layoutSizeExpr(f, /*round16=*/false);
+            }
+            addExpr(e, fe, 1);
+        }
+        // A dynamic aggregate is kOpaqueAlign-aligned, so its size rounds to it
+        // — which also makes round16 a no-op for it.
+        roundCst(e, kOpaqueAlign);
+        return e;
+    }
+    if (t.form == Type::Form::kArray) {
+        std::vector<int> dims = t.dims;
+        TypeRef elem_t = t.elem;
+        LayoutExpr elem = layoutSizeExpr(elem_t, /*round16=*/true);
+        long long n = 1;
+        for (int d : dims) n *= d;
+        addExpr(e, elem, n);
+        return e;
+    }
+    assert(false && "layoutSizeExpr: dynamic non-aggregate");
+    return e;
+}
+
+LayoutExpr layoutSlotOffset(TypeRef agg, std::size_t k) {
+    TypeRef s = strip(agg);
+    Type const& t = get(s);
+    assert((t.form == Type::Form::kSlid || t.form == Type::Form::kTuple)
+           && sizeIsDynamic(s) && "layoutSlotOffset: not a computed aggregate");
+    std::vector<TypeRef> slots = t.slots;   // copy: recursion is arena-safe
+    assert(k < slots.size() && "layoutSlotOffset: slot out of range");
+    LayoutExpr e;
+    for (std::size_t i = 0; ; i++) {
+        TypeRef f = slots[i];
+        if (sizeIsDynamic(f)) {
+            roundCst(e, kOpaqueAlign);
+            if (i == k) return e;
+            addExpr(e, layoutSizeExpr(f, /*round16=*/true), 1);
+        } else {
+            roundCst(e, staticByteAlign(f));
+            if (i == k) return e;
+            addExpr(e, layoutSizeExpr(f, /*round16=*/false), 1);
+        }
+    }
 }
 
 void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout) {

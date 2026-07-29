@@ -119,17 +119,10 @@ struct Type {
     // `opaque` (the size is a runtime call too). True in EVERY TU that sees the header,
     // exactly like `opaque`, so both halves agree on the layout rule.
     bool runtime_layout = false;
-    // kSlid: the class embeds one or more fields whose SIZE is not a compile-time
-    // constant (an opaque class field, or a field of a class that is itself
-    // computed_layout). Unlike runtime_layout — where a completer knows the whole
-    // struct and folds the offset table — NO TU can fold this one: the field list
-    // lives here and the embedded size lives in another module. So the offsets past
-    // the first such field, and the class's own size, are computed AT RUN TIME into
-    // a cached table (codegen's `__$layout`). Every field UP TO AND INCLUDING the
-    // first non-static one still has a compile-time offset: an opaque field is laid
-    // out at the fixed OPAQUE ALIGNMENT (kOpaqueAlign), the same over-alignment every
-    // opaque alloca already uses, so the round-up before it is a constant.
-    bool computed_layout = false;
+    // (COMPUTED LAYOUT is not a stored flag: whether a class/tuple/array embeds a
+    // dynamically-sized value is a pure STRUCTURAL fact of universal per-class facts
+    // — the opaque flag and the slot lists — so it is asked, not published. See
+    // sizeIsDynamic / slidComputedLayout below.)
 };
 
 // The alignment an OPAQUE class is laid out at. Its real alignment belongs to the
@@ -207,12 +200,50 @@ bool slidOpaque(TypeRef ref);
 void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout);
 bool slidRuntimeLayout(TypeRef ref);
 
-// Set/read whether the class's layout must be computed at run time (see
-// Type::computed_layout). Resolve marks it when a field's size is not static; codegen
-// emits the `__$layout` filler + the cached table and reads the flag to decide, per
-// field, between a constant GEP and a table load.
-void setSlidComputedLayout(TypeRef ref, bool computed_layout);
+// Does this type's STORAGE embed an opaque class by value — directly, or through
+// any depth of class fields / array elements / tuple slots? Equivalently: is its
+// byte size not a compile-time constant of this stage. An opaque class answers
+// true in EVERY TU (the flag is universal), so every TU classifies a layout
+// identically — that universality is what lets two TUs agree on a COMPUTED layout
+// without either exporting it. A pointer / iterator breaks the walk.
+bool sizeIsDynamic(TypeRef ref);
+
+// A COMPUTED-layout class: its field list is visible everywhere it is nameable,
+// but a field's size lives in another module — so no TU can fold the layout, and
+// every TU instead lays it out by ONE CONVENTION: fields at their natural offsets,
+// any dynamically-sized field at kOpaqueAlign with its size ROUNDED UP to
+// kOpaqueAlign (the completer-exported `__$size16`). All the arithmetic besides
+// the leaf sizes is compile-time, so every offset and the total size reduce to
+// `constant + Σ mult·size16(leaf)` — see layoutSlotOffset / layoutSizeExpr.
+// (An OPAQUE class is not computed — its layout is the completer's private,
+// llc-folded struct; computed is the visible-field complement.)
 bool slidComputedLayout(TypeRef ref);
+
+// The byte size / alignment of a STATICALLY-sized type, INCLUDING a class (laid
+// out like the literal struct codegen lowers it to: natural alignment, padding,
+// an empty class is 1 byte). -1 when the size is dynamic (sizeIsDynamic) or the
+// form has no size. Unlike typeByteSize — which answers -1 for EVERY class so
+// sizeof(Class) stays a runtime value llc owns — these are the numeric layout
+// the computed-layout convention positions a static field with.
+long long staticByteSize(TypeRef ref);
+long long staticByteAlign(TypeRef ref);
+
+// A layout value under the computed-layout convention: a compile-time constant
+// plus multiples of opaque leaf classes' rounded sizes (`__$size16` symbols —
+// codegen materializes each term). Every term's value is a multiple of
+// kOpaqueAlign, which is why the constant part absorbs ALL alignment rounding.
+struct LayoutExpr {
+    long long cst = 0;
+    std::vector<std::pair<TypeRef, long long>> terms;   // (opaque class, multiplier)
+};
+
+// The byte offset of slot `k` of a computed-layout class/tuple `agg` (stripped).
+LayoutExpr layoutSlotOffset(TypeRef agg, std::size_t k);
+
+// The byte size of any type under the convention. `round16` rounds the result up
+// to kOpaqueAlign (the embedding stride/size); a computed class/tuple is already
+// 16-rounded by construction. Static types yield a pure constant.
+LayoutExpr layoutSizeExpr(TypeRef ref, bool round16);
 
 // Set whether each hook's BODY is written in this TU (see Type::ctor_here). Resolve
 // decides it in registerClassBody, where every OPENING of the class is visible — the

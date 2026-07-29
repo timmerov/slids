@@ -200,6 +200,24 @@ int strtag(Rope^ s);
    layout is hidden, or the importer reads uninitialized storage. */
 Flat(...) { int a(); int b(); }
 
+/* a COMPLETE header class EMBEDDING the incomplete Rope BY VALUE — the COMPUTED-LAYOUT
+   seam test. No TU can fold this layout (the field list is here, Rope's size is
+   library.sl's), so EVERY TU lays it out by one convention: id_ at 0, r_ at the fixed
+   opaque alignment (16), tail_ right after it — a single relocation off the completer's
+   exported absolute @Rope__$size16. A field the consumer writes DIRECTLY must be read
+   back by a METHOD compiled in the sibling, and vice versa: if the two TUs' convention
+   math ever disagreed, the write and the read would pass each other. No explicit hooks
+   on purpose: the Rope field alone makes construction a routed obligation, so the
+   synthesized @Crate__$ctor/__$dtor exist and are the sibling's exports. */
+Crate(
+    int id_ = 1,
+    Rope r_,
+    int tail_ = 2
+) {
+    void stamp(int v);
+    int tail();
+}
+
 NoCtor(int a_) { }
 
 /* no definitions in a header file. a declaration and its definition are separable for

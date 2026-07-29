@@ -83,6 +83,12 @@ void hello_world() {
     note();
     Widget lw; lw.hum();
     println(String + "library priv: " + priv_);   // library's own internal priv_
+    // completer-side COMPUTED LAYOUT: the same Crate convention math, from the TU
+    // that completes Rope — the seam's other half. tail_ written through the
+    // method, read directly; the embedded Rope default-constructed (tag 7).
+    Crate lc;
+    lc.stamp(55);
+    println(String + "library crate: " + lc.tail_ + " " + lc.r_.tag());
 }
 
 Animal() {
@@ -257,6 +263,12 @@ Flat(int a_ = 55, int b_) {
     int a() { return a_; }
     int b() { return b_; }
 }
+
+/* Crate's methods (see the header): compiled HERE against the same computed-layout
+   convention the consumer computes for its direct field accesses — tail_ sits one
+   S+A relocation past @Rope__$size16 in BOTH TUs, or the seam test fails. */
+void Crate:stamp(int v) { tail_ = v; }
+int Crate:tail() { return tail_; }
 
 /*
 in a source file, we cannot add a ctor/dtor or copy, move, swap operator to a class

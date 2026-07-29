@@ -88,6 +88,32 @@ Rope make_string() {
     return s;
 }
 
+/* ── COMPUTED LAYOUT: local classes EMBEDDING imported incomplete classes BY VALUE.
+   Each is laid out by the convention — static fields at natural offsets, an opaque
+   field at the fixed opaque alignment (16) with its size read from the completer's
+   absolute @<C>__$size16 — so every offset below is a compile-time constant plus a
+   link-time relocation (or, past one symbolic term, a runtime sum of them). */
+
+/* ONE opaque field between statics: post_'s offset is a single S+A relocation. */
+Sack(int pre_ = 2, Rope r_, int post_ = 5) { }
+
+/* TWO different opaque classes: end_'s offset sums two exported sizes — the
+   multi-term case, link-time constants added at run time. Flat is the POD leaf:
+   its fields still arrive {55, 0} through the routed @Flat__$ctor. */
+Duo(Rope r_, int mid_ = 3, Flat f_, int end_ = 9) { }
+
+/* an ARRAY of an opaque class as a FIELD: rs_[i] strides by @Rope__$size16 at run
+   time, and z_ sits past a 2·size16 term. */
+Trio(int n_ = 1, Rope rs_[2], int z_ = 4) { }
+
+/* a RUNTIME-LAYOUT class (derives from Rope) as the embedded leaf: w_ rides
+   @Tagged__$size16 — a size the completer folded over the real derived struct. */
+TCase(Tagged t_, int w_ = 8) { }
+
+/* Mix BY VALUE: its hidden fields (a nested Cell, an array) are built by the
+   routed @Mix__$ctor inside THIS class's synthesized constructor. */
+MCase(Mix m_, int k_ = 6) { }
+
 int32 main() {
 
     note();
@@ -237,6 +263,80 @@ int32 main() {
     Rope asrc; Rope adst; adst = asrc; println(String + "assign tag: " + adst.tag());
     Rope rv = make_string();         println(String + "return tag: " + rv.tag());
 
+    // ── COMPUTED LAYOUT (the by-value embedding rejection is repealed) ──
+    // A local class with an opaque field: statics before AND after the opaque one,
+    // read/written directly, plus the opaque field driven through its methods.
+    Sack sk;
+    sk.r_.set("packed");
+    println(String + "sack: " + sk.pre_ + " " + sk.r_.get() + " " + sk.r_.tag()
+            + " " + sk.post_);
+    sk.post_ = 50;
+    println(String + "sack post: " + sk.post_);
+
+    // TWO opaque leaves (Rope + the POD Flat): the multi-term offset, and the POD
+    // routed-fill check (f_ must arrive {55, 0} even though Flat has no hooks).
+    Duo du;
+    println(String + "duo: " + du.mid_ + " " + du.f_.a() + " " + du.f_.b()
+            + " " + du.r_.tag() + " " + du.end_);
+
+    // an ARRAY FIELD of an opaque class: per-element construction, runtime stride,
+    // and a static field past the 2·size16 term.
+    Trio tr;
+    tr.rs_[0].set("zero");
+    tr.rs_[1].set("one");
+    println(String + "trio: " + tr.n_ + " " + tr.rs_[0].get() + " "
+            + tr.rs_[1].get() + " " + tr.rs_[1].tag() + " " + tr.z_);
+
+    // a LOCAL ARRAY of an opaque class (the old negative): runtime-sized alloca,
+    // stride off @Rope__$size16, each element routed through @Rope__$ctor/$dtor.
+    Rope ra[3];
+    ra[1].set("mid");
+    println(String + "rope arr: " + ra[0].tag() + " " + ra[1].get());
+
+    // a TUPLE SLOT holding an opaque class (the old negative).
+    (Rope, int) tp2;
+    tp2[1] = 12;
+    println(String + "tuple slot: " + tp2[0].tag() + " " + tp2[1]);
+
+    // TRANSFERS of the embedding class: the synthesized memberwise ops route the
+    // Rope member through the sibling's @Rope__$copy/move/swap (never a blit).
+    Sack sc; sc.post_ = 60; Sack sc2 = sc;   println(String + "sack copy: " + sc2.post_ + " " + sc2.r_.tag());
+    Sack sm; sm.post_ = 61; Sack sm2 <-- sm; println(String + "sack move: " + sm2.post_);
+    Sack sx1; Sack sx2; sx2.post_ = 62; sx1 <--> sx2; println(String + "sack swap: " + sx1.post_);
+    Sack sa; sa.post_ = 63; Sack sb; sb = sa; println(String + "sack assign: " + sb.post_);
+
+    // a single `new` of an embedding class: malloc'd at the convention size.
+    Sack^ sp2 = new Sack;
+    sp2^.post_ = 70;
+    println(String + "sack new: " + sp2^.post_ + " " + sp2^.r_.tag());
+    delete sp2;
+
+    // THE SEAM TEST: Crate is a HEADER class embedding Rope, so both TUs compute
+    // its layout independently by the convention. A direct write here must be seen
+    // by a method the sibling compiled, and vice versa.
+    Crate ho;
+    ho.tail_ = 33;
+    println(String + "crate direct->method: " + ho.tail());
+    ho.stamp(44);
+    println(String + "crate method->direct: " + ho.tail_ + " id=" + ho.id_
+            + " rope=" + ho.r_.tag());
+
+    // a runtime-layout leaf (Tagged prints its hooks) and a deep-hidden leaf (Mix).
+    TCase tc3;
+    println(String + "tcase: " + tc3.t_.mark_ + " " + tc3.w_);
+    MCase mc;
+    println(String + "mcase: " + mc.m_.a() + " " + mc.m_.s() + " " + mc.k_);
+
+    // sizeof over the seam: an opaque size is a link-time value, an embedding
+    // class's a convention expression. Relations, not absolutes, so the golden
+    // survives library-side field edits.
+    int size_ok = 0;
+    if (sizeof(Rope) > 0 && sizeof(Sack) >= sizeof(Rope)
+        && sizeof(Duo) >= sizeof(Sack)) {
+        size_ok = 1;
+    }
+    println(String + "sizeof ok: " + size_ok);
+
     return 0;
 }
 
@@ -263,23 +363,18 @@ about the class being declared in a header, not about which source file this is.
 /*
 Rope is declared incomplete in the header (`Rope(...)`) and completed in library.sl,
 so from HERE its layout is opaque: this TU knows the class exists and can name its methods,
-but not its fields, size, or offsets. That is enough to hold a `Rope` by pointer, to make
-a bare local (sized at runtime via @String__$sizeof and default-constructed via @String__$ctor
-— `Rope hello;` in main above proves it), and to `new` one. It is NOT enough for anything
-that needs a static layout: embedding one BY VALUE in an aggregate (a field, an array element,
-a tuple slot) would mis-size the container, and reaching a hidden field or filling one at a
-construction site would offset into memory this TU can't see. Each is a compile error here,
-and would NOT be one in library.sl, which completes the class and owns the layout.
+but not its fields, size, or offsets. Holding one by pointer, a bare local, a `new`, AND —
+since the COMPUTED-LAYOUT landing — embedding one by value (a class field, an array
+element, a tuple slot: see the Sack/Duo/Trio/Crate tests in main) are all legal: the
+container is laid out by the cross-TU convention off the completer's exported absolute
+sizes. What REMAINS illegal is exactly what still needs a fact this TU cannot have:
+  - reaching a hidden field / passing a construction initializer (no field to see);
+  - any GLOBAL whose storage would need the layout (static storage can't be
+    runtime-sized) — bare opaque, or an aggregate/computed-class embedding one;
+  - `new C[n]` (the heap-array machinery runs on a static element type);
+  - a BY-VALUE parameter (the standing rule for every class: non-primitives pass
+    by pointer).
 */
-
-//-EXPECT-ERROR: embeds imported incomplete class 'Rope'
-//Wrap(Rope s_) { }
-
-//-EXPECT-ERROR: embeds imported incomplete class 'Rope'
-//void neg_array() { Rope a[3]; a[0].tag(); }
-
-//-EXPECT-ERROR: embeds imported incomplete class 'Rope'
-//void neg_tuple() { (Rope, int) t; t; }
 
 //-EXPECT-ERROR: has no field 'str_'
 //void neg_field() { Rope h; int x = h.str_; x; }
@@ -287,44 +382,47 @@ and would NOT be one in library.sl, which completes the class and owns the layou
 //-EXPECT-ERROR: initializer(s) were given
 //void neg_init() { Rope s("x"); s; }
 
-/* a GLOBAL is the one place a BARE opaque class is also illegal: its storage is static
-   (sized at compile time), so the runtime-sizing that makes a bare opaque LOCAL work has no
-   analogue. A global must be a pointer instead. */
+/* a GLOBAL is where a BARE opaque class is still illegal: its storage is static
+   (sized at compile time), so the runtime-sizing that makes a bare opaque LOCAL work
+   has no analogue. A global must be a pointer instead. */
 //-EXPECT-ERROR: a global needs static storage
 //global Rope gbad;
 
-//-EXPECT-ERROR: embeds imported incomplete class 'Rope'
+//-EXPECT-ERROR: embeds incomplete class 'Rope'
 //global Rope garr[3];
 
-/* `new C[n]` is the heap twin: the array indexes and constructs its elements at a static
-   stride this TU lacks. A single `new C` is fine (no stride), so only the array form is out. */
-//-EXPECT-ERROR: array of imported incomplete class
+/* a global of an EMBEDDING class is the same static-storage problem one level up. */
+//-EXPECT-ERROR: embeds incomplete class 'Rope'
+//global Sack gsack;
+
+/* `new C[n]` stays out: the heap-array machinery (cookie, broadcast fill, delete's
+   element loop) runs on a static element type. A single `new C` is fine. */
+//-EXPECT-ERROR: array of incomplete class
 //void neg_newarr() { Rope[] p = new Rope[3]; delete p; }
+
+/* the heap twin for an EMBEDDING (computed-layout) class. */
+//-EXPECT-ERROR: array of incomplete class
+//void neg_newemb() { Sack[] p = new Sack[3]; delete p; }
+
+/* BY-VALUE parameters are prohibited — the standing non-primitive rule; an opaque
+   class gets no special dispensation. */
+//-EXPECT-ERROR: A non-primitive parameter must be a pointer
+//int neg_param(Rope r) { return 0; }
 
 /*
 Tagged DERIVES from Rope, so it inherits that unknown layout wholesale: this TU can name
 its fields and read and write them, but it cannot PLACE them. Default construction is the
 only form here — an initializer would have to be written at an offset past a base only the
-completer can measure, and dropping it silently would be worse than refusing it. Everything
-barred for the base is barred for the derived class, for the identical reason: by-value
-embedding in an aggregate, a bare global, and `new T[n]` all need a static size or stride.
-None of these is an error in library.sl, which completes Rope and owns both layouts.
+completer can measure, and dropping it silently would be worse than refusing it. Embedding
+a Tagged by value is LEGAL now (TCase in main — the leaf rides @Tagged__$size16); the
+global and heap-array bans hold for the identical static-storage/static-stride reasons.
 */
 
 //-EXPECT-ERROR: can only be default-constructed here
 //void neg_derived_init() { Tagged t(1); t; }
 
-//-EXPECT-ERROR: embeds imported incomplete class 'Tagged'
-//WrapT(Tagged t_) { }
-
-//-EXPECT-ERROR: embeds imported incomplete class 'Tagged'
-//void neg_derived_array() { Tagged a[3]; a[0].mark(); }
-
-//-EXPECT-ERROR: embeds imported incomplete class 'Tagged'
-//void neg_derived_tuple() { (Tagged, int) t; t; }
-
 //-EXPECT-ERROR: a global needs static storage
 //global Tagged gtbad;
 
-//-EXPECT-ERROR: array of imported incomplete class
+//-EXPECT-ERROR: array of incomplete class
 //void neg_derived_newarr() { Tagged[] p = new Tagged[3]; delete p; }

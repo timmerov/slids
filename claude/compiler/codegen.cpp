@@ -38,13 +38,14 @@ std::string emitArrayLiteralValue(widen::TypeRef arrType, ast::Node const& rhs,
 // runs the ctor at the freshly-allocated object, delete runs the dtor before free,
 // and new[]/delete[] gate the count cookie on whether the element needs a dtor.
 void emitConstructHooks(std::string const& addr, widen::TypeRef type,
-                        std::ostream& out);
+                        std::ostream& out, bool in_ctor_body = false);
 void emitDestructHooks(std::string const& addr, widen::TypeRef type,
                        std::ostream& out);
 // The BODIES of the per-class complete ctor/dtor and their slot loops. The complete
 // methods are materialized once per class (in run()); the dispatch above routes a
 // class object to them and inlines aggregate walks down to a class leaf.
-void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out);
+void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out,
+                   bool in_ctor_body = false);
 void emitSlotDtors(std::string const& addr, widen::TypeRef cs, std::ostream& out);
 void emitClassCtorBody(std::string const& addr, widen::TypeRef cs, std::ostream& out);
 void emitClassDtorBody(std::string const& addr, widen::TypeRef cs, std::ostream& out);
@@ -115,6 +116,11 @@ std::string llvmForRef(widen::TypeRef ref) {
         case widen::Type::Form::kAnyptr:
             return "ptr";
         case widen::Type::Form::kArray: {
+            // An array whose ELEMENT size is dynamic (opaque / computed) has no
+            // spellable LLVM type: it lowers to the same placeholder every
+            // convention-laid-out storage gets, and every access is a byte GEP
+            // at a runtime stride.
+            if (widen::sizeIsDynamic(ref)) return "{ i8 }";
             // Standard row-major: the FIRST source dim is the OUTERMOST LLVM
             // array, so `int[R][C]` -> `[R x [C x i32]]`. Wrap last-dim-first.
             std::string ll = llvmForRef(t.elem);
@@ -141,10 +147,24 @@ std::string llvmForRef(widen::TypeRef ref) {
             // (the base plus its own fields), but the base's size is unknown here, so a
             // struct over those slots would compute the WRONG size and the WRONG offsets.
             // Lower it to the same placeholder an opaque class gets — the size comes from
-            // @C__$sizeof() and every field offset from @C__$offsets, so nothing here may
-            // be structurally indexed.
+            // the completer's exported @C__$sizeof and every field offset from its
+            // @C__$off<k> absolute symbols, so nothing here may be structurally indexed.
             if (t.form == widen::Type::Form::kSlid && t.runtime_layout
                 && t.linkage == widen::Type::Linkage::kDeclare) {
+                return "{ i8 }";
+            }
+            // A COMPUTED-layout class or a dynamic tuple — visible fields, an embedded
+            // size owned elsewhere — lowers to the placeholder in EVERY TU (even one
+            // that completes the embedded class): the layout is the cross-TU CONVENTION
+            // (widen::layoutSlotOffset), so no TU may fold a struct view of its own.
+            // The one exception stays above this line: an OPAQUE class in its
+            // completer (kDefine/kInternal) IS the real struct — its interior is
+            // single-TU by construction, and the exported size symbols fold off it.
+            if (t.form == widen::Type::Form::kSlid && !t.opaque
+                && widen::sizeIsDynamic(ref)) {
+                return "{ i8 }";
+            }
+            if (t.form == widen::Type::Form::kTuple && widen::sizeIsDynamic(ref)) {
                 return "{ i8 }";
             }
             std::string s = "{ ";
@@ -784,7 +804,8 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
         // destroy from here (no dtor scope) — it leaks / unbalances. Until the
         // desugar lift (inline use -> a temp decl) lands, reject it cleanly rather
         // than miscompile. Assign the call to a variable first.
-        if (sret_dst.empty() && typeNeedsHook(call.return_type, /*ctor=*/true)) {
+        if (sret_dst.empty() && (typeNeedsHook(call.return_type, /*ctor=*/true)
+                                 || widen::sizeIsDynamic(call.return_type))) {
             diagnostic::report(diag, {call.file_id, call.tok,
                 "Returning a class by value in an expression position is not yet "
                 "supported — assign the call to a variable first.", {}});
@@ -821,6 +842,158 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
         out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
     }
     return result;
+}
+
+// ── Computed-layout materialization ────────────────────────────────────────
+// Every layout fact under the cross-TU convention reduces to
+// `constant + Σ mult·size16(opaque leaf)` (widen::LayoutExpr). These helpers turn
+// that into an i64 VALUE: a plain literal, a single-relocation LLVM constant
+// (`ptrtoint` of the leaf's absolute `__$size16` symbol, with the constant riding
+// as a getelementptr addend — the linker patches an immediate), or, past one
+// symbolic term, a short add/mul instruction sequence over those constants.
+
+// The absolute size symbols the COMPLETER of an opaque class exports (aliases to
+// folded inttoptr constants): `__$sizeof` = the true byte size, `__$size16` = it
+// rounded up to widen::kOpaqueAlign (what the convention embeds/strides by —
+// round-up of a link-time value is not expressible as a relocation, so the
+// completer exports it pre-rounded).
+std::string sizeSymbolValue(widen::TypeRef cls, bool round16) {
+    return "ptrtoint (ptr @" + widen::classSymbol(cls)
+        + (round16 ? "__$size16" : "__$sizeof") + " to i64)";
+}
+
+std::string emitLayoutValue(widen::LayoutExpr const& e, std::ostream& out) {
+    if (e.terms.empty()) return std::to_string(e.cst);
+    if (e.terms.size() == 1 && e.terms[0].second == 1) {
+        // One leaf, multiplier 1: a single S+A relocation — a link-time constant.
+        std::string sym = "@" + widen::classSymbol(e.terms[0].first) + "__$size16";
+        if (e.cst == 0) return "ptrtoint (ptr " + sym + " to i64)";
+        return "ptrtoint (ptr getelementptr (i8, ptr " + sym + ", i64 "
+            + std::to_string(e.cst) + ") to i64)";
+    }
+    // Multiple terms (or a multiplied one): relocations cannot add two symbols,
+    // so sum the link-time constants at run time.
+    std::string acc;
+    for (auto const& [leaf, mult] : e.terms) {
+        std::string v = sizeSymbolValue(leaf, /*round16=*/true);
+        if (mult != 1) {
+            std::string m = newTmp("szmul");
+            out << "  " << m << " = mul i64 " << v << ", " << mult << "\n";
+            v = m;
+        }
+        if (acc.empty()) { acc = v; continue; }
+        std::string a = newTmp("szadd");
+        out << "  " << a << " = add i64 " << acc << ", " << v << "\n";
+        acc = a;
+    }
+    if (e.cst != 0) {
+        std::string a = newTmp("szadd");
+        out << "  " << a << " = add i64 " << acc << ", " << e.cst << "\n";
+        acc = a;
+    }
+    return acc;
+}
+
+// The byte size of `ty` as an i64 VALUE. A static class/tuple/array keeps llc as
+// the layout owner (a GEP-null/ptrtoint constant over its real LLVM type — the
+// same fold the old per-class `__$sizeof()` function returned, now inline); an
+// opaque class reads the completer's absolute symbol; a computed layout expands
+// its convention expression. `round16` rounds up to kOpaqueAlign (the embedding
+// stride).
+std::string emitSizeValue(widen::TypeRef ty, bool round16, std::ostream& out) {
+    widen::TypeRef st = widen::strip(ty);
+    widen::Type::Form f = widen::form(st);
+    if (widen::sizeIsDynamic(st)) {
+        if (f == widen::Type::Form::kSlid && widen::slidOpaque(st))
+            return sizeSymbolValue(st, round16);
+        return emitLayoutValue(widen::layoutSizeExpr(st, round16), out);
+    }
+    if (f == widen::Type::Form::kSlid || f == widen::Type::Form::kTuple
+        || f == widen::Type::Form::kArray) {
+        std::string llty = llvmForRef(st);
+        if (round16) llty = "{ [0 x <16 x i8>], " + llty + " }";
+        return "ptrtoint (ptr getelementptr (" + llty
+            + ", ptr null, i32 1) to i64)";
+    }
+    long long sz = widen::typeByteSize(st);
+    assert(sz >= 0 && "emitSizeValue: unsized static type");
+    if (round16) sz = (sz + widen::kOpaqueAlign - 1)
+                    / widen::kOpaqueAlign * widen::kOpaqueAlign;
+    return std::to_string(sz);
+}
+
+// Storage this TU cannot lower to a real LLVM type — it allocas by runtime/link-
+// time size and addresses by byte offsets. Mirrors llvmForRef's placeholder arms:
+// an imported opaque class, a computed-layout class (every TU), or a tuple/array
+// embedding either. NOT an opaque class in its completer — that one is the real
+// struct.
+bool dynamicStorage(widen::TypeRef ty) {
+    widen::TypeRef st = widen::strip(ty);
+    widen::Type::Form f = widen::form(st);
+    if (f == widen::Type::Form::kSlid) {
+        // Opaque (incl. runtime-layout): dynamic only where imported — the
+        // completer's own storage is the real struct.
+        if (widen::slidOpaque(st))
+            return widen::slidLinkage(st) == widen::Type::Linkage::kDeclare;
+        return widen::sizeIsDynamic(st);
+    }
+    if (f == widen::Type::Form::kTuple || f == widen::Type::Form::kArray)
+        return widen::sizeIsDynamic(st);
+    return false;
+}
+
+// The address of slot `k` of a class/tuple at `base` — THE slot-address funnel.
+// Three regimes: a RUNTIME-LAYOUT class an importer declares reads the
+// completer's absolute `__$off<k>` symbol (slot 0 is the base sub-object at
+// offset 0 — no symbol, no GEP); a COMPUTED layout GEPs by its convention
+// offset expression; everything else is the constant struct GEP.
+std::string emitSlotAddr(std::string const& base, widen::TypeRef agg,
+                         std::size_t k, std::ostream& out) {
+    widen::TypeRef cs = widen::strip(agg);
+    widen::Type::Form f = widen::form(cs);
+    if (f == widen::Type::Form::kSlid && widen::slidRuntimeLayout(cs)
+        && widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
+        if (k == 0) return base;   // the base sub-object IS offset 0
+        std::string gep = newTmp("slot");
+        out << "  " << gep << " = getelementptr i8, ptr " << base
+            << ", i64 ptrtoint (ptr @" << widen::classSymbol(cs) << "__$off" << k
+            << " to i64)\n";
+        return gep;
+    }
+    bool computed = widen::sizeIsDynamic(cs)
+        && !(f == widen::Type::Form::kSlid && widen::slidOpaque(cs));
+    if (computed) {
+        std::string off = emitLayoutValue(widen::layoutSlotOffset(cs, k), out);
+        if (off == "0") return base;
+        std::string gep = newTmp("slot");
+        out << "  " << gep << " = getelementptr i8, ptr " << base
+            << ", i64 " << off << "\n";
+        return gep;
+    }
+    std::string gep = newTmp("slot");
+    out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cs)
+        << ", ptr " << base << ", i32 0, i32 " << k << "\n";
+    return gep;
+}
+
+// The address of element `idx` (an i64 value string) of an array of `elem` at
+// `base` — a typed GEP when the element is statically sized, else a byte GEP at
+// the convention stride (the element's 16-rounded size).
+std::string emitElemAddr(std::string const& base, widen::TypeRef elem,
+                         std::string const& idx, std::ostream& out) {
+    if (!widen::sizeIsDynamic(elem)) {
+        std::string gep = newTmp("elt");
+        out << "  " << gep << " = getelementptr " << llvmForRef(elem)
+            << ", ptr " << base << ", i64 " << idx << "\n";
+        return gep;
+    }
+    std::string stride = emitSizeValue(elem, /*round16=*/true, out);
+    std::string off = newTmp("eltoff");
+    out << "  " << off << " = mul i64 " << idx << ", " << stride << "\n";
+    std::string gep = newTmp("elt");
+    out << "  " << gep << " = getelementptr i8, ptr " << base
+        << ", i64 " << off << "\n";
+    return gep;
 }
 
 // Compute the address of an array element from a (possibly nested) kIndexExpr.
@@ -894,44 +1067,33 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         } else if (f == widen::Type::Form::kArray) {
             std::string idx = emitExpr(idx_node, syms, pool, out, diag,
                                        widen::intern("int64"));
-            std::string gep = newTmp("elt");
-            out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
-                << ", ptr " << addr << ", i64 0, i64 " << idx << "\n";
-            addr = gep;
             std::vector<int> const& dd = widen::get(cs).dims;
-            cur = (dd.size() <= 1)
+            widen::TypeRef sub = (dd.size() <= 1)
                 ? widen::get(cs).elem
                 : widen::internArray(widen::get(cs).elem,
                       std::vector<int>(dd.begin() + 1, dd.end()));
+            if (widen::sizeIsDynamic(cs)) {
+                // Dynamic element: byte GEP at the convention stride.
+                addr = emitElemAddr(addr, sub, idx, out);
+            } else {
+                std::string gep = newTmp("elt");
+                out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
+                    << ", ptr " << addr << ", i64 0, i64 " << idx << "\n";
+                addr = gep;
+            }
+            cur = sub;
         } else if (f == widen::Type::Form::kTuple
                 || f == widen::Type::Form::kSlid) {
-            // A tuple slot or a class field (a class is a named tuple) -> a
-            // struct GEP by the constant slot/field index.
+            // A tuple slot or a class field (a class is a named tuple) -> the
+            // slot-address funnel (constant struct GEP / runtime-layout absolute
+            // offset symbol / computed-layout convention offset).
             long k = std::strtol(idx_node.text.c_str(), nullptr, 10);
-            std::vector<widen::TypeRef> const& slots = widen::get(cs).slots;
+            // Capture BY VALUE: emitSlotAddr's layout walk can intern (arena
+            // reallocation would dangle a slots reference).
+            std::vector<widen::TypeRef> slots = widen::get(cs).slots;
             assert(k >= 0 && k < static_cast<long>(slots.size())
                 && "emitElementAddr: tuple/field slot index out of range");
-            std::string gep = newTmp("slot");
-            if (widen::slidRuntimeLayout(cs)
-                && widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
-                // The class derives from an opaque base, and this TU is not the one that
-                // completes it: the field's offset is a link-time constant we can only
-                // READ. Load it from the completer's exported table and index by BYTES.
-                // Slot 0 (the base sub-object) rides the same path and loads a 0, so an
-                // upcast needs no special case.
-                std::string op = newTmp("offp");
-                std::string ov = newTmp("off");
-                std::string arr = "[" + std::to_string(slots.size()) + " x i64]";
-                out << "  " << op << " = getelementptr " << arr << ", ptr @"
-                    << widen::classSymbol(cs) << "__$offsets, i64 0, i64 " << k << "\n";
-                out << "  " << ov << " = load i64, ptr " << op << "\n";
-                out << "  " << gep << " = getelementptr i8, ptr " << addr
-                    << ", i64 " << ov << "\n";
-            } else {
-                out << "  " << gep << " = getelementptr inbounds " << llvmForRef(cur)
-                    << ", ptr " << addr << ", i32 0, i32 " << k << "\n";
-            }
-            addr = gep;
+            addr = emitSlotAddr(addr, cs, static_cast<std::size_t>(k), out);
             cur = slots[k];
         } else {
             assert(false && "emitElementAddr: indexing a non-indexable type "
@@ -1136,14 +1298,10 @@ void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
     }
     // A class is a named tuple: null its fields' pointer leaves the same way.
     if (f == widen::Type::Form::kTuple || f == widen::Type::Form::kSlid) {
-        std::string tll = llvmForRef(s);
-        std::vector<widen::TypeRef> const& slots = widen::get(s).slots;
+        std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no dangle
         for (std::size_t i = 0; i < slots.size(); i++) {
             if (!typeHasPointer(slots[i])) continue;
-            std::string gep = newTmp("nleaf");
-            out << "  " << gep << " = getelementptr inbounds " << tll
-                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
-            emitNullLeaves(gep, slots[i], out);
+            emitNullLeaves(emitSlotAddr(addr, s, i, out), slots[i], out);
         }
         return;
     }
@@ -1153,13 +1311,10 @@ void emitNullLeaves(std::string const& addr, widen::TypeRef ty,
         // (`int[3]`) has nothing to null and is skipped.
         widen::TypeRef elem = widen::get(s).elem;
         if (!typeHasPointer(elem)) return;
-        std::string elem_ll = llvmForRef(elem);
         long total = 1;
         for (int d : widen::get(s).dims) total *= d;
         for (long i = 0; i < total; i++) {
-            std::string gep = newTmp("nleaf");
-            out << "  " << gep << " = getelementptr " << elem_ll
-                << ", ptr " << addr << ", i64 " << i << "\n";
+            std::string gep = emitElemAddr(addr, elem, std::to_string(i), out);
             emitNullLeaves(gep, elem, out);
         }
         return;
@@ -1204,29 +1359,21 @@ void emitAggregateTransfer(std::string const& dst, std::string const& src,
         return;
     }
     if (f == F::kTuple) {
-        std::string tll = llvmForRef(s);
-        std::vector<widen::TypeRef> const& slots = widen::get(s).slots;
+        std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no dangle
         for (std::size_t i = 0; i < slots.size(); i++) {
-            std::string dg = newTmp("acp"), sg = newTmp("acp");
-            out << "  " << dg << " = getelementptr inbounds " << tll << ", ptr "
-                << dst << ", i32 0, i32 " << i << "\n";
-            out << "  " << sg << " = getelementptr inbounds " << tll << ", ptr "
-                << src << ", i32 0, i32 " << i << "\n";
+            std::string dg = emitSlotAddr(dst, s, i, out);
+            std::string sg = emitSlotAddr(src, s, i, out);
             emitAggregateTransfer(dg, sg, slots[i], is_move, out);
         }
         return;
     }
     if (f == F::kArray) {
         widen::TypeRef elem = widen::get(s).elem;
-        std::string elem_ll = llvmForRef(elem);
         long total = 1;
         for (int d : widen::get(s).dims) total *= d;
         for (long i = 0; i < total; i++) {
-            std::string dg = newTmp("acp"), sg = newTmp("acp");
-            out << "  " << dg << " = getelementptr " << elem_ll << ", ptr "
-                << dst << ", i64 " << i << "\n";
-            out << "  " << sg << " = getelementptr " << elem_ll << ", ptr "
-                << src << ", i64 " << i << "\n";
+            std::string dg = emitElemAddr(dst, elem, std::to_string(i), out);
+            std::string sg = emitElemAddr(src, elem, std::to_string(i), out);
             emitAggregateTransfer(dg, sg, elem, is_move, out);
         }
         return;
@@ -1256,29 +1403,21 @@ void emitAggregateSwap(std::string const& a, std::string const& b,
         return;
     }
     if (f == F::kTuple) {
-        std::string tll = llvmForRef(s);
-        std::vector<widen::TypeRef> const& slots = widen::get(s).slots;
+        std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no dangle
         for (std::size_t i = 0; i < slots.size(); i++) {
-            std::string ag = newTmp("asw"), bg = newTmp("asw");
-            out << "  " << ag << " = getelementptr inbounds " << tll << ", ptr "
-                << a << ", i32 0, i32 " << i << "\n";
-            out << "  " << bg << " = getelementptr inbounds " << tll << ", ptr "
-                << b << ", i32 0, i32 " << i << "\n";
+            std::string ag = emitSlotAddr(a, s, i, out);
+            std::string bg = emitSlotAddr(b, s, i, out);
             emitAggregateSwap(ag, bg, slots[i], out);
         }
         return;
     }
     if (f == F::kArray) {
         widen::TypeRef elem = widen::get(s).elem;
-        std::string ell = llvmForRef(elem);
         long total = 1;
         for (int d : widen::get(s).dims) total *= d;
         for (long i = 0; i < total; i++) {
-            std::string ag = newTmp("asw"), bg = newTmp("asw");
-            out << "  " << ag << " = getelementptr " << ell << ", ptr "
-                << a << ", i64 " << i << "\n";
-            out << "  " << bg << " = getelementptr " << ell << ", ptr "
-                << b << ", i64 " << i << "\n";
+            std::string ag = emitElemAddr(a, elem, std::to_string(i), out);
+            std::string bg = emitElemAddr(b, elem, std::to_string(i), out);
             emitAggregateSwap(ag, bg, elem, out);
         }
         return;
@@ -1332,12 +1471,9 @@ void emitAggBump(std::string const& addr, widen::TypeRef ty,
     widen::TypeRef s = widen::strip(ty);
     widen::Type::Form f = widen::form(s);
     if (f == widen::Type::Form::kTuple) {
-        std::string tll = llvmForRef(s);
         std::vector<widen::TypeRef> slots = widen::get(s).slots;   // copy: no intern
         for (std::size_t i = 0; i < slots.size(); i++) {
-            std::string gep = newTmp("bleaf");
-            out << "  " << gep << " = getelementptr inbounds " << tll
-                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
+            std::string gep = emitSlotAddr(addr, s, i, out);
             if (widen::form(widen::strip(slots[i])) == widen::Type::Form::kTuple
                 || widen::form(widen::strip(slots[i])) == widen::Type::Form::kArray)
                 emitAggBump(gep, slots[i], op, out);
@@ -1348,15 +1484,12 @@ void emitAggBump(std::string const& addr, widen::TypeRef ty,
     }
     // Array: flat-walk all dims (row-major contiguous), recurse on the element.
     widen::TypeRef elem = widen::get(s).elem;            // copy: no intern
-    std::string elem_ll = llvmForRef(elem);
     long total = 1;
     for (int d : widen::get(s).dims) total *= d;
     bool elemAgg = widen::form(widen::strip(elem)) == widen::Type::Form::kTuple
                 || widen::form(widen::strip(elem)) == widen::Type::Form::kArray;
     for (long i = 0; i < total; i++) {
-        std::string gep = newTmp("bleaf");
-        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
-            << addr << ", i64 " << i << "\n";
+        std::string gep = emitElemAddr(addr, elem, std::to_string(i), out);
         if (elemAgg) emitAggBump(gep, elem, op, out);
         else         emitLeafBump(gep, elem, op, out);
     }
@@ -1489,14 +1622,14 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             ast::Node const& ibase = *expr.children[0];
             widen::TypeRef ibs = widen::strip(ibase.inferred_type);
             widen::Type::Form ibf = widen::form(ibs);
-            // A field of a class whose layout is a LINK-TIME fact here cannot be reached
-            // by loading the whole object and extracting slot k — there is no whole object
-            // to load, only a runtime-sized blob. Fall through to the address path, which
-            // reads the offset from the completer's table. Same funnel the WRITE side uses,
-            // so a read and a write of one field cannot land on different bytes.
-            bool ib_runtime = ibf == widen::Type::Form::kSlid
-                && widen::slidRuntimeLayout(ibs)
-                && widen::slidLinkage(ibs) == widen::Type::Linkage::kDeclare;
+            // A field of an object whose layout is a LINK-TIME / convention fact here
+            // (a runtime-layout import, a computed-layout class, a dynamic tuple)
+            // cannot be reached by loading the whole object and extracting slot k —
+            // there is no whole object to load, only a runtime-sized blob. Fall
+            // through to the address path, which shares the slot-address funnel with
+            // the WRITE side, so a read and a write of one field cannot land on
+            // different bytes.
+            bool ib_runtime = dynamicStorage(ibs);
             if (!ib_runtime
                 && (ibf == widen::Type::Form::kTuple || ibf == widen::Type::Form::kSlid)) {
                 std::string agg = emitExpr(ibase, syms, pool, out, diag,
@@ -1580,14 +1713,13 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                 ast::Node const& addr = *expr.children[1];
                 p = emitExpr(addr, syms, pool, out, diag, addr.inferred_type);
             } else {
-                // Element byte size: a class is sized at runtime by its __$sizeof()
-                // helper; everything else has a compile-time size.
+                // Element byte size: a class's size is a VALUE — an llc-folded
+                // constant for a local layout, the completer's absolute symbol
+                // for an imported opaque one, the convention expression for a
+                // computed one. Everything else has a compile-time size.
                 std::string elem_size;
                 if (is_class) {
-                    std::string sz = newTmp("esz");
-                    out << "  " << sz << " = call i64 @" << widen::classSymbol(es)
-                        << "__$sizeof()\n";
-                    elem_size = sz;
+                    elem_size = emitSizeValue(es, /*round16=*/false, out);
                 } else {
                     long long elem = widen::typeByteSize(expr.return_type);
                     // classify rejected an unsized element ("Cannot allocate") and
@@ -1777,6 +1909,18 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                     "declare a new variable (e.g. 'Class x = Class(...)').", {}});
                 return "0";
             }
+            // `sizeof(Class)` — classify rewrote it to this call shape with the
+            // class handle in param_types[0]. The size is a VALUE now (an llc
+            // constant / absolute-symbol relocation / convention expression),
+            // not a per-class function call.
+            if (expr.children.empty() && expr.param_types.size() == 1
+                && expr.name.size() > 9
+                && expr.name.compare(expr.name.size() - 9, 9, "__$sizeof") == 0) {
+                std::string v = emitSizeValue(expr.param_types[0],
+                                              /*round16=*/false, out);
+                return widen::convert(v, expr.return_type, dest_type,
+                                      expr.file_id, expr.tok, out, diag);
+            }
             assert(widen::form(expr.return_type) != widen::Type::Form::kVoid
                 && "emitExpr kCallExpr: classify should have rejected void call-as-value");
             std::string r = emitCall(expr, syms, pool, out, diag);
@@ -1947,32 +2091,38 @@ widen::TypeRef arrayElemOf(widen::TypeRef arr) {
 // so its hook-carrying elements / slots are built in place, recursing until a class
 // leaf reaches its complete ctor. Memory is already laid down (field-init); this
 // runs the HOOKS.
+// `in_ctor_body` marks the walk INSIDE a class's complete ctor body (@C__$ctor):
+// that symbol is ONE definition shared by every TU, and no site fill precedes it —
+// so an opaque slot there must be COMPLETELY constructed (@Op__$ctor: default-fill
+// + hooks) in every TU, never the role-split $pctor a site walk uses.
 void emitConstructHooks(std::string const& addr, widen::TypeRef type,
-                        std::ostream& out) {
+                        std::ostream& out, bool in_ctor_body) {
     widen::TypeRef cs = widen::strip(type);
     widen::Type const& ct = widen::get(cs);
     if (ct.form == widen::Type::Form::kArray) {
         int n = ct.dims[0];   // capture before arrayElemOf interns (dangles ct)
-        std::string llty = llvmForRef(cs);
         widen::TypeRef et = arrayElemOf(cs);
-        if (typeNeedsHook(et, true)) {
+        // A dynamic (opaque-bearing) element is ALWAYS routed — its construction
+        // obligation exists even hook-less (the POD-opaque rule: an importer
+        // cannot fill fields it can't see).
+        if (typeNeedsHook(et, true) || widen::sizeIsDynamic(et)) {
             for (int i = 0; i < n; i++) {
-                std::string gep = newTmp("ctorelt");
-                out << "  " << gep << " = getelementptr inbounds " << llty
-                    << ", ptr " << addr << ", i64 0, i64 " << i << "\n";
-                emitConstructHooks(gep, et, out);
+                std::string gep = emitElemAddr(addr, et, std::to_string(i), out);
+                emitConstructHooks(gep, et, out, in_ctor_body);
             }
         }
         return;
     }
     if (ct.form == widen::Type::Form::kSlid) {
-        // An OPAQUE class dispatches by TU ROLE. The importer's storage is runtime-sized
-        // and its fields are invisible, so it calls @C__$ctor (which default-fills them).
-        // The completer filled the fields at the site (known layout), so it calls
-        // @C__$pctor — the hook body only — skipping the default-fill.
+        // An OPAQUE class at a SITE dispatches by TU ROLE. The importer's storage is
+        // runtime-sized and its fields are invisible, so it calls @C__$ctor (which
+        // default-fills them). The completer filled the fields at the site (known
+        // layout), so it calls @C__$pctor — the hook body only. INSIDE a complete
+        // ctor body there is no site: always the complete @C__$ctor.
         if (widen::slidOpaque(cs)) {
             char const* suffix =
-                widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare
+                (in_ctor_body
+                 || widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare)
                     ? "__$ctor" : "__$pctor";
             out << "  call void @" << widen::classSymbol(cs) << suffix << "(ptr "
                 << addr << ")\n";
@@ -1985,20 +2135,21 @@ void emitConstructHooks(std::string const& addr, widen::TypeRef type,
                 << addr << ")\n";
         return;
     }
-    emitSlotCtors(addr, cs, out);   // a tuple: construct each hook-carrying slot
+    // a tuple: construct each hook-carrying slot
+    emitSlotCtors(addr, cs, out, in_ctor_body);
 }
 
 // Construct each hook-carrying slot of a class / tuple in place (declaration order —
 // the base subobject is field 0, so it constructs first).
-void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out) {
-    std::string llty = llvmForRef(cs);
+void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out,
+                   bool in_ctor_body) {
     std::vector<widen::TypeRef> slots = widen::get(cs).slots;  // copy: recursion may intern
     for (std::size_t i = 0; i < slots.size(); i++) {
-        if (typeNeedsHook(slots[i], true)) {
-            std::string gep = newTmp("ctorfld");
-            out << "  " << gep << " = getelementptr inbounds " << llty
-                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
-            emitConstructHooks(gep, slots[i], out);
+        // A dynamic (opaque-bearing) slot is ALWAYS routed, hooks or not — the
+        // POD-opaque rule extended to fields.
+        if (typeNeedsHook(slots[i], true) || widen::sizeIsDynamic(slots[i])) {
+            std::string gep = emitSlotAddr(addr, cs, i, out);
+            emitConstructHooks(gep, slots[i], out, in_ctor_body);
         }
     }
 }
@@ -2011,7 +2162,9 @@ void emitSlotCtors(std::string const& addr, widen::TypeRef cs, std::ostream& out
 void emitClassCtorBody(std::string const& addr, widen::TypeRef cs,
                        std::ostream& out) {
     bool has_ctor = widen::get(cs).has_ctor;   // capture before emitSlotCtors interns
-    emitSlotCtors(addr, cs, out);
+    // in_ctor_body: this IS the shared complete ctor — an opaque slot gets its
+    // COMPLETE @Op__$ctor here (no site fill precedes this symbol in any TU).
+    emitSlotCtors(addr, cs, out, /*in_ctor_body=*/true);
     if (g_vtable_syms.count(widen::classSymbol(cs)))
         out << "  store ptr @" << widen::classSymbol(cs) << "__$vtable, ptr "
             << addr << "\n";
@@ -2031,13 +2184,11 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
     widen::Type const& ct = widen::get(cs);
     if (ct.form == widen::Type::Form::kArray) {
         int n = ct.dims[0];   // capture before arrayElemOf interns (dangles ct)
-        std::string llty = llvmForRef(cs);
         widen::TypeRef et = arrayElemOf(cs);
-        if (typeNeedsHook(et, false)) {
+        // Dynamic element: always routed (mirrors emitConstructHooks).
+        if (typeNeedsHook(et, false) || widen::sizeIsDynamic(et)) {
             for (int i = n; i-- > 0; ) {
-                std::string gep = newTmp("dtorelt");
-                out << "  " << gep << " = getelementptr inbounds " << llty
-                    << ", ptr " << addr << ", i64 0, i64 " << i << "\n";
+                std::string gep = emitElemAddr(addr, et, std::to_string(i), out);
                 emitDestructHooks(gep, et, out);
             }
         }
@@ -2061,13 +2212,11 @@ void emitDestructHooks(std::string const& addr, widen::TypeRef type,
 // (the base subobject, field 0, is torn down last — the vptr "downgrades" toward the
 // root, the C++ rule).
 void emitSlotDtors(std::string const& addr, widen::TypeRef cs, std::ostream& out) {
-    std::string llty = llvmForRef(cs);
     std::vector<widen::TypeRef> slots = widen::get(cs).slots;  // copy: recursion may intern
     for (std::size_t i = slots.size(); i-- > 0; ) {
-        if (typeNeedsHook(slots[i], false)) {
-            std::string gep = newTmp("dtorfld");
-            out << "  " << gep << " = getelementptr inbounds " << llty
-                << ", ptr " << addr << ", i32 0, i32 " << i << "\n";
+        // Dynamic slot: always routed (mirrors emitSlotCtors).
+        if (typeNeedsHook(slots[i], false) || widen::sizeIsDynamic(slots[i])) {
+            std::string gep = emitSlotAddr(addr, cs, i, out);
             emitDestructHooks(gep, slots[i], out);
         }
     }
@@ -2180,7 +2329,6 @@ void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
     std::vector<ast::Node const*> elems;
     collectArrayElementNodesAst(rhs, at.dims, 0, elems);
     for (std::size_t i = 0; i < elems.size(); i++) {
-        std::string gep = newTmp("aelt");
         std::string v;
         if (!elem_class) {
             // A nested ARRAY element is built as an array value (not a tuple).
@@ -2188,14 +2336,25 @@ void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
                 ? emitArrayLiteralValue(elem, *elems[i], syms, pool, out, diag)
                 : emitExpr(*elems[i], syms, pool, out, diag, elem);
         }
-        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr "
-            << alloca_name << ", i64 " << i << "\n";
+        std::string gep = emitElemAddr(alloca_name, elem, std::to_string(i), out);
         if (elem_class) {
             emitInitFill(gep, elem, elem_ll, *elems[i], is_move, syms, pool, out, diag);
             continue;
         }
         out << "  store " << elem_ll << " " << v << ", ptr " << gep << "\n";
     }
+}
+
+// Is a slot's content constructed ENTIRELY by opaque complete ctors — a direct
+// opaque class, or an array (of arrays) of one? Such a slot of a computed-layout
+// class is CTOR-OWNED: the shared complete ctor default-fills it in every TU, so
+// no site fill may touch it (see emitTupleFromTuple).
+bool slotCtorOwned(widen::TypeRef t) {
+    widen::TypeRef s = widen::strip(t);
+    if (widen::form(s) == widen::Type::Form::kSlid) return widen::slidOpaque(s);
+    if (widen::form(s) == widen::Type::Form::kArray)
+        return slotCtorOwned(widen::get(s).elem);
+    return false;
 }
 
 // Initialize a TUPLE from a tuple LITERAL, slot by slot — the tuple twin of
@@ -2212,16 +2371,22 @@ void emitTupleFromTuple(std::string const& addr, widen::TypeRef tupType,
                         ast::Node const& rhs, bool is_move, SymTab const& syms,
                         strings::Pool& pool, std::ostream& out,
                         diagnostic::Sink& diag) {
-    std::vector<widen::TypeRef> const& slots =
-        widen::get(widen::strip(tupType)).slots;
-    std::string tup_ll = llvmForRef(tupType);
+    widen::TypeRef ts = widen::strip(tupType);
+    bool computed_class = widen::form(ts) == widen::Type::Form::kSlid
+        && widen::slidComputedLayout(ts);
+    std::vector<widen::TypeRef> slots = widen::get(ts).slots;   // copy: no dangle
     assert(rhs.children.size() == slots.size()
         && "emitTupleFromTuple: slot count != literal element count (classify validated)");
     for (std::size_t i = 0; i < slots.size(); i++) {
         widen::TypeRef sty = slots[i];
-        std::string gep = newTmp("telt");
-        out << "  " << gep << " = getelementptr inbounds " << tup_ll << ", ptr "
-            << addr << ", i32 0, i32 " << i << "\n";
+        // An OPAQUE slot of a COMPUTED-layout class is CTOR-OWNED in every TU:
+        // its default-fill happens inside the shared complete ctor (@C__$ctor →
+        // the slot's @Op__$ctor), never at a site — the completer's site filling
+        // it would be clobbered by that very refill, and an importer's can't
+        // fill it at all. Skip it here so both TUs construct identically. (Same
+        // for an array-of-opaque slot: its elements are refilled per element.)
+        if (computed_class && slotCtorOwned(sty)) continue;
+        std::string gep = emitSlotAddr(addr, ts, i, out);
         emitInitFill(gep, sty, llvmForRef(sty), *rhs.children[i], is_move,
                      syms, pool, out, diag);
     }
@@ -2264,6 +2429,15 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
     if (dform == widen::Type::Form::kSlid && init.kind == ast::Kind::kTupleExpr
         && widen::slidOpaque(widen::strip(type))
         && widen::slidLinkage(widen::strip(type)) == widen::Type::Linkage::kDeclare) {
+        return;
+    }
+    // A COMPUTED-layout class filled from its construction tuple: its fields are
+    // visible here, but the class has no whole-struct LLVM value to build (the
+    // placeholder type) — distribute the literal SLOT BY SLOT through the funnel,
+    // exactly the class-bearing-tuple rule below (a class is a named tuple).
+    if (dform == widen::Type::Form::kSlid && init.kind == ast::Kind::kTupleExpr
+        && widen::slidComputedLayout(widen::strip(type))) {
+        emitTupleFromTuple(addr, type, init, is_move, syms, pool, out, diag);
         return;
     }
     // An array filled from a tuple LITERAL flows through the array<->tuple bridge.
@@ -2372,9 +2546,11 @@ void emitConstructed(std::string const& addr, widen::TypeRef type,
     // An OPAQUE class is construct/destruct-paired through its @C__$ctor / @C__$dtor even
     // when it needs no hooks (typeNeedsHook sees no hidden fields HERE): an importer cannot
     // fill or tear down fields it can't see, so it must always route through those two.
-    bool opaque = widen::slidOpaque(st);
-    if (!typeNeedsHook(st, /*ctor=*/true) && !opaque) return;
-    assert((opaque || typeNeedsHook(st, /*ctor=*/false))
+    // The same obligation extends to ANY opaque-bearing storage (a computed-layout class,
+    // a tuple/array with an opaque element): its opaque leaves must be routed.
+    bool routed = widen::slidOpaque(st) || widen::sizeIsDynamic(st);
+    if (!typeNeedsHook(st, /*ctor=*/true) && !routed) return;
+    assert((routed || typeNeedsHook(st, /*ctor=*/false))
            && "ctor/dtor hook need diverged — must be language-paired");
     emitConstructHooks(addr, st, out);
     if (register_dtor) {
@@ -2577,7 +2753,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // rebuilt in place: temp + default-move-ASSIGN (whole-value overwrite +
             // null source), then destroy the temp husk.
             if (rhs && rhs->kind == ast::Kind::kCallExpr
-                && typeNeedsHook(it->second.slids_type, /*ctor=*/true)) {
+                && (typeNeedsHook(it->second.slids_type, /*ctor=*/true)
+                    || widen::sizeIsDynamic(it->second.slids_type))) {
                 widen::TypeRef T = it->second.slids_type;
                 // The callee writes its return type into `slot` (sized as T); a class
                 // never converts, so the two must be identical. A non-exact hook
@@ -2590,14 +2767,27 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 std::string sp = newTmp("sp");
                 out << "  " << sp << " = call ptr @llvm.stacksave.p0()\n";
                 std::string slot = newTmp("rettmp");
-                out << "  " << slot << " = alloca " << Tll << "\n";
+                if (dynamicStorage(widen::strip(T))) {
+                    std::string sz = emitSizeValue(widen::strip(T),
+                                                   /*round16=*/false, out);
+                    out << "  " << slot << " = alloca i8, i64 " << sz
+                        << ", align 16\n";
+                } else {
+                    out << "  " << slot << " = alloca " << Tll << "\n";
+                }
                 emitCall(*rhs, syms, pool, out, diag, slot);
                 // Assign the temp into the target: this is the `=` form, so a whole CLASS
                 // goes through its COPY function @<Class>__$copy (runs op= if defined);
-                // a non-class aggregate does a whole-value blit. Then destroy the temp.
+                // a class-BEARING aggregate dispatches per leaf (never a blit past an
+                // op= — the transfer invariant, and a dynamic layout has no whole value
+                // to load anyway); a POD aggregate does a whole-value blit. Then
+                // destroy the temp.
                 widen::TypeRef sT = widen::strip(T);
                 if (widen::form(sT) == widen::Type::Form::kSlid) {
                     emitCopy(it->second.alloca_name, slot, sT, out);
+                } else if (widen::hasInPlaceClass(sT)) {
+                    emitAggregateTransfer(it->second.alloca_name, slot, sT,
+                                          /*is_move=*/false, out);
                 } else {
                     std::string raw = newTmp("mv");
                     out << "  " << raw << " = load " << Tll << ", ptr " << slot
@@ -2721,8 +2911,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             widen::TypeRef pointee = (pf == widen::Type::Form::kPointer
                                    || pf == widen::Type::Form::kIterator)
                 ? widen::get(pts).pointee : widen::kNoType;
+            // Opaque-bearing pointees are ALWAYS routed through destruction —
+            // hooks or not (the POD-opaque rule: hidden fields may need teardown
+            // this TU can't see; emitDestructHooks dispatches @C__$dtor).
             bool needs = pointee != widen::kNoType
-                && typeNeedsHook(pointee, /*ctor=*/false);
+                && (typeNeedsHook(pointee, /*ctor=*/false)
+                    || widen::sizeIsDynamic(pointee));
             // A VIRTUAL pointee always dispatches its destructor through the vtable — the
             // runtime (most-derived) type may need destruction even when the static base
             // type does not, so force the dtor path on.
@@ -2835,14 +3029,22 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // A DISCARDED sret call still constructs its result into a slot — the
             // caller owns it, so destroy it here (otherwise the slot leaks and its
             // ctor goes unbalanced). Materialize the slot, call into it, dtor it.
-            if (typeNeedsHook(stmt.return_type, /*ctor=*/true)) {
+            if (typeNeedsHook(stmt.return_type, /*ctor=*/true)
+                || widen::sizeIsDynamic(stmt.return_type)) {
                 widen::TypeRef T = stmt.return_type;
                 // Reclaim the temp each time so a discarded call in a loop doesn't
                 // grow the stack per iteration.
                 std::string sp = newTmp("sp");
                 out << "  " << sp << " = call ptr @llvm.stacksave.p0()\n";
                 std::string slot = newTmp("rettmp");
-                out << "  " << slot << " = alloca " << llvmForRef(T) << "\n";
+                if (dynamicStorage(widen::strip(T))) {
+                    std::string sz = emitSizeValue(widen::strip(T),
+                                                   /*round16=*/false, out);
+                    out << "  " << slot << " = alloca i8, i64 " << sz
+                        << ", align 16\n";
+                } else {
+                    out << "  " << slot << " = alloca " << llvmForRef(T) << "\n";
+                }
                 emitCall(stmt, syms, pool, out, diag, slot);
                 emitDestructHooks(slot, widen::strip(T), out);
                 out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
@@ -3505,17 +3707,16 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         }
         std::string regname = std::string("%") + d->name + "."
             + std::to_string(d->resolved_entry_id);
-        // An OPAQUE class an importer only DECLARES has an unknown layout here (its LLVM
-        // type is the `{ i8 }` placeholder), so size the storage at runtime from the
-        // completer's @C__$sizeof(). Over-align to 16 — the importer can't know the real
-        // alignment, and 16 satisfies any scalar field. (The completer knows the layout,
-        // so its own instances alloca the real struct.)
+        // DYNAMIC storage — an imported opaque class, a computed-layout class, or
+        // a tuple/array embedding one — has only the `{ i8 }` placeholder LLVM
+        // type, so size the alloca by the size VALUE (an absolute-symbol constant
+        // or the convention expression). Over-align to kOpaqueAlign — this TU
+        // can't know the real alignment, and 16 satisfies any scalar field. (An
+        // opaque class's completer knows the layout, so its own instances still
+        // alloca the real struct.)
         widen::TypeRef ds = widen::strip(d->return_type);
-        if (widen::form(ds) == widen::Type::Form::kSlid && widen::slidOpaque(ds)
-            && widen::slidLinkage(ds) == widen::Type::Linkage::kDeclare) {
-            std::string sz = newTmp("osz");
-            out << "  " << sz << " = call i64 @" << widen::classSymbol(ds)
-                << "__$sizeof()\n";
+        if (dynamicStorage(ds)) {
+            std::string sz = emitSizeValue(ds, /*round16=*/false, out);
             out << "  " << regname << " = alloca i8, i64 " << sz << ", align 16\n";
         } else {
             out << "  " << regname << " = alloca " << llty << "\n";
@@ -3870,59 +4071,64 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // MEMBERWISE operator method synthesized in resolve (synthesizeClassTransferOps, run at
     // the resolveScopeBodies choke point), so those symbols are always defined and there is
     // nothing left to fall back to.)
-    // Per-class size helper. LLVM owns the struct layout, so the byte size is the
-    // GEP-null/ptrtoint of the struct type — emitted as `<Name>__$sizeof()` (v1's
-    // design), which sizeof(Class) (and new/delete) call. A function rather than an
-    // inline expression so it resolves at link time for cross-TU classes (Phase 8).
+    // Per-class size SYMBOLS — for OPAQUE classes only. A local (non-opaque)
+    // class's size is an inline llc constant everywhere it is asked (emitSizeValue),
+    // so it needs no symbol at all. An opaque class's size is known only to the TU
+    // that COMPLETES it, so the completer exports two ABSOLUTE symbols — aliases to
+    // folded inttoptr constants, so LLVM still owns the layout and the two halves
+    // cannot drift:
+    //   @C__$sizeof — the true byte size (SHN_ABS, value = sizeof)
+    //   @C__$size16 — rounded up to widen::kOpaqueAlign (the zero-length 16-aligned
+    //                 vector wrapper makes llc do the rounding), the size the
+    //                 computed-layout convention embeds/strides by — a relocation
+    //                 cannot round, so it ships pre-rounded.
+    // An importer declares them and reads each as `ptrtoint` — a link-time VALUE
+    // the linker patches (GOTPCRELX-relaxed to an immediate), never a call or load.
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
         widen::TypeRef cs = widen::strip(ct);
+        if (!widen::slidOpaque(cs)) continue;
         std::string name = widen::classSymbol(ct);
-        // An OPAQUE class (declared incomplete in a header): its size is only known to the
-        // TU that COMPLETES it, so `__$sizeof` is an EXTERNAL function — the completer
-        // defines it (the folded layout constant), every importer DECLARES it and calls it
-        // at runtime. An importer must NOT compute the size from its own (partial) view.
-        if (widen::slidOpaque(cs)) {
-            if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
-                body << "declare i64 @" << name << "__$sizeof()\n\n";
-                continue;
-            }
-            body << "define i64 @" << name << "__$sizeof() {\n";   // completer: external
-        } else {
-            body << "define internal i64 @" << name << "__$sizeof() {\n";
+        if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
+            body << "@" << name << "__$sizeof = external global i8\n";
+            body << "@" << name << "__$size16 = external global i8\n\n";
+            continue;
         }
         std::string llty = llvmForRef(ct);
-        body << "  %g = getelementptr " << llty << ", ptr null, i32 1\n";
-        body << "  %s = ptrtoint ptr %g to i64\n";
-        body << "  ret i64 %s\n";
-        body << "}\n\n";
+        body << "@" << name << "__$sizeof = alias i8, inttoptr (i64 ptrtoint (ptr "
+             << "getelementptr (" << llty << ", ptr null, i32 1) to i64) to ptr)\n";
+        body << "@" << name << "__$size16 = alias i8, inttoptr (i64 ptrtoint (ptr "
+             << "getelementptr ({ [0 x <16 x i8>], " << llty
+             << " }, ptr null, i32 1) to i64) to ptr)\n\n";
     }
-    // Per-class FIELD-OFFSET table, for a class deriving from an opaque base. The base
-    // sub-object sits at slot 0 with a size only its completer knows, so nothing past it
-    // has a compile-time offset in an importer. The completer folds the whole table (LLVM
-    // computes each offset off its real struct, so the two halves cannot drift) and
-    // exports it; an importer declares it and LOADS the slot it needs. One symbol per
-    // class rather than one per field, and the completer's own layout is untouched — it
-    // still GEPs the struct directly, because there the offsets ARE constants.
+    // Per-slot FIELD-OFFSET symbols, for a class deriving from an opaque base. The
+    // base sub-object sits at slot 0 with a size only its completer knows, so
+    // nothing past it has a compile-time offset in an importer. The completer
+    // exports each offset as an ABSOLUTE symbol `@C__$off<k>` (an alias to the
+    // llc-folded GEP constant — LLVM owns the layout), and an importer reads it as
+    // a link-time value. Slot 0 (the base) is offset 0 by construction: no symbol
+    // (an alias whose value folds to 0 would be a plain `null` aliasee, which LLVM
+    // rejects), no GEP — emitSlotAddr special-cases it. The completer's own layout
+    // is untouched: it still GEPs the real struct, where offsets ARE constants.
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
         widen::TypeRef cs = widen::strip(ct);
         if (!widen::slidRuntimeLayout(cs)) continue;
         std::size_t n = widen::get(cs).slots.size();
-        std::string name = widen::classSymbol(ct) + "__$offsets";
-        std::string arr = "[" + std::to_string(n) + " x i64]";
-        if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
-            body << "@" << name << " = external constant " << arr << "\n\n";
-            continue;
-        }
+        std::string name = widen::classSymbol(ct);
+        bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare;
         std::string llty = llvmForRef(ct);
-        body << "@" << name << " = constant " << arr << " [";
-        for (std::size_t i = 0; i < n; i++) {
-            if (i) body << ", ";
-            body << "i64 ptrtoint (ptr getelementptr (" << llty
-                 << ", ptr null, i32 0, i32 " << i << ") to i64)";
+        for (std::size_t i = 1; i < n; i++) {
+            if (declare_only) {
+                body << "@" << name << "__$off" << i << " = external global i8\n";
+            } else {
+                body << "@" << name << "__$off" << i
+                     << " = alias i8, inttoptr (i64 ptrtoint (ptr getelementptr ("
+                     << llty << ", ptr null, i32 0, i32 " << i
+                     << ") to i64) to ptr)\n";
+            }
         }
-        body << "]\n\n";
+        if (n > 1) body << "\n";
     }
 
     out << "target triple = \"x86_64-pc-linux-gnu\"\n\n";

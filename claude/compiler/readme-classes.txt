@@ -714,14 +714,19 @@ FOR-CLASS — ITERATING A CLASS BY ITS PROTOCOL (landed; resolve understandForCl
 CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
 
   * SIZEOF(Class) — LLVM owns the struct layout, so a class's size is NOT a
-    compile-time constant. codegen emits a per-class `define internal i64
-    @<Name>__$sizeof()` = `getelementptr <struct>, ptr null, i32 1` + `ptrtoint`
-    (v1's design — resolves at link time for cross-TU). The helper symbol is
-    widen::classSymbol(handle) (bare name for file-scope, disambiguated for a
-    local). resolve recognizes a bare class name as a TYPE operand (its kClass
-    entry redirects to the registered kSlid); classify rewrites `sizeof(Class)` to
-    a CALL of that helper (a runtime intptr, NOT foldable — can't init a const).
-    The class kSlid types are threaded parse->ast via a new `ast::Tree.classes`
+    compile-time constant of THIS stage; it is a VALUE, never a call (2026-07-29;
+    the per-class `__$sizeof()` FUNCTION is gone). resolve recognizes a bare class
+    name as a TYPE operand (its kClass entry redirects to the registered kSlid);
+    classify rewrites `sizeof(Class)` to the `<sym>__$sizeof` CALL SHAPE with the
+    class handle riding in param_types[0] (a runtime intptr, NOT foldable — can't
+    init a const); codegen intercepts that shape (emitExpr kCallExpr head) and
+    emits the size via emitSizeValue:
+      - LOCAL layout: the inline constant `ptrtoint (getelementptr (<struct>,
+        null, i32 1))` — llc folds it, same value the old helper returned;
+      - imported OPAQUE: `ptrtoint (ptr @C__$sizeof)` — the completer's ABSOLUTE
+        symbol, patched by the linker (see OPAQUE CLASSES);
+      - COMPUTED layout: the convention expression (see COMPUTED LAYOUT).
+    The class kSlid types are threaded parse->ast via `ast::Tree.classes`
     (desugar populates it).
   * EMPTY CLASS MINIMUM SIZE — an instantiable class with NO fields lowers to the
     1-byte struct `{ i8 }`, not `{  }` (0 bytes), so distinct instances occupy
@@ -735,8 +740,9 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     array/`new[]` elements and tuple slots ALIAS (stride 0 / both at offset 0); a
     plain pair of stack locals only differed by incidental frame layout. Canon
     test/class/empty.sl.
-  * NEW T / NEW T(args) — a class is sized by `call @<Name>__$sizeof()` (not the
-    typeByteSize literal). `new T(args)`: grammar parses the trailing `(args)` onto
+  * NEW T / NEW T(args) — a class is sized by emitSizeValue (the same value
+    sizeof yields; not the typeByteSize literal). `new T(args)`: grammar parses
+    the trailing `(args)` onto
     kNewExpr children[2] (distinct from the leading `new(addr)` placement and `[n]`);
     classify routes it through constructClass (the same field-init tuple as a class
     var-decl); codegen mallocs, then constructs THROUGH THE DECLARATOR FUNNEL —
@@ -1179,8 +1185,8 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   existing paths; no privacy single-file; defaults optional on every field; an empty completed
   class is 1 byte). A COMPLETE class rejects a field-bearing re-open (above) and cannot be
   re-opened as incomplete. Canon test/class/incomplete.sl. Cross-file (LANDED): a `.slh`
-  incomplete class is OPAQUE to an importer that never sees the close — size deferred to a
-  link-time `__$sizeof()`, construction split across the seam. See OPAQUE CLASSES below.
+  incomplete class is OPAQUE to an importer that never sees the close — size deferred to the
+  link-time absolute `@C__$sizeof`, construction split across the seam. See OPAQUE CLASSES below.
 
   BLOCK RE-OPEN. A same-name class with an EMPTY field list re-opens the existing one.
   registerClassName points the re-open node's resolved_entry_id at the PRIMARY's entry and
@@ -1488,8 +1494,9 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
 
     kInternal  the class is declared in a `.sl`. It is PRIVATE to this TU — nothing outside
                can name it, so nothing outside can call its members — and EVERY symbol it
-               owns is `define internal`: the complete `@C__$ctor`/`__$dtor` and `__$sizeof`
-               (run()'s per-class loop), AND every member emitted through emitFunction (the
+               owns is `define internal`: the complete `@C__$ctor`/`__$dtor` (run()'s
+               per-class loop; a non-opaque class has NO size symbols — its size is an
+               inline llc constant), AND every member emitted through emitFunction (the
                hook impls, the transfer ops, ordinary methods — flagged ast internal_def by
                desugar's liftMember, the last place a lifted member knows its owner). This
                is a FIX, not just a policy: two unrelated `.sl` files each declaring a class
@@ -1574,12 +1581,25 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     consumer, with constant field offsets and embeddable BY VALUE, while `Rope` keeps the runtime
     path. Canon test/import tmpl_test.sl (Holder) + tmpl_test2.sl (Pair2 — the SECOND consumer,
     pinning that two independent TUs compute the same layout). Opaque changes three things — its size is a
-  RUNTIME function, its construction is SPLIT across the seam, and its layout-needing uses are
-  REJECTED in an importer.
-    SIZE. `@C__$sizeof` becomes EXTERNAL: the completer `define`s it (the folded GEP-null/ptrtoint
-    constant), every importer `declare`s it and CALLS it. An importer must never compute the size
-    from its own (placeholder `{ i8 }`) view — every opaque local allocas `i8, i64 %sz, align 16`
-    off that call (codegen's entry-block hoist), and `new C` sizes the malloc the same way.
+  LINK-TIME value the completer exports, its construction is SPLIT across the seam, and its
+  layout-needing uses either COMPUTE by convention or are REJECTED in an importer.
+    SIZE (absolute symbols, 2026-07-29 — previously an external `__$sizeof()` FUNCTION). The
+    completer exports two ABSOLUTE symbols (SHN_ABS — the symbol's "value" IS the number),
+    emitted as LLVM aliases to folded inttoptr constants so llc still owns the layout and the
+    two halves cannot drift:
+      @C__$sizeof = alias i8, inttoptr(ptrtoint(getelementptr(<struct>, null, i32 1)))  — true size
+      @C__$size16 = the same folded over `{ [0 x <16 x i8>], <struct> }` — the size ROUNDED UP to
+                    widen::kOpaqueAlign (16). Round-up is not expressible as a relocation, so the
+                    convention's stride/embedding size ships pre-rounded.
+    An importer emits `@C__$sizeof = external global i8` and reads the value as the CONSTANT
+    `ptrtoint (ptr @C__$sizeof to i64)` — one relocation, which the PIE link relaxes
+    (R_X86_64_REX_GOTPCRELX against an ABS symbol) to a plain immediate: no call, no load. A
+    compile-time addend rides as a getelementptr on the symbol (S+A, still one relocation).
+    Verified on LLVM 18 + GNU ld PIE, incl. static resolution in data initializers. An importer
+    must never compute the size from its own (placeholder `{ i8 }`) view — every opaque local
+    allocas `i8, i64 <value>, align 16` (codegen's entry-block hoist), and `new C` sizes the
+    malloc the same way. A NON-opaque class exports no size symbols at all — its size is asked
+    per-TU as an inline llc constant (emitSizeValue).
     CONSTRUCTION IS DIVIDED BETWEEN TWO SITES, and this is the whole feature: the PUBLIC fields
     (any before the `...`) are filled at the call site as usual; the HIDDEN fields are filled by
     the class's OWN ctor. Two symbols carry the split:
@@ -1598,21 +1618,30 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
                  stamp + `@C__$ctor__impl`). A same-TU (known-layout) construction fills the fields
                  at the site and calls `@C__$pctor` DIRECTLY, skipping the default-fill; the
                  placement-new inside `@C__$ctor` dispatches its hook phase here too. So
-                 emitConstructHooks routes an opaque class by TU ROLE: kDeclare → `@C__$ctor`,
-                 kDefine → `@C__$pctor`.
+                 emitConstructHooks routes an opaque class AT A SITE by TU ROLE: kDeclare →
+                 `@C__$ctor`, kDefine → `@C__$pctor`. INSIDE another class's complete ctor body
+                 the role split does not apply — see CTOR-OWNED SLOTS under COMPUTED LAYOUT.
     DESTRUCTION is uniform — both TUs call `@C__$dtor` (no default-fill counterpart needed). A
     POD opaque class (no hooks) STILL emits/declares both `@C__$ctor` and `@C__$dtor` and STILL
     routes construction/destruction through them: emitConstructed / emitDestructHooks gate on
     `typeNeedsHook || slidOpaque`, because the "trivial class, do nothing" shortcut would leave an
     importer reading fields it cannot see. Canon test/import Flat.
-    REJECTED IN AN IMPORTER (layout unknown, so no static offset/stride): embedding one BY VALUE in
-    an aggregate — a class field, an array element, a tuple slot (checkClassByValueAcyclic + a
-    var-entry pass in resolve); a BARE opaque GLOBAL (static storage has no runtime-alloca twin);
-    `new C[n]` (element stride unknown — classify, the heap twin of the stack rejection). A bare
-    LOCAL, a pointer `C^`, and a single `new C` are all fine. Reaching a hidden field or passing an
-    initializer already errors (the importer sees no such field / zero fields). Canon test/import
-    String (str_ + tag_), Mix (every field kind: default, no-default→0, recursive class field,
-    array, exercised through getters), Flat (POD).
+    EMBEDDING ONE BY VALUE — a class field, an array element (incl. an array FIELD), a tuple slot,
+    a bare local array — is LEGAL since 2026-07-29: the container gets a COMPUTED LAYOUT (next
+    section). WHAT REMAINS REJECTED: a GLOBAL whose storage would need the layout (a bare
+    imported-opaque global, or any convention-laid-out type — static storage cannot be
+    runtime-sized; the var-entry pass in resolve); `new C[n]` of an imported opaque or computed
+    class (classify — the heap-array machinery runs on a static element type; a completer's own
+    opaque element stays allowed, it is the real struct); a BY-VALUE parameter (the standing
+    non-primitive munge rule — no opaque dispensation); reaching a hidden field or passing a
+    construction initializer (the importer sees no such field / zero fields); and, NEW,
+    completer-side: an opaque class whose exported layout cannot FOLD because a (hidden) field
+    embeds another module's incomplete (or a computed-layout) class — an ELF symbol table cannot
+    hold a relocation, so the absolute exports would be unmintable (checkOpaqueExportFoldable;
+    canon test/import extra.slh/extra.sl, the SECOND header module that exists to spell it:
+    BadPack completed with a hidden Rope, and with a hidden computed-layout LPack).
+    Canon test/import Rope (str_ + tag_), Mix (every field kind: default, no-default→0, recursive
+    class field, array, exercised through getters), Flat (POD).
 
   DERIVING FROM AN OPAQUE CLASS (LANDED). `Base : Derived` where Base is an imported incomplete
   class. The base sub-object KEEPS SLOT 0 — every upcast stays a no-op, and that is exactly why
@@ -1630,19 +1659,23 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     layout rejections. Those are precisely the three things a derived class needs, so it joins
     that machinery (propagateRuntimeLayout sets slidOpaque too) instead of a second copy of it.
     Sizeof, the ctor/dtor routing, and the runtime-sized alloca all come for free.
-    OFFSETS. `@C__$offsets` is a `[N x i64]` table, one entry per SLOT (including the base at 0).
-    The COMPLETER folds it off its real struct — `ptrtoint (getelementptr (<struct>, null, 0, k))`
-    per slot, so LLVM computes every offset and the two halves cannot drift — and exports it; an
-    importer emits `external constant` and LOADS the entry it needs, then GEPs by bytes. ONE
-    symbol per class, not one per field. Slot 0 folds to 0, so an upcast rides the same path with
-    no special case. The completer's own layout and GEPs are UNTOUCHED: there the offsets ARE
-    constants, and it keeps indexing the struct directly.
+    OFFSETS (absolute symbols, 2026-07-29 — previously a `[N x i64]` table an importer LOADED).
+    The COMPLETER exports one ABSOLUTE symbol per slot k ≥ 1, `@C__$off<k>`, an alias to the
+    llc-folded `inttoptr(ptrtoint(getelementptr(<struct>, null, 0, k)))` — LLVM computes every
+    offset off the real struct, so the two halves cannot drift. An importer declares each and
+    GEPs by `ptrtoint (ptr @C__$off<k> to i64)` — a link-time value the linker relaxes to an
+    immediate, no load. Slot 0 (the base sub-object) gets NO symbol: its offset is 0 by
+    construction, and an alias whose aliasee folds to 0 is a plain `null`, which LLVM rejects —
+    emitSlotAddr returns the base address unchanged, so an upcast still costs nothing. The
+    completer's own layout and GEPs are UNTOUCHED: there the offsets ARE constants, and it keeps
+    indexing the struct directly.
     CODEGEN. llvmForRef lowers a runtime-layout class in a kDeclare TU to the `{ i8 }` placeholder
     — the same placeholder an opaque class gets — so nothing can structurally index it. BOTH field
-    paths consult the table: the write side (emitElementAddr's kSlid arm) and the read side
-    (emitExpr's kIndexExpr). The read side used to shortcut with a whole-object load +
-    extractvalue; there is no whole object to load here, and routing it back through the address
-    funnel is what guarantees a read and a write of one field land on the same bytes. emitInitFill
+    paths consult the offset symbols through ONE funnel, emitSlotAddr: the write side
+    (emitElementAddr's kSlid arm) and the read side (emitExpr's kIndexExpr). The read side used to
+    shortcut with a whole-object load + extractvalue; there is no whole object to load here, and
+    routing it back through the address funnel is what guarantees a read and a write of one field
+    land on the same bytes. emitInitFill
     skips the SITE FIELD-FILL for any opaque class in an importer — `@C__$ctor` owns the entire
     default-fill. That skip was a latent bug before this landing: invisible for a class with no
     visible fields (an empty `store undef`), fatal for one that has them.
@@ -1660,46 +1693,68 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     and the read would pass each other), base methods on a derived receiver, a base field read by
     a derived method, the upcast, `new`, copy/move/swap/assign, and six negatives.
 
-  COMPUTED LAYOUT — embedding an opaque class BY VALUE (IN PROGRESS, not landed).
-    The rejection above is a limitation, not a law: a class embedding an opaque one has a layout
-    that is a LINK-TIME fact, and the `__$offsets` machinery already proves such a layout can be
-    consulted at run time (Tagged's field access is a table load + byte GEP today). The difference
-    is who can fold the table. For a DERIVED class the completer can — `Tagged` ships in the same
-    header as `Rope`, so `library.sl` sees both. For an EMBEDDING class nobody can: the field list
-    lives in the consumer and the embedded size lives in another module, so the values must be
-    COMPUTED at run time and cached.
-    THE PARTITION (the reason this is worth doing rather than making every access a load). Fields
-    are statically placeable up to AND INCLUDING the first one whose size is not a compile-time
-    constant; only fields AFTER it need the cache. An opaque field is laid out at a fixed
-    OPAQUE ALIGNMENT (widen::kOpaqueAlign = 16) — the same over-alignment every opaque `alloca`
-    already uses — which is what makes the round-up before it a constant, and is why no
-    `__$alignof` export is needed: offset(op2) = offset(op1) + round_up(sizeof(op1), 16) needs
-    only the size, which is already exported. FIELD ORDER IS NOT SPEC'D (slids_reference.md pins
-    only source-level positional meaning for tuple literals), so a later pass may REORDER
-    statically-sized fields first and make the static prefix maximal — that is a separate landing,
-    and its cost is the class-IS-a-tuple identity: every positional consumer would need a
-    declared<->layout map.
-    ARRAYS OF AN OPAQUE CLASS MUST WORK TOO (`String s_[3]` is required syntax, user 2026-07-28).
-    An array indexes at a runtime STRIDE — `base + i * round_up(sizeof(T), kOpaqueAlign)` — off
-    the same cached value, so it is the same mechanism, NOT the separate rejection an earlier
-    reading of this section assumed. The rejections that genuinely survive are the ones with no
-    table to consult: a bare opaque GLOBAL (static storage, no runtime size), and an initializer
-    list at a site that cannot place the fields.
-    STATE. Landed so far, inert: widen::Type.computed_layout + setSlidComputedLayout /
-    slidComputedLayout, and widen::kOpaqueAlign with the convention documented. Nothing sets or
-    reads the flag, so behaviour is unchanged and the suite is green. REMAINING, in the order it
-    should be taken: (1) resolve — split checkClassByValueAcyclic's opaque rejection, which today
-    cannot tell a direct field from an array element because collectByValueClasses flattens
-    arrays and tuples, then add a computed_layout fixpoint beside propagateRuntimeLayout;
-    (2) codegen for the SINGLE non-static field case, where no cache is needed at all (every
-    offset constant, size = const + `@Op__$sizeof()`); (3) the cached table for two or more —
-    `@C__$offsets` becomes a MUTABLE global filled by an idempotent `@C__$layout()` (lazy, guarded
-    by a done flag, calling its field classes' `__$sizeof()` so ordering solves itself, the shape
-    VarInfo::touch_symbol already uses), with `@C__$sizeof()` ensuring layout then returning the
-    computed size. Each of (1)-(3) keeps the suite green on its own. The hazard to respect: the
-    ctor/dtor hooks, the synthesized transfer ops, and new/delete all branch on slidOpaque today
-    and each must learn WHICH layout regime it is in — and every piece has three linkage variants
-    that must keep agreeing across the seam.
+  COMPUTED LAYOUT — embedding an opaque class BY VALUE (LANDED 2026-07-29).
+    A class (or tuple, or array) embedding an imported incomplete class by value is legal: a
+    class field, an array element (incl. an array FIELD — `Rope rs_[2]`), a tuple slot, a bare
+    local array. No TU can fold such a layout (the field list is visible everywhere, the
+    embedded size lives in another module), and no TU needs to: every TU lays it out by ONE
+    CONVENTION, and every layout fact reduces to `constant + Σ mult·size16(opaque leaf)` — no
+    cache, no lazy filler, no mutable table (the earlier cached-`__$layout()` plan is dead; the
+    absolute-symbol exports made it unnecessary).
+    THE PREDICATES (widen, pure structural queries — the inert computed_layout FLAG was
+    deleted). sizeIsDynamic(T): T's storage embeds an opaque class by value at any depth; the
+    opaque flag is universal and the walk never descends into an opaque class's (per-TU) slots,
+    so every TU classifies identically — that universality is what lets two TUs agree on a
+    layout neither can fold. slidComputedLayout(C) = class, not opaque, sizeIsDynamic.
+    staticByteSize/staticByteAlign: numeric layout for STATIC types incl. classes (natural
+    alignment, padding, empty class = 1) — deterministic x86-64 struct rules, needed to place a
+    static field numerically inside a convention layout.
+    THE CONVENTION (widen::layoutSlotOffset / layoutSizeExpr → LayoutExpr {cst, (leaf, mult)}).
+    Walk the slots in declared order: a static field at its natural offset/size; a DYNAMIC field
+    at widen::kOpaqueAlign (16, the over-alignment every opaque alloca already uses) with size
+    round_up(size, 16) — the completer-exported `@C__$size16`, pre-rounded because a relocation
+    cannot round. Every symbolic term is a 16-multiple, so ALL alignment rounding folds into the
+    constant part; a computed sub-class expands structurally (its fields are visible), so terms
+    only ever name opaque leaves; an array multiplies its element expression. Total size rounds
+    to 16 (a dynamic aggregate is 16-aligned). codegen materializes a LayoutExpr (emitLayoutValue
+    / emitSizeValue): no terms → a literal; ONE term ×1 → a single S+A relocation (`ptrtoint
+    (getelementptr (i8, @Leaf__$size16, cst))`) — a link-time immediate after relaxation; more →
+    a short add/mul instruction sequence over the relocated constants.
+    ONE ADDRESS FUNNEL. emitSlotAddr (slots: static struct GEP / runtime-layout `__$off<k>` /
+    convention byte GEP) and emitElemAddr (elements: typed GEP / byte GEP at the size16 stride)
+    are the ONLY slot/element address emitters — emitElementAddr, the read-side kIndexExpr, the
+    hook walks, the aggregate transfer/swap/null/bump walks, and the tuple/array fill bridges all
+    route through them, so a read and a write can never land on different bytes. llvmForRef
+    lowers every convention-laid-out type (computed class ANYWHERE — even the TU that completes
+    the leaf — and any dynamic tuple/array) to the `{ i8 }` placeholder; codegen's
+    dynamicStorage() mirrors that and switches allocas (locals, sret temps, discarded-call slots)
+    to `alloca i8, i64 <size value>, align 16`. The one non-uniform case stays deliberate: a bare
+    opaque class in its COMPLETER is the real struct (its interior is single-TU by construction).
+    ROUTED OBLIGATIONS. An opaque-bearing value is ALWAYS constructed/destroyed through the
+    routed chain, hooks or not (the POD-opaque rule extended): fieldContributesNeed counts an
+    opaque field as contributing BOTH needs, and every gate (emitConstructed, the slot/element
+    hook walks, delete) asks `typeNeedsHook || sizeIsDynamic`.
+    CTOR-OWNED SLOTS (the seam bug this landing hit). A class's complete ctor `@C__$ctor` is ONE
+    symbol shared by every TU, and no site fill precedes it — so inside its BODY an opaque slot
+    must be COMPLETELY constructed (`@Op__$ctor`: default-fill + hooks), never the role-split
+    `$pctor` a site walk uses (emitConstructHooks' in_ctor_body flag, threaded from
+    emitClassCtorBody). Correspondingly the SITE fill of a computed class SKIPS its ctor-owned
+    slots (a direct opaque slot, an array-of-opaque slot — slotCtorOwned in emitTupleFromTuple)
+    in EVERY TU: the completer's site fill would be clobbered by that very refill, and an
+    importer's can't fill them at all. KNOWN CORNER: a completer-side construction list that
+    passes an EXPLICIT initializer for opaque content nested deeper (a tuple slot mixing opaque
+    and static, inside a computed class) is refilled to defaults rather than rejected.
+    STILL REJECTED: any GLOBAL of a convention-laid-out type (static storage cannot be
+    runtime-sized); `new C[n]` of an imported-opaque or computed element; by-value parameters
+    (the standing rule); the completer-unfoldable exports (checkOpaqueExportFoldable, above).
+    FIELD ORDER IS NOT SPEC'D, so a later pass may still REORDER statics first to maximize the
+    constant-offset prefix — now purely a micro-optimization (fewer symbolic terms), not a
+    correctness lever.
+    Canon test/import: Sack/Duo/Trio/TCase/MCase (consumer-local embeddings: single leaf,
+    multi-term, array field, runtime-layout leaf, deep-hidden leaf), Crate (a HEADER class
+    embedding Rope — the seam test: a direct consumer write read back by a sibling-compiled
+    method and vice versa, plus the completer-side half in library.sl), the local array + tuple
+    slot, transfers, `new`, and the sizeof relations.
 
   OPEN. cross-TU globals (LANDED — see readme.txt); multi-header modules. (Overloads across a
   `.slh` now LINK — every function/method mangles to an Itanium `_Z...` symbol off its signature,

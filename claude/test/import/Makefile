@@ -35,10 +35,14 @@ SAMPLES = \
 # bird.sl is a NON-SIBLING source for library.slh: a member declared in a header
 # may be defined in any one .sl, so a header declaring several classes can give
 # each its own file. library.sl still emits Bird's SYNTHESIZED members.
+# extra.sl/.slh is a SECOND header module: its live build is (deliberately) an
+# almost-empty completer — it exists for the completer-unfold negatives, and
+# linking it here keeps the live TU honest.
 OBJS = \
 	consumer \
 	library \
-	bird
+	bird \
+	extra
 
 # Every file holding negative cases. Unlike the other test dirs this is not just
 # $(SAMPLES): a rule about imports has a side per FILE ROLE, and each has to be
@@ -49,6 +53,7 @@ NEGATIVES = \
 	consumer.sl \
 	library.sl \
 	library.slh \
+	extra.sl \
 	tmpl_test.sl \
 	tmpl_test2.sl \
 	tmpl_lib.sl \

@@ -1,0 +1,23 @@
+/*
+test import and linked files.
+this is a SECOND library header, imported alongside library.slh.
+
+its job is the completer-side export rule: an incomplete class's completer
+exports its layout as link-time absolute symbols, so a completion whose
+hidden fields embed ANOTHER module's incomplete (or computed-layout) class
+cannot fold them and must be rejected. that rejection needs two modules to
+exist at all, which is why this header does.
+*/
+
+/*
+claude says:
+
+BadPack declares NO methods and NO hooks on purpose: its completion exists only
+inside extra.sl's negative blocks, so in the live build it stays forever open —
+a declared member would be a symbol no source ever defines. Its only job is to
+be the class those negatives try (and fail) to complete; it is never
+instantiated. (The same never-instantiated pattern as library.slh's NoCtor.)
+*/
+
+/* incomplete class, completed only by the negative cases in extra.sl */
+BadPack(...) { }

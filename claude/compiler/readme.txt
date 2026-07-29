@@ -2199,10 +2199,12 @@ STAGE FILES (.h / .cpp pairs)
             for a string literal (an explicit arm that now agrees with typeByteSize of
             its `const char[N]` type — redundant rather than wrong; see plan.txt STRING
             LITERALS ARE `const char[N]`). A CLASS operand (typeByteSize -1 but a registered
-            class) is the exception: its size is the real struct layout LLVM owns, so
-            it rewrites to a CALL to `<Name>__$sizeof()` (a runtime intptr, NOT
-            foldable — can't init a const). void / an unregistered slid still reports
-            "Cannot take sizeof of 'X'."
+            class) is the exception: its size is the real struct layout LLVM owns (or,
+            imported opaque / computed, a link-time / convention value), so it rewrites
+            to the `<Name>__$sizeof` CALL SHAPE with the class handle in param_types[0]
+            — codegen intercepts it and emits the size as a VALUE (emitSizeValue), not
+            a call (a runtime intptr, NOT foldable — can't init a const). void / an
+            unregistered slid still reports "Cannot take sizeof of 'X'."
             ##type(x) lowering: a kStringifyType node becomes a kStringLiteral whose
             text is the operand's resolved type — alias_label ?: inferred_type, plus
             the const qualifier (a kIdentExpr operand resolving to a kConst -> "const
@@ -2336,10 +2338,12 @@ STAGE FILES (.h / .cpp pairs)
             classify already types the partial index.
             kNewExpr: a heap element must be sized — a primitive / pointer / array /
             TUPLE (compile-time typeByteSize, the tuple laid out with LLVM-default
-            struct alignment) OR a CLASS (runtime __$sizeof, so it IS allocatable);
+            struct alignment) OR a CLASS (its size is a value — llc constant /
+            link-time symbol / convention expression — so it IS allocatable);
             void / a tuple with a class slot / unsized -> "Cannot allocate" (carets
-            the element type, name_tok). An ARRAY of an imported OPAQUE class is also
-            rejected (`new C[n]` — the element stride is unknown here, the heap twin of
+            the element type, name_tok). An ARRAY of an imported OPAQUE class — or of
+            a COMPUTED-layout class — is also
+            rejected (`new C[n]` — the element stride is not a static layout, the heap twin of
             the stack `C a[n]` ban; single `new C` needs no stride and is fine — see
             readme-classes.txt OPAQUE CLASSES). An array size must be integer-class; a
             placement address must be a buffer-class pointer (isBufferClassPtr, the
@@ -2580,7 +2584,7 @@ STAGE FILES (.h / .cpp pairs)
             (TODO stub.)
             (No layout stage: every job the original plan gave it lands in a
             stage with the right inputs — field offsets = codegen index-GEP, struct
-            sizes = the GEP-null/ptrtoint `__$sizeof` helper, mangled names =
+            sizes = inline GEP-null/ptrtoint constants (emitSizeValue), mangled names =
             desugar, needs_ctor/dtor = resolve, vtables [Phase 7] = resolve slot
             assignment + codegen emission. An ast-only pass has neither the entry
             table nor the class graph, so it can't own any of them.)
@@ -2671,14 +2675,16 @@ STAGE FILES (.h / .cpp pairs)
             ast-side endsInReturn / endsInReturnNode (return only) that recurses
             into a trailing block and a both-arms-return if, mirroring classify.
             Mangled names are baked in by desugar (functionSymbol); field offsets
-            are the index-GEP here in codegen (LLVM owns the byte offset). ONE
-            exception, and it is still LLVM that owns it: a class DERIVING from an
-            imported opaque base has no compile-time offsets in an importer, so the
-            COMPLETER folds them into an exported `@C__$offsets` table (a ptrtoint of
-            a null-GEP per slot, off its real struct) and the importer LOADS the entry
-            and GEPs by bytes. Both the write path (emitElementAddr's kSlid arm) and
-            the read path (emitExpr kIndexExpr) go through it — the read side must NOT
-            take its whole-object-load + extractvalue shortcut there, since the object
+            are the index-GEP here in codegen (LLVM owns the byte offset). TWO
+            exceptions: a class DERIVING from an imported opaque base has no
+            compile-time offsets in an importer, so the COMPLETER exports each as an
+            ABSOLUTE symbol `@C__$off<k>` (an alias to the llc-folded null-GEP
+            ptrtoint, off its real struct — still LLVM's numbers) and the importer
+            GEPs by the relocated value; and a COMPUTED-layout class/tuple GEPs by
+            the convention expression (widen::layoutSlotOffset). Both the write path
+            (emitElementAddr's kSlid arm) and the read path (emitExpr kIndexExpr) go
+            through ONE funnel (emitSlotAddr) — the read side must NOT take its
+            whole-object-load + extractvalue shortcut there, since the object
             is a runtime-sized blob typed `{ i8 }`. See readme-classes.txt DERIVING
             FROM AN OPAQUE CLASS.
               Pointers & arrays (Phase 4). References (`T^`) and iterators
@@ -2760,7 +2766,8 @@ STAGE FILES (.h / .cpp pairs)
             is then flexed into dest via widen::convert.
             kNewExpr: `new T` -> `call ptr @malloc(i64 sizeof(T))`; `new T[n]` ->
             `mul i64 n, sizeof(T)` then malloc (sizeof(T) is typeByteSize — a
-            primitive / pointer / array / tuple; a CLASS uses its runtime __$sizeof);
+            primitive / pointer / array / tuple; a CLASS uses its size VALUE via
+            emitSizeValue);
             placement (children[1]) -> the address itself, no allocation. An assert
             guards an unsized element (classify gated it). A class object is
             constructed THROUGH THE FUNNEL (emitConstructAt, register_dtor=false since
