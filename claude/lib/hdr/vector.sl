@@ -150,7 +150,7 @@ Vector<T>(
     }
 
     /* add the element at the end. */
-    void append(T^ element) {
+    void append(T element) {
         insert(size_, element);
     }
 
@@ -163,9 +163,9 @@ Vector<T>(
     }
 
     /* insert the element at the index. */
-    void insert(intptr index, T^ element) {
+    void insert(intptr index, T element) {
         slot = insert(index);
-        slot^ = element^;
+        slot^ = element;
     }
 
     /*

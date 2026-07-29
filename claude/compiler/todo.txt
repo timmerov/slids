@@ -13,6 +13,10 @@ BUGS
     initializer for opaque content nested in a mixed tuple slot of a computed class is silently refilled to defaults
     rather than rejected
 
+  * intpr sz = 100; for (i : 0..sz) fails to compile.
+
+  * dump(#ring^.inward_) fails to compile.
+
 
 UNBLOCKED FEATURES
 

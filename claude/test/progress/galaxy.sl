@@ -87,24 +87,23 @@ Ring(
     /* total mass of the ring. */
     float64 mass_,
     /* number of slices. */
-    int slices_
+    int slices_,
+    /* inward and spinward acceleration. */
+    float64 inward_,
+    float64 spinward_
 ) {
 }
 alias Rings = Vector<Ring>;
+
+alias Floats = Vector<float64>;
 
 Galaxy(
     int nrings_,
     Rings rings_,
 
-    /* track the range of numbers we're summing. */
-    float64 in_min_,
-    float64 in_max_,
-    float64 spin_min_,
-    float64 spin_max_
-
     /* sort numbers before summing them. */
-    //Vector<float64> ins_,
-    //Vector<float64> spins_
+    Floats ins_,
+    Floats spins_
 ) {
     void run() {
         init();
@@ -155,34 +154,42 @@ Galaxy(
             ring^.mass_ = mass_per_radius * ring^.radius_;
             //dump(#ring^.mass_);
         }
+
+        nins = total_slices + 2 * nrings_;
+        nspins = total_slices;
+        ins_.reserve(nins);
+        spins_.reserve(nspins);
+        dump(#nins);
+        dump(#nspins);
     }
 
     void acceleration() {
-        /*
-        track the magnitudes of the numbers we're summing.
-        check if we're adding "too small" numbers to "too large" numbers.
-        */
-        in_min_ = +1e300;
-        in_max_ = 0.0;
-        spin_min_ = +1e300;
-        spin_max_ = 0.0;
 
-        /*for (i : 0..nrings_) {
+        for (i : 0..nrings_) {
             println(String + "Calculating total acceleration on ring " + i + ".");
             for (k : 0..nrings_) {
                 acceleration(i, k);
             }
-        }*/
-        acceleration(nrings_*2/3, nrings_/3);
 
-        in_ratio = in_max_ / in_min_;
-        spin_ratio = spin_max_ / spin_min_;
-        dump(#in_ratio);
-        dump(#spin_ratio);
+            sort(ins_);
+            sort(spins_);
+
+            inward = sum(ins_);
+            spinward = sum(spins_);
+            dump(#inward);
+            dump(#spinward);
+
+            ring = ^rings_[i];
+            ring^.inward_ = inward;
+            ring^.spinward_ = spinward;
+
+            ins_.resize(0);
+            spins_.resize(0);
+        }
     }
 
     void acceleration(int on_idx, int by_idx) {
-        println(String + "Calculating acceleration on ring " + on_idx + " caused by ring " + by_idx + ".");
+        //println(String + "Calculating acceleration on ring " + on_idx + " caused by ring " + by_idx + ".");
 
         /* the rings. */
         on_ring = ^rings_[on_idx];
@@ -195,20 +202,14 @@ Galaxy(
         on_r = on_ring^.radius_;
         by_r = by_ring^.radius_;
 
-        /* two components of acceleration. */
-        float64 inward = 0.0;
-        float64 spinward = 0.0;
-
         /* centripetal acceleration is outward - negative. */
         in = kAngularVelocity2 * on_r;
-        update_in_min_max(in);
-        inward -= in;
+        ins_.append(-in);
 
         /* gravity of central bulge. */
         r2 = on_r * on_r;
         in = kG * kCentralBulgeMass / r2;
-        update_in_min_max(in);
-        inward += in;
+        ins_.append(in);
 
         /*
         contribution from each slice.
@@ -228,40 +229,75 @@ Galaxy(
             d2 = dx*dx + dy*dy;
             a = kG * by_mass / d2;
             d = math:sqrt(d2);
+
             in = a * dx / d;
-            update_in_min_max(in);
+            ins_.append(in);
+
             spin = a * dy / d;
-            update_spin_min_max(in);
-            inward += in;
-            spinward += spin;
-        }
-
-        dump(#inward);
-        dump(#spinward);
-    }
-
-    void update_in_min_max(float64 in) {
-        if (in < 0.0) {
-            in = - in;
-        }
-        if (in_max_ < in) {
-            in_max_ = in;
-        }
-        if (in_min_ > in) {
-            in_min_ = in;
+            spins_.append(spin);
         }
     }
 
-    void update_spin_min_max(float64 spin) {
-        if (spin < 0.0) {
-            spin = - spin;
+    void sort(Floats^ vec) {
+        sz = vec^.size();
+        sort(vec, 0, sz-1);
+
+        /*
+        println("sorted:");
+        for (value : vec^) {
+            println(String + value);
         }
-        if (spin_max_ < spin) {
-            spin_max_ = spin;
+        */
+    }
+
+    void sort(Floats^ vec, intptr first, intptr last) {
+        /* done */
+        if (first >= last) {
+            return;
         }
-        if (spin_min_ > spin) {
-            spin_min_ = spin;
+
+        /* grab the pivot. */
+        raw_pivot = vec^[last];
+        pivot = raw_pivot;
+        if (pivot < 0.0) {
+            pivot = - pivot;
         }
+
+        /* loop. */
+        scan = first;
+        limit = last;
+        while {
+            /*
+            small values stay in place.
+            big values move to the end.
+            */
+            value = vec^[scan];
+            if (value < 0.0) {
+                value = - value;
+            }
+            if (value <= pivot) {
+                ++scan;
+            } else {
+                vec^[limit] = vec^[scan];
+                --limit;
+                vec^[scan] = vec^[limit];
+            }
+        } (scan < limit);
+
+        /* place the pivot at the correct place. */
+        vec^[scan] = raw_pivot;
+
+        /* recurse. */
+        sort(vec, first, scan-1);
+        sort(vec, scan+1, last);
+    }
+
+    float64 sum(Floats^ vec) {
+        float64 total = 0.0;
+        for (value : vec^) {
+            total += value;
+        }
+        return total;
     }
 }
 

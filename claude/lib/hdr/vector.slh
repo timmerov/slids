@@ -51,7 +51,7 @@ Vector<T>(...) {
     void resize(intptr new_size);
 
     /* add the element at the end. */
-    void append(T^ element);
+    void append(T element);
 
     /*
     create an element at the end.
@@ -60,7 +60,7 @@ Vector<T>(...) {
     T^ append();
 
     /* insert the element at the index. */
-    void insert(intptr index, T^ element);
+    void insert(intptr index, T element);
 
     /*
     insert the element at the index.
