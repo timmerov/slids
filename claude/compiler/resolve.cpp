@@ -7402,7 +7402,11 @@ void mintUsurpers(parse::Tree& tree,
         usurperFor(tree, children, minted, base, refined,
                    ch->file_id, ch->qualifier_toks[0]);
     }
-    for (auto& u : minted) children.push_back(std::move(u));
+    // At the FRONT, not appended: a refinement applies to the ENTIRE scope, so its
+    // declaration belongs ahead of every statement — and appending would drop it after
+    // a trailing `return`, where the unreachable-statement check flags it.
+    children.insert(children.begin(), std::make_move_iterator(minted.begin()),
+                    std::make_move_iterator(minted.end()));
 }
 
 // The two things a refinement may not change (refine.sl canon): a ctor/dtor, and a

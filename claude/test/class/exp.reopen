@@ -35,6 +35,8 @@ ec.kQ = 5
 el.via = 37
 el.item = 10
 el.sp = 8
+el.eq = true
+el.aug = 40
 efe.pick = 7
 efe.col = 2
 nc.go = 10
@@ -42,6 +44,8 @@ nc.e = 1
 os.go = 11
 os.kC = 4
 os.e = 1
+os.eq = true
+os.aug = 15
 le.sum = 7
 le.e = 1
 Forward:ctor: 0

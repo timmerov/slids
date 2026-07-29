@@ -77,9 +77,9 @@ so a hoisted class with fields is written in a block, not by qualified name. Sti
 of scope: `global` vars, `...`.
 
 STAGE E (landed): the external form is NOT file-scope-bound. Every external form
-(method / namespace / hoisted-class re-open / const / alias / enum) applies in ANY scope
-the class is DECLARED in — file, namespace body, class body, or function body / nested
-block. relocateOutOfLineMembers runs per-scope (file + registerScopeNames + resolveStmtList
+(method / OPERATOR / namespace / hoisted-class re-open / const / alias / enum) applies in
+ANY scope the class is DECLARED in — file, namespace body, class body, or function body /
+nested block. relocateOutOfLineMembers runs per-scope (file + registerScopeNames + resolveStmtList
 / resolveFunctionBody) and MOVES the qualified node into its target — a LOCAL sibling
 opening — so the target's ordinary registration handles it, no special-casing. A CLASS is
 re-opened only in its OWN scope: a class merely VISIBLE from an enclosing scope is not a
@@ -90,6 +90,21 @@ class or namespace in scope). A NAMESPACE, by contrast, opens in ANY scope: a le
 (const/alias/enum) whose first segment names an enclosing-scope namespace is registered
 into that namespace's frame IN PLACE (registerQualifiedLeaf), left for constfold. A
 qualified MUTABLE var is not a member; a bad qualifier errors per-segment.
+
+An OPERATOR is a method, so the external form names one after the ':' like any other
+member — both spellings, `bool C:op==(int a) { }` (a real return type, qualifier in the
+name slot) and the produce-self `C:op+=(int a) { }` (the leading `C` IS the qualifier).
+This only ever WORKED at file / namespace scope, where parseDefinitionMember falls
+through to parseFunctionDef unconditionally. The two scopes that GATE on
+looksLikeFunctionDef — a class body and a function body — rejected it, because that
+predicate's qualified-name walk consumed `ident (: ident)*` and `op<sym>` is not an
+identifier: the shape stopped being function-like and a function body fell through to a
+var-decl ("Expected ';'" at the ':'). parseFunctionDef could always parse it — only the
+RECOGNIZER was missing the case. readme-classes.txt names the three member spellings
+that are not identifiers (`op<sym>`, `_`, `~`) and says every ':'-chain scan must stop
+before them; looksLikeFunctionDef had the early-out for `_`/`~` (isHookHead) and nothing
+for `op`. Now skipOpName is that third test, in ONE spelling, used by the bare name slot
+and by the qualified TAIL, plus `: op` joining isHookHead in the no-return-type early-out.
 
 STAGE F (landed): the external ENUM form (`enum int Class:E ( kZero );`) — a NAMED enum
 defined out of line. Its members are reached qualified (`Class:E:member`, or `E:member`
@@ -326,6 +341,11 @@ Outer(int o_) {
     alias Sib:Num = int;
     enum int Sib:E ( kA, kB );
     int Sib:go() { Num n = sm() + kC + E:kB; return n; }    // sm + 4 + 1
+    /* an OPERATOR is a method, so it takes the external form like any other member —
+       here in a CLASS BODY, both spellings: a value-producing one WITH a return type,
+       and a produce-self one without. */
+    bool Sib:op==(int a) { return (s_ == a); }
+    Sib:op+=(int a) { s_ += a; }
 }
 
 Forward(int a_) {
@@ -472,12 +492,20 @@ int32 main() {
     int Elc:viaExt() { Num n = v_ + kL; return n; }   // ext method + ext const + alias
     Elc:Item() { int extra() { return im() + 1; } }    // ext hoisted-class re-open
     Elc:Sp { const int kB = 8; }                        // ext namespace def
+    /* an OPERATOR takes the external form here too — a FUNCTION BODY. Both spellings:
+       WITH a return type (whose leading `bool` is a real return type, so the qualifier
+       sits in the name slot) and WITHOUT one (whose leading `Elc` IS the qualifier). */
+    bool Elc:op==(int a) { return (v_ == a); }
+    Elc:op+=(int a) { v_ += a; }
 
     Elc el = (7);
     println(String + "el.via = " + el.viaExt());       // 37   (v_ + kL)
     Elc:Item eit = (9);
     println(String + "el.item = " + eit.extra());      // 10   (im() + 1, via ext re-open)
     println(String + "el.sp = " + Elc:Sp:kB);          // 8    (ext namespace const)
+    println(String + "el.eq = " + (el == 7));          // true (ext operator, function body)
+    el += 3;
+    println(String + "el.aug = " + el.viaExt());       // 40   (v_ 7+3, + kL 30)
 
     /* STAGE F — external ENUM at file scope, namespace body, and class body. */
     Efe efe = (5);
@@ -490,6 +518,9 @@ int32 main() {
     println(String + "os.go = " + os.go());            // 11   (sm + kC + E:kB, class-body forms)
     println(String + "os.kC = " + Outer:Sib:kC);       // 4
     println(String + "os.e = " + Outer:Sib:E:kB);      // 1
+    println(String + "os.eq = " + (os == 6));          // true (ext operator, class body)
+    os += 4;
+    println(String + "os.aug = " + os.go());           // 15   (sm 10 + kC 4 + E:kB 1)
 
     /* STAGE F — external ENUM in a FUNCTION body on a body-local class. */
     Lce(int v_) { int lm() { return v_; } }

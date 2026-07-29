@@ -1504,6 +1504,17 @@ Phase 7 — class advanced
     split into REFINEMENTS below. Canon test/class/reopen.sl (Stages A-F: block/method/
     namespace/hoisted-reopen/chained + const/alias/enum in file/namespace/class/function scope;
     field-add / redefine / leak / bad-path negatives). [[project_reopen_classes]]
+    FOLLOW-UP 2026-07-28: the external OPERATOR form (`bool C:op==(...)`, and the produce-self
+    `C:op+=(...)`) worked ONLY at file / namespace scope. parseFunctionDef always handled it —
+    its qualifier loop names `op<sym>` after the ':' explicitly — but looksLikeFunctionDef, which
+    gates a CLASS BODY and a STATEMENT context, walked a qualified name as `ident (: ident)*` and
+    `op<sym>` is not an identifier, so the shape stopped being function-like and a function body
+    fell through to a var-decl ("Expected ';'" at the ':'). File / namespace scope was unaffected
+    because parseDefinitionMember falls through to parseFunctionDef with no recognizer at all.
+    Fixed with skipOpName — the `op` counterpart to isHookHead, ONE spelling used by the bare
+    name slot AND the qualified TAIL, plus `: op` joining isHookHead in the no-return-type
+    early-out. Canon test/class/reopen.sl (STAGE E: both spellings in a class body and a function
+    body).
   * A CTOR/DTOR IS A METHOD WITH RESTRICTIONS — LANDED 2026-07-16. The governing rule (canon):
     a ctor/dtor is a method with restrictions, LIKE AN OPERATOR, so every syntax a method admits
     it admits too. The restrictions are only: no params, no return type, class-only, ctor never
@@ -1611,6 +1622,10 @@ Phase 7 — class advanced
     demotion is now SAME-SIZE-gated (classChainSameSize; cast.sl stated the iff, ptrBaseUpcastOk
     never enforced it), and explicit `obj.field` now walks the BASE CHAIN (an inherited field was
     reachable only from inside the class; classify splices the `_$base` hops).
+    The minted usurper goes at the FRONT of the scope's children, never appended — a refinement
+    applies to the ENTIRE scope, and appending drops it after a trailing `return`, where the
+    unreachable-statement check flags it (fixed 2026-07-28; a refinement written as the LAST
+    statement of a function body).
     Canon test/class/refine.sl. [[project_refinements]]
   * incomplete-class semantics (`...`)  — LANDED (single-file above; cross-TU opaque in Phase 8)
   * inheritance contracts (`= default`, `= delete`)

@@ -1024,6 +1024,10 @@ NAMESPACE ↔ CLASS — ONE SCOPE ABSTRACTION (landed; spans parse / desugar / c
     namespace/program member that isn't matched is a function def OR `;`-decl, so
     forward declarations parse — looksLikeFunctionDef is a statement-context
     disambiguator that wrongly rejects `name();`, so it gates ONLY in a class body).
+    That asymmetry is load-bearing to read: a shape the RECOGNIZER cannot see still
+    parses at namespace / program scope and fails in a class or function body — how
+    the external OPERATOR form stayed broken in two scopes while working in the other
+    two (see A NAME-SLOT THAT IS NOT A NAME).
     ctor/dtor are method-shaped, legal only in a class. The shared statement-body
     loop is parseStmtsThroughRBrace.
   * DESUGAR — one flatten. flattenScope recurses every scope uniformly: a namespace
@@ -1226,6 +1230,19 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   does). `~` is not an identifier and `_` is reserved wherever a member may be named, so neither is
   spellable as a member name and there is nothing to disambiguate against.
 
+  skipOpName(o) is the same ONE test for the THIRD spelling — `op<sym>` (op plus one operator
+  token, or the two-token `[]`, plus an optional `op*<T>` list); it returns the offset past the
+  name or -1. looksLikeFunctionDef uses it in BOTH places a member name can sit: the bare name
+  slot, and the TAIL of a qualified chain (`bool Class:op==(`), where the `ident (: ident)*` walk
+  necessarily stops before it. `: op` also joins isHookHead in the no-return-type early-out, for
+  `Class:op+=(`. Until this landed the external OPERATOR form worked ONLY at file / namespace
+  scope, where parseDefinitionMember falls through to parseFunctionDef with no recognizer at all;
+  the two scopes that GATE on looksLikeFunctionDef — a class body and a function body — rejected
+  it, a function body falling through to a var-decl ("Expected ';'" at the ':'). parseFunctionDef
+  could always parse the shape; only the recognizer was missing the case, which is the exact
+  hazard this section warns about. Canon test/class/reopen.sl (STAGE E, class body + function
+  body, both spellings).
+
   THE LEADING CHAIN IS THE QUALIFIER. An out-of-line member with NO return type — `C:op+=(…)`,
   `C:_()`, and the CHAINED `A:B:op+=(…)` / `A:B:~()` — leads with the qualifier where a return type
   would sit, so parseFunctionDef reinterprets what parseDeclarator ate. That reinterpretation must
@@ -1299,7 +1316,11 @@ REFINEMENTS (landed; spans resolve / classify; non-virtual)
   (gated on runtime_scope), which is what lets the external form need no special case: the
   usurper is a real local sibling by the time the qualifier walk looks for one — collectScopeOpenings
   answers the REFINED name for a usurper, though its own name is `$Class`. The block form is
-  folded in by the same pass, its members moved onto the usurper and the opening consumed. Two
+  folded in by the same pass, its members moved onto the usurper and the opening consumed. The
+  minted node goes at the FRONT of the scope's children, never appended: a refinement applies to
+  the ENTIRE scope, so its declaration belongs ahead of every statement — and appending drops it
+  after a trailing `return`, where the unreachable-statement check flags it (which is what a
+  refinement written as the LAST statement of a function body did). Two
   guards mirror the re-open path exactly: an opening with a real FIELD is not a re-open in any
   scope (it declares a new local class that merely shadows, and stays one), and the synthetic
   `_$vptr` / `_$base` do not count as fields — a `virtual` member makes the parser add a

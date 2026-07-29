@@ -3854,19 +3854,47 @@ struct Parser {
     // `in_class`: the shape is being read as a CLASS BODY member, where a `;` tail
     // is always a method declaration (see the tail below). A statement context
     // passes false — there the `;` shape is ambiguous with a construction.
+    // `op<sym>` in a NAME slot: `op` plus one operator token, or the two-token `[]`,
+    // plus an optional template list (`op*<T>(`). Returns the offset just past it, or
+    // -1 when the tokens at `o` are not an operator name. THE single spelling — the
+    // bare name-slot arm and the qualified TAIL both use it, the `op` counterpart of
+    // isHookHead.
+    int skipOpName(int o) const {
+        if (peekKind(o) != token::Kind::kOp) return -1;
+        o++;
+        if (peekKind(o) == token::Kind::kLBracket
+            && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
+        else if (isOperatorSymbolKind(peekKind(o))) o++;
+        else return -1;
+        // A TEMPLATE-LIST after the SYMBOL — `op*<T>(` — the same bounded skip as the
+        // named arm below (the symbol was max-munched, so the `<` here is the list's).
+        if (peekKind(o) == token::Kind::kLt
+            && peekKind(o + 1) == token::Kind::kIdentifier) {
+            int q = o + 1;
+            while (peekKind(q) == token::Kind::kIdentifier
+                   && peekKind(q + 1) == token::Kind::kComma
+                   && peekKind(q + 2) == token::Kind::kIdentifier) q += 2;
+            if (peekKind(q + 1) == token::Kind::kGt) o = q + 2;
+        }
+        return o;
+    }
+
     bool looksLikeFunctionDef(bool in_class = false) const {
         int o = 0;
-        // An out-of-line HOOK head — `C:_(`, `A:B:~(` — carries NO return type, so its
-        // leading identifier is the QUALIFIER, not a type. The return-type scan below would
-        // eat it and then find `:` where the name must be, so recognize the shape up front.
-        // (`_`/`~` are reserved wherever a member may be named, so `ident : … : _(` has no
-        // other reading.) parseFunctionDef performs the same reinterpretation.
+        // An out-of-line head whose member name is NOT AN IDENTIFIER and that carries NO
+        // return type — a HOOK `C:_(`, `A:B:~(`, or an OPERATOR `C:op+=(` — leads with the
+        // QUALIFIER where a type would sit. The return-type scan below would eat it and
+        // then find `:` where the name must be, so recognize the shape up front. (`_`/`~`
+        // are reserved wherever a member may be named, and `op` leads no type, so
+        // `ident : … : _(` / `: op` have no other reading.) parseFunctionDef performs the
+        // same reinterpretation.
         if (peekKind(0) == token::Kind::kIdentifier) {
             int q = 1;
             while (peekKind(q) == token::Kind::kColon
                    && peekKind(q + 1) == token::Kind::kIdentifier
                    && !isHookHead(q + 1)) q += 2;
-            if (peekKind(q) == token::Kind::kColon && isHookHead(q + 1)) return true;
+            if (peekKind(q) == token::Kind::kColon
+                && (isHookHead(q + 1) || peekKind(q + 1) == token::Kind::kOp)) return true;
         }
         // An operator method may omit the return type (`op+(...)`); when a return
         // type is present it is scanned exactly as for a named function, and the
@@ -3914,24 +3942,10 @@ struct Parser {
         // name — `Ret const m(...)`, `Ret const op[](...)`. Skip it so the shape is recognized.
         if (peekKind(o) == token::Kind::kConst) o++;
         if (peekKind(o) == token::Kind::kOp) {
-            // `op<sym>`: `op` plus one operator token, or the two-token `[]`. An
-            // `op`-led shape with no return type reaches here with o == 0.
-            o++;
-            if (peekKind(o) == token::Kind::kLBracket
-                && peekKind(o + 1) == token::Kind::kRBracket) o += 2;
-            else if (isOperatorSymbolKind(peekKind(o))) o++;
-            else return false;
-            // A TEMPLATE-LIST after the SYMBOL — `op*<T>(` — the same bounded
-            // skip as the named arm below (the symbol was max-munched, so the
-            // `<` here is the list's).
-            if (peekKind(o) == token::Kind::kLt
-                && peekKind(o + 1) == token::Kind::kIdentifier) {
-                int q = o + 1;
-                while (peekKind(q) == token::Kind::kIdentifier
-                       && peekKind(q + 1) == token::Kind::kComma
-                       && peekKind(q + 2) == token::Kind::kIdentifier) q += 2;
-                if (peekKind(q + 1) == token::Kind::kGt) o = q + 2;
-            }
+            // `op<sym>` in the name slot. An `op`-led shape with NO return type reaches
+            // here with o == 0; `Ret op<sym>` reaches it past the type.
+            o = skipOpName(o);
+            if (o < 0) return false;
         } else {
             if (peekKind(o) != token::Kind::kIdentifier) return false;   // fn name
             o++;
@@ -3941,9 +3955,20 @@ struct Parser {
             // qualifier itself).
             while (peekKind(o) == token::Kind::kColon
                    && peekKind(o + 1) == token::Kind::kIdentifier) o += 2;
+            // The chain's LAST segment may be an OPERATOR — `bool Class:op==(`. An
+            // operator IS a method, so the out-of-line form names one after the ':'
+            // exactly as an inline head does (parseFunctionDef's qualifier loop already
+            // accepts it). `op<sym>` is not an identifier, so the chain walk above stops
+            // BEFORE it and the tail must be recognized here — without this the shape is
+            // not function-like and the statement falls through to a var-decl.
+            if (peekKind(o) == token::Kind::kColon) {
+                int op_end = skipOpName(o + 1);
+                if (op_end >= 0) o = op_end;
+            }
             // A TEMPLATE-LIST after the name — `T add<T, U>(`. Identifiers and commas
             // only, so the skip is bounded; anything else after the `<` is a
-            // comparison, not a function shape.
+            // comparison, not a function shape. (An operator tail consumed its own
+            // list above, and is followed by `(`, so this is a no-op there.)
             if (peekKind(o) == token::Kind::kLt
                 && peekKind(o + 1) == token::Kind::kIdentifier) {
                 int q = o + 1;

@@ -1611,7 +1611,18 @@ STAGE FILES (.h / .cpp pairs)
             the migration table — proper attribution for uint/char
             literal-fit errors.
   grammar   tokens -> parse tree. Pure syntax; every identifier is just a
-            name string. Hand-written recursive descent. Parses: types
+            name string. Hand-written recursive descent.
+            A RECOGNIZER IS NOT THE PARSER, and where the two disagree the
+            recognizer wins by default: looksLikeFunctionDef gates a class body and
+            a statement context but NOT namespace / program scope (which falls
+            through to parseFunctionDef unconditionally, so `name();` forward decls
+            parse). So a shape parseFunctionDef handles but the predicate cannot SEE
+            works at file scope and fails in the other two — how the external
+            operator form `bool C:op==(...)` stayed broken in a class and function
+            body. Every member spelling that is NOT an identifier needs its own test
+            in that predicate: isHookHead for `_(` / `~(`, skipOpName for `op<sym>`
+            (readme-classes.txt, A NAME-SLOT THAT IS NOT A NAME).
+            Parses: types
             (built-in primitives, an identifier type name, a namespace-qualified
             type name `Space:Dir` / `::A:B:T`, + T[] of any); a
             looksLikeQualifiedTypedDecl lookahead routes an identifier-typed decl
