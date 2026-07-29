@@ -967,6 +967,11 @@ int32 main() {
 //-EXPECT-ERROR: may appear only in 'main'
 //void elsewhere() { global; }
 
+/* a TRAILING COMMA in a `global (…)` group's member list. The group rides the same
+   shared list parser as a field tuple and a parameter list, and names its own item. */
+//-EXPECT-ERROR: Expected a global variable after ','.
+//global ( int tc_ = 1, ) { }
+
 /* a type-first SIZED array is rejected — a size goes on the declared NAME (`int a[N]`),
    not the type. The keyword-less file-scope lookahead recognizes it as a decl, so it
    reaches this proper message instead of the old confusing "Expected '('". */

@@ -11,10 +11,12 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
-# The library: string.slh / dump.slh (+ the template source dump.sl beside its
-# header) live in lib/hdr; the merged libslids.o lands in build/lib (lib's
-# Makefile owns it — make.sh builds lib/ before test/). Consumers here compile
-# with -I so `import string;` / `import dump;` resolve.
+# The library: string.slh / math.slh / dump.slh / vector.slh live in lib/hdr, and a
+# TEMPLATE library's source sits BESIDE its header there (dump.sl, vector.sl — the
+# lexer loads the template source next to an imported header). The merged libslids.o
+# lands in build/lib (lib's Makefile owns it — make.sh builds lib/ before test/).
+# Consumers here compile with -I so `import string;` / `import vector;` resolve.
+# vector_test.sl also lives in lib/hdr, beside the library it exercises.
 LIB       = ../../lib
 LIB_HDR   = $(LIB)/hdr
 LIB_BUILD = ../../build/lib
@@ -68,12 +70,18 @@ $(LIB_BUILD)/libslids.o:
 # compiles AFTER its consumers, reading the demand pool (each consumer's .sli,
 # dumped beside its .ll) with --instantiate, so every demanded flavor is
 # emitted once, externally, by the library's own TU. vector has TWO consumers
-# (vector_test + galaxy); dump's consumer is galaxy. dump.sl lives beside its
-# header in lib/hdr, but its OBJECT is per-demand-pool, so it is built here.
-$(BUILD_DIR)/vector.ll: vector.sl $(BUILD_DIR)/vector_test.ll \
+# (vector_test + galaxy); dump's consumer is galaxy. Both sources live beside their
+# headers in lib/hdr, but their OBJECTS are per-demand-pool, so they are built here.
+$(BUILD_DIR)/vector.ll: $(LIB_HDR)/vector.sl $(BUILD_DIR)/vector_test.ll \
 		$(BUILD_DIR)/galaxy.ll $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d $(IFLAGS) --instantiate $(BUILD_DIR)
+
+# vector_test's source moved to lib/hdr beside the library it exercises, so it needs
+# its own rule — the generic `%.sl` rule below looks in THIS directory.
+$(BUILD_DIR)/vector_test.ll: $(LIB_HDR)/vector_test.sl $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector_test.d $(IFLAGS)
 
 # dump compiles from lib/hdr, but the demand pool's PROVENANCE imports name the
 # consumer's own headers (galaxy imports vector/math) — so the consumer's

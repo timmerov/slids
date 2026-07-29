@@ -406,6 +406,14 @@ int32 main() {
 
 /* compiler errors. */
 
+/* a TRAILING COMMA in a METHOD's parameter list. A method's list is a function's —
+   one shared parser, so it reports the same noun; the class field tuple beside it
+   says "field" instead. */
+//-EXPECT-ERROR: Expected a parameter after ','.
+//TcM(int v_) {
+//    int get(int a, ) { return v_ + a; }
+//}
+
 /* a method of an UNRELATED class cannot be called through its class name —
    and the qualifier is NEVER dropped: the caller has its own `fm`, which
    must not silently receive the call (the silent-wrong-target shape). */

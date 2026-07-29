@@ -101,6 +101,10 @@ Galaxy(
     float64 in_max_,
     float64 spin_min_,
     float64 spin_max_,
+
+    /* sort numbers before summing them. */
+    //Vector<float64> ins_,
+    //Vector<float64> spins_
 ) {
     void run() {
         init();

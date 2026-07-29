@@ -186,6 +186,19 @@ int32 main() {
     return 0;
 }
 
+/* a TRAILING COMMA in the field tuple separates nothing. Rejected at the comma —
+   the token to delete. (An empty slot is meaningful when SUPPLYING values, in a
+   construction `Pt p(,2)` or a destructure `(x,,z) = t`, but a declaration list has
+   no name to omit. And `(int x, ...)` is the incomplete form, which this is a
+   half-typed version of.) */
+//-EXPECT-ERROR: Expected a field after ','.
+//TrailComma(int x, ) { }
+
+/* a LEADING or INTERIOR empty slot already failed on the missing name — only the
+   trailing one could slip past the loop's emptiness test. */
+//-EXPECT-ERROR: Expected parameter name.
+//MidComma(int x, , int y) { }
+
 /* a typeless field with NO default has nothing to infer from. */
 //-EXPECT-ERROR: Field 'x' needs an explicit type
 //NoType(x) {

@@ -2022,7 +2022,9 @@ struct Parser {
             if (!expect(token::Kind::kLParen, "(")) return nullptr;
             // Reuse the field/param-list parser (typeless-with-init allowed, no
             // mutable), then convert each param into a global var-decl member.
-            if (!parseParamList(node.get(), /*allow_mutable=*/false)) return nullptr;
+            if (!parseParamList(node.get(), /*allow_mutable=*/false,
+                                /*allow_incomplete=*/false,
+                                /*item=*/"global variable")) return nullptr;
             for (auto& p : node->params) {
                 if (!p) continue;
                 auto v = newNodeAt(parse::Kind::kVarDeclStmt, p->file_id, p->tok);
@@ -4085,8 +4087,11 @@ struct Parser {
     // `allow_mutable` distinguishes a function/method parameter list (where the
     // `mutable` pointer-qualifier is legal) from a class FIELD list (where it is not —
     // a field is a non-parameter; parseType then diagnoses the misplaced keyword).
+    // `item` names what one entry IS ("field" / "parameter" / "global variable"), for
+    // the trailing-comma diagnostic — the one message whose wording the caller decides.
     bool parseParamList(parse::Node* node, bool allow_mutable = true,
-                        bool allow_incomplete = false) {
+                        bool allow_incomplete = false,
+                        char const* item = "parameter") {
         while (peek().kind != token::Kind::kRParen) {
             // A trailing `...` marks an INCOMPLETE class field tuple (a later same-scope
             // re-open may append fields). Only a CLASS field list allows it, and only as
@@ -4133,7 +4138,23 @@ struct Parser {
             }
             node->params.push_back(std::move(p));
             if (peek().kind == token::Kind::kComma) {
+                int comma_tok = pos;
                 advance();
+                // A TRAILING comma. The loop's only emptiness test is its top condition,
+                // which cannot tell "the list is empty" (the legitimate `()`) from
+                // "another item follows" — so without this the comma is consumed, the
+                // loop exits on the `)`, and the separator that separates nothing is
+                // silently forgotten. Caret the COMMA: it is the token to delete. (A
+                // LEADING or INTERIOR empty slot already errors — the loop body runs and
+                // parseDeclarator's Required policy reports the missing name.) A
+                // DESTRUCTURE target list is a different parser entirely
+                // (parseDestructureSlots), where an empty slot — trailing included — is
+                // a MEANINGFUL discard; the two must not share a rule.
+                if (peek().kind == token::Kind::kRParen) {
+                    errorAt(comma_tok,
+                            "Expected a " + std::string(item) + " after ','.");
+                    return false;
+                }
                 continue;
             }
             if (peek().kind != token::Kind::kRParen) {
@@ -4241,7 +4262,8 @@ struct Parser {
         node->type_param_toks = std::move(type_param_toks);
 
         if (!parseParamList(node.get(), /*allow_mutable=*/false,
-                            /*allow_incomplete=*/true)) return nullptr;
+                            /*allow_incomplete=*/true,
+                            /*item=*/"field")) return nullptr;
         // A derived class carries its base as the UNNAMED FIRST FIELD `_$base` of
         // type Base: the layout becomes [Base, own fields...], so construction,
         // ctor/dtor hooks, the needs-fixpoint, and the by-value cycle check all reuse

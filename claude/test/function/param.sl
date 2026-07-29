@@ -116,6 +116,14 @@ int32 main() {
     return 0;
 }
 
+/* a TRAILING COMMA in the parameter list separates nothing — the same shared list
+   parser a class field tuple uses, so it is rejected here identically (the noun is
+   what differs). Careted at the comma. */
+//-EXPECT-ERROR: Expected a parameter after ','.
+//void neg_trail_comma(int a, ) {
+//    println(String + "x" + a);
+//}
+
 /* a parameter with no type and no default has nothing to infer from. */
 //-EXPECT-ERROR: needs an explicit type or a default value
 //void neg_no_type(a) {
