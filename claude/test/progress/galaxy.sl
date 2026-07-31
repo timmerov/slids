@@ -102,6 +102,43 @@ alias Rings = Vector<Ring>;
 
 alias Floats = Vector<float64>;
 
+/*
+math:sin and math:cos are only accurate to like 16 decimal places.
+we can do a wee bit better by only using 0 to pi/2.
+but it's still not perfect because the angle has round-off issues.
+maybe take slice and nslices as parameters.
+assumes angle is 0 to 2pi.
+*/
+float64 sin(float64 angle) {
+    if (angle <= 0.5*math:kPi64) {
+        return math:sin(angle);
+    }
+    if (angle <= math:kPi64) {
+        return math:sin(math:kPi64 - angle);
+    }
+    if (angle <= 1.5*math:kPi64) {
+        return - math:sin(angle - math:kPi64);
+    }
+    return - math:sin(math:k2Pi64 - angle);
+}
+
+/*
+see above.
+assumes angle is 0 to 2pi.
+*/
+float64 cos(float64 angle) {
+    if (angle <= 0.5*math:kPi64) {
+        return math:cos(angle);
+    }
+    if (angle <= math:kPi64) {
+        return - math:cos(math:kPi64 - angle);
+    }
+    if (angle <= 1.5*math:kPi64) {
+        return - math:cos(angle - math:kPi64);
+    }
+    return math:cos(math:k2Pi64 - angle);
+}
+
 Galaxy(
     int nrings_,
     Rings rings_,
@@ -233,8 +270,10 @@ Galaxy(
         }
         for (slice : first..nslices) {
             angle = math:k2Pi64 * slice / nslices;
-            x = by_r * math:cos(angle);
-            y = by_r * math:sin(angle);
+            cosa = cos(angle);
+            sina = sin(angle);
+            x = by_r * cosa;
+            y = by_r * sina;
             dx = x - on_r;
             dy = y;
             d2 = dx*dx + dy*dy;
@@ -246,6 +285,18 @@ Galaxy(
 
             spin = a * dy / d;
             spins_.append(spin);
+
+            /* debugging: search for "wrong" values of sin and cos. */
+            /*if (spin > -1e-27 && spin < 1e-27 && spin != 0.0) {
+                dump(#on_idx);
+                dump(#by_idx);
+                dump(#slice);
+                dump(#nslices);
+                dump(#angle);
+                dump(#sina);
+                dump(#cosa);
+                dump(#spin);
+            }*/
         }
     }
 
