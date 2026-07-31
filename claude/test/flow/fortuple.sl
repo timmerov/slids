@@ -107,6 +107,35 @@ import string;
    global, constructing it before the walk. */
 global (int, int, int) gtup = (10, 20, 30);
 
+/* a NAMESPACE-qualified global tuple. */
+tups {
+    global (int, int, int) nstup = (4, 5, 6);
+}
+
+/* a class holding a TUPLE FIELD — iterated bare inside a method, via `self.`,
+   via `obj.field` / a nested member chain from outside. A field tuple iterates
+   IN PLACE (never a spilled copy), so a by-ref write lands in the object. */
+Trip((int, int, int) t_ = (1, 2, 3)) {
+    int sumBare() {
+        int t = 0;
+        for (x : t_) { t = t + x; }
+        return t;
+    }
+    int sumSelf() {
+        int t = 0;
+        for (x : self.t_) { t = t + x; }
+        return t;
+    }
+}
+Wrap3(Trip trip_) { }
+
+/* a tuple passed by REFERENCE param, iterated through the deref. */
+int sumRef((int, int, int)^ p) {
+    int t = 0;
+    for (x : p^) { t = t + x; }
+    return t;
+}
+
 int32 main() {
 
     /* by value, tuple literal */
@@ -269,6 +298,51 @@ int32 main() {
     for (int^ p : gtup) { p^ = p^ + 1; }
     println(String + "gtup= " + gtup[0] + " " + gtup[1] + " " + gtup[2]);   // 11 21 31
 
+    /* tuple FIELDS: bare / self. / obj.field / nested chain; a by-ref write
+       through the member lands IN PLACE. */
+    Trip tr;
+    println(String + "tbare= " + tr.sumBare());         // 6
+    println(String + "tself= " + tr.sumSelf());         // 6
+    int osum = 0;
+    for (x : tr.t_) { osum = osum + x; }
+    println(String + "tobj= " + osum);                  // 6
+    for (int^ p : tr.t_) { p^ = p^ * 10; }
+    println(String + "tbump= " + tr.sumBare());         // 60
+    Wrap3 w3;
+    int wsum3 = 0;
+    for (x : w3.trip_.t_) { wsum3 = wsum3 + x; }
+    println(String + "tnested= " + wsum3);              // 6
+
+    /* a namespace-qualified global tuple. */
+    int nsts = 0;
+    for (x : tups:nstup) { nsts = nsts + x; }
+    println(String + "nstup= " + nsts);                 // 15
+
+    /* a reference PARAM's deref. */
+    (int, int, int) pt = (2, 3, 4);
+    println(String + "refparam= " + sumRef(^pt));       // 9
+
+    /* CONST tuples — typed and inferred — iterate by value (reads). */
+    const (int, int, int) ctt = (5, 6, 7);
+    int cs1 = 0;
+    for (x : ctt) { cs1 = cs1 + x; }
+    println(String + "consttup= " + cs1);               // 18
+    (int, int, int) seedt = (1, 1, 2);
+    const cinft = seedt;
+    int cs2 = 0;
+    for (x : cinft) { cs2 = cs2 + x; }
+    println(String + "constinf= " + cs2);               // 4
+
+    /* a TUPLE SLOT that is itself a tuple — typed and typeless outer. */
+    ((int, int), (int, int)) tt2 = ((1, 2), (3, 4));
+    int sl1 = 0;
+    for (x : tt2[0]) { sl1 = sl1 + x; }
+    println(String + "slot_typed= " + sl1);             // 3
+    tt3 = ((5, 6), (7, 8));
+    int sl2 = 0;
+    for (x : tt3[1]) { sl2 = sl2 + x; }
+    println(String + "slot_typeless= " + sl2);          // 15
+
     return 0;
 }
 
@@ -307,7 +381,7 @@ negatives — one //-block uncommented per run.
 //}
 
 /* the iterable must be a tuple (or enum / array), not a scalar. */
-//-EXPECT-ERROR: is not an enum, array, or tuple
+//-EXPECT-ERROR: is not an array, enum, class, or tuple
 //int neg_not_tuple() {
 //    int v = 5;
 //    for (x : v) {
@@ -327,4 +401,14 @@ negatives — one //-block uncommented per run.
 //        println(String + "" + c);
 //    }
 //    return 0;
+//}
+
+/* a DECLARED plain `int^` over CONST tuple elements drops the const — mirrors
+   the for-array rule. */
+//-EXPECT-ERROR: does not match the tuple element type 'const int'
+//void neg_const_declared_ref() {
+//    const (int, int, int) ct2 = (1, 2, 3);
+//    for (int^ p : ct2) {
+//        p^ = 9;
+//    }
 //}

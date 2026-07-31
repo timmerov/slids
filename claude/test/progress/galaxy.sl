@@ -120,7 +120,7 @@ Galaxy(
         nrings = (kGalaxyRadius - kCentralBulgeRadius) / kScale;
         //dump(#nrings_f);
         nrings = math:round(nrings);
-        nrings_ = (int=nrings) + 1;
+        nrings_ = (int=nrings);
         //dump(#nrings);
         rings_.resize(nrings_);
         println(String + "Divided the galaxy into " + nrings_ + " rings.");
@@ -130,10 +130,11 @@ Galaxy(
         sum the radii - proportional to circumference.
         */
         float64 sum_radius = 0.0;
-        step_radius = (kGalaxyRadius - kCentralBulgeRadius) / (nrings_ - 1);
+        diff_radius = kGalaxyRadius - kCentralBulgeRadius;
         total_slices = 0;
         for (int i : 0..nrings_) {
-            radius = step_radius * i + kCentralBulgeRadius;
+            factor = (i + (float64=0.5)) / nrings_;
+            radius = diff_radius * factor + kCentralBulgeRadius;
             sum_radius += radius;
             //dump(#radius);
 

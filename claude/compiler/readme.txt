@@ -2041,7 +2041,39 @@ STAGE FILES (.h / .cpp pairs)
             understandForClass into a kForLongStmt over the class's protocol methods
             (size/op[] or begin/end/next) and re-resolved, so classify infers the
             synthesized method calls [a call minted in desugar is never classified —
-            hence lower-at-resolve, not retag-for-desugar]. The INFER-AS-REFERENCE
+            hence lower-at-resolve, not retag-for-desugar]. EVERY SOURCE of an
+            iterable routes through ONE expression dispatch (the dispatchIterExpr
+            lambda in the kForEnumStmt arm): a non-ident expression peeks its type
+            (peekIterableType — idents [local / global / const / field entries],
+            derefs, indexes, calls, and FIELD CHAINS `base.f` off the class
+            layout, reading through one pointer level for `self` / a convention
+            param) and routes on the form; a BARE FIELD name lowers first through
+            lowerFieldRef (ident -> `_$recv^.field`, the one field-access funnel)
+            and then dispatches as the member expression it now is, typed by its
+            kField entry. The in-place-vs-spill decision is parse::iterableIsLvalue
+            — a var / deref / index / a field chain ROOTED in one is storage
+            (iterated in place; a by-ref write lands in the object), everything
+            else spills once to a for-scope temp — shared by the dispatch,
+            understandForClass's spill_recv, and desugar's lowerForTuple
+            re-derivation, so the stages cannot disagree (a member iterable that
+            spilled used to lose its by-ref writes silently). A SIZED-ARRAY PARAM
+            (`int a[3]`) iterates: bodies resolve pre-munge (the entry still reads
+            `int[3]`), so understandForArray applies the munge's promise itself —
+            Entry.param_mutable, stamped at registration, consts the element for a
+            non-mutable param (a by-ref write hits the wall; a declared plain `T^`
+            mismatches) — and desugar's lowerForArray reads the shape through the
+            munged pointer-to-array (codegen's emitElementAddr already indexes
+            through it; classify's for-array narrow check reads through it too).
+            CONST FLOW for a DECLARED by-ref head: a const element keeps its const
+            through the reference — a declared plain `T^` over `const T` elements
+            mismatches (for-array at resolve, for-tuple in classify's
+            kForTupleStmt arm — the rule the `ref^ :` reuse check always
+            enforced). ONE LIMIT: a class whose type is only INFERRED at classify
+            (a typeless local `b = C()`, a slot of a typeless tuple) cannot be
+            understood — for-class lowers at resolve, whose scope frames are gone
+            by classify — and rejects with an honest "class type ... is inferred;
+            requires a declared class type" (not a false "not a class").
+            The INFER-AS-REFERENCE
             head `for (name^ : iter)` (Node.infer_ref, parsed as `IDENT ^ :`) makes
             the typeless loop var bind each element's ADDRESS: for-array forces
             by-ref `Elem^` (a const element rides into the pointee), and REUSE is

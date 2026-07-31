@@ -350,7 +350,7 @@ negatives — one //-block uncommented per run.
 //}
 
 /* iterating a non-enum. */
-//-EXPECT-ERROR: is not an enum
+//-EXPECT-ERROR: is not an array, enum, class, or tuple
 //int neg_not_enum(int n) {
 //    for (int x : n) {
 //        println(String + x);

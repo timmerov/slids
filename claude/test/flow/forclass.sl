@@ -305,6 +305,47 @@ IdxBase : IdxDerived(int extra_ = 0) { }
 // A global class container.
 global IdxVec gvec = (11, 22, 33);
 
+// A class holding a CONTAINER FIELD — iterated bare inside a method, as
+// `self.vec_`, and as `obj.vec_` / a nested member chain from outside. A field
+// container iterates IN PLACE (never a spilled copy), so a by-ref write lands
+// in the object.
+Nest(IdxVec vec_ = (7, 8, 9)) {
+    int sumBare() {
+        int t = 0;
+        for (x : vec_) {
+            t = t + x;
+        }
+        return t;
+    }
+    int sumSelf() {
+        int t = 0;
+        for (x : self.vec_) {
+            t = t + x;
+        }
+        return t;
+    }
+    void bump() {
+        for (int^ r : vec_) {
+            r^ = r^ + 1;
+        }
+    }
+}
+Wrap(Nest nest_) { }
+
+// A NAMESPACE-qualified global container.
+pool {
+    global IdxVec nsvec = (2, 4, 6);
+}
+
+// A reference PARAM's deref as the container.
+int sumThrough(IdxVec^ v) {
+    int t = 0;
+    for (x : v^) {
+        t = t + x;
+    }
+    return t;
+}
+
 int32 main() {
     // ---- size/op[] ----
     IdxVec v;
@@ -530,6 +571,46 @@ int32 main() {
     }
     println(String + "spilled write done");
 
+    // ---- FIELD containers: bare / self. / obj.field / nested chain ----
+    Nest nst;
+    println(String + "field bare: " + nst.sumBare());          // 24
+    println(String + "field self: " + nst.sumSelf());          // 24
+    int fsum2 = 0;
+    for (x : nst.vec_) {
+        fsum2 = fsum2 + x;
+    }
+    println(String + "field obj: " + fsum2);                   // 24
+    nst.bump();   // by-ref write INSIDE the method lands in the object
+    println(String + "field after bump: " + nst.sumBare());    // 27
+    for (int^ r : nst.vec_) {   // by-ref write from OUTSIDE, in place
+        r^ = r^ * 2;
+    }
+    println(String + "field after x2: " + nst.sumBare());      // 54
+    Wrap w;
+    int nsum = 0;
+    for (x : w.nest_.vec_) {
+        nsum = nsum + x;
+    }
+    println(String + "field nested: " + nsum);                 // 24
+
+    // ---- a namespace-qualified global container ----
+    println(String + "ns-qualified global:");
+    for (int x : pool:nsvec) {
+        println(String + "  " + x);
+    }
+
+    // ---- a reference PARAM's deref as the container ----
+    IdxVec pv2;
+    println(String + "ref param deref: " + sumThrough(^pv2));  // 6
+
+    // ---- a class in a (typed) TUPLE SLOT as the container ----
+    (IdxVec, IdxVec) pr;
+    int slotsum = 0;
+    for (x : pr[0]) {
+        slotsum = slotsum + x;
+    }
+    println(String + "tuple-slot container: " + slotsum);      // 6
+
     return 0;
 }
 
@@ -720,6 +801,29 @@ int32 main() {
 //int neg_unused_loop_var() {
 //    IdxVec v;
 //    for (int x : v) {
+//    }
+//    return 0;
+//}
+
+// A TYPELESS local's class type is inferred at classify — too late for the
+// for-class lowering at resolve (the protocol lookup and rewrite need the scope
+// frames). An honest rejection, not a false "not a class".
+//-EXPECT-ERROR: is inferred; a for-loop over a class requires a container with a declared class type
+//int neg_inferred_class_local() {
+//    b = IdxVec();
+//    for (x : b) {
+//        return x;
+//    }
+//    return 0;
+//}
+
+// ...and the expression form of the same limit: a class in a TYPELESS tuple's
+// slot (the outer tuple's type — and so the slot's — is inferred at classify).
+//-EXPECT-ERROR: is inferred; a for-loop over a class requires a container with a declared class type
+//int neg_inferred_class_slot() {
+//    tb = (IdxVec(), IdxVec());
+//    for (x : tb[0]) {
+//        return x;
 //    }
 //    return 0;
 //}

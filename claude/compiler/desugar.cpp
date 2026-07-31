@@ -922,6 +922,13 @@ std::unique_ptr<ast::Node> lowerForArray(parse::Node const& p,
     int arr_id = arrp.resolved_entry_id;
     widen::TypeRef arr_type = arrp.inferred_type;          // classify stamped it
     widen::TypeRef arrS = widen::strip(arr_type);
+    // A sized-array PARAM munges to a pointer-to-array (`int[3]` ->
+    // `((const int)[3])^`) AFTER resolve understood the loop — read the shape
+    // through the pointer. The emitted `arr[_$idx]` indexes through it exactly
+    // as a body-written `a[i]` does (emitElementAddr's implicit-deref base).
+    if (widen::form(arrS) == widen::Type::Form::kPointer) {
+        arrS = widen::strip(widen::get(arrS).pointee);
+    }
     std::vector<int> adims = widen::get(arrS).dims;
     // resolve validated a fixed-size array (>= 1 dim); desugar runs error-free.
     assert(!adims.empty() && "lowerForArray: array has at least one dimension");
@@ -1075,11 +1082,11 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
     parse::Node const& itp = *p.children[1];
     int v_id = lvp.resolved_entry_id;
     bool reuse = (lvp.kind == parse::Kind::kAssignStmt);
-    // In place iff the iterable is an lvalue (var / `ref^` / index); everything
-    // else (a literal, a call, a computed tuple) has no storage -> spill.
-    bool spill = !(itp.kind == parse::Kind::kIdentExpr
-                || itp.kind == parse::Kind::kDerefExpr
-                || itp.kind == parse::Kind::kIndexExpr);
+    // In place iff the iterable is an lvalue (var / `ref^` / index / a field
+    // chain rooted in one); everything else (a literal, a call, a computed
+    // tuple) has no storage -> spill. The SAME test resolve's dispatch used
+    // (parse::iterableIsLvalue), so the stages cannot disagree.
+    bool spill = !parse::iterableIsLvalue(itp);
 
     widen::TypeRef tup_type = itp.inferred_type;
     widen::TypeRef itS = widen::strip(tup_type);

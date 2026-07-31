@@ -702,13 +702,23 @@ FOR-CLASS — ITERATING A CLASS BY ITS PROTOCOL (landed; resolve understandForCl
     reference bound directly — NOT `^c[i]`, which codegen's addr-of rejects]. op[] is
     called as a method node, since `.op[](i)` is not surface syntax and `c[i]` sugar
     always derefs.
-  * CONTAINER LIFETIME: a re-readable lvalue (a var, `ptr^`, an index) is cloned per
+  * CONTAINER LIFETIME: a re-readable lvalue (a var, `ptr^`, an index, a FIELD
+    CHAIN rooted in one — the shared parse::iterableIsLvalue test) is cloned per
     method call; an RVALUE (`C(..)`, `fn()`) is SPILLED to a class temp that WRAPS the
     loop in a block scope — a for-long varlist local is NOT destructed at loop scope,
     a block local IS — so the temp is built once and destructed at loop exit. Synth
     locals are token-suffixed so NESTED for-class loops never collide. Loop-var
     widening/truncation, the unused-loop-var sweep, and break/continue all fall out of
     the kForLongStmt. Canon test/flow/forclass.sl.
+  * CONTAINER SOURCES: any storage or rvalue whose class type resolve can see — a
+    local/global (ns-qualified too), a bare FIELD (lowered to `_$recv^.field` at
+    the for-head, then handled as a member expression), `self.f` / `obj.f` / a
+    nested member chain (peekIterableType reads the field's type off the class
+    layout), a typed tuple slot, a deref, a construction, a call. A field-chain
+    container iterates IN PLACE — protocol methods hit the real object, so by-ref
+    element writes land in it. LIMIT: a container whose class type is only
+    INFERRED at classify (`b = C(); for (x : b)`) rejects — for-class lowers at
+    resolve; the diagnostic says the type is inferred, not that it isn't a class.
 
 
 CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)

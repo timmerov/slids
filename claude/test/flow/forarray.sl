@@ -116,6 +116,71 @@ global int garr[4] = (2, 4, 6, 8);
 Box(int b_ = 0) { }
 global Box gboxes[3];
 
+/* a NAMESPACE-qualified global array. */
+arrs {
+    global int nsarr[3] = (3, 5, 7);
+}
+
+/* a class holding ARRAY FIELDS — iterated bare inside a method (by-ref fill +
+   by-value read), via `self.`, via `obj.field` / a nested member chain from
+   outside, and a 2-D array field (rows force a reference). A field array
+   iterates IN PLACE (never a spilled copy), so writes land in the object. */
+Grid(int data_[3], int cells_[2, 3]) {
+    void fill() {
+        int n = 1;
+        for (r^ : data_) {
+            r^ = n * 10;
+            n = n + 1;
+        }
+    }
+    int sumBare() {
+        int t = 0;
+        for (x : data_) {
+            t = t + x;
+        }
+        return t;
+    }
+    int sumSelf() {
+        int t = 0;
+        for (x : self.data_) {
+            t = t + x;
+        }
+        return t;
+    }
+    int sum2d() {
+        int t = 0;
+        for (row^ : cells_) {
+            for (x : row^) {
+                t = t + x;
+            }
+        }
+        return t;
+    }
+}
+Holder(Grid grid_) { }
+
+/* sized-array PARAMS: a non-mutable param READS (its elements carry the munge's
+   const promise — writes are negatives below); a `mutable` param's by-ref loop
+   WRITES the caller's array. */
+int sumParam(int a[4]) {
+    int t = 0;
+    for (x : a) {
+        t = t + x;
+    }
+    return t;
+}
+void scaleParam(mutable int a[4]) {
+    for (r^ : a) {
+        r^ = r^ * 2;
+    }
+}
+
+/* an array-returning call — the rvalue is SPILLED, then iterated. */
+int[3] makeArr() {
+    int a[3] = (7, 8, 9);
+    return a;
+}
+
 int32 main() {
     int arr[5];
 
@@ -360,6 +425,50 @@ int32 main() {
     for (gr^ : garr) { gr^ = gr^ + 1; }
     println(String + "garr2= " + garr[0] + " " + garr[3]);   // 4 10
 
+    /* array FIELDS: bare (fill + read inside methods), self., obj.field, a
+       by-ref write from outside (in place), a 2-D field, a nested chain. */
+    Grid g;
+    g.fill();
+    println(String + "gbare= " + g.sumBare());        // 60 (10+20+30)
+    println(String + "gself= " + g.sumSelf());        // 60
+    int gosum = 0;
+    for (x : g.data_) { gosum = gosum + x; }
+    println(String + "gobj= " + gosum);               // 60
+    for (r^ : g.data_) { r^ = r^ + 1; }
+    println(String + "gbumped= " + g.sumBare());      // 63
+    println(String + "g2d= " + g.sum2d());            // 0 (default elements)
+    Holder hg;
+    hg.grid_.fill();
+    int hsum = 0;
+    for (x : hg.grid_.data_) { hsum = hsum + x; }
+    println(String + "gnested= " + hsum);             // 60
+
+    /* sized-array params: non-mutable read; mutable write flows to the caller. */
+    int parr[4] = (1, 2, 3, 4);
+    println(String + "psum= " + sumParam(parr));      // 10
+    scaleParam(parr);
+    println(String + "pscaled= " + parr[0] + " " + parr[3]);   // 2 8
+
+    /* a namespace-qualified global array. */
+    int nssum = 0;
+    for (x : arrs:nsarr) { nssum = nssum + x; }
+    println(String + "nssum= " + nssum);              // 15
+
+    /* an array in a TUPLE SLOT, a whole-array reference deref, and an
+       array-returning call (spilled). */
+    (int[3], int) pslot = ((1, 2, 3), 9);
+    int ssum = 0;
+    for (x : pslot[0]) { ssum = ssum + x; }
+    println(String + "slotsum= " + ssum);             // 6
+    int warr[3] = (4, 5, 6);
+    wref = ^warr;
+    int wsum = 0;
+    for (x : wref^) { wsum = wsum + x; }
+    println(String + "wsum= " + wsum);                // 15
+    int mcs = 0;
+    for (x : makeArr()) { mcs = mcs + x; }
+    println(String + "callsum= " + mcs);              // 24
+
     return 0;
 }
 
@@ -402,7 +511,7 @@ int32 main() {
 //}
 
 /* the right-hand side must be an array (or enum / tuple), not a scalar. */
-//-EXPECT-ERROR: is not an enum, array, or tuple
+//-EXPECT-ERROR: is not an array, enum, class, or tuple
 //void neg_scalar() {
 //    int v = 5;
 //    for (int^ it : v) {
@@ -504,5 +613,33 @@ int32 main() {
 //void neg_ref_enum() {
 //    for (r^ : Dir) {
 //        println(String + "" + r^);
+//    }
+//}
+
+/* writing through an inferred reference over a NON-MUTABLE sized-array param —
+   the munge's element const applies inside the loop too. */
+//-EXPECT-ERROR: Cannot write to a const value
+//void neg_param_const_write(int a[3]) {
+//    for (r^ : a) {
+//        r^ = 9;
+//    }
+//}
+
+/* a declared plain `int^` over a non-mutable param's (const) elements would
+   drop the promise. */
+//-EXPECT-ERROR: does not match the array element type 'const int'
+//void neg_param_ref_drop(int a[3]) {
+//    for (int^ r : a) {
+//        r^ = 9;
+//    }
+//}
+
+/* a DECLARED plain `int^` over CONST array elements drops the const — the
+   declared-type mirror of the `ref^ :` reuse rule. */
+//-EXPECT-ERROR: does not match the array element type 'const int'
+//void neg_const_declared_ref() {
+//    const int carr[3] = (1, 2, 3);
+//    for (int^ r : carr) {
+//        r^ = 9;
 //    }
 //}

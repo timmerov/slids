@@ -7785,10 +7785,16 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 lv_t = parse::entryType(tree, s.children[0]->resolved_entry_id);
             }
             if (lv_t != widen::kNoType && !isPtrLikeType(lv_t)) {
-                widen::TypeRef arr_t = s.children[1]->inferred_type;
-                if (widen::form(widen::strip(arr_t))
-                        == widen::Type::Form::kArray) {
-                    widen::TypeRef elem_t = widen::get(widen::strip(arr_t)).elem;
+                widen::TypeRef arr_t = widen::strip(s.children[1]->inferred_type);
+                // A sized-array PARAM munged to a pointer-to-array — the narrow
+                // check reads the array through it (mirrors desugar's shape read).
+                if (widen::form(arr_t) == widen::Type::Form::kPointer
+                    && widen::form(widen::strip(widen::get(arr_t).pointee))
+                           == widen::Type::Form::kArray) {
+                    arr_t = widen::strip(widen::get(arr_t).pointee);
+                }
+                if (widen::form(arr_t) == widen::Type::Form::kArray) {
+                    widen::TypeRef elem_t = widen::get(arr_t).elem;
                     checkValueWiden(lv_t, elem_t,
                                     s.children[0]->file_id,
                                     s.children[0]->tok, diag);
@@ -7870,7 +7876,12 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 if (by_ref && !slots.empty()) {
                     widen::TypeRef pointee =
                         widen::get(widen::strip(var_decl.return_type)).pointee;
-                    if (widen::strip(pointee) != widen::strip(elem)) {
+                    // CONST FLOW: a const element keeps its const through the
+                    // reference — a declared plain `T^` would drop it (mirrors
+                    // the for-array rule at resolve).
+                    if (widen::strip(pointee) != widen::strip(elem)
+                        || (elem != widen::removeConst(elem)
+                            && pointee == widen::removeConst(pointee))) {
                         diagnostic::report(diag, {var_decl.file_id, var_decl.name_tok,
                             "Loop variable type '"
                                 + widen::spellOrEmpty(var_decl.return_type)
@@ -7921,16 +7932,34 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             } else if (it_ref.inferred_type != widen::kNoType) {
                 // An unknown-typed iterable the dispatcher routed here on faith (a
                 // typeless local — arrays are always typed — or an inferred-typed
-                // expression, the only iterable expression form being a tuple) that
-                // did NOT infer to a tuple: `x = 5; for (v : x)`, or an inferred ref
-                // to a non-tuple. A named local names itself; an expression uses the
-                // operand wording. (kNoType => an earlier error already fired.)
-                if (it_ref.kind == parse::Kind::kIdentExpr) {
+                // expression) that did NOT infer to a tuple or array. A CLASS
+                // discovered only NOW is a special case: for-class lowers at
+                // RESOLVE (the protocol lookup and the kForLongStmt rewrite need
+                // the scope frames, gone by classify) — a late-typed class
+                // container cannot be understood, and calling it "not a class"
+                // would be false. Everything else: a named local names itself; an
+                // expression uses the operand wording. (kNoType => an earlier
+                // error already fired.)
+                bool is_class = widen::form(widen::strip(it_ref.inferred_type))
+                                == widen::Type::Form::kSlid;
+                if (is_class && it_ref.kind == parse::Kind::kIdentExpr) {
                     diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
-                        "'" + it_ref.name + "' is not an enum, array, or tuple.", {}});
+                        "The class type of '" + it_ref.name + "' ('"
+                        + widen::spellOrEmpty(widen::strip(it_ref.inferred_type))
+                        + "') is inferred; a for-loop over a class requires a "
+                          "container with a declared class type.", {}});
+                } else if (is_class) {
+                    diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
+                        "The for-loop operand's class type ('"
+                        + widen::spellOrEmpty(widen::strip(it_ref.inferred_type))
+                        + "') is inferred; a for-loop over a class requires a "
+                          "container with a declared class type.", {}});
+                } else if (it_ref.kind == parse::Kind::kIdentExpr) {
+                    diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
+                        "'" + it_ref.name + "' is not an array, enum, class, or tuple.", {}});
                 } else {
                     diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
-                        "A for-loop operand must be an enum, an array, or a tuple.",
+                        "A for-loop operand must be an array, an enum, a class, or a tuple.",
                         {}});
                 }
             }

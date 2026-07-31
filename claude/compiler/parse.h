@@ -412,6 +412,23 @@ struct Node {
     int self_entry_id = -1;
 };
 
+// A for-iterable expression that denotes STORAGE — iterated in place (for-tuple /
+// for-array) or re-read per protocol call (for-class): a named variable, a deref,
+// an index, or a FIELD CHAIN rooted in one of those. A call / construction /
+// literal is an rvalue — spilled once to a for-scope temp. ONE test, shared by
+// resolve (the for-head dispatch, understandForClass's spill decision) and
+// desugar (lowerForTuple's re-derivation), so the stages can never disagree on
+// what iterates in place.
+inline bool iterableIsLvalue(Node const& e) {
+    if (e.kind == Kind::kIdentExpr
+        || e.kind == Kind::kDerefExpr
+        || e.kind == Kind::kIndexExpr) return true;
+    if (e.kind == Kind::kFieldExpr)
+        return !e.children.empty() && e.children[0]
+            && iterableIsLvalue(*e.children[0]);
+    return false;
+}
+
 enum class EntryKind {
     kFunction,
     kLocalVar,
@@ -514,6 +531,12 @@ struct Entry {
                                   // ignores a parameter's const facets — the param
                                   // munge makes every reference pointee const, and
                                   // PARAM enforcement is deferred (todo Phase 6).
+    bool param_mutable = false;   // kLocalVar param: declared `mutable`. Bodies
+                                  // resolve BEFORE mungeParamTypes rewrites the
+                                  // entry's type, so a site that must apply the
+                                  // munge's promise DURING body resolution (the
+                                  // for-array element const) reads the flag, not
+                                  // the not-yet-rewritten type.
     bool tmpl_ref_param = false;  // kLocalVar: a template instance's BARE-T parameter
                                   // that munged to `(const T)^` (tmpl_value_param, class/
                                   // tuple binding). classify's ident arm auto-derefs

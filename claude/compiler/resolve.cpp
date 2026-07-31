@@ -3191,6 +3191,14 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     // Element type + length come off the array handle STRUCTURALLY (one subscript
     // strips the first dim). strip() sees through an alias-typed array.
     widen::TypeRef arrS = widen::strip(tree.entries[arr_id].slids_type);
+    // A NON-MUTABLE sized-array PARAM munges to a pointer-to-const-array (`int[3]`
+    // -> `((const int)[3])^`) — but only AFTER bodies resolve, so the entry still
+    // reads plain here. Apply the same element-wise promise now: a by-ref loop var
+    // carries the const (a body write hits the wall), a declared plain `T^`
+    // mismatches, and a by-value read is unaffected.
+    if (tree.entries[arr_id].is_param && !tree.entries[arr_id].param_mutable) {
+        arrS = widen::strip(widen::deepConst(arrS));
+    }
     widen::TypeRef aelem = widen::get(arrS).elem;
     std::vector<int> adims = widen::get(arrS).dims;
     widen::TypeRef elemRef = (adims.size() <= 1)
@@ -3215,8 +3223,13 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     bool by_ref = isReferenceType(var_decl.return_type);
     if (by_ref) {
         // A by-ref loop var `T^` references the element type T (pointee == elem).
+        // CONST FLOW: a const element keeps its const through the reference — a
+        // declared plain `T^` over `const T` elements would drop it (writes
+        // through the loop var would land in const storage), so it mismatches.
         widen::TypeRef pointeeRef = widen::get(widen::strip(var_decl.return_type)).pointee;
-        if (widen::strip(pointeeRef) != widen::strip(elemRef)) {
+        if (widen::strip(pointeeRef) != widen::strip(elemRef)
+            || (elemRef != widen::removeConst(elemRef)
+                && pointeeRef == widen::removeConst(pointeeRef))) {
             // The loop var is a reference whose pointee ISN'T the element. If the
             // loop var type IS the element type, this is a by-VALUE copy of a
             // reference-typed element (`int^ v : int^[]` — a by-ref binding would
@@ -3348,9 +3361,35 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
     if (e.kind == parse::Kind::kIdentExpr) {
         int id = isQualified(e) ? resolveQualifiedRef(tree, e, diag)
                                 : resolveName(tree, e.name);
-        if (id < 0 || tree.entries[id].kind != parse::EntryKind::kLocalVar)
+        if (id < 0) return widen::kNoType;
+        // Any STORAGE-backed name peeks its declared type: a local, a global, a
+        // (runtime) const, or a class FIELD (a bare field as a member-expr BASE —
+        // the field-access lowering fires when the iterable itself resolves).
+        parse::EntryKind k = tree.entries[id].kind;
+        if (k != parse::EntryKind::kLocalVar && k != parse::EntryKind::kGlobalVar
+            && k != parse::EntryKind::kConst && k != parse::EntryKind::kField)
             return widen::kNoType;
         return tree.entries[id].slids_type;
+    }
+    if (e.kind == parse::Kind::kFieldExpr) {
+        // `base.field` — the field's declared type off the base class's layout.
+        // The base may peek as the class itself or as a pointer to it (`self`
+        // arrives as the receiver's pointee; a convention param as `(const T)^`
+        // — classify auto-derefs its uses, so peek reads through one level).
+        if (e.children.empty() || !e.children[0]) return widen::kNoType;
+        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag));
+        if (widen::form(b) == widen::Type::Form::kPointer
+            || widen::form(b) == widen::Type::Form::kIterator) {
+            b = widen::strip(widen::get(b).pointee);
+        }
+        b = widen::strip(widen::removeConst(b));
+        if (widen::form(b) != widen::Type::Form::kSlid) return widen::kNoType;
+        auto it = tree.classes.find(b);
+        if (it == tree.classes.end()) return widen::kNoType;
+        int fi = it->second.fieldIndex(e.name);
+        if (fi < 0 || fi >= static_cast<int>(it->second.field_types.size()))
+            return widen::kNoType;
+        return it->second.field_types[fi];
     }
     if (e.kind == parse::Kind::kDerefExpr) {
         widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag));
@@ -3383,6 +3422,8 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
     }
     return widen::kNoType;
 }
+// (The lvalue-vs-spill test for a for-iterable is parse::iterableIsLvalue —
+// shared with desugar's lowerForTuple, which re-derives the same decision.)
 
 // Understand `for (v : <iterable>) {body}` over a homogeneous tuple WITHOUT
 // lowering: validate (non-literal homogeneity), register the loop var bound to a
@@ -3711,13 +3752,14 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
     std::string sEnd = "_$fc_end" + sfx, sRef = "_$fc_ref" + sfx,
                 sSize = "_$fc_size" + sfx, sCount = "_$fc_count" + sfx,
                 sRecv = "_$fc_recv" + sfx;
-    // A re-readable lvalue container (a var, `ptr^`, an index) is cloned per method
-    // call; an rvalue (a construction / call) is SPILLED to a for-scope local built
-    // ONCE, so every begin/size/next/op[] hits the same object (and it is destructed
-    // when the loop scope exits). Lvalue kinds re-read with no side effect.
-    bool spill_recv = !(contNode->kind == parse::Kind::kIdentExpr
-                     || contNode->kind == parse::Kind::kDerefExpr
-                     || contNode->kind == parse::Kind::kIndexExpr);
+    // A re-readable lvalue container (a var, `ptr^`, an index, a FIELD chain) is
+    // cloned per method call; an rvalue (a construction / call) is SPILLED to a
+    // for-scope local built ONCE, so every begin/size/next/op[] hits the same
+    // object (and it is destructed when the loop scope exits). Lvalue kinds
+    // re-read with no side effect — the shared iterableIsLvalue test, so a field
+    // container is iterated IN PLACE (a spill would copy the object and lose
+    // by-ref writes).
+    bool spill_recv = !iterableIsLvalue(*contNode);
 
     auto ident = [&](std::string nm) {
         auto n = std::make_unique<parse::Node>();
@@ -4813,21 +4855,25 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // inferred ref/index — peek yields kNoType) is routed as a tuple with a
             // deferred type; classify guards it (errors if it isn't one). A KNOWN
             // non-tuple type errors here.
-            if (enum_ref.kind != parse::Kind::kIdentExpr) {
-                widen::TypeRef ity = peekIterableType(tree, enum_ref, diag);
-                bool lval = (enum_ref.kind == parse::Kind::kDerefExpr
-                          || enum_ref.kind == parse::Kind::kIndexExpr);
-                // A tuple OR array EXPRESSION iterable (`sub^`, `t[i]`) routes
-                // through the iterator-based for-tuple path — an array is a
-                // homogeneous tuple (the loop var binds each element in place).
+            // ONE dispatch for every EXPRESSION iterable (and for a bare FIELD,
+            // lowered to one below): peek the type, route on its form. The
+            // in-place-vs-spill decision rides iterableIsLvalue (a field chain
+            // rooted in storage iterates IN PLACE — spilling would copy and lose
+            // by-ref writes).
+            auto dispatchIterExpr = [&](widen::TypeRef ity) -> Completion {
+                bool lval = iterableIsLvalue(enum_ref);
+                // A tuple OR array EXPRESSION iterable (`sub^`, `t[i]`, `o.f`)
+                // routes through the iterator-based for-tuple path — an array is
+                // a homogeneous tuple (the loop var binds each element in place).
                 if (widen::form(widen::strip(ity)) == widen::Type::Form::kTuple
                     || widen::form(widen::strip(ity)) == widen::Type::Form::kArray) {
                     return understandForTuple(tree, s, ity, /*is_literal=*/false,
                                            lval, diag);
                 }
                 // A CLASS EXPRESSION iterable — `ptr^`, a construction `C(..)`, a
-                // call `fn()`. understandForClass spills a non-lvalue (rvalue) to a
-                // for-scope temp so its protocol methods hit one object.
+                // call `fn()`, a field. understandForClass spills a non-lvalue
+                // (rvalue) to a for-scope temp so its protocol methods hit one
+                // object.
                 if (widen::form(widen::strip(ity)) == widen::Type::Form::kSlid) {
                     return understandForClass(tree, s, widen::strip(ity), diag);
                 }
@@ -4836,8 +4882,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                                            /*is_literal=*/false, lval, diag);
                 }
                 diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
-                    "A for-loop operand must be an enum, an array, or a tuple.", {}});
+                    "A for-loop operand must be an array, an enum, a class, or a tuple.", {}});
                 return Completion::Normal;
+            };
+            if (enum_ref.kind != parse::Kind::kIdentExpr) {
+                return dispatchIterExpr(peekIterableType(tree, enum_ref, diag));
             }
             int enum_id = isQualified(enum_ref)
                 ? resolveQualifiedRef(tree, enum_ref, diag)
@@ -4848,6 +4897,15 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                         "Unknown enum '" + enum_ref.name + "'.", {}});
                 }
                 return Completion::Normal;
+            }
+            // A bare FIELD iterable: lower it to `_$recv^.field` through the one
+            // field-access funnel, then dispatch it as the member EXPRESSION it
+            // now is — the field's declared type routes it (kNoType for an
+            // inferred-typed field defers to classify like any unknown).
+            if (tree.entries[enum_id].kind == parse::EntryKind::kField) {
+                widen::TypeRef fty = tree.entries[enum_id].slids_type;
+                lowerFieldRef(tree, enum_ref, enum_id, diag);
+                return dispatchIterExpr(fty);
             }
             // The colon-form also iterates a fixed-size ARRAY local — `for (v :
             // arr)` — or a TUPLE local — `for (v : tuple)`. Dispatch on what the
@@ -4899,7 +4957,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 || tree.entries[enum_id].slids_type == widen::kNoType) {
                 parse::Entry const& bad = tree.entries[enum_id];
                 diagnostic::report(diag, {enum_ref.file_id, enum_ref.tok,
-                    "'" + enum_ref.name + "' is not an enum, array, or tuple.",
+                    "'" + enum_ref.name + "' is not an array, enum, class, or tuple.",
                     {{bad.file_id, bad.tok, "declared here"}}});
                 return Completion::Normal;
             }
@@ -5643,7 +5701,8 @@ Completion resolveStmtList(parse::Tree& tree,
 // frame with kField entries — replacing the old method_fields name-list + baseFieldDepth
 // per-site walk.
 void collectMethodFields(parse::Tree& tree, widen::TypeRef cls,
-                         std::vector<std::tuple<std::string, widen::TypeRef, int>>& out) {
+                         std::vector<std::tuple<std::string, widen::TypeRef, int,
+                                                int, int>>& out) {
     std::set<std::string> seen;
     int guard = static_cast<int>(tree.classes.size()) + 2;
     for (int depth = 0; cls != widen::kNoType && guard-- > 0; depth++) {
@@ -5656,7 +5715,14 @@ void collectMethodFields(parse::Tree& tree, widen::TypeRef cls,
             if (!seen.insert(n).second) continue;        // a derived field shadows a base's
             widen::TypeRef ty = i < info.field_types.size()
                                     ? info.field_types[i] : widen::kNoType;
-            out.emplace_back(n, ty, depth);
+            // The field's DECLARATION location, off its stable kParam node — so a
+            // diagnostic citing the kField entry points at the field in the class
+            // list, not at the method whose frame registered it.
+            parse::Node const* p = i < info.field_params.size()
+                                       ? info.field_params[i] : nullptr;
+            out.emplace_back(n, ty, depth,
+                             p ? p->file_id : info.def_file_id,
+                             p ? p->name_tok : info.def_tok);
         }
         cls = parse::baseTypeOf(info);
     }
@@ -5708,16 +5774,16 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         if (cls == widen::kNoType) break;
         parse::pushFrame(tree);
         field_frame_pushed = 1;
-        std::vector<std::tuple<std::string, widen::TypeRef, int>> fields;
+        std::vector<std::tuple<std::string, widen::TypeRef, int, int, int>> fields;
         collectMethodFields(tree, cls, fields);
-        for (auto& [n, ty, d] : fields) {
+        for (auto& [n, ty, d, ffile, ftok] : fields) {
             parse::Entry fe;
             fe.kind = parse::EntryKind::kField;
             fe.name = n;
             fe.slids_type = ty;
             fe.field_depth = d;
-            fe.file_id = fn.file_id;
-            fe.tok = fn.name_tok;
+            fe.file_id = ffile;
+            fe.tok = ftok;
             parse::addEntry(tree, std::move(fe));
         }
         break;
@@ -5762,6 +5828,7 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
         e.tok = p->name_tok;
         e.is_param = true;   // the const-lvalue wall skips param const facets
                              // (the munge's const; enforcement deferred)
+        e.param_mutable = p->is_mutable;   // pre-munge sites read the promise here
         p->resolved_entry_id = parse::addEntry(tree, std::move(e));
         tree.initialized_locals.insert(p->resolved_entry_id);
         // An ARRAY param arrives initialized too — seed the monotonic may-set so a

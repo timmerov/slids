@@ -121,3 +121,15 @@ global container:
   33
 by-ref write into a spilled container:
 spilled write done
+field bare: 24
+field self: 24
+field obj: 24
+field after bump: 27
+field after x2: 54
+field nested: 24
+ns-qualified global:
+  2
+  4
+  6
+ref param deref: 6
+tuple-slot container: 6

@@ -3159,6 +3159,53 @@ SPELLED back as "char" (noWidthName).
     This unblocks the print-conversion sweep's uint8 blocker: `String + u8`
     now coerces via op=(uint64) and prints the NUMBER.
 
+FOR-ITERABLE SOURCE AUDIT (landed 2026-07-30). Trigger: galaxy.sl's
+`for (spin : spins_)` — a bare FIELD container rejected with "'spins_' is not
+an enum, array, or tuple" (and the note caret pointed at the enclosing METHOD,
+because collectMethodFields stamped every kField entry with fn.name_tok; fixed
+first — the field frame now carries each field's own declaration location off
+its stable kParam node). The audit then swept every SOURCE of a class / array /
+tuple iterable; canon test/flow/forclass.sl + forarray.sl + fortuple.sl grew
+the matrix (fields bare/self./obj./nested, ns-qualified globals, params,
+tuple slots, whole-array refs, array-returning calls, const flow).
+  - ONE DISPATCH: the kForEnumStmt arm's dispatchIterExpr lambda routes every
+    expression iterable; a bare FIELD lowers through lowerFieldRef (the one
+    field-access funnel) and dispatches as the member expression it becomes.
+    peekIterableType grew ident kinds (global / const / field) and a
+    kFieldExpr arm (field type off the class layout, one pointer level read
+    through for `self` / a convention param).
+  - THE SPILL BUG: a member-expr array/tuple iterable was treated as an
+    rvalue and SPILLED — by-ref writes landed in the copy and were silently
+    LOST (`for (r^ : h.data_) r^ = 5` left h.data_ untouched). The fix is ONE
+    shared test, parse::iterableIsLvalue (var / deref / index / field chain
+    rooted in one), used by the dispatch, understandForClass's spill_recv,
+    and desugar's lowerForTuple — the stages cannot disagree again.
+  - SIZED-ARRAY PARAMS: `for (x : a)` over `int a[3]` CRASHED desugar (the
+    munge had rewritten the param to `((const int)[3])^` after resolve
+    understood the loop; lowerForArray read no dims). Bodies resolve
+    pre-munge, so understandForArray now applies the promise itself via
+    Entry.param_mutable (non-mutable => const element: by-ref writes hit the
+    wall, declared plain `T^` mismatches, `mutable` writes flow to the
+    caller); lowerForArray + classify's narrow check read the shape through
+    the pointer (codegen's emitElementAddr already indexed through it).
+  - CONST FLOW (declared-ref hole): a DECLARED `int^ r` over const array or
+    tuple elements compiled and wrote to const storage — the `ref^ :` reuse
+    checks always rejected this, the declared-type twin didn't. Both now
+    mismatch ("does not match the ... element type 'const int'"), for-array
+    at resolve, for-tuple in classify's kForTupleStmt arm.
+  - THE HONEST LIMIT: a class whose type is only INFERRED at classify
+    (`b = C(); for (x : b)`, a typeless tuple's slot) cannot be understood —
+    for-class lowers at RESOLVE and the scope frames are gone. It used to
+    say "'b' is not a[] ... class" (false); it now says the class type is
+    inferred and a declared class type is required. Supporting it would need
+    resolve-time typing of construction-initialized typeless locals — an
+    open design question, not a bug.
+  - Diagnostic wording: both for-iterable rejections now enumerate all four
+    forms ("array, enum, class, or tuple" / "an array, an enum, a class, or
+    a tuple"); three EXPECT-ERROR markers moved with it.
+  Detail: readme.txt kForEnumStmt carrier paragraph; readme-classes.txt
+  FOR-CLASS CONTAINER SOURCES.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
