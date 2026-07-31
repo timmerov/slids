@@ -263,6 +263,21 @@ Galaxy(
             acceleration(i, k);
         }
 
+        ring = ^rings_[i];
+        radius = ring^.radius_;
+
+        /* centripetal acceleration is outward - negative. */
+        /* angular velocity of the on ring. */
+        //velocity = ring^.velocity_;
+        //velocity2 = velocity * velocity;
+        //in = - velocity2 * radius;
+        //ins_.append(in);
+
+        /* gravity of central bulge. */
+        radius2 = radius * radius;
+        in = kG * kCentralBulgeMass / radius2;
+        ins_.append(in);
+
         sort(ins_);
         sort(spins_);
 
@@ -289,19 +304,6 @@ Galaxy(
         /* radius of each ring. */
         on_r = on_ring^.radius_;
         by_r = by_ring^.radius_;
-
-        /* angular velocity of the on ring. */
-        //on_velocity = on_ring^.velocity_;
-        //on_velocity2 = on_velocity * on_velocity;
-
-        /* centripetal acceleration is outward - negative. */
-        //in = - on_velocity2 * on_r;
-        //ins_.append(in);
-
-        /* gravity of central bulge. */
-        r2 = on_r * on_r;
-        in = kG * kCentralBulgeMass / r2;
-        ins_.append(in);
 
         /*
         contribution from each slice.
