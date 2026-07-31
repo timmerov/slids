@@ -51,10 +51,10 @@ const float64 kSecondsPerYear = 3.154e7;
 const float64 kG = 6.6743e-11;
 
 /* estimated mass of milky way: 2e42 to 6e42 kg */
-const float64 kGalaxyMass = 3e42;
+const float64 kGalaxyMass = 2.5e42;
 
 /* diameter and radius of milky way. */
-const float64 kGalaxyDiameterLY = 100_000.0;
+const float64 kGalaxyDiameterLY = 90_000.0;
 const float64 kGalaxyDiameter = kGalaxyDiameterLY * kMetersPerLightyear;
 const float64 kGalaxyRadius = kGalaxyDiameter / 2.0;
 
@@ -63,10 +63,10 @@ const float64 kScaleLY = 3_000.0; // 100.0;
 const float64 kScale = kScaleLY * kMetersPerLightyear;
 
 /* estimated mass central bulge: 1.5e40 to 4e40 kg */
-const float64 kCentralBulgeMass = 2e40;
+const float64 kCentralBulgeMass = 3e40;
 
 /* estimated radius of central bulge: 3000 to 6500 ly. */
-const float64 kCentralBulgeRadiusLY = 4_000.0;
+const float64 kCentralBulgeRadiusLY = 10_700.0;
 const float64 kCentralBulgeRadius = kCentralBulgeRadiusLY * kMetersPerLightyear;
 
 /* estimated total mass of rings: 2e42 to 6e42 kg */
@@ -77,7 +77,7 @@ const float64 kRotationPeriodYr = 237_000_000.0;
 const float64 kRotationPeriod = kRotationPeriodYr * kSecondsPerYear;
 
 /* we assume the entire galaxy rotates as a rigid disk. */
-const float64 kAngularVelocity = 2.0 * math:kPi64 / kRotationPeriod;
+const float64 kAngularVelocity = math:k2Pi64 / kRotationPeriod;
 
 /* separate the mass of the galaxy into rings. */
 Ring(
@@ -207,29 +207,73 @@ Galaxy(
         dump(#nspins);
     }
 
+    /*
+    put all of the mass in one ring.
+    place it half-way between inner and outer.
+    computer the gravitational acceleration.
+    */
+    void one_ring() {
+        nrings_ = 1;
+        rings_.resize(1);
+
+        radius = (kCentralBulgeRadius + kGalaxyRadius) / 2.0;
+        circumference = 2.0 * math:kPi64 * radius;
+        divs = circumference / kScale;
+        divs = math:round(divs);
+        slices = (int=divs);
+
+        ring = ^rings_[0];
+        ring^.radius_ = radius;
+        ring^.slices_ = slices;
+        ring^.velocity_ = kAngularVelocity;
+        ring^.mass_ = kRingsMass;
+
+        acceleration(0);
+
+        /*
+        centripetal = - w^2 * r
+        w = sqrt( - a / r );
+        */
+        radiusly = radius / kMetersPerLightyear;
+        dump(#radiusly);
+        inward = ring^.inward_;
+        velocity = math:sqrt( - inward / radius );
+        dump(#velocity);
+        println(String + "expected velocity = " + kAngularVelocity);
+        ratio = velocity / kAngularVelocity;
+        dump(#ratio);
+        momentum = velocity * kRingsMass * radius * radius;
+        dump(#momentum);
+    }
+
     void acceleration() {
 
         for (i : 0..nrings_) {
-            println(String + "Calculating total acceleration on ring " + i + ".");
-            for (k : 0..nrings_) {
-                acceleration(i, k);
-            }
-
-            sort(ins_);
-            sort(spins_);
-
-            inward = sum(ins_);
-            spinward = sum(spins_);
-            dump(#inward);
-            dump(#spinward);
-
-            ring = ^rings_[i];
-            ring^.inward_ = inward;
-            ring^.spinward_ = spinward;
-
-            ins_.clear();
-            spins_.clear();
+            acceleration(i);
         }
+    }
+
+    void acceleration(int i) {
+
+        ins_.clear();
+        spins_.clear();
+
+        println(String + "Calculating total acceleration on ring " + i + ".");
+        for (k : 0..nrings_) {
+            acceleration(i, k);
+        }
+
+        sort(ins_);
+        sort(spins_);
+
+        inward = sum(ins_);
+        spinward = sum(spins_);
+        dump(#inward);
+        dump(#spinward);
+
+        ring = ^rings_[i];
+        ring^.inward_ = inward;
+        ring^.spinward_ = spinward;
     }
 
     void acceleration(int on_idx, int by_idx) {
@@ -247,12 +291,12 @@ Galaxy(
         by_r = by_ring^.radius_;
 
         /* angular velocity of the on ring. */
-        on_velocity = on_ring^.velocity_;
-        on_velocity2 = on_velocity * on_velocity;
+        //on_velocity = on_ring^.velocity_;
+        //on_velocity2 = on_velocity * on_velocity;
 
         /* centripetal acceleration is outward - negative. */
-        in = - on_velocity2 * on_r;
-        ins_.append(in);
+        //in = - on_velocity2 * on_r;
+        //ins_.append(in);
 
         /* gravity of central bulge. */
         r2 = on_r * on_r;
@@ -364,9 +408,9 @@ Galaxy(
 }
 
 int32 main() {
-    println("Hello, World!");
+
     Galaxy galaxy;
-    galaxy.run();
-    println("Goodbye, World!");
+    galaxy.one_ring();
+
     return 0;
 }
