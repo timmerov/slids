@@ -1,0 +1,13 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+analyze guthrie voting.
+*/
+
+GuthrieVoting(...) {
+    _(); ~();
+
+    void run();
+}

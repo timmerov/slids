@@ -1,0 +1,28 @@
+/*
+Copyright (C) 2012-2025 tim cotter. All rights reserved.
+*/
+
+/*
+wraopper c functions for c++ random number generator.
+*/
+
+
+import {
+    /*
+    must be called first.
+    use a randomly generated seed if the parameter is 0.
+    */
+    void rng_init(uint seed);
+
+    /* exposed so cases can be reproduced. */
+    uint64 rng_get_seed();
+
+    /* uniform from 0.0 to 1.0-. */
+    float64 rng_generate_float64();
+
+    /* uniform from 0 to max-1 */
+    int rng_generate_int(int max);
+
+    /* normal distribritution with mean 0.0 and standard deviation 1.0. */
+    float64 rng_normal();
+}
