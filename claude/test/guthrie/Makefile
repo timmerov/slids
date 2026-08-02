@@ -33,21 +33,26 @@ all: guthrie
 
 guthrie: $(BIN_DIR)/guthrie
 
-# The binary: every .sl object, the dump template TU, the native random TU,
-# and the library.
-$(BIN_DIR)/guthrie: $(SL_OBJS) $(BUILD_DIR)/dump.o $(BUILD_DIR)/random.o \
-		$(LIB_BUILD)/libslids.o
+# The binary: every .sl object, the template library TUs (dump + vector), the
+# native random TU, and the library.
+$(BIN_DIR)/guthrie: $(SL_OBJS) $(BUILD_DIR)/dump.o $(BUILD_DIR)/vector.o \
+		$(BUILD_DIR)/random.o $(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
 
 # THE POST-COMPILE PRE-LINK STAGE (the test/import + test/progress shape):
-# dump is a TEMPLATE library, so its source compiles AFTER every consumer,
-# reading the demand pool (each consumer's .sli, dumped beside its .ll) with
-# --instantiate — every demanded flavor emitted once, externally, by the
-# library's own TU. The demand pool's PROVENANCE imports name the consumers'
-# own headers (guthrie.slh etc.), so this directory joins the import path.
+# dump and vector are TEMPLATE libraries, so each source compiles AFTER every
+# consumer, reading the demand pool (each consumer's .sli, dumped beside its
+# .ll) with --instantiate — every demanded flavor emitted once, externally, by
+# the library's own TU. The demand pool's PROVENANCE imports name the
+# consumers' own headers (guthrie.slh etc.), so this directory joins the
+# import path.
 $(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(SL_OBJS:.o=.ll) $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
+
+$(BUILD_DIR)/vector.ll: $(LIB_HDR)/vector.sl $(SL_OBJS:.o=.ll) $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
 
 # random.cc is a native C++ TU (the RNG wrapper). Only this one .cc builds; the
 # other .cc files are the C++ originals the .sl ports came from.

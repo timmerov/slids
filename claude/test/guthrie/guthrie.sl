@@ -260,6 +260,7 @@ import electorate;
 import guthrie;
 import random;
 import string;
+import vector;
 
 /** number of trials. **/
 //const int kNTrials = 1;
@@ -401,47 +402,46 @@ const bool kShowCoombsRounds = false;
 /** some functions should sometimes be quiet. **/
 const bool kQuiet = true;
 
-/*
-/*
-class SatisfactionMetrics {
-public:
+SatisfactionMetrics(
     /** candidate with the best utility. **/
-    int which_ = 0;
+    int which_ = 0,
 
     /** utility of the best candidate. **/
-    float64 best_ = 0;
+    float64 best_ = 0,
 
     /** average utility of the average candidate. **/
-    float64 average_ = 0;
-};
+    float64 average_ = 0
+) { }
 
-typedef std::vector<int> Rankings;
-typedef std::vector<float64> Utilities;
+alias Rankings = Vector<int>;
+alias Utilities = Vector<float64>;
 
-class Candidate {
-public:
+Candidate(
     /** generated name **/
-    char name_ = '?';
+    char name_ = '?',
 
     /** position along the axis ranges from 0..1 **/
-    Position position_;
+    Position position_,
 
     /** vote total aka asset **/
-    int support_ = 0;
+    int support_ = 0,
 
     /** ranking of other candidates. **/
-    Rankings rankings_;
-    Utilities utilities_;
+    Rankings rankings_,
+    Utilities utilities_,
 
     /** utility **/
-    float64 utility_ = 0.0;
-
+    float64 utility_ = 0.0
+) {
     /** for sorting **/
-    bool operator < (const Candidate& other) const
+    /*bool operator < (const Candidate& other) const
     {
         return (position_ < other.position_);
-    }
-};
+    }*/
+}
+
+/*
+/*
 typedef std::vector<Candidate> Candidates;
 
 typedef std::vector<int> Approvals;
@@ -2841,6 +2841,7 @@ void GuthrieVoting::run() noexcept {
 }
 */
 */
+
 GuthrieVoting() {
     _() {}
     ~() {}

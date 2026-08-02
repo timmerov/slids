@@ -20,8 +20,9 @@ C. clustered - voters are normally distributed around one of several points.
 how many clusters? how much spread? to be determined.
 */
 
+import electorate;
+
 /*
-#include "electorate.h"
 #include "random.h"
 
 #include <aggiornamento/aggiornamento.h>
@@ -30,8 +31,24 @@ how many clusters? how much spread? to be determined.
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+*/
 
+Position() {
+    /** return the utility to another position. **/
+    float64 utility(Position^ other) {
+        return 0.0;
+    }
 
+    /** format the position as a string. **/
+    String to_string() {
+        return String;
+    }
+
+    /** for sorting **/
+    /*bool operator < (const Position& other) const;*/
+}
+
+/*
 class Cluster {
 public:
     /** size **/

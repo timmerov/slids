@@ -6,35 +6,28 @@ Copyright (C) 2012-2025 tim cotter. All rights reserved.
 model the electorate.
 */
 
-/*
-#include <string>
-#include <vector>
-*/
+import string;
+import vector;
 
 /** initialization options. **/
 const int kElectorateUniform = 0;
 const int kElectorateRandom = 1;
 const int kElectorateClusters = 2;
 
-
-/*
-class Position {
-public:
-    Position() = default;
-    ~Position() = default;
-
-    std::vector<double> axis_;
-
+Position(
+    Vector<float64> axis_
+) {
     /** return the utility to another position. **/
-    double utility(const Position& other) noexcept;
+    float64 utility(Position^ other);
 
     /** format the position as a string. **/
-    std::string to_string() noexcept;
+    String to_string();
 
     /** for sorting **/
-    bool operator < (const Position& other) const;
-};
+    /*bool operator < (const Position& other) const;*/
+}
 
+/*
 class Voter {
 public:
     Voter() = default;
