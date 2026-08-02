@@ -9,14 +9,15 @@ model the electorate.
 /*
 #include <string>
 #include <vector>
-
+*/
 
 /** initialization options. **/
-constexpr int kElectorateUniform = 0;
-constexpr int kElectorateRandom = 1;
-constexpr int kElectorateClusters = 2;
+const int kElectorateUniform = 0;
+const int kElectorateRandom = 1;
+const int kElectorateClusters = 2;
 
 
+/*
 class Position {
 public:
     Position() = default;

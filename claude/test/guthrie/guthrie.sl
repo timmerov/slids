@@ -261,43 +261,42 @@ import guthrie;
 import random;
 import string;
 
-/*
 /** number of trials. **/
-//int kNTrials = 1;
-//int kNTrials = 10;
-//int kNTrials = 30;
-//int kNTrials = 300;
-int kNTrials = 1000;
-//int kNTrials = 10*1000;
-//int kNTrials = 30*1000;
+//const int kNTrials = 1;
+//const int kNTrials = 10;
+//const int kNTrials = 30;
+//const int kNTrials = 300;
+const int kNTrials = 1000;
+//const int kNTrials = 10*1000;
+//const int kNTrials = 30*1000;
 
 /** number of voters. **/
-//int kNVoters = 20;
-//int kNVoters = 50;
-//int kNVoters = 100;
-int kNVoters = 1000;
-//int kNVoters = 10*1000;
+//const int kNVoters = 20;
+//const int kNVoters = 50;
+//const int kNVoters = 100;
+const int kNVoters = 1000;
+//const int kNVoters = 10*1000;
 
 /** number of candidates **/
-//int kNCandidates = 3;
-int kNCandidates = 4;
-//int kNCandidates = 5;
-//int kNCandidates = 6;
-//int kNCandidates = 7;
-//int kNCandidates = 9;
+//const int kNCandidates = 3;
+const int kNCandidates = 4;
+//const int kNCandidates = 5;
+//const int kNCandidates = 6;
+//const int kNCandidates = 7;
+//const int kNCandidates = 9;
 
 /** options for distributing the electorate. **/
-//int kElectorateMethod = kElectorateUniform;
-//int kElectorateMethod = kElectorateRandom;
-int kElectorateMethod = kElectorateClusters;
+//const int kElectorateMethod = kElectorateUniform;
+//const int kElectorateMethod = kElectorateRandom;
+const int kElectorateMethod = kElectorateClusters;
 
 /** options for clustered method. **/
-int kNClusters = kNCandidates * 2;
+const int kNClusters = kNCandidates * 2;
 
 /** options for number of issue dimensions (axes). **/
-//int kNAxes = 1;
-int kNAxes = 2;
-//int kNAxes = 3;
+//const int kNAxes = 1;
+const int kNAxes = 2;
+//const int kNAxes = 3;
 
 /**
 option for relative weighting of the axes.
@@ -312,13 +311,13 @@ which seems to be the case.
 and they are all equally important.
 which seems a bit of a stretch.
 **/
-float64 kAxisWeightDecay = 0.4;
-//float64 kAxisWeightDecay = 1.0;
+const float64 kAxisWeightDecay = 0.4;
+//const float64 kAxisWeightDecay = 1.0;
 
 /** options for choosing candidates **/
-int kCandidatesRandom = 0;
-int kCandidatesSingleTransferableVote = 1;
-int kCandidateMethod = kCandidatesSingleTransferableVote;
+const int kCandidatesRandom = 0;
+const int kCandidatesSingleTransferableVote = 1;
+const int kCandidateMethod = kCandidatesSingleTransferableVote;
 
 /**
 with the single transferable vote primary...
@@ -330,7 +329,7 @@ too many takes too long and doesn't help.
 might even hurt.
 default compromise is about 0.4.
 **/
-float64 kPrimaryPower = 0.4;
+const float64 kPrimaryPower = 0.4;
 
 /**
 the assumption is voters are more radical than candidates.
@@ -344,13 +343,13 @@ low dispersion amplifies errors by the electoral method.
 with dispersion around 0.7, plurality satisfaction is 0.0 or negative.
 interesting.
 **/
-//float64 kDispersion = 1.0;
-float64 kDispersion = 0.7;
-//float64 kDispersion = 0.3;
+//const float64 kDispersion = 1.0;
+const float64 kDispersion = 0.7;
+//const float64 kDispersion = 0.3;
 
 /** option to use a fixed seed for testing. **/
-uint64 kSeedChoice = 0;
-//uint64 kSeedChoice = 1753391226898898129;
+const uint64 kSeedChoice = 0;
+//const uint64 kSeedChoice = 1753391226898898129;
 
 /**
 option to use approval votes to find guthrie winner.
@@ -359,49 +358,50 @@ but it actually increases the opportunities for strategic voting
 that lowers total voter satisfaction.
 this is not recommended.
 **/
-bool kUseApprovalVotes = false;
-//bool kUseApprovalVotes = true;
+const bool kUseApprovalVotes = false;
+//const bool kUseApprovalVotes = true;
 
 /**
 option to find the theoretical best candidate from the voters.
 this feature is expensive and not used by the art.
 **/
-//bool kFindTheoreticalBestCandidate = true;
-bool kFindTheoreticalBestCandidate = false;
+//const bool kFindTheoreticalBestCandidate = true;
+const bool kFindTheoreticalBestCandidate = false;
 
 /**
 option to use the median voter and a constructed average voter
 for calculating voter satisfaction.
 this is not recommended.
 **/
-//bool kUseMedianForSatisfaction = true;
-bool kUseMedianForSatisfaction = false;
+//const bool kUseMedianForSatisfaction = true;
+const bool kUseMedianForSatisfaction = false;
 
 /**
 option to show the electorate distribution.
 this is a bit spammy.
 **/
-//bool kShowElectorateDistribution = true;
-bool kShowElectorateDistribution = false;
+//const bool kShowElectorateDistribution = true;
+const bool kShowElectorateDistribution = false;
 
 /**
 option to show the voter blocs.
 this is a bit spammy.
 **/
-//bool kShowVoterBlocs = true;
-bool kShowVoterBlocs = false;
+//const bool kShowVoterBlocs = true;
+const bool kShowVoterBlocs = false;
 
 /**
 option to show details of all coombs rounds.
 this is a bit spammy.
 **/
-//bool kShowCoombsRounds = true;
-bool kShowCoombsRounds = false;
+//const bool kShowCoombsRounds = true;
+const bool kShowCoombsRounds = false;
 
 
 /** some functions should sometimes be quiet. **/
-bool kQuiet = true;
+const bool kQuiet = true;
 
+/*
 /*
 class SatisfactionMetrics {
 public:
