@@ -2898,10 +2898,19 @@ struct Parser {
             // the imported-header form) is function-shaped too, which is what
             // in_class buys. (The ctor/dtor `_();`/`~();` decls are handled
             // separately by the class loop.)
-            if (!looksLikeFunctionDef(/*in_class=*/true)) {
-                error("A class body holds the constructor '_()', the destructor "
-                      "'~()', member definitions (aliases, constants, enums, "
-                      "classes, namespaces), and methods.");
+            int bad_tail = -1;
+            if (!looksLikeFunctionDef(/*in_class=*/true, &bad_tail)) {
+                // An ALMOST-method — everything matched through the parameter
+                // list — carets the offending token after the `)`, not the head.
+                if (bad_tail >= 0) {
+                    errorAt(pos + bad_tail,
+                        "Expected '{' to open the method body, ';' to declare "
+                        "it, or '= delete' after the parameter list.");
+                } else {
+                    error("A class body holds the constructor '_()', the destructor "
+                          "'~()', member definitions (aliases, constants, enums, "
+                          "classes, namespaces), and methods.");
+                }
                 return nullptr;
             }
             auto m = parseFunctionDef();
@@ -3881,7 +3890,11 @@ struct Parser {
         return o;
     }
 
-    bool looksLikeFunctionDef(bool in_class = false) const {
+    // `bad_tail`, when supplied, reports the ONE almost-a-function failure: the
+    // head and parameter list matched whole but the token after the closing `)`
+    // is not `{` / `=` / `;` (e.g. a stray C++ `noexcept`). It receives that
+    // token's offset so the caller can caret the offender instead of the head.
+    bool looksLikeFunctionDef(bool in_class = false, int* bad_tail = nullptr) const {
         int o = 0;
         // An out-of-line head whose member name is NOT AN IDENTIFIER and that carries NO
         // return type — a HOOK `C:_(`, `A:B:~(`, or an OPERATOR `C:op+=(` — leads with the
@@ -4000,7 +4013,10 @@ struct Parser {
         token::Kind after = peekKind(close + 1);
         if (after == token::Kind::kLBrace) return true;        // definition
         if (after == token::Kind::kEquals) return true;        // `= delete` pure virtual
-        if (after != token::Kind::kSemicolon) return false;
+        if (after != token::Kind::kSemicolon) {
+            if (bad_tail) *bad_tail = close + 1;
+            return false;
+        }
         // A class body holds no variable declarations — a field is a slot in the
         // field tuple, never a body member — so nothing there can be a construction
         // and `Type name(…);` is unambiguously a method DECLARATION. The params-vs-

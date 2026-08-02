@@ -21,12 +21,10 @@ how many clusters? how much spread? to be determined.
 */
 
 import electorate;
+import math;
 
 /*
 #include "random.h"
-
-#include <aggiornamento/aggiornamento.h>
-#include <aggiornamento/log.h>
 
 #include <algorithm>
 #include <cmath>
@@ -34,14 +32,65 @@ import electorate;
 */
 
 Position() {
-    /** return the utility to another position. **/
-    float64 utility(Position^ other) {
-        return 0.0;
+    /*
+    calculate the utility of the other's position.
+    utility is defined to be 1.0 when distance is 0.0.
+    utility decreases with distance.
+    */
+    float64 utility(
+        Position^ other
+    ) {
+        int naxes = (int=axis_.size());
+        if (naxes == 1) {
+            float64 utility = 1.0 - math:fabs(axis_[0] - other^.axis_[0]);
+            return utility;
+        }
+        float64 sum2 = 0.0;
+        for (int i : 0..naxes) {
+            float64 dx = axis_[i] - other^.axis_[i];
+            sum2 += dx * dx;
+        }
+        float64 dist = math:sqrt(sum2);
+
+        /** the simplest model for utility is 1.0 - distance. **/
+        float64 utility = 1.0 - dist;
+
+        /*
+        ==experimental==
+        non-linear utility.
+
+        hack the distance to be more of a utility distance.
+        near 0.0 is even nearer 1.0.
+        at a threshold value the utility equals the 1.0 - distance.
+        over the threshold asymptotically approaches 0.0.
+        a threshold of about 0.3 t0 0.4 feels about right.
+        the exponent factor would be 3.2 to 4.0.
+        */
+        /*
+        constexpr double kScaleFactor = 3.9;
+        double utility = std::exp(- kScaleFactor * dist * dist);
+        */
+
+        return utility;
     }
 
     /** format the position as a string. **/
     String to_string() {
-        return String;
+        String s;
+        int naxes = (int=axis_.size());
+        if (naxes == 1) {
+            s = axis_[0];
+        } else {
+            s = "{";
+            for (int i : 0..naxes) {
+                if (i > 0) {
+                    s += ", ";
+                }
+                s += axis_[i];
+            }
+            s += "}";
+        }
+        return s;
     }
 
     /** for sorting **/

@@ -1598,6 +1598,37 @@ int pushBaseChain(parse::Tree& tree, parse::Node const& node) {
     return (int)frames.size();
 }
 
+// A signature's CONST-EXPRESSIONS — parameter defaults and array dims (param and
+// return) — resolve in the ENCLOSING scope, never a body frame, so a default cannot
+// reference a parameter or a body local. One funnel for both node kinds: a
+// DEFINITION resolves them at the head of resolveFunctionBody; a bodyless
+// DECLARATION (a class-member decl, a header / file-scope forward decl) has no body
+// pass, yet classify's signature pass still infers these exprs — unresolved, a
+// default naming an entity (`= kQuiet`) asserts there.
+void resolveSignatureConstExprs(parse::Tree& tree, parse::Node& fn,
+                                diagnostic::Sink& diag) {
+    for (auto& p : fn.params) {
+        if (p && !p->children.empty() && p->children[0]) {
+            resolveExpr(tree, *p->children[0], diag);
+        }
+        // A const-expression array dim on a param (`int a[N]`) is likewise a
+        // constant expression in the enclosing scope — resolve so constfold can
+        // fold + bake it (it re-syncs param_types after).
+        if (p) {
+            for (auto& d : p->dim_exprs) {
+                if (d) resolveExpr(tree, *d, diag);
+            }
+        }
+    }
+    // A const-expression array dim in the RETURN type (`int[N] f()` / a tuple-slot
+    // return) lives on the function node — a constant expression in the enclosing
+    // scope, like a param dim. constfold bakes it into the return type (== entry
+    // slids_type for a function).
+    for (auto& d : fn.dim_exprs) {
+        if (d) resolveExpr(tree, *d, diag);
+    }
+}
+
 void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
                         diagnostic::Sink& diag) {
     int frame = isClass
@@ -1655,6 +1686,11 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             // A header class's bodyless member-template DECLARATION: snapshot,
             // so a consumer can mint declaration-only instances from it.
             snapshotTemplate(tree, *m);
+        } else if (m->kind == parse::Kind::kFunctionDecl) {
+            // A plain member DECLARATION has no body, but its signature
+            // const-exprs (defaults, dims) still resolve — same funnel and same
+            // enclosing scope as a definition's.
+            resolveSignatureConstExprs(tree, *m, diag);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
             for (auto& init : m->children) {
@@ -5731,30 +5767,10 @@ void collectMethodFields(parse::Tree& tree, widen::TypeRef cls,
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                          diagnostic::Sink& diag, bool nested) {
     if (!nested) tree.nested_call_checks.clear();   // per top-level function body
-    // Parameter defaults are constant expressions resolved in the ENCLOSING
-    // (file) scope — before the body frame is pushed, so a default cannot
-    // reference a parameter or a body local. (constfold then folds them and
-    // classify requires the result to be a literal constant.)
-    for (auto& p : fn.params) {
-        if (p && !p->children.empty() && p->children[0]) {
-            resolveExpr(tree, *p->children[0], diag);
-        }
-        // A const-expression array dim on a param (`int a[N]`) is likewise a
-        // constant expression in the enclosing scope — resolve so constfold can
-        // fold + bake it (it re-syncs param_types after).
-        if (p) {
-            for (auto& d : p->dim_exprs) {
-                if (d) resolveExpr(tree, *d, diag);
-            }
-        }
-    }
-    // A const-expression array dim in the RETURN type (`int[N] f()` / a tuple-slot
-    // return) lives on the function node — a constant expression in the enclosing
-    // scope, like a param dim. constfold bakes it into the return type (== entry
-    // slids_type for a function).
-    for (auto& d : fn.dim_exprs) {
-        if (d) resolveExpr(tree, *d, diag);
-    }
+    // Signature const-exprs (defaults, dims) — before the body frame is pushed
+    // (see resolveSignatureConstExprs; constfold then folds them and classify
+    // requires the result to be a literal constant).
+    resolveSignatureConstExprs(tree, fn, diag);
     int saved_floor = tree.capture_floor;
     parse::Node* saved_capture_node = tree.capture_node;
     // A METHOD body resolves inside a transient FIELD FRAME (pushed OUTSIDE the body
@@ -9545,6 +9561,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (ch->kind == parse::Kind::kFunctionDecl && !ch->type_params.empty()) {
             if (tree.templates.count(ch->resolved_entry_id))
                 snapshotTemplate(tree, *ch);
+            continue;
+        }
+        if (ch->kind == parse::Kind::kFunctionDecl) {
+            // A file-scope forward decl (header or local) has no body pass; its
+            // signature const-exprs still resolve — the one funnel.
+            resolveSignatureConstExprs(tree, *ch, diag);
             continue;
         }
         if (ch->kind != parse::Kind::kFunctionDef) continue;

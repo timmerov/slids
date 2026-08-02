@@ -13,9 +13,10 @@ BUGS
     initializer for opaque content nested in a mixed tuple slot of a computed class is silently refilled to defaults
     rather than rejected
 
-  * intptr sz = 100; for (i : 0..sz) fails to compile.
-
-  * dump(#ring^.inward_) fails to compile.
+  * A second, non-crashing wrinkle: when a same-TU definition merges with a declaration, the def's signature wins and the
+    decl's default is silently dropped — void helper(bool q = kQuiet); + void helper(bool q) {} makes helper() fail with
+    "expects 1 arguments, got 0". Where defaults canonically live (decl vs def, C++ says decl) is a semantic call that's
+    yours; the cross-TU model needs the decl side to work, at minimum.
 
 
 UNBLOCKED FEATURES
@@ -286,6 +287,28 @@ REACH GOALS
     currently printf is imported exactly the way it is used in string.sl.
     but that will be insufficient if someone wants to use printf two different
     ways.
+
+  * c++ has this feature:
+    Template Specialization of Member Function Outside the Class
+    it's exactly the kind of arcana slids was designed to avoid.
+    this gist is we want to a class ElectoralMethod to have a method that is
+    specific to the particular voting method being used.
+    like Guthrie or Condorcet.
+    in c++ and slids, you could just derive a class and define the function.
+    that's the current methodology.
+    but there's no way to force a derived class to define the function.
+    other than to make it pure virtual - which is less than ideal.
+    possible syntax.
+    ElectoralMethod(int winner) {
+        void find_winner() = default/delete/alias?;
+    }
+    ElectoralMethod : Guthrie() {
+        void find_winner() { winner = me; }
+    }
+    ElectoralMethod : CompileError() {
+        void find_winner_not_defined() { winner = none; }
+    }
+
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)
 

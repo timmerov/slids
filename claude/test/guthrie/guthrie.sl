@@ -439,75 +439,70 @@ Candidate(
         return (position_ < other.position_);
     }*/
 }
+alias Candidates = Vector<Candidate>;
 
-/*
-/*
-typedef std::vector<Candidate> Candidates;
+alias Approvals = Vector<int>;
 
-typedef std::vector<int> Approvals;
-
-class Bloc {
-public:
+Bloc(
     /** voters in this bloc. **/
-    int size_ = 0;
+    int size_ = 0,
 
     /** distances to candidates in ranked order. **/
-    Utilities utilities_;
+    Utilities utilities_,
 
     /** total approvals of voters in the bloc. **/
-    int napprovals_ = 0;
-    Approvals approvals_;
-};
+    int napprovals_ = 0,
+    Approvals approvals_
+) { }
+
+/*
+==tsc== skipped
 typedef std::map<Rankings, Bloc> BlocMap;
+*/
 
-/**
-this particular piece of c++ arcana is called:
+/*
+this is a base class for specific electoral methods.
+in c++, the technique was called:
 Template Specialization of Member Function Outside the Class
-it's strange that this statement:
-    ElectoralMethod<Guthrie> guthrie_;
-does not automatically create/define this function:
-    template<> void ElectoralMethod<Guthrie>::find_winner(bool quiet) noexcept
-i suppose there's a reason for it.
-the actual XXX::find_winner functions are defined later.
-**/
-template <typename SpecificMethod>
-class ElectoralMethod {
-public:
-    int winner_ = -1;
-    int is_winner_ = 0;
-    float64 total_utility_ = 0.0;
+which is exactly the type of arcana slids was created to avoid.
+unfortunately there currently is no way for a base class to force a
+derived class to implement a specific function.
+the derived classes are defined with a single member and no
+additional fields after they are used.
+no forward declaration needed.
+*/
+ElectoralMethod(
+    int winner_ = -1,
+    int is_winner_ = 0,
+    float64 total_utility_ = 0.0
+) {
+    /* a derived class should define this function. */
+    //void find_winner(bool quiet = kQuiet);
+}
 
-    void find_winner(bool quiet = kQuiet) noexcept;
-};
 /**
-macro creates the trivial class
-and forward declares the find_winner function.
-**/
-#define TemplateSpecializaationOfMemberFunctionOutsideClass(T) \
-class T {}; \
-template<> void ElectoralMethod<T>::find_winner(bool quiet) noexcept
-/**
-analyzed electoral methods.
-**/
-TemplateSpecializaationOfMemberFunctionOutsideClass(Guthrie);
-TemplateSpecializaationOfMemberFunctionOutsideClass(ApprovalRunoff);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Range);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Condorcet);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Star);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Borda);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Approval);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Coombs);
-TemplateSpecializaationOfMemberFunctionOutsideClass(AntiPlurality);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Bucklin);
-TemplateSpecializaationOfMemberFunctionOutsideClass(InstantRunoff);
-TemplateSpecializaationOfMemberFunctionOutsideClass(PluralityRunoff);
-TemplateSpecializaationOfMemberFunctionOutsideClass(Plurality);
-TemplateSpecializaationOfMemberFunctionOutsideClass(CandidateMethod);
-/**
+analyzed electoral methods:
+Guthrie,
+ApprovalRunoff,
+Range,
+Condorcet,
+Star,
+Borda,
+Approval,
+Coombs,
+AntiPlurality,
+Bucklin,
+InstantRunoff,
+PluralityRunoff,
+Plurality,
+CandidateMethod
+
 to do:
 MajorityJudgement
 */
 
+/*
+/*
 class GuthrieImpl;
 static GuthrieImpl *g_impl = nullptr;
 
@@ -2859,6 +2854,16 @@ GuthrieVoting() {
         dump(#random_int);
         dump(#random_normal);
 
+        Guthrie guthrie_;
+        guthrie_.find_winner();
+        dump(#guthrie_.winner_);
+
         println(String + "Goodbye, World!");
+    }
+}
+
+ElectoralMethod:Guthrie() {
+    void find_winner(bool quiet = kQuiet) {
+        winner_ = 10;
     }
 }
