@@ -1678,7 +1678,30 @@ STAGE FILES (.h / .cpp pairs)
             aug-assign, move (`a <-- b`) / swap (`a <--> b`) — the name-led lvalue
             chain (array element / tuple slot / class field / deref / composed) takes
             `=`, the aug-assign family, `++`/`--`, and move/swap UNIFORMLY (lhs as an
-            expr child); finishMoveSwap on both the bare-name and chain paths,
+            expr child); finishMoveSwap on both the bare-name and chain paths;
+            the conversion SHORTHAND `lvalue type = expr;` (convention of
+            convenience #2 — canon test/assign/typeconv.sl): a type spelling in
+            the `=` slot of a name-led assign, a chained-lvalue store, or a
+            decl init desugars AT PARSE into the long form's exact node
+            (`lvalue = (type = expr);` — a kAssignStmt / kStoreStmt /
+            kVarDeclStmt-init holding the kConvertExpr; resolve onward see
+            nothing new). The trigger (startsConvShorthand) is a primitive
+            keyword, an identifier-led target per looksLikeConvTarget, or a
+            balanced `(...)` IMMEDIATELY followed by `=` (parenGroupThenEquals
+            — the immediacy keeps `obj.m(a)^ = e` / `obj.m(a)[2] = e`
+            method-call chains, which are VALID statements, out of the claim;
+            the same gate excludes such a `(` from finishLvalueChain's
+            method-call loop-head). THE DECL SHAPE WINS every collision:
+            `x Amt = e` is `ident ident` (a decl with type x — an EXISTING
+            variable x doesn't flip it: "'x' is a variable, not a type"), and
+            `p^ Amt = e` / `arr[i] Amt = e` are suffix-run decl shapes; the
+            long form is the escape hatch (canon's ambiguity clause). ONE
+            decl-gate carve-out: `v Vec<int> = e` — `ident ident` whose SECOND
+            ident carries a type-arg group whose closer is followed by `=` —
+            routes to the shorthand, since a declared NAME never carries
+            type-args. The decl-init slot (`decl-type name conv-type = expr`)
+            takes ident / alias / qualified / class conv types (no collision —
+            the decl's own type+name are already consumed);
             alias,
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
             return, if/else, while + post-condition do-while, the long-form for,
@@ -1730,11 +1753,18 @@ STAGE FILES (.h / .cpp pairs)
             looksLikeTupleConvTarget + looksLikeIdentConvTarget] opens a
             tuple-led target `((...)...)` OR an identifier-led target
             [a `::`(global)/`:`(member)-qualified class/alias name — user-named /
-            namespaced targets], by a lead that is either a balanced `(...)` or
+            namespaced targets — each segment may carry a type-arg group, so a
+            TEMPLATE INSTANCE (`Vec<int>`, `Kit<int>:Sub`) is a target too], by
+            a lead that is either a balanced `(...)` or
             a qualified name, then any type-suffix chain `^`/`[]`/`[N]`, matched
             if the next token is `=`;
             parseConvertChain parses the target onto return_type and recurses
-            for chain links `(A = B = expr)`, right-to-left, no inner parens),
+            for chain links `(A = B = expr)`, right-to-left, no inner parens —
+            an interior link may be IDENTIFIER-led too (`(Wrap = Amt = 9)`),
+            recognized by the same looksLikeConvTarget in the operand slot [safe:
+            no EXPRESSION operand puts a top-level `=` after a type-shaped lead];
+            parseConvertChain is also the parse behind the statement-level
+            conversion SHORTHAND `lvalue type = expr;`, above),
             prefix/postfix ++/--, full binary set
             arith/bitwise/shift/comparison/logical, parens, postfix-call on
             a bare ident, and the `##` stringify macros in parsePrimary's

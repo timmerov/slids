@@ -10,6 +10,8 @@ unused locals: a body-declared local that is never read is a compile error —
 "Unused local variable 'x'." if it was never written, "Local variable 'x' set
 but never used." if it was written. (A use-before-init error suppresses the
 unused report on the same code, so the two never double up.)
+
+also see the convenience convention in typeconv.sl.
 */
 
 /*

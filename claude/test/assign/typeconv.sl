@@ -37,6 +37,36 @@ arrays are type converted by element iteratively and recursively.
 
     int_arr is now [97, 98, 99]
 
+convention of convenience (#2):
+the type conversion syntax is ungainly when writing to an existing lvalue
+and when inferring the type of a new variable declaration.
+there is a redundant equals '=' and superfluous parentheses '(' ')'
+the following pretty shorthand desugars to ungainly syntax.
+shorthand and examples:
+
+    lvalue type = expression ; -->
+        lvalue = ( type = expression ) ;
+    new-variable type = expression ; -->
+        new-variable = ( type = expression ) ;
+    decl-type new-variable conv-type = expression ; -->
+        decl-type new-variable = ( conv-type = expression ) ;
+
+    x int = get_float(); -->
+        x = (int=get_float());
+    int vol int = 3.14 * r * r * h; -->
+        int vol = (int=(3.14*r*r*h));
+    obj.field Class = (1,2,3); -->
+        obj.field = (Class=(1,2,3));
+
+the shorthand may be chained:
+
+    x type1 = type2 = type3 = expr; -->
+        x = (type1=type2=type3=expr);
+
+the shorthand applies to all lvalue types.
+there may be cases where the shorthand syntax is ambiguous.
+in those cases it may not be used.
+
 notes:
 pointer casting reinterprets the bits without changing them.
 type conversion changes the bits.
@@ -92,6 +122,29 @@ once, proving single evaluation), wv (cross-class-in-slot), vv (virtual-in-slot)
 op=), neg_class_ptr_target (a class pointer target), neg_abstract_target (the temp's
 default-construct triggers the abstract check).
 
+the SHORTHAND (convention of convenience #2, LANDED) is a pure GRAMMAR-stage
+desugar: `lvalue type = expr;` builds the very kAssignStmt / kStoreStmt /
+kVarDeclStmt-init that `lvalue = (type = expr);` builds, so resolve onward see
+no new shape. recognized in three slots: the name-led assign (a primitive
+keyword, a tuple-led `(...)` IMMEDIATELY followed by `=`, or a template-instance
+lead), the chained-lvalue store (field / index / deref — identifier-led types
+work here too), and the decl init (`decl-type name conv-type = expr` — ident /
+alias / qualified / class conv types all reachable). THE DECL SHAPE WINS every
+collision: `x Amt = e` (ident ident), `p^ Amt = e` (`T^ name`), and
+`arr[i] Amt = e` (`T[i] name`) all read as declarations, and a SUFFIXED paren
+lead after a field (`obj.m(a)^ = e`, `obj.m(a)[2] = e`) stays a method-call
+chain — the long form is the escape hatch everywhere (canon lines 66-68).
+chains ride parseConvertChain unchanged; interior links may now be
+IDENTIFIER-led (`(Wrap = Amt = 9)`), and looksLikeConvTarget accepts
+template-instance targets — both shared with the paren form. shorthand
+coverage: shx/shy (assign / infer-new), vol/shw (decl-type form: the canon
+example + convert-then-widen), shc (const), sharr/shp (index / deref), shch
+(chain), shtp/shia (tuple lead + sized array + const dim), sha/shwr/shd/shq
+(class / cross-class / alias / qualified via the decl-init slot), ncp/hldp
+(field lvalues, ident + tuple leads), shcv (template instance), shck (interior
+ident link). negatives: a pointer target, strong-result narrowing, and the
+decl-wins adjudication (Unknown type 'shdw').
+
 addresses are nondeterministic, so the pointer->intptr cases print a stable
 projection (a null address, or the bool of a non-null one) rather than the raw
 value.
@@ -146,6 +199,10 @@ Nested(Amt part, int label_) { _() {} ~() {} op=(int r) { part.cents_ = r; label
    — unlike mkpair()'s call source above. Exercises the kFieldExpr arm of the shared
    bare-lvalue predicate at the aggregate-conversion spill site. */
 Holder( (int, int) pr_ ) { _() {} ~() {} }
+/* a TEMPLATE class as a conversion target — `Cell<int>` in the type slot. The
+   `<args>` group breaks the decl shape, so the bare-lvalue SHORTHAND spelling
+   (`shcv Cell<int> = 5`) works where a bare class name would read as a decl. */
+Cell<T>(T v_) { _() {} ~() {} op=(T r) { v_ = r; } }
 
 Amt amt_from(int n) { return (Amt = n); }               // a conversion at a RETURN
 int amt_pair(Amt^ a, Amt^ b) {
@@ -523,6 +580,82 @@ int32 main() {
     hfld = ((Amt, Amt) = hld.pr_);
     println(String + "hfld = " + hfld[0].cents_ + " " + hfld[1].cents_);   // 14 15
 
+    /* ---- the SHORTHAND (convention of convenience #2): `lvalue type = expr;`
+       desugars in the grammar to `lvalue = (type = expr);` — the same node the
+       long form builds, so everything below re-locks existing semantics through
+       the new spelling, not a new grid. ---- */
+
+    /* assign an existing primitive lvalue. */
+    float shf = 3.9;
+    int shx = 0;
+    shx int = shf;
+    println(String + "shx = " + shx);          // 3
+
+    /* infer a NEW variable — the conversion's strong result types it. */
+    shy int = 2.5;
+    println(String + "shy = " + shy);          // 2
+
+    /* the decl-type form — the canon example, and convert-then-widen (the conv
+       result then satisfies the decl by ordinary assignment rules). */
+    int vol int = 3.14 * 2.0 * 2.0;
+    println(String + "vol = " + vol);          // 12
+    int64 shw int = 7.9;
+    println(String + "shw = " + shw);          // 7
+
+    /* const + shorthand — folds to a strong const, like N above. */
+    const shc int = 2.9;
+    println(String + "shc = " + shc);          // 2
+
+    /* complex lvalues: index, deref (shp aims at shx). */
+    int sharr[2];
+    sharr[0] int = 4.2;
+    sharr[1] int = 5.8;
+    println(String + "sharr = " + sharr[0] + " " + sharr[1]);   // 4 5
+    int^ shp = ^shx;
+    shp^ int = 8.9;
+    println(String + "shp = " + shx);          // 8
+
+    /* chained — the lvalue joins the chain (ptr -> intptr 0 -> 0.0). */
+    shch float64 = intptr = nul;
+    println(String + "shch = " + shch);        // 0
+
+    /* a tuple-led type (would read as a CALL without the `(...)=` gate) and a
+       sized-array type with a const-expression dim. */
+    shtp (int, int) = ff;
+    println(String + "shtp = (" + shtp[0] + "," + shtp[1] + ")");           // (1,2)
+    shia int[kC] = ch_kc;
+    println(String + "shia = " + shia[0] + " " + shia[1] + " " + shia[2]);  // 65 66 67
+
+    /* class targets through the DECL-INIT slot. (The bare-assign slot's
+       `x Amt = e` is token-identical to a decl — the decl shape WINS there;
+       the long form is the escape hatch. See the shdw negative below.) */
+    Amt sha int = 5;                            // Amt filled from the converted int
+    println(String + "sha = " + sha.cents_);    // 5
+    Wrap shwr Amt = 6;                          // an ident conv type; Wrap <- Amt temp
+    println(String + "shwr = " + shwr.w_);      // 6
+    Amt shd Dollars = 7;                        // an ALIAS as the conv type
+    println(String + "shd = " + shd.cents_);    // 7
+    Money:Cents shq Money:Cents = 8;            // a QUALIFIED name as the conv type
+    println(String + "shq = " + shq.c_);        // 8
+
+    /* FIELD lvalues — the field chain breaks the decl shape, so ident-led and
+       tuple-led conv types both work here (nc.label_ untouched by the store). */
+    nc.part Amt = 77;
+    println(String + "ncp = " + nc.part.cents_ + " " + nc.label_);          // 77 9
+    hld.pr_ (int, int) = ff;
+    println(String + "hldp = " + hld.pr_[0] + " " + hld.pr_[1]);            // 1 2
+
+    /* a TEMPLATE INSTANCE as the conv type — `<args>` breaks the decl shape,
+       so the bare-lvalue spelling works (also new for the paren form). */
+    shcv Cell<int> = 5;
+    println(String + "shcv = " + shcv.v_);      // 5
+
+    /* an interior IDENTIFIER-LED chain link (paren form) — the operand of a
+       link may itself be a class-led link: (Amt = 9) fills the temp, then
+       (Wrap = temp) dispatches op=(Amt^). */
+    Wrap shck = (Wrap = Amt = 9);
+    println(String + "shck = " + shck.w_);      // 9
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     /* a pointer converts only to bool / intptr, not an arbitrary numeric. */
@@ -653,6 +786,27 @@ int32 main() {
     //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
     //int8  en = (int = 5);
     //println(String + "x= " + en);
+
+    /* the shorthand rejects a pointer target exactly like the long form. */
+    //-EXPECT-ERROR: A type conversion target may not be a pointer type
+    //int shnp = 5;
+    //shep int^ = shnp;
+    //println(String + "x= " + shep^);
+
+    /* the shorthand's strong result does not flex either — the decl-type form
+       re-checks the decl by ordinary assignment rules. */
+    //-EXPECT-ERROR: Cannot implicitly narrow 'int' to 'int8'
+    //int8 shen int = 5;
+    //println(String + "x= " + shen);
+
+    /* `name Class = e` is token-identical to a DECL (`Class name = e` reversed):
+       THE DECL SHAPE WINS — even an EXISTING variable `shdw` does not flip the
+       reading; it is diagnosed as a variable misused as a type. The long form
+       `shdw = (Amt = 5);` is the escape hatch (canon lines 66-68). */
+    //-EXPECT-ERROR: 'shdw' is a variable, not a type
+    //int shdw = 1;
+    //shdw Amt = 5;
+    //println(String + "x= " + shdw);
 
     return 0;
 }

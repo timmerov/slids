@@ -3206,6 +3206,44 @@ tuple slots, whole-array refs, array-returning calls, const flow).
   Detail: readme.txt kForEnumStmt carrier paragraph; readme-classes.txt
   FOR-CLASS CONTAINER SOURCES.
 
+CONVERSION SHORTHAND — CONVENTION OF CONVENIENCE #2 (landed 2026-08-03).
+Canon: test/assign/typeconv.sl header. `lvalue type = expr;` desugars AT
+PARSE to `lvalue = (type = expr);` — the long form's redundant `=` and
+parens dropped; `x int = get_float();`, `int vol int = 3.14*r*r*h;`,
+`obj.field Class = (1,2,3);`, chains `x float64 = intptr = ref;`.
+  - A PURE GRAMMAR DESUGAR: the shorthand builds the exact kAssignStmt /
+    kStoreStmt / kVarDeclStmt-init of kConvertExpr the paren form builds —
+    resolve, classify, desugar, codegen untouched. The whole cost is the
+    statement recognizer: startsConvShorthand (a primitive keyword, an
+    identifier-led target via looksLikeConvTarget, or a balanced `(...)`
+    IMMEDIATELY followed by `=`), hooked at the name-led assign arm, the
+    finishLvalueChain store tail, and the parseVarDeclStmt init slot.
+  - THE DECL SHAPE WINS every collision (the canon's ambiguity clause):
+    `x Amt = e` is `ident ident` — a decl with type x, even when x is an
+    existing variable ("'x' is a variable, not a type"); `p^ Amt = e` /
+    `arr[i] Amt = e` are suffix-run decl shapes. The long form is the escape
+    hatch. ONE decl-gate carve-out: `v Vec<int> = e` — the second ident
+    carries a type-arg group then `=`, a shape no decl can have (a declared
+    name never carries type-args).
+  - CLAIMED SPACE IS ERROR SPACE: every stolen shape failed to parse before
+    ("Expected '='" / call-args type error), so no valid program changed
+    meaning. The immediacy of the `(...)=` gate is what protects the VALID
+    call chains `obj.m(a)^ = e` / `obj.m(a)[2] = e` — a suffixed paren lead
+    stays a method call (so a suffixed tuple conv type needs the long form).
+  - TWO SHARED EXTENSIONS (paren form too): looksLikeConvTarget skips
+    type-arg groups (TEMPLATE-INSTANCE targets `Vec<int>` / `Kit<int>:Sub`
+    now convert in both spellings), and parseConvertChain's operand accepts
+    identifier-led interior links (`(Wrap = Amt = 9)` — the inner class
+    temp feeds the outer op=(Amt^)).
+  - The decl-init slot (`decl-type name conv-type = expr`) has NO collision
+    (the decl's type+name are consumed first), so ident / alias / qualified /
+    class conv types all work there: `Wrap w Amt = 6;`, `Amt d Dollars = 7;`,
+    `Money:Cents q Money:Cents = 8;`, `const c int = 2.9;` (typeless-const
+    path). Coverage: typeconv.sl sh* block + ncp/hldp field stores + three
+    negatives (pointer target, strong-result narrowing, decl-wins).
+  Detail: readme.txt grammar statements + conversion passages;
+  readme-classes.txt VALUE CONVERSION bullet.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

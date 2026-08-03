@@ -409,10 +409,17 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     class's op= overloads (value via op=(T), pointer via op=(T^)) PLUS the same-class default
     copy; a source no op= accepts is a clean reject. It is the 12th declarator binding site
     (plan-declarator.txt "THE CONVERSION-TARGET TEMP"); an identifier-led grammar trigger
-    (looksLikeConvTarget) routes user-named / namespaced / alias / virtual targets. An
+    (looksLikeConvTarget) routes user-named / namespaced / alias / virtual targets — incl.
+    TEMPLATE-INSTANCE targets (`Vec<int>` — the segments skip type-arg groups). An
     AGGREGATE target with a class leaf converts PER SLOT (classify::lowerAggregateConversion
     desugars to a tuple of per-slot sub-conversions), so a class leaf at any depth / form /
-    cross-form / same-class reshape / spilled source reuses this path. test/assign/typeconv.sl.
+    cross-form / same-class reshape / spilled source reuses this path. The statement-level
+    SHORTHAND `lvalue type = expr;` (convention of convenience #2) desugars AT PARSE to
+    this same conversion — a class target rides it wherever the shape isn't a decl's
+    (readme.txt, THE DECL SHAPE WINS): a field store `nc.part Amt = 77;`, the decl-init
+    slot `Wrap w Amt = 6;` — while `x Amt = e` stays a decl spelling (long form there).
+    A chain's INTERIOR link may be identifier-led too (`(Wrap = Amt = 9)` — the temp of
+    the inner class conversion feeds the outer op=(Amt^)). test/assign/typeconv.sl.
   * CLASS-FROM-A-VALUE — op= VS FIELD-LIST, ONE FUNNEL (2026-07-15). A class slot built from a
     VALUE (a tuple / scalar, not a same-class copy) chooses between an op= ASSIGNMENT and a
     field-list CONSTRUCTION, and the choice lives in ONE place — classify::buildClassFromValue:

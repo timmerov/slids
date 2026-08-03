@@ -829,10 +829,12 @@ struct Parser {
             if (peekKind(o) == token::Kind::kColonColon) o++;       // global `::T`
             if (peekKind(o) != token::Kind::kIdentifier) return false;
             o++;
+            o = skipTypeArgGroup(o);                        // `Vec<int>=` / `Kit<int>:Sub=`
             while (peekKind(o) == token::Kind::kColon) {            // `A:B:C` segments
                 o++;                                        // (parseQualifiedName spelling)
                 if (peekKind(o) != token::Kind::kIdentifier) return false;
                 o++;
+                o = skipTypeArgGroup(o);
             }
         }
         // A chain of type-suffix wrappers between the lead and the `=`: `^`, `[]`,
@@ -856,6 +858,43 @@ struct Parser {
             break;
         }
         return peekKind(o) == token::Kind::kEquals;
+    }
+
+    // Pure lookahead: a balanced `(...)` group IMMEDIATELY followed by `=` — the
+    // tuple-type lead of the conversion SHORTHAND (`t (int,int) = src;`). The
+    // immediacy matters: a SUFFIXED paren group before `=` (`obj.m(a)^ = e`,
+    // `obj.m(a)[2] = e`) is a method call whose result chains to a store — a
+    // shape that is VALID today — so a suffixed tuple-type shorthand
+    // (`t (int,int)[2] = e`) is never claimed; write the long form there.
+    bool parenGroupThenEquals() const {
+        if (peekKind(0) != token::Kind::kLParen) return false;
+        int o = 1, depth = 1;
+        while (depth > 0) {
+            token::Kind k = peekKind(o);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput)
+                return false;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen) depth--;
+            o++;
+        }
+        return peekKind(o) == token::Kind::kEquals;
+    }
+
+    // Pure lookahead: does the current token start the conversion SHORTHAND's type
+    // spelling — `lvalue TYPE = expr;` in a slot where `=` (or a decl's init)
+    // belongs? Desugars to `lvalue = (TYPE = expr);` — see "convention of
+    // convenience (#2)" in the conversion canon. A primitive-keyword lead needs no
+    // lookahead (no statement puts a bare type keyword in an `=` slot); an
+    // identifier lead (`Amt =`, `Money:Cents =`, `Vec<int> =`) and a tuple lead
+    // (`(int,int) =`, bare group only — see parenGroupThenEquals) are recognized
+    // by their trailing `=`. The shapes a DECL already claims (`x Amt = e` is
+    // token-identical to `Amt x = e` reversed) never reach a caller of this
+    // gate — parseStmt routes them to parseVarDeclStmt first; the decl wins and
+    // the long form is the escape hatch.
+    bool startsConvShorthand() const {
+        if (isTypeStart(peek().kind)) return true;
+        if (peek().kind == token::Kind::kLParen) return parenGroupThenEquals();
+        return looksLikeConvTarget();
     }
 
     // Parse a for-varlist variable head: an optional type then the variable
@@ -1015,7 +1054,12 @@ struct Parser {
     // One `Type=operand` link of a value conversion. Called positioned at the
     // target type (the leading `(` already consumed; the trailing `)` is the
     // caller's). The operand is another link when it too begins with a type
-    // keyword (`(float64 = intptr = ref)`), else a full expression.
+    // keyword (`(float64 = intptr = ref)`) or an identifier-led/tuple-led type
+    // spelling followed by `=` (`(Wrap = Amt = 5)` — looksLikeConvTarget; safe
+    // because no EXPRESSION operand puts a top-level `=` after a type-shaped
+    // lead), else a full expression. Also the parse behind the conversion
+    // SHORTHAND (`lvalue TYPE = expr;`), which enters at the type with no
+    // parens at all.
     std::unique_ptr<parse::Node> parseConvertChain(int file_id) {
         int op_tok = pos;
         Declarator d;
@@ -1028,7 +1072,8 @@ struct Parser {
         std::vector<std::unique_ptr<parse::Node>> conv_dims = std::move(d.dim_exprs);
         if (!expect(token::Kind::kEquals, "=")) return nullptr;
         std::unique_ptr<parse::Node> operand =
-            isTypeStart(peek().kind) ? parseConvertChain(file_id) : parseExpr();
+            (isTypeStart(peek().kind) || looksLikeConvTarget())
+                ? parseConvertChain(file_id) : parseExpr();
         if (!operand) return nullptr;
         auto node = newNodeAt(parse::Kind::kConvertExpr, file_id, op_tok);
         node->return_type = widen::internOrNone(target);
@@ -1918,7 +1963,17 @@ struct Parser {
         node->return_type = widen::internOrNone(d.type);
         node->return_type_seg_toks = std::move(d.type_seg_toks);
         node->is_const = is_const;
-        if (peek().kind == token::Kind::kEquals
+        // The conversion SHORTHAND in a decl init — `decl-type name CONV = expr;`
+        // desugars to `decl-type name = (CONV = expr);` (`int vol int = e;`,
+        // `int64 big int = e;`, `Amt a int = 5;`, `const cx int = 2.9;` — the
+        // last through the TYPELESS-declarator path, `cx` the name and the
+        // conversion the whole init). The kVarDeclStmt-of-kConvertExpr is the
+        // long form's exact shape; resolve onward see nothing new.
+        if (startsConvShorthand()) {
+            auto init = parseConvertChain(stmt_file);
+            if (!init) return nullptr;
+            node->children.push_back(std::move(init));
+        } else if (peek().kind == token::Kind::kEquals
             || peek().kind == token::Kind::kArrowLeft
             || peek().kind == token::Kind::kArrowBoth) {
             // `<--` is a default-move-init (the same copy as `=`, then desugar nulls the
@@ -2197,8 +2252,15 @@ struct Parser {
                    || peek().kind == token::Kind::kDot
                    || peek().kind == token::Kind::kPlusPlus
                    || peek().kind == token::Kind::kMinusMinus
+                   // A `(` after a field is a method call — UNLESS the group is
+                   // immediately followed by `=`: then it is the tuple-type lead
+                   // of the conversion shorthand (`obj.f (int,int) = e`), left
+                   // for the chain tail. (A call's result never takes a bare
+                   // `=`, so the shape is free; a SUFFIXED group `(a)^ =` /
+                   // `(a)[2] =` stays a call chain — see parenGroupThenEquals.)
                    || (peek().kind == token::Kind::kLParen
-                       && lhs->kind == parse::Kind::kFieldExpr)
+                       && lhs->kind == parse::Kind::kFieldExpr
+                       && !parenGroupThenEquals())
                    || (peek().kind == token::Kind::kLt
                        && lhs->kind == parse::Kind::kFieldExpr
                        && looksLikeTemplateCallArgs(0))) {
@@ -2315,8 +2377,21 @@ struct Parser {
                 node->children.push_back(std::move(lhs));
                 return node;
             }
-            if (!expect(token::Kind::kEquals, "=")) return nullptr;
-            auto rhs = parseExpr();
+            // The conversion SHORTHAND on a chained lvalue — `obj.f Class = e;`,
+            // `arr[i] int = e;`, `p^ int = e;` — a type spelling in the `=` slot
+            // desugars to `lvalue = (TYPE = expr);` (the same kStoreStmt-of-
+            // kConvertExpr the long form builds). Every claimed shape errors
+            // today ("Expected '='"), so nothing valid changes meaning. NOTE the
+            // suffix-run decl shapes never arrive: `p^ Amt = e` / `arr[i] Amt = e`
+            // read as decls (`T^ name` / `T[i] name`) in parseStmt — the decl
+            // wins; the long form is the escape hatch there.
+            std::unique_ptr<parse::Node> rhs;
+            if (startsConvShorthand()) {
+                rhs = parseConvertChain(stmt_file);
+            } else {
+                if (!expect(token::Kind::kEquals, "=")) return nullptr;
+                rhs = parseExpr();
+            }
             if (!rhs) return nullptr;
             if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
             auto node = newNodeAt(parse::Kind::kStoreStmt, stmt_file, stmt_tok);
@@ -2350,6 +2425,25 @@ struct Parser {
             lhs->qualifier_toks = toks;
             lhs->global_qualified = global;
             return finishLvalueChain(std::move(lhs), /*allow_bare_expr=*/false);
+        }
+        // The conversion SHORTHAND `name TYPE = expr;` — a type spelling in the
+        // slot where `=` belongs desugars to `name = (TYPE = expr);`: the same
+        // kAssignStmt-of-kConvertExpr the long form builds, so resolve onward see
+        // no new shape (assign-if-exists, infer-declare if not — unchanged). The
+        // type lead here is a primitive keyword (`x int = e` — an identifier lead
+        // was routed to the decl by parseStmt), a template instance
+        // (`v Vec<int> = e` — parseStmt's carve-out), or a bare tuple group
+        // (`t (int,int) = e` — checked BEFORE the call arm below, which would
+        // otherwise read `t (...)` as a call; a call is never followed by
+        // top-level `=`, so the shape is free).
+        if (startsConvShorthand()) {
+            auto rhs = parseConvertChain(stmt_file);
+            if (!rhs) return nullptr;
+            if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+            auto node = newNodeAt(parse::Kind::kAssignStmt, stmt_file, stmt_tok);
+            stamp(*node);
+            node->children.push_back(std::move(rhs));
+            return node;
         }
         if (next == token::Kind::kLParen) {
             advance();   // (
@@ -3571,8 +3665,20 @@ struct Parser {
             // and then the assignment / bare-statement tail. (parseIncDecStmt handles only
             // the leading-PREFIX form `++name`.)
             // `<ident> <ident>` is a declaration with an identifier type
-            // (alias / class / enum), e.g. `Integer x = 42;`.
-            if (next == token::Kind::kIdentifier) return parseVarDeclStmt();
+            // (alias / class / enum), e.g. `Integer x = 42;`. ONE carve-out: a
+            // second identifier carrying a type-arg group whose closer is
+            // immediately followed by `=` (`v Vec<int> = e`) is the conversion
+            // SHORTHAND — a declared NAME never carries type-args, so the shape
+            // is decl-impossible. The bare twin `x Amt = e` is token-identical
+            // to a decl (`Amt x = e` reversed) and stays a decl: THE DECL SHAPE
+            // WINS, and the long form `x = (Amt = e)` is the escape hatch.
+            if (next == token::Kind::kIdentifier) {
+                int ta = skipTypeArgGroup(2);
+                bool conv_shorthand = peekKind(2) == token::Kind::kLt && ta > 2
+                    && peekKind(ta) == token::Kind::kEquals;
+                if (!conv_shorthand) return parseVarDeclStmt();
+                return parseNameLedStmt();
+            }
             // A qualified (`Space:Dir x`), pointer-suffixed (`Integer^ ref`,
             // `Integer[] iter`), or template-alias-use (`Ref<int> p`) identifier-
             // typed decl. looksLikeQualifiedTypedDecl accepts an optional type-arg

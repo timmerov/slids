@@ -12,6 +12,8 @@ infer const types and reference types.
     const x = y;            // const int
     ref^ = ^array[x];       // int^
     const ref^ = ^array[y]; // const int^
+
+also see the convenience convention in typeconv.sl.
 */
 
 /*

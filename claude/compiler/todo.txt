@@ -18,6 +18,14 @@ BUGS
     "expects 1 arguments, got 0". Where defaults canonically live (decl vs def, C++ says decl) is a semantic call that's
     yours; the cross-TU model needs the decl side to work, at minimum.
 
+  * check this claud-comment:
+    "The decl-wins diagnostic is sharper than expected: with an existing variable shdw, shdw Amt = 5 reports "'shdw' is
+    a variable, not a type." — the existing variable does not flip the reading, and the negative now locks that exact
+    behavior."
+    this:
+    Class shdw; shdw Amt = 5; should desugar to: shdw = (Amt=5);
+    should work as long as Amt = 5; is valid and Class = Amt; is valid.
+
 
 UNBLOCKED FEATURES
 
