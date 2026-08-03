@@ -308,6 +308,24 @@ REACH GOALS
     ElectoralMethod : CompileError() {
         void find_winner_not_defined() { winner = none; }
     }
+    claude votes for =delete.
+    this makes a virtual method pure.
+    analogously it makes a non-virtual method pure.
+    in both cases, the derived class must define it or it's a compile error.
+
+  * c++ has #if. slids has no counterpart. constant fold so we end up with:
+    if (0) { unreachable_code_error; }
+    but we often want to do this:
+    if (const-expr == other-const-expr) { blah }
+    so the question is what syntax to use to signal to the compiler we don't care
+    about the error.
+    leading contenders:
+    if const (kChoice == kOption1) { }
+    if <kChoice == kOption1> { }
+    if ? (kChoice == kOption1) { }
+    if [(kChoice == kOption1)] { }
+    if (kChoice == kOption1) {[ ]} {* *} {+ +}
+    the feature would also apply to all condition clauses: if, for, while.
 
 
 ASPIRATIONAL FEATURES (someday; low priority, may never land)

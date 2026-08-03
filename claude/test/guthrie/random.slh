@@ -7,12 +7,12 @@ wraopper c functions for c++ random number generator.
 */
 
 
-import {
+rng import {
     /*
     must be called first.
     use a randomly generated seed if the parameter is 0.
     */
-    void rng_init(uint seed);
+    void rng_init(uint64 seed);
 
     /* exposed so cases can be reproduced. */
     uint64 rng_get_seed();
@@ -25,4 +25,13 @@ import {
 
     /* normal distribritution with mean 0.0 and standard deviation 1.0. */
     float64 rng_normal();
+}
+
+rng {
+    /* aliases */
+    alias init = rng_init;
+    alias get_seed = rng_get_seed;
+    alias generate_float64 = rng_generate_float64;
+    alias generate_int = rng_generate_int;
+    alias normal = rng_normal;
 }

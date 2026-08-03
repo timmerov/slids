@@ -262,7 +262,11 @@ import random;
 import string;
 import vector;
 
-/** number of trials. **/
+stdc import {
+    void exit(int status);
+}
+
+/* number of trials. */
 //const int kNTrials = 1;
 //const int kNTrials = 10;
 //const int kNTrials = 30;
@@ -271,14 +275,14 @@ const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
 //const int kNTrials = 30*1000;
 
-/** number of voters. **/
+/* number of voters. */
 //const int kNVoters = 20;
 //const int kNVoters = 50;
 //const int kNVoters = 100;
 const int kNVoters = 1000;
 //const int kNVoters = 10*1000;
 
-/** number of candidates **/
+/* number of candidates */
 //const int kNCandidates = 3;
 const int kNCandidates = 4;
 //const int kNCandidates = 5;
@@ -286,20 +290,20 @@ const int kNCandidates = 4;
 //const int kNCandidates = 7;
 //const int kNCandidates = 9;
 
-/** options for distributing the electorate. **/
+/* options for distributing the electorate. */
 //const int kElectorateMethod = kElectorateUniform;
 //const int kElectorateMethod = kElectorateRandom;
 const int kElectorateMethod = kElectorateClusters;
 
-/** options for clustered method. **/
+/* options for clustered method. */
 const int kNClusters = kNCandidates * 2;
 
-/** options for number of issue dimensions (axes). **/
+/* options for number of issue dimensions (axes). */
 //const int kNAxes = 1;
 const int kNAxes = 2;
 //const int kNAxes = 3;
 
-/**
+/*
 option for relative weighting of the axes.
 the major axis has a weight of 1.0.
 successive axes are scaled by this factor.
@@ -311,16 +315,16 @@ which seems to be the case.
 1.0 means we have many uncorrelated issues.
 and they are all equally important.
 which seems a bit of a stretch.
-**/
+*/
 const float64 kAxisWeightDecay = 0.4;
 //const float64 kAxisWeightDecay = 1.0;
 
-/** options for choosing candidates **/
+/* options for choosing candidates */
 const int kCandidatesRandom = 0;
 const int kCandidatesSingleTransferableVote = 1;
 const int kCandidateMethod = kCandidatesSingleTransferableVote;
 
-/**
+/*
 with the single transferable vote primary...
 we choose a number of voters to be candidates.
 intutition says the number should be between the cube root (0.333)
@@ -329,10 +333,10 @@ too few is not a representative statistical distribution of the voters.
 too many takes too long and doesn't help.
 might even hurt.
 default compromise is about 0.4.
-**/
+*/
 const float64 kPrimaryPower = 0.4;
 
-/**
+/*
 the assumption is voters are more radical than candidates.
 we select candidates at random from the voters.
 then we move them towards the middle.
@@ -343,97 +347,97 @@ with best guess around 0.7.
 low dispersion amplifies errors by the electoral method.
 with dispersion around 0.7, plurality satisfaction is 0.0 or negative.
 interesting.
-**/
+*/
 //const float64 kDispersion = 1.0;
 const float64 kDispersion = 0.7;
 //const float64 kDispersion = 0.3;
 
-/** option to use a fixed seed for testing. **/
+/* option to use a fixed seed for testing. */
 const uint64 kSeedChoice = 0;
 //const uint64 kSeedChoice = 1753391226898898129;
 
-/**
+/*
 option to use approval votes to find guthrie winner.
 this seems like it should work well.
 but it actually increases the opportunities for strategic voting
 that lowers total voter satisfaction.
 this is not recommended.
-**/
+*/
 const bool kUseApprovalVotes = false;
 //const bool kUseApprovalVotes = true;
 
-/**
+/*
 option to find the theoretical best candidate from the voters.
 this feature is expensive and not used by the art.
-**/
+*/
 //const bool kFindTheoreticalBestCandidate = true;
 const bool kFindTheoreticalBestCandidate = false;
 
-/**
+/*
 option to use the median voter and a constructed average voter
 for calculating voter satisfaction.
 this is not recommended.
-**/
+*/
 //const bool kUseMedianForSatisfaction = true;
 const bool kUseMedianForSatisfaction = false;
 
-/**
+/*
 option to show the electorate distribution.
 this is a bit spammy.
-**/
+*/
 //const bool kShowElectorateDistribution = true;
 const bool kShowElectorateDistribution = false;
 
-/**
+/*
 option to show the voter blocs.
 this is a bit spammy.
-**/
+*/
 //const bool kShowVoterBlocs = true;
 const bool kShowVoterBlocs = false;
 
-/**
+/*
 option to show details of all coombs rounds.
 this is a bit spammy.
-**/
+*/
 //const bool kShowCoombsRounds = true;
 const bool kShowCoombsRounds = false;
 
 
-/** some functions should sometimes be quiet. **/
+/* some functions should sometimes be quiet. */
 const bool kQuiet = true;
 
 SatisfactionMetrics(
-    /** candidate with the best utility. **/
+    /* candidate with the best utility. */
     int which_ = 0,
 
-    /** utility of the best candidate. **/
-    float64 best_ = 0,
+    /* utility of the best candidate. */
+    float64 best_ = 0.0,
 
-    /** average utility of the average candidate. **/
-    float64 average_ = 0
+    /* average utility of the average candidate. */
+    float64 average_ = 0.0
 ) { }
 
 alias Rankings = Vector<int>;
 alias Utilities = Vector<float64>;
 
 Candidate(
-    /** generated name **/
+    /* generated name */
     char name_ = '?',
 
-    /** position along the axis ranges from 0..1 **/
+    /* position along the axis ranges from 0..1 */
     Position position_,
 
-    /** vote total aka asset **/
+    /* vote total aka asset */
     int support_ = 0,
 
-    /** ranking of other candidates. **/
+    /* ranking of other candidates. */
     Rankings rankings_,
     Utilities utilities_,
 
-    /** utility **/
+    /* utility */
     float64 utility_ = 0.0
 ) {
-    /** for sorting **/
+    /* for sorting */
     /*bool operator < (const Candidate& other) const
     {
         return (position_ < other.position_);
@@ -444,13 +448,13 @@ alias Candidates = Vector<Candidate>;
 alias Approvals = Vector<int>;
 
 Bloc(
-    /** voters in this bloc. **/
+    /* voters in this bloc. */
     int size_ = 0,
 
-    /** distances to candidates in ranked order. **/
+    /* distances to candidates in ranked order. */
     Utilities utilities_,
 
-    /** total approvals of voters in the bloc. **/
+    /* total approvals of voters in the bloc. */
     int napprovals_ = 0,
     Approvals approvals_
 ) { }
@@ -480,7 +484,19 @@ ElectoralMethod(
     //void find_winner(bool quiet = kQuiet);
 }
 
-/**
+/*
+example electoral method specialization:
+*/
+/*
+ElectoralMethod:Guthrie() {
+    void find_winner(bool quiet = kQuiet) {
+        winner_ = 10;
+    }
+}
+*/
+
+
+/*
 analyzed electoral methods:
 Guthrie,
 ApprovalRunoff,
@@ -501,93 +517,92 @@ to do:
 MajorityJudgement
 */
 
-/*
-/*
-class GuthrieImpl;
-static GuthrieImpl *g_impl = nullptr;
+GuthrieVoting(
+    /* "constants" */
+    int ntrials_ = kNTrials,
+    int ncandidates_ = kNCandidates,
+    int canddiate_method_ = kCandidateMethod,
+    float64 dispersion_ = kDispersion,
 
-class GuthrieImpl {
-public:
-    GuthrieImpl() = default;
-    GuthrieImpl(const GuthrieImpl &) = delete;
-    GuthrieImpl(GuthrieImpl &&) = delete;
-    ~GuthrieImpl() = default;
+    /* the electorate and the candidates. */
+    Electorate electorate_,
+    Candidates candidates_,
+    /*
+    ==tsc== skipped
+    BlocMap bloc_map_,
+    */
+    int total_support_ = 0,
 
-    /** "constants" **/
-    int ntrials_ = kNTrials;
-    int ncandidates_ = kNCandidates;
-    int canddiate_method_ = kCandidateMethod;
-    float64 dispersion_ = kDispersion;
+    /* results from the trial. */
+    SatisfactionMetrics theoretical_,
+    SatisfactionMetrics actual_,
+    SatisfactionMetrics accumulated_,
 
-    /** the electorate and the candidates. **/
-    Electorate electorate_;
-    Candidates candidates_;
-    BlocMap bloc_map_;
-    int total_support_ = 0;
+    /* analyzed electoral methods. */
+    /*
+    ==tsc== skipped
+    ElectoralMethod<Guthrie> guthrie_,
+    ElectoralMethod<ApprovalRunoff> approval_runoff_,
+    ElectoralMethod<Range> range_,
+    ElectoralMethod<Condorcet> condorcet_,
+    ElectoralMethod<Star> star_,
+    ElectoralMethod<Borda> borda_,
+    ElectoralMethod<Approval> approval_,
+    ElectoralMethod<Coombs> coombs_,
+    ElectoralMethod<Bucklin> bucklin_,
+    ElectoralMethod<AntiPlurality> anti_plurality_,
+    ElectoralMethod<InstantRunoff> instant_runoff_,
+    ElectoralMethod<PluralityRunoff> plurality_runoff_,
+    ElectoralMethod<Plurality> plurality_,
+    ElectoralMethod<CandidateMethod> candidate_,
+    */
 
-    /** results from the trial. **/
-    SatisfactionMetrics theoretical_;
-    SatisfactionMetrics actual_;
-    SatisfactionMetrics accumulated_;
+    /* summary */
+    float64 total_utility_ = 0.0,
+    float64 total_utility_strategic_ = 0.0,
+    float64 total_utility_ordering_ = 0.0,
+    int majority_winners_ = 0,
+    int winner_maximizes_satisfaction_ = 0,
+    int condorcet_loser_ = 0,
+    int condorcet_is_loser_ = 0,
+    int condorcet_cycles_ = 0,
+    int candidate_cycles_ = 0,
+    int independence_ = 0,
+    int irv_is_condorcet_ = 0
+) {
+    /* nothing to ctor/dtor */
+    _() {}
+    ~() {}
 
-    /** analyzed electoral methods. **/
-    ElectoralMethod<Guthrie> guthrie_;
-    ElectoralMethod<ApprovalRunoff> approval_runoff_;
-    ElectoralMethod<Range> range_;
-    ElectoralMethod<Condorcet> condorcet_;
-    ElectoralMethod<Star> star_;
-    ElectoralMethod<Borda> borda_;
-    ElectoralMethod<Approval> approval_;
-    ElectoralMethod<Coombs> coombs_;
-    ElectoralMethod<Bucklin> bucklin_;
-    ElectoralMethod<AntiPlurality> anti_plurality_;
-    ElectoralMethod<InstantRunoff> instant_runoff_;
-    ElectoralMethod<PluralityRunoff> plurality_runoff_;
-    ElectoralMethod<Plurality> plurality_;
-    ElectoralMethod<CandidateMethod> candidate_;
+    void run() {
 
-    /** summary **/
-    float64 total_utility_ = 0.0;
-    float64 total_utility_strategic_ = 0.0;
-    float64 total_utility_ordering_ = 0.0;
-    int majority_winners_ = 0;
-    int winner_maximizes_satisfaction_ = 0;
-    int condorcet_loser_ = 0;
-    int condorcet_is_loser_ = 0;
-    int condorcet_cycles_ = 0;
-    int candidate_cycles_ = 0;
-    int independence_ = 0;
-    int irv_is_condorcet_ = 0;
+        println(String + "Hello, World!");
 
-    void run() noexcept {
-        /** grant global access to our data. **/
-        g_impl = this;
+        /* initialize the random number generators. */
+        rng:init(kSeedChoice);
 
-        /** initialize the random number generators. **/
-        RandomNumberGenerator::init(kSeedChoice);
-
-        /** configure the electorate. **/
+        /* configure the electorate. */
         electorate_.nvoters_ = kNVoters;
         electorate_.method_ = kElectorateMethod;
         electorate_.naxes_ = kNAxes;
         electorate_.axis_weight_decay_ = kAxisWeightDecay;
         electorate_.nclusters_ = kNClusters;
 
-        /** some sanity checks. **/
+        /* some sanity checks. */
         sanity_checks();
-
-        /** hello, world. **/
+/*
+        /* hello, world. */
         LOG("Guthrie voting analysis:");
         show_header();
 
-        /** run many trials. **/
+        /* run many trials. */
         for (int trial = 1; trial <= ntrials_; ++trial) {
             if (ntrials_ > 1) {
                 LOG("");
                 LOG("Trial: "<<trial);
             }
 
-            /** initialize the electorate and candidates. **/
+            /* initialize the electorate and candidates. */
             electorate_.init();
             if (kShowElectorateDistribution) {
                 electorate_.show_distribution();
@@ -604,35 +619,37 @@ public:
             check_criteria();
         }
 
-        /** log the results. **/
+        /* log the results. */
         show_summary();
+*/
+        println(String + "Goodbye, World!");
     }
 
-    void sanity_checks() noexcept {
+    void sanity_checks() {
         if (ntrials_ < 1) {
-            LOG("Error: Need at least 1 trial ("<<ntrials_<<").");
-            std::exit(1);
+            println(String + "Error: Need at least 1 trial (" + ntrials_ + ").");
+            stdc:exit(1);
         }
         if (ncandidates_ < 3) {
-            LOG("Error: Need at least 3 candidates ("<<ncandidates_<<").");
-            exit(1);
+            println(String + "Error: Need at least 3 candidates (" + ncandidates_ + ").");
+            stdc:exit(1);
         }
         if (electorate_.nvoters_ < ncandidates_) {
-            LOG("Error: Need more voters ("<<electorate_.nvoters_<<") than candidates ("<<ncandidates_<<").");
-            exit(1);
+            println(String + "Error: Need more voters (" + electorate_.nvoters_ + ") than candidates (" + ncandidates_ + ").");
+            stdc:exit(1);
         }
 
-        /** uniform electorate is a single axis. **/
+        /* uniform electorate is a single axis. */
         if (kElectorateMethod == kElectorateUniform) {
             if (electorate_.naxes_ != 1) {
-                LOG("Warning: Uniform electorate requires number of issue axes ("<<electorate_.naxes_<<") to be 1, overriding.");
+                println(String + "Warning: Uniform electorate requires number of issue axes (" + electorate_.naxes_ + ") to be 1, overriding.");
                 electorate_.naxes_ = 1;
             }
         }
     }
-
-    /** show configuration. **/
-    void show_header() noexcept {
+/*
+    /* show configuration. */
+    void show_header() {
         auto seed = Rng::get_seed();
 
         LOG("Configuration:");
@@ -674,11 +691,11 @@ public:
         }
     }
 
-    /**
+    /*
     find the voter that would make the best candidate.
     also find the average utility of all voters.
-    **/
-    void find_best_candidate() noexcept {
+    */
+    void find_best_candidate() {
         if (kFindTheoreticalBestCandidate == false) {
             return;
         }
@@ -702,34 +719,34 @@ public:
             total_utility += utility;
         }
 
-        /**
+        /*
         save the best candidate and utility.
         and the average utility of all candidates.
-        **/
+        */
         theoretical_.which_ = best;
         theoretical_.best_ = best_utility;
         theoretical_.average_ = total_utility / float64(electorate_.nvoters_);
 
-        /** show results. **/
+        /* show results. */
         LOG("Best candidate chosen from all voters:");
         LOG(" Position: "<<best_position->to_string());
         LOG(" Utility : "<<best_utility);
         LOG(" Average : "<<theoretical_.average_);
     }
 
-    void init_candidates() noexcept {
-        /**
+    void init_candidates() {
+        /*
         pick primary candidates from the voters.
         eliminate most of them.
         sort them by the major axis.
         name them
         figure out how candidates rank each other.
         calculate voter satisfactions.
-        **/
+        */
         LOG("Selecting candidates from the electorate.");
         pick_candidates_from_electorate();
         disperse_candidates();
-        /** sort them. **/
+        /* sort them. */
         std::sort(candidates_.begin(), candidates_.end());
         single_transferable_vote_primary();
         name_candidates();
@@ -740,15 +757,15 @@ public:
         rank_candidates();
     }
 
-    void pick_candidates_from_electorate() noexcept {
-        /** choose the number of candidates based on the specified method. **/
+    void pick_candidates_from_electorate() {
+        /* choose the number of candidates based on the specified method. */
         int n = ncandidates_;
         if (canddiate_method_ == kCandidatesSingleTransferableVote) {
-            /** use the cube root of the numbe of voters. **/
+            /* use the cube root of the numbe of voters. */
             float64 cube_root = std::pow(float64(electorate_.nvoters_), kPrimaryPower);
             n = (int) std::round(cube_root);
 
-            /** maybe increase it. **/
+            /* maybe increase it. */
             n = std::max(n, ncandidates_);
         }
 
@@ -756,13 +773,13 @@ public:
             LOG("Reducing the number of candidates from "<<n<<" to "<<ncandidates_<<".");
         }
 
-        /** allocate space **/
+        /* allocate space */
         candidates_.resize(n);
 
-        /**
+        /*
         choose random voters as candidates.
         do not allow duplicates.
-        **/
+        */
         std::vector<bool> duplicates;
         duplicates.resize(electorate_.nvoters_);
         for (int i = 0; i < electorate_.nvoters_; ++i) {
@@ -783,15 +800,15 @@ public:
         }
     }
 
-    /**
+    /*
     move candidates closer to the political center.
-    **/
-    void disperse_candidates() noexcept {
+    */
+    void disperse_candidates() {
         if (dispersion_ == 1.0) {
             return;
         }
 
-        /** find the average voter position. **/
+        /* find the average voter position. */
         int naxes = electorate_.naxes_;
         Position pos;
         pos.axis_.resize(naxes);
@@ -809,17 +826,17 @@ public:
             pos.axis_[i] *= denom;
         }
 
-        /**
+        /*
         pre-apply the weighting factor to the average position.
         yes, we could optimize this step with the divide in the average.
         but that would make the code less clear.
-        **/
+        */
         float64 factor = 1.0 - dispersion_;
         for (int i = 0; i < naxes; ++i) {
             pos.axis_[i] *= factor;
         }
 
-        /** move all candidates towards the center. **/
+        /* move all candidates towards the center. */
         for (auto&& candidate : candidates_) {
             for (int i = 0; i < naxes; ++i) {
                 float64 cpos = candidate.position_.axis_[i];
@@ -829,18 +846,18 @@ public:
         }
     }
 
-    void single_transferable_vote_primary() noexcept {
-        /**
+    void single_transferable_vote_primary() {
+        /*
         creating blocs is expensive.
         reducing blocks is cheaper.
-        **/
+        */
         create_blocs();
 
-        /**
+        /*
         reduce the number of candidates.
         remove the ones with the lowest vote counts.
         we don't care about ties.
-        **/
+        */
         for(;;) {
             int n = candidates_.size();
             if (n <= ncandidates_) {
@@ -860,19 +877,19 @@ public:
             reduce_blocs(worst);
         }
 
-        /** repeat for correct approvals. sigh. **/
+        /* repeat for correct approvals. sigh. */
         create_blocs();
     }
 
-    void name_candidates() noexcept {
-        /** name them in sorted normalized order **/
+    void name_candidates() {
+        /* name them in sorted normalized order */
         for (int i = 0; i < ncandidates_; ++i) {
             auto& candidate = candidates_[i];
             candidate.name_ = 'A' + i;
         }
     }
 
-    void show_candidate_positions() noexcept {
+    void show_candidate_positions() {
         LOG("Candidate positions:");
         for (auto&& candidate : candidates_ ) {
             LOG(" "<<candidate.name_<<": "<<candidate.position_.to_string());
@@ -881,8 +898,8 @@ public:
 
     void rank_candidates(
         bool quiet = false
-    ) noexcept {
-        /** every candidate rank orders the others. **/
+    ) {
+        /* every candidate rank orders the others. */
         for (auto&& candidate : candidates_) {
             rank_other_candidates(candidate);
         }
@@ -907,7 +924,7 @@ public:
 
     void rank_other_candidates(
         Candidate& candidate
-    ) noexcept {
+    ) {
         candidate.rankings_.reserve(ncandidates_);
         candidate.utilities_.reserve(ncandidates_);
         candidate.rankings_.clear();
@@ -927,19 +944,19 @@ public:
         }
     }
 
-    /**
+    /*
     calculate the total utilities of all of the candidates.
-    **/
+    */
     void calculate_utilities(
         SatisfactionMetrics& result
-    ) noexcept {
+    ) {
 
-        /** reset the candidate utilities. **/
+        /* reset the candidate utilities. */
         for (auto& candidate : candidates_) {
             candidate.utility_ = 0.0;
         }
 
-        /** use the voter blocks. **/
+        /* use the voter blocks. */
         for (auto&& it : bloc_map_) {
             auto& rankings = it.first;
             auto& bloc = it.second;
@@ -950,19 +967,19 @@ public:
             }
         }
 
-        /** this might be the primary with extra candidates. **/
+        /* this might be the primary with extra candidates. */
         int n = candidates_.size();
 
-        /**
+        /*
         find the best candidate.
         their utility.
         and the total utility.
-        **/
+        */
         int best_candidate = 0;
         float64 best_utility = -1.0;
         float64 total_utility = 0.0;
         for (int i = 0; i < n; ++i) {
-            /** update best and sum **/
+            /* update best and sum */
             float64 utility = candidates_[i].utility_;
             if (utility > best_utility) {
                 best_candidate = i;
@@ -971,16 +988,16 @@ public:
             total_utility += utility;
         }
 
-        /** compute utility or random candidate. **/
+        /* compute utility or random candidate. */
         float64 average_utility = total_utility / float64(n);
 
-        /** return results. **/
+        /* return results. */
         result.which_ = best_candidate;
         result.best_ = best_utility;
         result.average_ = average_utility;
     }
 
-    /**
+    /*
     experimental option for alternative method for calculating voter satisfaction.
     the idea is to use a definition of best and average candidate that tracks
     across multiple trials.
@@ -988,15 +1005,15 @@ public:
     approximate the optimal candidate by the median voter.
     estimate the worst candidate as the first or last voter.
     approximate the average candidate as the average of the best and worst.
-    **/
+    */
     void use_median_satisfaction(
         SatisfactionMetrics& result
-    ) noexcept {
+    ) {
         if (kUseMedianForSatisfaction == false) {
             return;
         }
 
-        /** calculate the utility for the first median last voters. **/
+        /* calculate the utility for the first median last voters. */
         int n = electorate_.nvoters_;
         int left = 0;
         int mid = n / 2;
@@ -1013,7 +1030,7 @@ public:
             last_utility += voter.position_.utility(last);
         }
 
-        /** return the results. **/
+        /* return the results. */
         float64 worst_utility = std::min(first_utility, last_utility);
         float64 average_utility = 0.90 * median_utility + 0.10 * worst_utility;
         result.best_ = median_utility;
@@ -1021,16 +1038,16 @@ public:
         LOG("=tsc= median sats: "<<first_utility<<" "<<median_utility<<" "<<last_utility<<" "<<average_utility<<" "<<(median_utility-worst_utility));
     }
 
-    /**
+    /*
     divide the electorate up into blocks.
     computing the distance between voters and candidates is expensive.
     will get worse when we convert from distance to utility.
-    **/
-    void create_blocs() noexcept {
-        /**
+    */
+    void create_blocs() {
+        /*
         when there are 3 candidates...
         the voters can only be ABC, ACB, BAC, BCA, CAB, CBA.
-        **/
+        */
         bloc_map_.clear();
         Rankings rankings;
         Utilities utilities;
@@ -1046,7 +1063,7 @@ public:
             utilities.clear();
             approvals.resize(n);
 
-            /** create the rankings and the utility. **/
+            /* create the rankings and the utility. */
             for (int i = 0; i < n; ++i) {
                 auto& candidate = candidates_[i];
                 float64 utility = voter.position_.utility(candidate.position_);
@@ -1060,7 +1077,7 @@ public:
                 utilities.insert(utilities.begin() + k, utility);
             }
 
-            /** approve of above average candidates. **/
+            /* approve of above average candidates. */
             float64 sum = 0.0;
             int napprovals = 0;
             for (int i = 0; i < n; ++i) {
@@ -1077,10 +1094,10 @@ public:
             }
             total_support += napprovals;
 
-            /** find the key. **/
+            /* find the key. */
             auto it = bloc_map_.find(rankings);
             if (it == bloc_map_.end()) {
-                /** add new bloc. **/
+                /* add new bloc. */
                 Bloc bloc;
                 bloc.size_ = 1;
                 bloc.utilities_ = std::move(utilities);
@@ -1088,7 +1105,7 @@ public:
                 bloc.approvals_ = std::move(approvals);
                 bloc_map_.insert({std::move(rankings), std::move(bloc)});
             } else {
-                /** add to the existing bloc. **/
+                /* add to the existing bloc. */
                 auto& found = it->second;
                 found.size_ += 1;
                 found.napprovals_ += napprovals;
@@ -1099,26 +1116,26 @@ public:
             }
         }
 
-        /** save the total support for find winner. **/
+        /* save the total support for find winner. */
         if (kUseApprovalVotes == false) {
-            /** voters vote for a single candidate. **/
+            /* voters vote for a single candidate. */
             total_support_ = electorate_.nvoters_;
         } else {
-            /** voters may approve multiple candidates. **/
+            /* voters may approve multiple candidates. */
             total_support_ = total_support;
         }
     }
 
-    /**
+    /*
     the k-th candidate has been removed.
     recreate the blocs without him.
     recreate the new keys and the new utilities.
 
     ignore approvals cause we don't have the information we need to update it.
-    **/
+    */
     void reduce_blocs(
         int k
-    ) noexcept {
+    ) {
         Rankings new_rankings;
         Utilities new_utilities;
         Approvals new_approvals;
@@ -1137,40 +1154,40 @@ public:
             new_utilities.clear();
             new_approvals.resize(n);
 
-            /**
+            /*
             copy the old rankings and utilities
             omitting the former k-th candidate.
             adjust number for the new candidates.
 
             the original block map has keys of size n+1.
             hence the less than or equal.
-            **/
+            */
             for (int i = 0; i <= n; ++i) {
                 int r = rankings[i];
                 if (r == k) {
-                    /** skip the removed candidate. **/
+                    /* skip the removed candidate. */
                     continue;
                 }
                 float64 u = bloc.utilities_[i];
                 int new_r = r;
                 if (new_r > k) {
-                    /** later candidates change index. **/
+                    /* later candidates change index. */
                     --new_r;
                 }
                 new_rankings.push_back(new_r);
                 new_utilities.push_back(u);
             }
 
-            /** find the new rankings in the map. **/
+            /* find the new rankings in the map. */
             auto rit = new_bloc_map.find(new_rankings);
             if (rit == new_bloc_map.end()) {
-                /** must have approvals. **/
+                /* must have approvals. */
                 new_approvals[0] = bloc.size_;
                 for (int i = 1; i < n; ++i) {
                     new_approvals[i] = 0;
                 }
 
-                /** add a new bloc. **/
+                /* add a new bloc. */
                 Bloc new_bloc;
                 new_bloc.size_ = bloc.size_;
                 new_bloc.utilities_ = std::move(new_utilities);
@@ -1178,7 +1195,7 @@ public:
                 new_bloc.approvals_ = std::move(new_approvals);
                 new_bloc_map.insert({std::move(new_rankings), std::move(new_bloc)});
             } else {
-                /** accumulate into an existing bloc. **/
+                /* accumulate into an existing bloc. */
                 auto& found = rit->second;
                 found.size_ += bloc.size_;
                 found.napprovals_ += bloc.size_;
@@ -1189,11 +1206,11 @@ public:
             }
         }
 
-        /** blow away the old bloc. **/
+        /* blow away the old bloc. */
         bloc_map_ = std::move(new_bloc_map);
     }
 
-    void show_bloc_map() noexcept {
+    void show_bloc_map() {
         int n = bloc_map_.size();
         LOG("Voter blocs ("<<n<<"):");
         for (auto&& it : bloc_map_) {
@@ -1218,29 +1235,29 @@ public:
         }
     }
 
-    void vote() noexcept {
-        /**
+    void vote() {
+        /*
         clear support.
         we may vote multiple times.
-        **/
+        */
         for (auto&& candidate : candidates_) {
             candidate.support_ = 0;
         }
 
-        /**
+        /*
         for each voter bloc...
         give the support to that candidate.
-        **/
+        */
         for (auto&& it : bloc_map_) {
             auto& rankings = it.first;
             auto& bloc = it.second;
 
             if (kUseApprovalVotes == false) {
-                /** voters vote for a single candidate. **/
+                /* voters vote for a single candidate. */
                 int which = rankings[0];
                 candidates_[which].support_ += bloc.size_;
             } else {
-                /** voters may approve multiple candidates. **/
+                /* voters may approve multiple candidates. */
                 for (int i = 0; i < ncandidates_; ++i) {
                     int which = rankings[i];
                     candidates_[which].support_ += bloc.approvals_[i];
@@ -1249,7 +1266,7 @@ public:
         }
     }
 
-    /**
+    /*
     voter satisfaction is a function of the utility of a candidate.
     the best candidate has satisfaction 1.0.
     the average candidate has a satisfaction of 0.0.
@@ -1259,8 +1276,8 @@ public:
     standard: considers just the candidates.
     primary: includes candidates eliminated in the primary.
     all possible: includes all voters.
-    **/
-    void show_satisfaction() noexcept {
+    */
+    void show_satisfaction() {
         LOG("");
         LOG("Voter satisfaction (utility):");
         calculate_satisfaction(actual_);
@@ -1273,7 +1290,7 @@ public:
 
     void calculate_satisfaction(
         const SatisfactionMetrics& metric
-    ) noexcept {
+    ) {
         float64 best = metric.best_;
         float64 average = metric.average_;
         float64 denom = best - average;
@@ -1287,14 +1304,14 @@ public:
     float64 calculate_satisfaction(
         float64 utility,
         const SatisfactionMetrics& metric
-    ) noexcept {
+    ) {
         float64 best = metric.best_;
         float64 average = metric.average_;
         float64 satisfaction = (utility - average) / (best - average);
         return satisfaction;
     }
 
-    void check_criteria() noexcept {
+    void check_criteria() {
         LOG("");
         LOG("Checking voting criteria.");
         int max_satisfaction = find_max_satisfaction_candidate();
@@ -1312,13 +1329,13 @@ public:
         plurality_.find_winner();
         candidate_.find_winner();
 
-        /** check for candidate rankings for cycle. **/
+        /* check for candidate rankings for cycle. */
         int candidate_cycle = check_candidate_rankings_for_cycles();
         if (candidate_cycle) {
             ++candidate_cycles_;
         }
 
-        /** caution: this destroys the bloc map. **/
+        /* caution: this destroys the bloc map. */
         int independence = check_independence();
 
         if (guthrie_.winner_ == max_satisfaction) {
@@ -1338,31 +1355,31 @@ public:
             condorcet_loser_name = candidates_[condorcet_loser_].name_;
         }
 
-        /**
+        /*
         tracking the condorcet loser is a bit tricky.
         if the winner is not the condorcet lower then result = string(x, x) = pass.
-        **/
+        */
         int loser = -1;
-        /**
+        /*
         if (condorcet_loser < 0) ie there is no condorcet loser
             loser = -1; condorcet_loser = -1;
             result = string(-1, -1) = n/a.
-        **/
-        /**
+        */
+        /*
         else if (winner_ == condorcet loser)
             loser = -1; condorcet_loser = x;
             result = string(-1, x) = fail.
-        **/
-        /**
+        */
+        /*
         else if (winner != condorcet_loser)
             loser = condorcet_loser = x
             result = string(x, x) = pass
-        **/
+        */
         if (guthrie_.winner_ != condorcet_loser_) {
             loser = condorcet_loser_;
         }
 
-        /** check if the irv winner picks the condorcet winner. **/
+        /* check if the irv winner picks the condorcet winner. */
         if (condorcet_.winner_ >= 0) {
             if (instant_runoff_.winner_ == condorcet_.winner_) {
                 ++irv_is_condorcet_;
@@ -1407,7 +1424,7 @@ public:
         LOG("Independence                : "<<candidates_[independence].name_<<" "<<result);
     }
 
-    const char *result_to_string(int winner, int expected) noexcept {
+    const char *result_to_string(int winner, int expected) {
         if (expected < 0) {
             return "n/a";
         }
@@ -1417,25 +1434,25 @@ public:
         return "=FAIL=";
     }
 
-    int find_max_satisfaction_candidate() noexcept {
-        /** max satisfaction candidate. **/
+    int find_max_satisfaction_candidate() {
+        /* max satisfaction candidate. */
         int winner = actual_.which_;
 
-        /** update summary **/
+        /* update summary */
         auto& winning_candidate = candidates_[guthrie_.winner_];
         total_utility_ += winning_candidate.utility_;
 
         return winner;
     }
 
-    /**
+    /*
     check the candidate rankings for a condorcet cycle.
-    **/
-    int check_candidate_rankings_for_cycles() noexcept {
-        /** ensure the candidate rankings are correct. **/
+    */
+    int check_candidate_rankings_for_cycles() {
+        /* ensure the candidate rankings are correct. */
         rank_candidates(true);
 
-        /** initialize number of wins for each candidate. **/
+        /* initialize number of wins for each candidate. */
         std::vector<int> wins;
         wins.reserve(ncandidates_);
         wins.resize(ncandidates_);
@@ -1443,10 +1460,10 @@ public:
             wins[i] = 0;
         }
 
-        /** for every candidate pairing. **/
+        /* for every candidate pairing. */
         for (int i = 0; i < ncandidates_; ++i) {
             for (int k = i + 1; k < ncandidates_; ++k) {
-                /** count the votes of every candidate. **/
+                /* count the votes of every candidate. */
                 int ivotes = 0;
                 int kvotes = 0;
                 for (auto&& candidate : candidates_) {
@@ -1471,9 +1488,9 @@ public:
             }
         }
 
-        /**
+        /*
         find the undefeated candidate.
-        **/
+        */
         int max_wins = ncandidates_ - 1;
         for (int i = 0; i < ncandidates_; ++i) {
             if (wins[i] == max_wins) {
@@ -1486,47 +1503,47 @@ public:
         return true;
     }
 
-    /**
+    /*
     check for independence of irrelevant choices.
     that's not quite what we do.
     we remove a candidate and ensure the winner still wins.
     which is close enough.
-    **/
-    int check_independence() noexcept {
-        /** assume we pass. **/
+    */
+    int check_independence() {
+        /* assume we pass. */
         int independence = guthrie_.winner_;
 
-        /** save the original winner **/
+        /* save the original winner */
         int original_winner = guthrie_.winner_;
 
-        /** save the name of the original winner. **/
+        /* save the name of the original winner. */
         char original_winner_name = candidates_[original_winner].name_;
 
-        /** save the original candidates. **/
+        /* save the original candidates. */
         auto original_candidates = candidates_;
 
-        /** decrement the number of candidates. **/
+        /* decrement the number of candidates. */
         int ncandidates = ncandidates_;
         ncandidates_ = ncandidates - 1;
 
-        /** remove the first candidate. **/
+        /* remove the first candidate. */
         candidates_.erase(candidates_.begin());
 
-        /** for summary **/
+        /* for summary */
         int nwinners = 0;
         float64 total_utility = 0.0;
 
-        /** remove one of the non-winners and revote. **/
+        /* remove one of the non-winners and revote. */
         for (int i = 0; i < ncandidates; ++i) {
-            /** skip the winner. **/
+            /* skip the winner. */
             if (i != original_winner) {
-                /** re-vote. **/
+                /* re-vote. */
                 rank_candidates(kQuiet);
                 create_blocs();
                 vote();
                 guthrie_.find_winner(kQuiet);
 
-                /** check by name, not index. **/
+                /* check by name, not index. */
                 auto& candidate = candidates_[guthrie_.winner_];
                 char winner_name = candidate.name_;
                 if (winner_name != original_winner_name) {
@@ -1537,25 +1554,25 @@ public:
                 }
             }
 
-            /**
+            /*
             update the list of candidates.
             avoid buffer overrun at end of loop.
             3 candidates.
             i ranges from 0,1,2.
             original size is 3.
             current size is 2.
-            **/
+            */
             if (i < ncandidates_) {
                 candidates_[i] = original_candidates[i];
             }
         }
 
-        /** restore the original candidates, count, and winner. **/
+        /* restore the original candidates, count, and winner. */
         std::swap(candidates_, original_candidates);
         ncandidates_ = ncandidates;
         guthrie_.winner_ = original_winner;
 
-        /** accumulate utility. **/
+        /* accumulate utility. */
         float64 utility;
         if (nwinners == 0) {
             utility = candidates_[guthrie_.winner_].utility_;
@@ -1567,7 +1584,7 @@ public:
         return independence;
     }
 
-    void show_summary() noexcept {
+    void show_summary() {
         if (ntrials_ <= 1) {
             return;
         }
@@ -1575,7 +1592,7 @@ public:
         float64 denom = float64(ntrials_);
         float64 non_cycle_trials = float64(ntrials_ - condorcet_cycles_);
 
-        /** calculates satisfactions from average utilities. **/
+        /* calculates satisfactions from average utilities. */
         accumulated_.best_ /= denom;
         accumulated_.average_ /= denom;
         float64 average_utility = total_utility_ / denom;
@@ -1675,14 +1692,16 @@ public:
         LOG(" candidate cycles             : "<<candidate_cycles<<"%");
         LOG(" instant runoff is Condorcet  : "<<irv_is_condorcet<<"%");
     }
-};
+*/
+}
 
-/**
+/*
+/*
 find the guthrie winner.
-**/
+*/
 template<> void ElectoralMethod<Guthrie>::find_winner(
     bool quiet
-) noexcept {
+) {
     bool show_everything = !quiet;
     if (kShowCoombsRounds == false) {
         show_everything = false;
@@ -1696,29 +1715,29 @@ template<> void ElectoralMethod<Guthrie>::find_winner(
     std::vector<int> counts;
     counts.resize(ncandidates);
 
-    /**
+    /*
     normally we can find the winner in N-1 rounds.
     unless there's a tie in the last round.
-    **/
+    */
     for (int round = 1; /*round < ncandidates_*/; ++round) {
         if (show_everything) {
             LOG("Round "<<round<<":");
         }
 
-        /** phase 1: count first place votes. **/
+        /* phase 1: count first place votes. */
 
-        /** initialize the counts **/
+        /* initialize the counts */
         for (int i = 0; i < ncandidates; ++i) {
             counts[i] = 0;
         }
 
-        /** count first place votes. **/
+        /* count first place votes. */
         for (auto&& candidate : candidates) {
             int favorite = candidate.rankings_[0];
             counts[favorite] += candidate.support_;
         }
 
-        /** show first place vote counts. **/
+        /* show first place vote counts. */
         bool show_it = show_everything;
         if (show_required && round == 1) {
             show_it = true;
@@ -1731,7 +1750,7 @@ template<> void ElectoralMethod<Guthrie>::find_winner(
             }
         }
 
-        /** check for majority. **/
+        /* check for majority. */
         for (int i = 0; i < ncandidates; ++i) {
             if (2*counts[i] > total_support) {
                 winner_ = i;
@@ -1743,39 +1762,39 @@ template<> void ElectoralMethod<Guthrie>::find_winner(
             }
         }
 
-        /** initialize the counts **/
+        /* initialize the counts */
         for (int i = 0; i < ncandidates; ++i) {
             counts[i] = 0;
         }
 
-        /**
+        /*
         count last place votes.
-        **/
+        */
         int last_index = ncandidates - round;
         for (auto&& candidate : candidates) {
             int worst = candidate.rankings_[last_index];
             counts[worst] += candidate.support_;
         }
 
-        /** find the candidate with the most last place votes. **/
+        /* find the candidate with the most last place votes. */
         int loser = 0;
         int loser_count = -1;
         for (int i = 0; i < ncandidates; ++i) {
             int count = counts[i];
-            /**
+            /*
             we have this implied bias that the first candidate in the list wins ties.
             however in case, we're looking for the loser.
             if there's a tie we want to find the last candidate in the list.
             hence the comparison is greater than or equal to.
             instead of just greater than.
-            **/
+            */
             if (count >= loser_count) {
                 loser = i;
                 loser_count = count;
             }
         }
 
-        /** remove the loser from the candidate rankings. **/
+        /* remove the loser from the candidate rankings. */
         for (auto&& candidate : candidates) {
             for (auto it = candidate.rankings_.begin(); it < candidate.rankings_.end(); ++it) {
                 if (*it == loser) {
@@ -1822,23 +1841,23 @@ public:
     int winner_votes_ = 0;
     int loser_votes_ = 0;
 
-    /** find the winner in a head to head election. **/
+    /* find the winner in a head to head election. */
     void resolve(
         int a,
         int b
-    ) noexcept {
+    ) {
         auto& bloc_map = g_impl->bloc_map_;
 
-        /** init vote counts. **/
+        /* init vote counts. */
         int avotes = 0;
         int bvotes = 0;
 
-        /** for each voter bloc. **/
+        /* for each voter bloc. */
         for (auto&& it : bloc_map) {
             auto& rankings = it.first;
             auto& bloc = it.second;
 
-            /** give the votes to whichever is first. */
+            /* give the votes to whichever is first. */
             for (auto&& which : rankings) {
                 if (which == a) {
                     avotes += bloc.size_;
@@ -1851,11 +1870,11 @@ public:
             }
         }
 
-        /**
+        /*
         we assume that a comes before b in the candidate list.
         and that we're looking for a winner.
         in which case, by the rules, a wins ties.
-        **/
+        */
         if (avotes >= bvotes) {
             winner_ = a;
             loser_ = b;
@@ -1870,18 +1889,18 @@ public:
     }
 };
 
-/**
+/*
 find the two round approval winner where the top two have a runoff.
 use the approvals stored when the bloc was created.
-**/
+*/
 template<> void ElectoralMethod<ApprovalRunoff>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
 
-    /** initialize number of approvals for each candidate. **/
+    /* initialize number of approvals for each candidate. */
     std::vector<int> approvals;
     approvals.reserve(ncandidates);
     approvals.resize(ncandidates);
@@ -1889,7 +1908,7 @@ template<> void ElectoralMethod<ApprovalRunoff>::find_winner(
         approvals[i] = 0;
     }
 
-    /** for each voter bloc. **/
+    /* for each voter bloc. */
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
         auto& bloc = it.second;
@@ -1900,7 +1919,7 @@ template<> void ElectoralMethod<ApprovalRunoff>::find_winner(
         }
     }
 
-    /** find the largest approval. **/
+    /* find the largest approval. */
     winner_ = -1;
     int max = -1;
     for (int i = 0; i < ncandidates; ++i) {
@@ -1911,7 +1930,7 @@ template<> void ElectoralMethod<ApprovalRunoff>::find_winner(
         }
     }
 
-    /** find the second largest approval. **/
+    /* find the second largest approval. */
     approvals[winner_] = 0;
     int second = -1;
     max = -1;
@@ -1923,42 +1942,42 @@ template<> void ElectoralMethod<ApprovalRunoff>::find_winner(
         }
     }
 
-    /** find the head to head winner. **/
+    /* find the head to head winner. */
     HeadToHead runoff;
     runoff.resolve(winner_, second);
 
-    /** overwrite the winner. **/
+    /* overwrite the winner. */
     winner_ = runoff.winner_;
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 find the range (score) voting winner.
 assign a range based on utilities for each block.
-**/
+*/
 template<> void ElectoralMethod<Range>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
 
-    /** initialize rating for each candidate. **/
+    /* initialize rating for each candidate. */
     std::vector<float64> ratings;
     ratings.resize(ncandidates);
     for (int i = 0; i < ncandidates; ++i) {
         ratings[i] = 0.0;
     }
 
-    /** for each voter bloc. **/
+    /* for each voter bloc. */
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
         auto& bloc = it.second;
@@ -1974,7 +1993,7 @@ template<> void ElectoralMethod<Range>::find_winner(
         }
     }
 
-    /** find the largest rating. **/
+    /* find the largest rating. */
     winner_ = -1;
     float64 max = -1.0;
     for (int i = 0; i < ncandidates; ++i) {
@@ -1985,26 +2004,26 @@ template<> void ElectoralMethod<Range>::find_winner(
         }
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 condorcet wins the most head to head races.
-**/
+*/
 template<> void ElectoralMethod<Condorcet>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
 
-    /** initialize number of wins for each candidate. **/
+    /* initialize number of wins for each candidate. */
     std::vector<int> wins;
     wins.reserve(ncandidates);
     wins.resize(ncandidates);
@@ -2013,7 +2032,7 @@ template<> void ElectoralMethod<Condorcet>::find_winner(
     }
 
     LOG("Condorcet results:");
-    /** count head to head victories. **/
+    /* count head to head victories. */
     for (int i = 0; i < ncandidates; ++i) {
         for (int k = i + 1; k < ncandidates; ++k) {
             HeadToHead result;
@@ -2024,13 +2043,13 @@ template<> void ElectoralMethod<Condorcet>::find_winner(
         }
     }
 
-    /** test for condorcet ordering. **/
+    /* test for condorcet ordering. */
     uint64 counts = 0;
 
-    /**
+    /*
     find the candidate with the most wins.
     find the average utility while we're here.
-    **/
+    */
     int max = -1;
     winner_ = -1;
     int nwinners = 0;
@@ -2056,59 +2075,59 @@ template<> void ElectoralMethod<Condorcet>::find_winner(
             loser = i;
         }
 
-        /** set bit for condorcet ordering. **/
+        /* set bit for condorcet ordering. */
         counts |= 1 << w;
     }
 
-    /** no winner if there's a cycle. **/
+    /* no winner if there's a cycle. */
     if (nwinners > 1) {
         LOG("Condorcet cycle exists.");
         winner_ = -1;
         ++g_impl->condorcet_cycles_;
     }
 
-    /** check if there is a condorcet ordering. **/
+    /* check if there is a condorcet ordering. */
     if (nwinners == 1) {
         LOG("Condorcet ordering exists.");
         auto& candidate = candidates[winner_];
         g_impl->total_utility_ordering_ += candidate.utility_;
     }
 
-    /**
+    /*
     average the utility for all candidates in the cycle if any.
     accumulate for the summary.
-    **/
+    */
     float64 utility = total_utility / float64(nwinners);
     total_utility_ += utility;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 
-    /** return results. **/
+    /* return results. */
     g_impl->condorcet_loser_ = loser;
 }
 
-/**
+/*
 find the star winner.
 assign a score from 0 to 5 based on utilities for each block.
-**/
+*/
 template<> void ElectoralMethod<Star>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
 
-    /** initialize rating for each candidate. **/
+    /* initialize rating for each candidate. */
     std::vector<int> ratings;
     ratings.resize(ncandidates);
     for (int i = 0; i < ncandidates; ++i) {
         ratings[i] = 0;
     }
 
-    /** for each voter bloc. **/
+    /* for each voter bloc. */
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
         auto& bloc = it.second;
@@ -2126,7 +2145,7 @@ template<> void ElectoralMethod<Star>::find_winner(
         }
     }
 
-    /** find the largest score. **/
+    /* find the largest score. */
     int a = -1;
     int max = -1;
     for (int i = 0; i < ncandidates; ++i) {
@@ -2137,7 +2156,7 @@ template<> void ElectoralMethod<Star>::find_winner(
         }
     }
 
-    /** find the second largest score. **/
+    /* find the second largest score. */
     int b = -1;
     max = -1;
     for (int i = 0; i < ncandidates; ++i) {
@@ -2151,7 +2170,7 @@ template<> void ElectoralMethod<Star>::find_winner(
         }
     }
 
-    /** find which is ranked higher most often. **/
+    /* find which is ranked higher most often. */
     int counta = 0;
     int countb = 0;
     for (auto&& it : bloc_map) {
@@ -2192,28 +2211,28 @@ template<> void ElectoralMethod<Star>::find_winner(
         winner_ = b;
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 borda count 0 for first, 1 for second, ...
 lowest total wins.
-**/
+*/
 template<> void ElectoralMethod<Borda>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
 
-    /** initialize number of wins for each candidate. **/
+    /* initialize number of wins for each candidate. */
     std::vector<int> counts;
     counts.reserve(ncandidates);
     counts.resize(ncandidates);
@@ -2221,7 +2240,7 @@ template<> void ElectoralMethod<Borda>::find_winner(
         counts[i] = 0;
     }
 
-    /** for each voter bloc. **/
+    /* for each voter bloc. */
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
         auto& bloc = it.second;
@@ -2232,7 +2251,7 @@ template<> void ElectoralMethod<Borda>::find_winner(
         }
     }
 
-    /** find the lowest count. **/
+    /* find the lowest count. */
     winner_ = -1;
     int min = 0x7FFFFFFF;
     for (int i = 0; i < ncandidates; ++i) {
@@ -2243,29 +2262,29 @@ template<> void ElectoralMethod<Borda>::find_winner(
         }
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 find the approval winner.
 use the approvals stored when the bloc was created.
-**/
+*/
 template<> void ElectoralMethod<Approval>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
     int nvoters = g_impl->electorate_.nvoters_;
 
-    /** initialize number of approvals for each candidate. **/
+    /* initialize number of approvals for each candidate. */
     std::vector<int> approvals;
     approvals.reserve(ncandidates);
     approvals.resize(ncandidates);
@@ -2273,7 +2292,7 @@ template<> void ElectoralMethod<Approval>::find_winner(
         approvals[i] = 0;
     }
 
-    /** for each voter bloc. **/
+    /* for each voter bloc. */
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
         auto& bloc = it.second;
@@ -2284,7 +2303,7 @@ template<> void ElectoralMethod<Approval>::find_winner(
         }
     }
 
-    /** find the largest approval. **/
+    /* find the largest approval. */
     winner_ = -1;
     int max = -1;
     for (int i = 0; i < ncandidates; ++i) {
@@ -2295,21 +2314,21 @@ template<> void ElectoralMethod<Approval>::find_winner(
         }
     }
 
-    /**
+    /*
     what does approval do when there is no majority winner?
     we use the plurality winner.
     log it. ship it.
-    **/
+    */
     auto& candidate = candidates[winner_];
     if (2*max <= nvoters) {
         int majority = (nvoters + 1) / 2;
         LOG(candidate.name_<<" has a plurality ("<<max<<") but not a majority ("<<majority<<") of approval votes.");
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
@@ -2322,19 +2341,19 @@ public:
 };
 typedef std::vector<RankedChoice> RankedChoices;
 
-/**
+/*
 find the coombs winner.
-**/
+*/
 template<> void ElectoralMethod<Coombs>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
 
     winner_ = -1;
 
-    /** copy the voter blocs. **/
+    /* copy the voter blocs. */
     int nblocs = bloc_map.size();
     RankedChoices ranked_choices;
     ranked_choices.reserve(nblocs);
@@ -2348,12 +2367,12 @@ template<> void ElectoralMethod<Coombs>::find_winner(
         ranked_choices.push_back(std::move(ranked_choice));
     }
 
-    /** allocate vote counts. **/
+    /* allocate vote counts. */
     std::vector<int> counts;
     counts.reserve(ncandidates);
     counts.resize(ncandidates);
 
-    /** initialize a list of elligible candidates. **/
+    /* initialize a list of elligible candidates. */
     std::vector<int> elligible;
     elligible.reserve(ncandidates);
     elligible.resize(ncandidates);
@@ -2361,34 +2380,34 @@ template<> void ElectoralMethod<Coombs>::find_winner(
         elligible[i] = i;
     }
 
-    /** repeat until we have a winner. **/
+    /* repeat until we have a winner. */
     for (int nc = ncandidates; nc > 1; --nc) {
-        /** clear the vote counts. **/
+        /* clear the vote counts. */
         for (int i = 0; i < ncandidates; ++i) {
             counts[i] = 0;
         }
 
-        /** count the last place votes. **/
+        /* count the last place votes. */
         int ix = nc - 1;
         for (auto&& rc : ranked_choices) {
             int which = rc.rankings_[ix];
             counts[which] += rc.size_;
         }
 
-        /** find the candidates with the most last place votes. **/
+        /* find the candidates with the most last place votes. */
         int loser = -1;
         int max = -1;
         for (int i = 0; i < nc; ++i) {
             int which = elligible[i];
             int count = counts[which];
-            /** by rule, last in the list loses ties. **/
+            /* by rule, last in the list loses ties. */
             if (max <= count) {
                 loser = which;
                 max = count;
             }
         }
 
-        /** remove the loser from the rankings. **/
+        /* remove the loser from the rankings. */
         for (auto&& rc : ranked_choices) {
             auto& rankings = rc.rankings_;
             for (int i = 0; i < nc; ++i) {
@@ -2400,7 +2419,7 @@ template<> void ElectoralMethod<Coombs>::find_winner(
             }
         }
 
-        /** remove the loser from the candidate list. **/
+        /* remove the loser from the candidate list. */
         for (int i = 0; i < nc; ++i) {
             int which = elligible[i];
             if (which == loser) {
@@ -2410,25 +2429,25 @@ template<> void ElectoralMethod<Coombs>::find_winner(
         }
     }
 
-    /** winner is the last elligible candidate. **/
+    /* winner is the last elligible candidate. */
     winner_ = elligible[0];
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 find the anti-plurality winner.
-**/
+*/
 template<> void ElectoralMethod<AntiPlurality>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
@@ -2437,12 +2456,12 @@ template<> void ElectoralMethod<AntiPlurality>::find_winner(
     counts.reserve(ncandidates);
     counts.resize(ncandidates);
 
-    /** clear the counts. **/
+    /* clear the counts. */
     for (int i = 0; i < ncandidates; ++i) {
         counts[i] = 0;
     }
 
-    /** sum the votes. **/
+    /* sum the votes. */
     int pos = ncandidates - 1;
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
@@ -2452,7 +2471,7 @@ template<> void ElectoralMethod<AntiPlurality>::find_winner(
         counts[last] += bloc.size_;
     }
 
-    /** find the winner. **/
+    /* find the winner. */
     winner_ = 0;
     int votes = 0x7FFFFFFF;
     for (int i = 0; i < ncandidates; ++i) {
@@ -2463,23 +2482,23 @@ template<> void ElectoralMethod<AntiPlurality>::find_winner(
         }
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 bucklin voting.
 while no greatest majority winner, accumulate the next choices.
-**/
+*/
 template<> void ElectoralMethod<Bucklin>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
@@ -2489,17 +2508,17 @@ template<> void ElectoralMethod<Bucklin>::find_winner(
     counts.reserve(ncandidates);
     counts.resize(ncandidates);
 
-    /** clear the counts. **/
+    /* clear the counts. */
     for (int i = 0; i < ncandidates; ++i) {
         counts[i] = 0;
     }
 
-    /** potentially accumulate over all rankings. **/
+    /* potentially accumulate over all rankings. */
     for (int i = 0; i < ncandidates; ++i) {
-        /** no winner. **/
+        /* no winner. */
         winner_ = -1;
 
-        /** sum the votes. **/
+        /* sum the votes. */
         for (auto&& it : bloc_map) {
             auto& rankings = it.first;
             auto& bloc = it.second;
@@ -2508,7 +2527,7 @@ template<> void ElectoralMethod<Bucklin>::find_winner(
             counts[which] += bloc.size_;
         }
 
-        /** find the index with the maximum count. **/
+        /* find the index with the maximum count. */
         int max = -1;
         for (int k = 0; k < ncandidates; ++k) {
             int c = counts[k];
@@ -2518,28 +2537,28 @@ template<> void ElectoralMethod<Bucklin>::find_winner(
             }
         }
 
-        /** done when they have the greatest majority. **/
+        /* done when they have the greatest majority. */
         if (2*max > nvoters) {
             break;
         }
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 instant runoff voting.
-**/
+*/
 template<> void ElectoralMethod<InstantRunoff>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
@@ -2547,7 +2566,7 @@ template<> void ElectoralMethod<InstantRunoff>::find_winner(
 
     winner_ = -1;
 
-    /** copy the voter blocs. **/
+    /* copy the voter blocs. */
     int nblocs = bloc_map.size();
     RankedChoices ranked_choices;
     ranked_choices.reserve(nblocs);
@@ -2561,12 +2580,12 @@ template<> void ElectoralMethod<InstantRunoff>::find_winner(
         ranked_choices.push_back(std::move(ranked_choice));
     }
 
-    /** allocate vote counts. **/
+    /* allocate vote counts. */
     std::vector<int> counts;
     counts.reserve(ncandidates);
     counts.resize(ncandidates);
 
-    /** initialize a list of elligible candidates. **/
+    /* initialize a list of elligible candidates. */
     std::vector<int> elligible;
     elligible.reserve(ncandidates);
     elligible.resize(ncandidates);
@@ -2574,20 +2593,20 @@ template<> void ElectoralMethod<InstantRunoff>::find_winner(
         elligible[i] = i;
     }
 
-    /** repeat until we have a winner. **/
+    /* repeat until we have a winner. */
     for (int nc = ncandidates; nc > 0; --nc) {
-        /** clear the vote counts. **/
+        /* clear the vote counts. */
         for (int i = 0; i < ncandidates; ++i) {
             counts[i] = 0;
         }
 
-        /** count the first place votes. **/
+        /* count the first place votes. */
         for (auto&& rc : ranked_choices) {
             int which = rc.rankings_[0];
             counts[which] += rc.size_;
         }
 
-        /** find the candidates with the most and least first place votes. **/
+        /* find the candidates with the most and least first place votes. */
         int winner = -1;
         int loser = -1;
         int max = -1;
@@ -2595,25 +2614,25 @@ template<> void ElectoralMethod<InstantRunoff>::find_winner(
         for (int i = 0; i < nc; ++i) {
             int which = elligible[i];
             int count = counts[which];
-            /** by rule, first in the list wins ties. **/
+            /* by rule, first in the list wins ties. */
             if (max < count) {
                 winner = which;
                 max = count;
             }
-            /** by rule, last in the list loses ties. **/
+            /* by rule, last in the list loses ties. */
             if (min >= count) {
                 loser = which;
                 min = count;
             }
         }
 
-        /** check for a majority winner. **/
+        /* check for a majority winner. */
         if (2*max > nvoters) {
             winner_ = winner;
             break;
         }
 
-        /** remove the loser from the rankings. **/
+        /* remove the loser from the rankings. */
         for (auto&& rc : ranked_choices) {
             auto& rankings = rc.rankings_;
             for (int i = 0; i < nc; ++i) {
@@ -2625,7 +2644,7 @@ template<> void ElectoralMethod<InstantRunoff>::find_winner(
             }
         }
 
-        /** remove the loser from the candidate list. **/
+        /* remove the loser from the candidate list. */
         for (int i = 0; i < nc; ++i) {
             int which = elligible[i];
             if (which == loser) {
@@ -2639,23 +2658,23 @@ template<> void ElectoralMethod<InstantRunoff>::find_winner(
         LOG("=tsc= uh oh! irv failed to find winner." );
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 find the plurality runoff winner.
 if there is no majority, then the top two go head to head.
-**/
+*/
 template<> void ElectoralMethod<PluralityRunoff>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
@@ -2665,12 +2684,12 @@ template<> void ElectoralMethod<PluralityRunoff>::find_winner(
     counts.reserve(ncandidates);
     counts.resize(ncandidates);
 
-    /** clear the counts. **/
+    /* clear the counts. */
     for (int i = 0; i < ncandidates; ++i) {
         counts[i] = 0;
     }
 
-    /** sum the votes. **/
+    /* sum the votes. */
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
         auto& bloc = it.second;
@@ -2679,7 +2698,7 @@ template<> void ElectoralMethod<PluralityRunoff>::find_winner(
         counts[first] += bloc.size_;
     }
 
-    /** find the winner. **/
+    /* find the winner. */
     winner_ = -1;
     int votes = -1;
     for (int i = 0; i < ncandidates; ++i) {
@@ -2690,12 +2709,12 @@ template<> void ElectoralMethod<PluralityRunoff>::find_winner(
         }
     }
 
-    /** go to the runoff if no majority. **/
+    /* go to the runoff if no majority. */
     if (2*votes <= nvoters) {
-        /** remove the winner from the counts. **/
+        /* remove the winner from the counts. */
         counts[winner_] = 0;
 
-        /** find the second place finisher. **/
+        /* find the second place finisher. */
         int second = -1;
         votes = -1;
         for (int i = 0; i < ncandidates; ++i) {
@@ -2706,30 +2725,30 @@ template<> void ElectoralMethod<PluralityRunoff>::find_winner(
             }
         }
 
-        /** find the head to head winner. **/
+        /* find the head to head winner. */
         HeadToHead runoff;
         runoff.resolve(winner_, second);
 
-        /** overwrite the winner. **/
+        /* overwrite the winner. */
         winner_ = runoff.winner_;
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 find the plurality winner.
-**/
+*/
 template<> void ElectoralMethod<Plurality>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
     auto& bloc_map = g_impl->bloc_map_;
@@ -2739,12 +2758,12 @@ template<> void ElectoralMethod<Plurality>::find_winner(
     counts.reserve(ncandidates);
     counts.resize(ncandidates);
 
-    /** clear the counts. **/
+    /* clear the counts. */
     for (int i = 0; i < ncandidates; ++i) {
         counts[i] = 0;
     }
 
-    /** sum the votes. **/
+    /* sum the votes. */
     for (auto&& it : bloc_map) {
         auto& rankings = it.first;
         auto& bloc = it.second;
@@ -2753,7 +2772,7 @@ template<> void ElectoralMethod<Plurality>::find_winner(
         counts[first] += bloc.size_;
     }
 
-    /** find the winner. **/
+    /* find the winner. */
     winner_ = -1;
     int votes = -1;
     for (int i = 0; i < ncandidates; ++i) {
@@ -2764,29 +2783,29 @@ template<> void ElectoralMethod<Plurality>::find_winner(
         }
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** was it a majority? **/
+    /* was it a majority? */
     if (2*votes > nvoters) {
         ++g_impl->majority_winners_;
     }
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
 }
 
-/**
+/*
 check if the winning candidate maximizes the total
 satisfaction of all candidates.
 not voters.
-**/
+*/
 template<> void ElectoralMethod<CandidateMethod>::find_winner(
     bool /*quiet*/
-) noexcept {
+) {
     int ncandidates = g_impl->ncandidates_;
     auto& candidates = g_impl->candidates_;
 
@@ -2809,11 +2828,11 @@ template<> void ElectoralMethod<CandidateMethod>::find_winner(
         }
     }
 
-    /** accumulate the utility. **/
+    /* accumulate the utility. */
     auto& candidate = candidates[winner_];
     total_utility_ += candidate.utility_;
 
-    /** accumulate correlations. **/
+    /* accumulate correlations. */
     if (winner_ == g_impl->guthrie_.winner_) {
         ++is_winner_;
     }
@@ -2821,49 +2840,17 @@ template<> void ElectoralMethod<CandidateMethod>::find_winner(
 
 } // anonymous namespace
 
-GuthrieVoting::GuthrieVoting() noexcept {
+GuthrieVoting::GuthrieVoting() {
     impl_ = (void *) new GuthrieImpl;
 }
 
-GuthrieVoting::~GuthrieVoting() noexcept {
+GuthrieVoting::~GuthrieVoting() {
     auto impl = (GuthrieImpl *) impl_;
     delete impl;
 }
 
-void GuthrieVoting::run() noexcept {
+void GuthrieVoting::run() {
     auto impl = (GuthrieImpl *) impl_;
     impl->run();
 }
 */
-*/
-
-GuthrieVoting() {
-    _() {}
-    ~() {}
-
-    void run() {
-        println(String + "Hello, World!");
-
-        rng_init(0);
-        seed = rng_get_seed();
-        random_float = rng_generate_float64();
-        random_int = rng_generate_int(100);
-        random_normal = rng_normal();
-        dump(#seed);
-        dump(#random_float);
-        dump(#random_int);
-        dump(#random_normal);
-
-        Guthrie guthrie_;
-        guthrie_.find_winner();
-        dump(#guthrie_.winner_);
-
-        println(String + "Goodbye, World!");
-    }
-}
-
-ElectoralMethod:Guthrie() {
-    void find_winner(bool quiet = kQuiet) {
-        winner_ = 10;
-    }
-}

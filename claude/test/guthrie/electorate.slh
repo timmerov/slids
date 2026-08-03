@@ -27,54 +27,34 @@ Position(
     /*bool operator < (const Position& other) const;*/
 }
 
-/*
-class Voter {
-public:
-    Voter() = default;
-    ~Voter() = default;
-
+Voter(
     /** position along the axis ranges from 0..1 **/
-    Position position_;
-
+    Position position_
+) {
     /** for sorting **/
-    bool operator < (const Voter& other) const;
-};
-typedef std::vector<Voter> Voters;
+    //bool operator < (const Voter& other) const;
+}
+alias Voters = Vector<Voter>;
 
-class Cluster;
-typedef std::vector<Cluster> Clusters;
+Cluster(...) { }
+alias Clusters = Vector<Cluster>;
 
-class Electorate {
-public:
-    Electorate() = default;
-    ~Electorate() = default;
-
+Electorate(
     /** configuration. **/
-    int nvoters_ = 100;
-    int method_ = kElectorateUniform;
-    int naxes_ = 1;
+    int nvoters_ = 100,
+    int method_ = kElectorateUniform,
+    int naxes_ = 1,
+
     /** minor axes have reduced range (and utility). **/
-    double axis_weight_decay_ = 1.0;
-    int nclusters_ = 6;
+    float64 axis_weight_decay_ = 1.0,
+    int nclusters_ = 6,
 
     /** data **/
-    Voters voters_;
-
+    Voters voters_
+) {
     /** set configuration parameters above. required. **/
-    void init() noexcept;
+    void init();
 
     /** what did we get. **/
-    void show_distribution() noexcept;
-
-    /** private implementation. **/
-private:
-    void size_position_axes() noexcept;
-    void ranked() noexcept;
-    void random() noexcept;
-    void clusters() noexcept;
-    void seat_voter(Clusters &clusters, int k) noexcept;
-    void normalize() noexcept;
-    void normalize(int axis, double weight) noexcept;
-    void show_distribution(int axis) noexcept;
-};
-*/
+    void show_distribution();
+}

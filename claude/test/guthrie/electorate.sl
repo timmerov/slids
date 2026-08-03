@@ -97,83 +97,21 @@ Position() {
     /*bool operator < (const Position& other) const;*/
 }
 
-/*
-class Cluster {
-public:
+Cluster(
     /** size **/
-    int count_ = 0;
+    int count_ = 0,
 
     /** position **/
-    Position position_;
-
+    Position position_
+) {
     /** for sorting **/
-    bool operator < (const Cluster& other) const
+    /*bool operator < (const Cluster& other) const
     {
         return (position_ < other.position_);
-    }
-};
-
-/**
-calculate the utility of the other's position.
-utility is defined to be 1.0 when distance is 0.0.
-utility decreases with distance.
-**/
-double Position::utility(
-    const Position& other
-) noexcept {
-    int naxes = axis_.size();
-    if (naxes == 1) {
-        double utility = 1.0 - std::abs(axis_[0] - other.axis_[0]);
-        return utility;
-    }
-    double sum2 = 0.0;
-    for (int i = 0; i < naxes; ++i) {
-        double dx = axis_[i] - other.axis_[i];
-        sum2 += dx * dx;
-    }
-    double dist = std::sqrt(sum2);
-
-    /** the simplest model for utility is 1.0 - distance. **/
-    double utility = 1.0 - dist;
-
-    /**
-    ==experimental==
-    non-linear utility.
-
-    hack the distance to be more of a utility distance.
-    near 0.0 is even nearer 1.0.
-    at a threshold value the utility equals the 1.0 - distance.
-    over the threshold asymptotically approaches 0.0.
-    a threshold of about 0.3 t0 0.4 feels about right.
-    the exponent factor would be 3.2 to 4.0.
-    **/
-#if 0
-    constexpr double kScaleFactor = 3.9;
-    double utility = std::exp(- kScaleFactor * dist * dist);
-#endif
-
-    return utility;
+    }*/
 }
 
-/** format the position as a string. **/
-std::string Position::to_string() noexcept {
-    std::stringstream ss;
-    int naxes = axis_.size();
-    if (naxes == 1) {
-        ss<<axis_[0];
-    } else {
-        ss<<"{";
-        for (int i = 0; i < naxes; ++i) {
-            if (i > 0) {
-                ss<<", ";
-            }
-            ss<<axis_[i];
-        }
-        ss<<"}";
-    }
-    return ss.str();
-}
-
+/*
 /** for sorting **/
 bool Position::operator < (const Position& other) const
 {
