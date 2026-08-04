@@ -5754,7 +5754,7 @@ Completion resolveStmtList(parse::Tree& tree,
                 diagnostic::report(diag, {stmts[j]->file_id, stmts[j]->tok,
                     "Unreachable statement.",
                     {{stmts[j]->file_id, stmts[j]->tok,
-                      "a 'void;' statement in the block suppresses this"}}});
+                      "A 'void;' statement in the block suppresses the error message."}}});
                 break;
             }
             break;

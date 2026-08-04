@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2012-2025 tim cotter. All rights reserved.
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
 */
 
 /*
@@ -576,8 +576,6 @@ GuthrieVoting(
 
     void run() {
 
-        println(String + "Hello, World!");
-
         /* initialize the random number generators. */
         rng:init(kSeedChoice);
 
@@ -590,23 +588,24 @@ GuthrieVoting(
 
         /* some sanity checks. */
         sanity_checks();
-/*
         /* hello, world. */
-        LOG("Guthrie voting analysis:");
+        println(String + "Guthrie voting analysis:");
         show_header();
 
         /* run many trials. */
-        for (int trial = 1; trial <= ntrials_; ++trial) {
+        for (int trial : 1..<=ntrials_) {
             if (ntrials_ > 1) {
-                LOG("");
-                LOG("Trial: "<<trial);
+                println(String);
+                println(String + "Trial: " + trial);
             }
 
             /* initialize the electorate and candidates. */
             electorate_.init();
             if (kShowElectorateDistribution) {
+                void; /* disable unreachable code error. */
                 electorate_.show_distribution();
             }
+/*
             find_best_candidate();
             init_candidates();
             calculate_utilities(actual_);
@@ -617,12 +616,12 @@ GuthrieVoting(
             guthrie_.find_winner();
             show_satisfaction();
             check_criteria();
+*/
         }
-
+/*
         /* log the results. */
         show_summary();
 */
-        println(String + "Goodbye, World!");
     }
 
     void sanity_checks() {
@@ -641,56 +640,60 @@ GuthrieVoting(
 
         /* uniform electorate is a single axis. */
         if (kElectorateMethod == kElectorateUniform) {
+            void; /* disable unreachable code error. */
+
             if (electorate_.naxes_ != 1) {
                 println(String + "Warning: Uniform electorate requires number of issue axes (" + electorate_.naxes_ + ") to be 1, overriding.");
                 electorate_.naxes_ = 1;
             }
         }
     }
-/*
+
     /* show configuration. */
     void show_header() {
-        auto seed = Rng::get_seed();
+        seed = rng:get_seed();
 
-        LOG("Configuration:");
-        LOG("Number trials    : "<<ntrials_);
-        LOG("Number voters    : "<<electorate_.nvoters_);
-        LOG("Number candidates: "<<ncandidates_);
+        println(String + "Configuration:");
+        println(String + "Number trials    : " + ntrials_);
+        println(String + "Number voters    : " + electorate_.nvoters_);
+        println(String + "Number candidates: " + ncandidates_);
         if (kSeedChoice == 0) {
-            LOG("Random seed      : "<<seed);
+            void; /* disable unreachable code error. */
+            println(String + "Random seed      : " + seed);
         } else {
-            LOG("Fixed seed       : "<<seed);
+            void; /* disable unreachable code error. */
+            println(String + "Fixed seed       : " + seed);
         }
         switch (electorate_.method_) {
-        case kElectorateUniform:
-            LOG("Electorate       : uniform");
-            break;
-        case kElectorateRandom:
-            LOG("Electorate       : random");
-            break;
-        case kElectorateClusters:
-            LOG("Electorate       : clusters ("<<electorate_.nclusters_<<")");
-            break;
+            kElectorateUniform: {
+                println(String + "Electorate       : uniform");
+            } kElectorateRandom: {
+                println(String + "Electorate       : random");
+            } kElectorateClusters: {
+                println(String + "Electorate       : clusters (" + electorate_.nclusters_ + ")");
+            }
         }
         if (electorate_.naxes_ == 1) {
-            LOG("Issue axes       : "<<electorate_.naxes_);
+            println(String + "Issue axes       : " + electorate_.naxes_);
         } else {
-            LOG("Issue axes       : "<<electorate_.naxes_<<" ("<<electorate_.axis_weight_decay_<<")");
+            println(String + "Issue axes       : " + electorate_.naxes_ + " (" + electorate_.axis_weight_decay_ + ")");
         }
-        LOG("Dispersion       : "<<dispersion_);
+        println(String + "Dispersion       : " + dispersion_);
 
         if (kUseApprovalVotes) {
-            LOG("Note: Guthrie winner is found using approval votes instead of single vote.");
+            void; /* disable unreachable code error. */
+            println(String + "Note: Guthrie winner is found using approval votes instead of single vote.");
         }
 
         if (kUseMedianForSatisfaction) {
-            LOG("Note: non-standard satisfaction metric is being shown.");
-            LOG("  The best utility is estimated by the median voter.");
-            LOG("  The worst utility is estimated by one of the extreme voters.");
-            LOG("  The average utility is 90% best and 10% worst.");
+            void; /* disable unreachable code error. */
+            println(String + "Note: non-standard satisfaction metric is being shown.");
+            println(String + "  The best utility is estimated by the median voter.");
+            println(String + "  The worst utility is estimated by one of the extreme voters.");
+            println(String + "  The average utility is 90% best and 10% worst.");
         }
     }
-
+/*
     /*
     find the voter that would make the best candidate.
     also find the average utility of all voters.

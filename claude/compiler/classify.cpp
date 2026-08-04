@@ -1942,6 +1942,21 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             widen::TypeRef bt = widen::strip(base.inferred_type);
             if (bt == widen::kNoType) return;   // base already reported
             if (widen::form(bt) != widen::Type::Form::kSlid) {
+                // A NAMED base splits the report: primary caret on the name at
+                // the access, note caret on its declaration. deepStrip sheds
+                // alias labels so an instance method's `T^` spells `Voter^`.
+                if (base.kind == parse::Kind::kIdentExpr
+                    && base.resolved_entry_id >= 0) {
+                    parse::Entry const& ent = tree.entries[base.resolved_entry_id];
+                    diagnostic::report(diag, {base.file_id, base.tok,
+                        "'" + base.name + "' cannot access field '"
+                        + e.name + "'.",
+                        {{ent.file_id, ent.tok,
+                          "'" + base.name + "' type '"
+                          + widen::spell(widen::deepStrip(base.inferred_type))
+                          + "' defined here is not a class object."}}});
+                    return;
+                }
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Cannot access field '" + e.name + "' of non-class value of "
                     "type '" + widen::spellOrEmpty(base.inferred_type) + "'.", {}});
@@ -3562,7 +3577,7 @@ void reportUnreachableBranch(parse::Node const& branch, diagnostic::Sink& diag) 
                 diagnostic::report(diag, {ch->file_id, ch->tok,
                     "Unreachable statement.",
                     {{ch->file_id, ch->tok,
-                      "a 'void;' statement in the block suppresses this"}}});
+                      "A 'void;' statement in the block suppresses the error message."}}});
                 return;
             }
         }
@@ -3571,7 +3586,7 @@ void reportUnreachableBranch(parse::Node const& branch, diagnostic::Sink& diag) 
     diagnostic::report(diag, {branch.file_id, branch.tok,
         "Unreachable statement.",
         {{branch.file_id, branch.tok,
-          "a 'void;' statement in the block suppresses this"}}});   // else-if chain
+          "A 'void;' statement in the block suppresses the error message."}}});   // else-if chain
 }
 
 // `a cmp b` for the ranged-for empty-range check. Unknown cmp -> true (don't flag).

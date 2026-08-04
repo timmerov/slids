@@ -18,5 +18,7 @@ int32 main() {
 
     //print("Hello, World!");
 
+    float64 axis[3];
+
     return 0;
 }
