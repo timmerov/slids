@@ -8,7 +8,6 @@ guthrie voting.
 
 import guthrie;
 
-
 int32 main() {
 
     GuthrieVoting guthrie;

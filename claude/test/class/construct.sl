@@ -648,7 +648,7 @@ negative cases. each block below is disabled; the negative-test runner enables
 one at a time and asserts the marked error substring.
 */
 
-//-EXPECT-ERROR: non-class value
+//-EXPECT-ERROR: is not a class object
 //int32 neg_non_class() {
 //    int n = 3;
 //    int z = n.a_;

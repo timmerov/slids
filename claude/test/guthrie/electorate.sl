@@ -24,7 +24,6 @@ import electorate;
 import math;
 import random;
 
-
 Position() {
     /*
     calculate the utility of the other's position.
