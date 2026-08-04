@@ -3462,8 +3462,16 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
 // trailing kBlockStmt whose last statement does (recurse). Mirrors classify's
 // endsInReturn so the codegen terminator decision matches the upstream check.
 bool endsInReturn(std::vector<std::unique_ptr<ast::Node>> const& stmts) {
-    if (stmts.empty() || !stmts.back()) return false;
-    return endsInReturnNode(*stmts.back());
+    // The last EXECUTABLE statement decides — a trailing nested definition is
+    // not executable code (a `void;`-suppressed dead tail may leave one last;
+    // mirrors classify's endsInReturn).
+    for (auto it = stmts.rbegin(); it != stmts.rend(); ++it) {
+        if (!*it) continue;
+        if ((*it)->kind == ast::Kind::kFunctionDef
+            || (*it)->kind == ast::Kind::kFunctionDecl) continue;
+        return endsInReturnNode(**it);
+    }
+    return false;
 }
 
 // A single statement guarantees a return: a return, a block whose tail does, or

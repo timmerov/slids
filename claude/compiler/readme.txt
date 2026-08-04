@@ -1742,6 +1742,11 @@ STAGE FILES (.h / .cpp pairs)
             only (a `:name` after a switch is a parse error). break / continue take
             an optional argument — an integer (stored in `text`, the Nth loop) or a
             name (in `name` — an identifier, or the `for`/`while` keyword default).
+            `void;` (kVoid immediately followed by `;` — unambiguous, no other
+            `void`-led shape continues with a semicolon) parses to kVoidStmt, the
+            no-op reachability marker; the arm sits in the STATEMENT dispatcher
+            only, so every non-runtime block (class / switch-clause-list / import /
+            namespace / global-group / template body) rejects it naturally.
             expressions
             across the full C precedence ladder (literals + ident, unary
             `! ~ + -`, the `<Type^>` pointer cast (a prefix unary — a leading
@@ -1951,9 +1956,20 @@ STAGE FILES (.h / .cpp pairs)
             { Normal, Abrupt } that resolveStmt RETURNS: return / break / continue
             are Abrupt, everything else Normal.
             resolveStmtList threads it over a statement list — a statement after
-            an Abrupt sibling is "Unreachable statement." (2A) and the dead tail
+            an Abrupt sibling is "Unreachable statement." (2A, with a note
+            suggesting the `void;` suppression) and the dead tail
             is skipped (it declares no locals); both the function body and every
-            block walk through resolveStmtList. A kBlockStmt `{ stmts }` opens
+            block walk through resolveStmtList. A top-level `void;` statement
+            (kVoidStmt — the no-op reachability marker, canon test/flow/void.sl)
+            anywhere in the SAME list suppresses the 2A report: the tail is then
+            resolved like live code (locals declared — the unused sweep and DA
+            apply to it unchanged) and each tail statement is marked
+            Node.dead_code so desugar's copyNode drops it (codegen must never
+            emit an instruction after a terminator). Definitions are never
+            marked — a def is not executable code, and a live call above the
+            `return` may target one; both classify's and codegen's endsInReturn
+            therefore decide trailing-return correctness at the last EXECUTABLE
+            statement (skipping `void;`, dead_code statements, and defs). A kBlockStmt `{ stmts }` opens
             a nested frame: initialized_locals + read_locals FLOW THROUGH (scoped,
             not isolated — an assign/read inside a block affects the enclosing
             local), only body_locals is save/restored so the unused sweep
@@ -2287,9 +2303,20 @@ STAGE FILES (.h / .cpp pairs)
             a folded literal / substituted const / synthesized empty-`()` is
             visible — vs resolve's 2A which is pre-constfold): constTruth folds the
             condition to True/False/NotConst; a const-true if flags its else dead,
-            a const-false if flags its then, a const-false while flags its body —
+            a const-false if flags its then, a const-false while flags its body,
+            a const-false long-for flags its update block and its body block
+            INDEPENDENTLY (the update is author code; a short-for's synthesized
+            update is never flagged), and a constant SWITCH scrutinee flags every
+            dead clause body: entry is the matching clause (else the default;
+            neither = all dead), a trailing `continue` carries reachability into
+            the next clause, and the analysis is abandoned when any label is
+            invalid. All of it funnels through reportUnreachableBranch —
             "Unreachable statement." at the dead branch's first statement (empty
-            branch = nothing to flag). The const-TRUE-LOOP unreachable-after case
+            branch = nothing to flag), with a note suggesting the suppression: a
+            top-level `void;` in the dead block silences that block's report
+            (per BLOCK — a nested dead branch needs its own marker; an else-if
+            chain has no block of its own, so a `void;` in ANY block along the
+            chain silences the chain's single report). Canon: test/flow/void.sl. The const-TRUE-LOOP unreachable-after case
             (3B revisited) is handled in RESOLVE (a non-completing loop returns
             Abrupt, so 2A flags the code after it), not here; classify's only
             const-true-loop role is endsInReturnNode reading Node.non_completing for
@@ -2721,7 +2748,8 @@ STAGE FILES (.h / .cpp pairs)
             conditional br to then/else/merge labels (no phi — definite-assignment rides the hoisted
             allocas); an arm ending in a control transfer (return / break /
             continue) emits no br-to-merge, and when every arm transfers the merge
-            block is omitted entirely (resolve's 2A guarantees nothing live
+            block is omitted entirely (resolve's 2A — or, on the suppressed
+            path, desugar's `void;` dead-tail drop — guarantees nothing live
             follows). A kWhileStmt is head/body/exit (test-first); a kDoWhileStmt
             is body/cond/exit (body-first, test after); a kForLongStmt runs the
             varlist init stores once (allocas hoisted) then head(cond)/body/update

@@ -1,0 +1,9 @@
+debug_exit: before the return
+debug_exit() = 7
+const_if(1) = 2
+chain(1) = 11
+marker_first() = 5
+def_in_dead_tail() = 21
+loops() = 33
+const_switch() = 112
+no_match() = 42

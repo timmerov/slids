@@ -120,6 +120,12 @@ enum class Kind {
     kBreakStmt,    // break; — exits the nearest enclosing loop OR switch.
     kContinueStmt, // continue; — jumps to the nearest enclosing loop's test
                    // (switch frames are transparent to continue).
+    kVoidStmt,     // void; — a no-op statement, legal anywhere in a runtime code
+                   // block. Its only effect: the block that directly contains one
+                   // is treated as reachable — the unreachable-statement
+                   // diagnostic (constant-condition dead branches in classify,
+                   // 2A dead tails in resolve) is suppressed for that block. No
+                   // effect on any other diagnostic. desugar drops it on copy.
     kGlobalScopeStmt, // `global;` — opens the global lifetime for its enclosing
                    // scope; at that scope's exit the lazy-global dtor registry runs.
                    // Auto-inserted at the top of `main` when absent.
@@ -377,6 +383,13 @@ struct Node {
                                  // never exits. Set in resolve (Abrupt completion
                                  // / unreachable-after), read in classify
                                  // (endsInReturnNode: a return-terminator).
+    bool dead_code = false;      // statement in a `void;`-suppressed dead tail
+                                 // (after an abrupt statement in the same list).
+                                 // Set in resolve's 2A; desugar drops the node on
+                                 // copy (codegen must never emit an instruction
+                                 // after a terminator). Never set on a
+                                 // kFunctionDef/kFunctionDecl — a definition is
+                                 // not executable code and stays compiled.
     // Qualified name (ident / call / inline decl / bare alias): leading namespace
     // segments before `name`. `Space:Nested:kFour` -> qualifier {Space, Nested},
     // name kFour. `global_qualified` marks a leading `::` (global root). Consumed

@@ -2844,6 +2844,7 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kVoidStmt:
         case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:
@@ -5068,6 +5069,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             s.children.push_back(std::move(body));       // [3] body
             return resolveStmt(tree, s, diag);
         }
+        case parse::Kind::kVoidStmt:
+            // `void;` — a no-op. Its reachability-marking side effect is read by
+            // resolveStmtList (2A) and classify's reportUnreachableBranch, which
+            // scan a statement list for the kind; nothing to resolve.
+            return Completion::Normal;
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt: {
             // A loop/switch exit / loop restart: transfers control (Abrupt). The
@@ -5699,10 +5705,27 @@ Completion resolveStmtList(parse::Tree& tree,
     // scope-local class in its signature) and before any statement — so a call may precede
     // the definition.
     registerNestedFunctions(tree, stmts, diag);
+    // A top-level `void;` anywhere in THIS list marks the list's dead tail as
+    // intentional: on an abrupt statement the 2A report is suppressed and the
+    // tail is resolved like live code (locals declared — so the unused sweep and
+    // DA apply to it unchanged) but marked dead_code so desugar drops it (codegen
+    // must never emit an instruction after a terminator). Definitions are not
+    // executable code: never marked, they stay compiled (a live call above the
+    // `return` may target a function defined below it).
+    bool void_marked = false;
+    for (auto const& st : stmts) {
+        if (st && st->kind == parse::Kind::kVoidStmt) { void_marked = true; break; }
+    }
     Completion result = Completion::Normal;
     for (std::size_t i = 0; i < stmts.size(); i++) {
         if (!stmts[i]) continue;
         Completion c = resolveStmt(tree, *stmts[i], diag);
+        // A dead-tail statement resolves like live code (first-error policy
+        // included) but its completion is meaningless — control never reaches it.
+        if (stmts[i]->dead_code) {
+            if (diagnostic::hasErrors(diag)) return result;
+            continue;
+        }
         // Stop at the first error (the design's first-error policy): resolving
         // later statements after one failed only spawns cascading follow-on
         // diagnostics (e.g. a bad for-iterable leaves its body-var undeclared).
@@ -5710,6 +5733,18 @@ Completion resolveStmtList(parse::Tree& tree,
         // before classify, so an unresolved body never reaches it.
         if (diagnostic::hasErrors(diag)) return c;
         if (c == Completion::Abrupt) {
+            result = Completion::Abrupt;
+            if (void_marked) {
+                // Suppressed: mark the tail dead (skipping definitions) and keep
+                // resolving it via the dead_code arm above.
+                for (std::size_t j = i + 1; j < stmts.size(); j++) {
+                    if (!stmts[j]) continue;
+                    if (stmts[j]->kind == parse::Kind::kFunctionDef
+                        || stmts[j]->kind == parse::Kind::kFunctionDecl) continue;
+                    stmts[j]->dead_code = true;
+                }
+                continue;
+            }
             // 2A: every statement after an abrupt one is unreachable. Flag the
             // next real statement (if any) once, then stop — dead code declares
             // no locals (so it can't trip the unused sweep) and resolving it
@@ -5717,10 +5752,11 @@ Completion resolveStmtList(parse::Tree& tree,
             for (std::size_t j = i + 1; j < stmts.size(); j++) {
                 if (!stmts[j]) continue;
                 diagnostic::report(diag, {stmts[j]->file_id, stmts[j]->tok,
-                    "Unreachable statement.", {}});
+                    "Unreachable statement.",
+                    {{stmts[j]->file_id, stmts[j]->tok,
+                      "a 'void;' statement in the block suppresses this"}}});
                 break;
             }
-            result = Completion::Abrupt;
             break;
         }
     }

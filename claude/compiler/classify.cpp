@@ -933,6 +933,7 @@ widen::TypeRef defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kContinueStmt:
         case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
+        case parse::Kind::kVoidStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
         case parse::Kind::kClassDef:
@@ -2856,6 +2857,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
         case parse::Kind::kContinueStmt:
         case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
+        case parse::Kind::kVoidStmt:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
         case parse::Kind::kClassDef:
@@ -3521,22 +3523,55 @@ CondConst constTruth(parse::Node const& cond) {
     return CondConst::NotConst;
 }
 
+// A top-level `void;` in the block marks the code as intentionally unreachable
+// (canon: test/flow/void.sl) — the suppression is per BLOCK; a nested dead
+// branch needs its own marker.
+bool blockHasVoidStmt(parse::Node const& block) {
+    if (block.kind != parse::Kind::kBlockStmt) return false;
+    for (auto const& ch : block.children) {
+        if (ch && ch->kind == parse::Kind::kVoidStmt) return true;
+    }
+    return false;
+}
+
+// Whether the dead branch carries a `void;` marker. A kBlockStmt scans its own
+// top level. An `else if` chain (a nested kIfStmt) has no block of its own to
+// hold the marker, so a `void;` in ANY block along the chain — a chained if's
+// then-block or the final else-block — suppresses the chain's single report.
+bool branchSuppressed(parse::Node const& branch) {
+    if (branch.kind == parse::Kind::kBlockStmt) return blockHasVoidStmt(branch);
+    if (branch.kind == parse::Kind::kIfStmt) {
+        if (branch.children.size() > 1 && branch.children[1]
+            && blockHasVoidStmt(*branch.children[1])) return true;
+        if (branch.children.size() > 2 && branch.children[2]) {
+            return branchSuppressed(*branch.children[2]);
+        }
+    }
+    return false;
+}
+
 // Report the first statement of an unreachable branch. The branch is a kBlockStmt
-// (then / else / loop body) or, for an `else if`, a nested kIfStmt. An empty
-// block has nothing to flag.
+// (then / else / loop body / switch case body) or, for an `else if`, a nested
+// kIfStmt. An empty block has nothing to flag; a `void;`-marked branch is
+// intentional and stays silent.
 void reportUnreachableBranch(parse::Node const& branch, diagnostic::Sink& diag) {
+    if (branchSuppressed(branch)) return;
     if (branch.kind == parse::Kind::kBlockStmt) {
         for (auto const& ch : branch.children) {
             if (ch) {
                 diagnostic::report(diag, {ch->file_id, ch->tok,
-                    "Unreachable statement.", {}});
+                    "Unreachable statement.",
+                    {{ch->file_id, ch->tok,
+                      "a 'void;' statement in the block suppresses this"}}});
                 return;
             }
         }
         return;   // empty block: nothing unreachable
     }
     diagnostic::report(diag, {branch.file_id, branch.tok,
-        "Unreachable statement.", {}});   // else-if chain
+        "Unreachable statement.",
+        {{branch.file_id, branch.tok,
+          "a 'void;' statement in the block suppresses this"}}});   // else-if chain
 }
 
 // `a cmp b` for the ranged-for empty-range check. Unknown cmp -> true (don't flag).
@@ -7672,6 +7707,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     "A for condition must be a condition expression; type '"
                     + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
             }
+            // A constant-false pre-condition runs neither the body nor the
+            // update (the update runs after a pass; there are no passes). Each
+            // block is flagged — and `void;`-suppressible — on its own. Same
+            // 3B stance as while: a constant-true condition is NOT flagged.
+            if (constTruth(cond) == CondConst::False) {
+                reportUnreachableBranch(*s.children[1], diag);   // update
+                reportUnreachableBranch(*s.children[2], diag);   // body
+            }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);   // update
             classifyStmt(tree, *s.children[2], fn_return_type, diag);   // body
             return;
@@ -7968,8 +8011,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         }
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kVoidStmt:
         case parse::Kind::kGlobalScopeStmt:
-            // Nothing to type-infer; resolve handled loop-legality.
+            // Nothing to type-infer; resolve handled loop-legality (and grammar
+            // the `void;` placement). The `void;` reachability-marking side
+            // effect is read by reportUnreachableBranch's block scan.
             return;
         case parse::Kind::kSwitchStmt: {
             // children[0] = scrutinee, [1..] = kCaseClause. The scrutinee must be
@@ -7984,6 +8030,26 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     "A switch value must be integer-class; got '" + st + "'.",
                     {}});
             }
+            // A constant scrutinee (constfold substituted a const / folded the
+            // expression to a literal) makes non-matching arms dead. Entry is the
+            // matching clause (the default when nothing matches); a trailing
+            // `continue` chains reachability into the NEXT clause (the only
+            // fall-through spelling — continue is otherwise loop-targeting).
+            // Analysis is abandoned on any invalid label (already reported).
+            bool scrut_const = scrut.kind == parse::Kind::kIntLiteral
+                || scrut.kind == parse::Kind::kUintLiteral
+                || scrut.kind == parse::Kind::kCharLiteral;
+            long long scrut_v = 0;
+            if (scrut_const) {
+                errno = 0;
+                scrut_v = std::strtoll(scrut.text.c_str(), nullptr, 10);
+                if (errno == ERANGE) {
+                    scrut_v = static_cast<long long>(
+                        std::strtoull(scrut.text.c_str(), nullptr, 10));
+                }
+            }
+            std::vector<char> clause_matches(s.children.size(), 0);
+            std::vector<char> clause_default(s.children.size(), 0);
             std::map<long long, parse::Node const*> seen;   // value -> first label
             parse::Node const* first_default = nullptr;      // for the dup-default note
             for (std::size_t i = 1; i < s.children.size(); i++) {
@@ -7994,11 +8060,13 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     parse::Node& label = *clause.children[j];
                     inferExpr(tree, label, scrut.inferred_type, diag);
                     if (!isLiteralKind(label.kind)) {
+                        scrut_const = false;   // no dead-arm analysis on errors
                         diagnostic::report(diag, {label.file_id, label.tok,
                             "A case label must be a constant.", {}});
                     } else if (label.kind == parse::Kind::kFloatLiteral
                                || (label.inferred_type != widen::kNoType
                                    && !isIntegerClass(label.inferred_type))) {
+                        scrut_const = false;
                         diagnostic::report(diag, {label.file_id, label.tok,
                             "A case label must be an integer constant.", {}});
                     } else if (!st.empty()
@@ -8013,6 +8081,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         // numeric constant both compare as code points — the
                         // fold-absorption rule; literalFitsContext would reject
                         // every label, char literals included).
+                        scrut_const = false;
                         diagnostic::report(diag, {label.file_id, label.tok,
                             "Case label '" + label.text
                                 + "' is out of range for switch type '" + st
@@ -8035,8 +8104,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                                 "Duplicate case label '" + label.text + "'.",
                                 {{first->file_id, first->tok, "first case here"}}});
                         }
+                        if (v == scrut_v) clause_matches[i] = 1;
                     }
                   } else {
+                    clause_default[i] = 1;
                     if (first_default) {
                         diagnostic::report(diag, {clause.file_id, clause.tok,
                             "A switch may have only one default clause.",
@@ -8048,6 +8119,33 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                   }
                 }
                 classifyStmt(tree, *clause.children.back(), fn_return_type, diag);
+            }
+            if (scrut_const) {
+                // Entry clause: the label match, else the (first) default. With
+                // neither, every clause is dead. From the entry, only a trailing
+                // `continue` carries control into the clause after it.
+                std::size_t entry = 0;   // 0 = no entry (scrutinee index)
+                for (std::size_t i = 1; i < s.children.size() && !entry; i++) {
+                    if (clause_matches[i]) entry = i;
+                }
+                for (std::size_t i = 1; i < s.children.size() && !entry; i++) {
+                    if (clause_default[i]) entry = i;
+                }
+                std::vector<char> reachable(s.children.size(), 0);
+                if (entry) {
+                    reachable[entry] = 1;
+                    for (std::size_t i = entry;
+                         i + 1 < s.children.size()
+                         && reachable[i] && s.children[i]->text == "continue";
+                         i++) {
+                        reachable[i + 1] = 1;
+                    }
+                }
+                for (std::size_t i = 1; i < s.children.size(); i++) {
+                    if (reachable[i]) continue;
+                    reportUnreachableBranch(*s.children[i]->children.back(),
+                                            diag);
+                }
             }
             return;
         }
@@ -8137,8 +8235,18 @@ bool containsBreak(parse::Node const& s) {
 }
 
 bool endsInReturn(std::vector<std::unique_ptr<parse::Node>> const& stmts) {
-    if (stmts.empty() || !stmts.back()) return false;
-    return endsInReturnNode(*stmts.back());
+    // The last EXECUTABLE statement decides: a `void;` marker, a suppressed
+    // dead tail (dropped before codegen), and definitions (not executable
+    // code) don't carry control.
+    for (auto it = stmts.rbegin(); it != stmts.rend(); ++it) {
+        if (!*it) continue;
+        if ((*it)->kind == parse::Kind::kVoidStmt) continue;
+        if ((*it)->dead_code) continue;
+        if ((*it)->kind == parse::Kind::kFunctionDef
+            || (*it)->kind == parse::Kind::kFunctionDecl) continue;
+        return endsInReturnNode(**it);
+    }
+    return false;
 }
 
 // Whether a single statement guarantees control leaves via a return: a return,

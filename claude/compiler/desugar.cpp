@@ -81,6 +81,11 @@ ast::Kind toAstKind(parse::Kind k) {
             __builtin_unreachable();
         case parse::Kind::kBreakStmt:     return ast::Kind::kBreakStmt;
         case parse::Kind::kContinueStmt:  return ast::Kind::kContinueStmt;
+        case parse::Kind::kVoidStmt:
+            // A no-op marker; copyNode's child loop skips it, so it never
+            // reaches the ast.
+            assert(false && "toAstKind: kVoidStmt should be dropped on copy");
+            __builtin_unreachable();
         case parse::Kind::kGlobalScopeStmt: return ast::Kind::kGlobalScopeStmt;
         case parse::Kind::kSwitchStmt:    return ast::Kind::kSwitchStmt;
         case parse::Kind::kCaseClause:    return ast::Kind::kCaseClause;
@@ -768,6 +773,10 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         if (c->kind == parse::Kind::kNamespaceDecl) continue;  // members hoisted
         if (c->kind == parse::Kind::kClassDef) continue;       // resolve-recorded
         if (c->kind == parse::Kind::kEnumDecl) continue;       // resolve-lowered
+        if (c->kind == parse::Kind::kVoidStmt) continue;       // no-op marker
+        if (c->dead_code) continue;   // `void;`-suppressed dead tail: emitting it
+                          // would place instructions after the terminator (defs
+                          // are never marked — they stay compiled)
         if (!c->type_params.empty()) continue;   // a TEMPLATE definition emits no
                           // code — its instances are ordinary spliced functions
         if (c->kind == parse::Kind::kVarDeclStmt && c->is_global) continue;  // a

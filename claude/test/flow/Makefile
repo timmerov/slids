@@ -29,6 +29,7 @@ SAMPLES = \
 	label \
 	return_flow \
 	switch \
+	void \
 	while
 
 .PHONY: all clean negatives positives $(SAMPLES)

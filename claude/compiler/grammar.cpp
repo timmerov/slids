@@ -3630,6 +3630,16 @@ struct Parser {
         if (t.kind == token::Kind::kReturn) return parseReturnStmt();
         if (t.kind == token::Kind::kDelete) return parseDeleteStmt();
         if (t.kind == token::Kind::kNew) return parseNewStmt();
+        // `void;` — the no-op reachability marker. Only the IMMEDIATE `;` form;
+        // any other `void`-led shape (a nested `void fn() {}`) falls through to
+        // the function-def dispatch below.
+        if (t.kind == token::Kind::kVoid
+            && peekKind(1) == token::Kind::kSemicolon) {
+            auto node = newNodeAt(parse::Kind::kVoidStmt, t.file_id, pos);
+            advance();                       // void
+            advance();                       // ;
+            return node;
+        }
         // A const-led FUNCTION shape (`const int^ fn(...) { }` — a deep-const
         // return type) falls through to the function-def dispatch below.
         if (t.kind == token::Kind::kConst && !looksLikeFunctionDef())

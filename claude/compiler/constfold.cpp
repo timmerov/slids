@@ -155,6 +155,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kForRangedStmt:
         case parse::Kind::kBreakStmt:
         case parse::Kind::kContinueStmt:
+        case parse::Kind::kVoidStmt:
         case parse::Kind::kGlobalScopeStmt:
         case parse::Kind::kSwitchStmt:
         case parse::Kind::kCaseClause:

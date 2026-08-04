@@ -3244,6 +3244,47 @@ parens dropped; `x int = get_float();`, `int vol int = 3.14*r*r*h;`,
   Detail: readme.txt grammar statements + conversion passages;
   readme-classes.txt VALUE CONVERSION bullet.
 
+THE `void;` REACHABILITY MARKER (landed 2026-08-03).
+Canon: test/flow/void.sl header. `void;` is a no-op statement, legal
+anywhere in a runtime code block (reachable ones included); its ONLY side
+effect is marking unreachable code as intentional — the "Unreachable
+statement." diagnostic is suppressed for the block that directly contains
+one. No effect on any other diagnostic (unused / uninitialized still fire
+inside dead code). The diagnostic now carries the suggestion note.
+  - GRAMMAR: kVoid immediately followed by `;` -> kVoidStmt, an arm in the
+    STATEMENT dispatcher only — so every non-runtime block (class body,
+    switch clause list, import block, namespace, global group, template
+    body) rejects the spelling naturally, each with its own existing error.
+  - PER BLOCK: a top-level `void;` marks the block that directly contains
+    it; a nested dead branch needs its own marker. An else-if chain gets
+    ONE report and has no block of its own — a `void;` in ANY block along
+    the chain suppresses it. All condition-form reports funnel through
+    classify's reportUnreachableBranch (branchSuppressed / blockHasVoidStmt).
+  - NEW DETECTION riding the same funnel: a const-false LONG-FOR flags its
+    update block and body block independently (the update is author code;
+    a short-for's synthesized update is never flagged); a constant SWITCH
+    scrutinee flags every dead clause body — entry is the matching clause
+    (else the default; neither = all dead), a trailing `continue` chains
+    reachability into the next clause, analysis abandoned on any invalid
+    label. A const-false do-while is NOT flagged (body runs once).
+  - 2A (resolve): a `void;` in the same statement list suppresses the
+    dead-tail report; the tail is then resolved like LIVE code (locals
+    declared — unused sweep + DA apply unchanged), each tail statement
+    marked Node.dead_code, and desugar's copyNode DROPS marked statements
+    (nothing may be emitted after a terminator). Definitions are never
+    marked — not executable, and a live call above the `return` may target
+    one — so both classify's and codegen's endsInReturn now decide
+    trailing-return correctness at the last EXECUTABLE statement (skipping
+    `void;`, dead_code, defs). The canon's debugging idiom: `return; void;`
+    ahead of temporarily-dead code that stays compiled and type-checked.
+  - Coverage: void.sl positives (all four condition forms + chain + marker
+    position anywhere + def-in-dead-tail + every for flavor as reachable
+    no-op + do-while pin) and 16 negatives (diagnostic still fires per
+    form, per-block isolation, unused/uninitialized unaffected, the six
+    non-runtime-block rejections).
+  Detail: readme.txt grammar statement dispatch, resolve 2A paragraph,
+  classify constant-condition passage, codegen if-arm merge note.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
