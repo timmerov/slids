@@ -114,6 +114,10 @@ TCase(Tagged t_, int w_ = 8) { }
    routed @Mix__$ctor inside THIS class's synthesized constructor. */
 MCase(Mix m_, int k_ = 6) { }
 
+/* a COMPLETE local class for the static iterator-difference case: the
+   difference's divisor is the class's layout size, not a scalar width. */
+Brick(int a_ = 1, int b_ = 2) { }
+
 int32 main() {
 
     note();
@@ -326,6 +330,59 @@ int32 main() {
     println(String + "tcase: " + tc3.t_.mark_ + " " + tc3.w_);
     MCase mc;
     println(String + "mcase: " + mc.m_.a() + " " + mc.m_.s() + " " + mc.k_);
+
+    // ── ITERATOR ARITHMETIC over runtime-sized elements: `iter ± int` and
+    // `iter - iter` stride by the SAME convention size the array layout uses
+    // (@Rope__$size16 / the layout expression) — never the opaque
+    // placeholder's single byte. The identities against the array-index path
+    // pin the agreement; the difference pins the divisor.
+    int it1 = 0;
+    Rope[] rp0 = ra;              // the Rope[3] local above, decayed
+    Rope[] rp1 = rp0 + 1;
+    Rope[] rp2 = rp1 + 2 - 1;     // the minus path
+    intptr rn = rp2 - rp0;
+    if (rn == 2 && (<intptr> rp1) == (<intptr> ^ra[1])
+        && (<intptr> rp2) == (<intptr> ^ra[2])) {
+        it1 = 1;
+    }
+    println(String + "iter opaque: " + it1);
+
+    // an EMBEDDING (computed-layout) element: the stride is the convention
+    // expression rather than a single exported symbol.
+    int it2 = 0;
+    Sack sarr[2];
+    Sack[] sp0 = sarr;
+    Sack[] sp1 = sp0 + 1;
+    intptr sn = sp1 - sp0;
+    if (sn == 1 && (<intptr> sp1) == (<intptr> ^sarr[1])) {
+        it2 = 1;
+    }
+    println(String + "iter computed: " + it2);
+
+    // the OTHER iterator steps ride the same funnel: `iter[i]` indexing and
+    // the `++`/`--` bump.
+    int it4 = 0;
+    Rope[] qp = rp0;
+    ++qp;
+    ++qp;
+    --qp;
+    if ((<intptr> qp) == (<intptr> ^ra[1])
+        && (<intptr> ^rp0[2]) == (<intptr> ^ra[2])) {
+        it4 = 1;
+    }
+    println(String + "iter bump: " + it4);
+
+    // a COMPLETE class element: the static path — the difference's divisor is
+    // the class's layout size (the scalar-only divisor used to assert here).
+    int it3 = 0;
+    Brick ba[3];
+    Brick[] bp0 = ba;
+    Brick[] bp2 = bp0 + 2;
+    intptr bn = bp2 - bp0;
+    if (bn == 2 && (<intptr> bp2) == (<intptr> ^ba[2])) {
+        it3 = 1;
+    }
+    println(String + "iter static: " + it3);
 
     // sizeof over the seam: an opaque size is a link-time value, an embedding
     // class's a convention expression. Relations, not absolutes, so the golden

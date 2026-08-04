@@ -2836,8 +2836,11 @@ STAGE FILES (.h / .cpp pairs)
             operand's address (a bare var's alloca / emitElementAddr / a deref's
             pointer); a default-move-init decl (`T x <-- y`) nulls after the var-decl store.
             Iterator
-            arithmetic: `iter ± int` is a signed element GEP, `iter - iter` is
-            ptrtoint-diff / elemBytes, `++`/`--` GEP ±1 element. Pointer
+            arithmetic: `iter ± int`, `iter[i]`, and the `++`/`--` bump all
+            step through emitElemAddr (typed GEP for a static element, a
+            convention-stride byte GEP for a runtime-sized one); `iter - iter`
+            is ptrtoint-diff / sdiv by the matching emitSizeValue stride
+            (2026-08-04 — see readme-classes ONE ADDRESS FUNNEL). Pointer
             comparisons icmp the raw pointers, SIGNED — pointers are signed in
             slids, so ordering them uses the same predicates an `intptr` gets.
             That is not cosmetic: classify settles a mixed `ptr <=> intptr` pair

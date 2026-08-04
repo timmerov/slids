@@ -1740,8 +1740,15 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     ONE ADDRESS FUNNEL. emitSlotAddr (slots: static struct GEP / runtime-layout `__$off<k>` /
     convention byte GEP) and emitElemAddr (elements: typed GEP / byte GEP at the size16 stride)
     are the ONLY slot/element address emitters — emitElementAddr, the read-side kIndexExpr, the
-    hook walks, the aggregate transfer/swap/null/bump walks, and the tuple/array fill bridges all
-    route through them, so a read and a write can never land on different bytes. llvmForRef
+    hook walks, the aggregate transfer/swap/null/bump walks, the tuple/array fill bridges, AND
+    (2026-08-04) ITERATOR STEPS — emitBinary's `iter ± int`, the read-side `iter[i]` arm, and
+    the `++`/`--` leaf bump all step through emitElemAddr, and the `iter - iter` difference
+    divides by the matching stride via emitSizeValue (static: the LLVM type's size, which also
+    unbroke class-element differences from the old scalar-only divisor; dynamic: size16) — all
+    route through them, so a read and a write can never land on different bytes and `p + i`
+    always agrees with `^arr[i]`. Before the funnel took the iterator steps, each GEP'd the
+    element's LLVM type — for an opaque element the `{ i8 }` placeholder, ONE byte — the
+    aggregated `Vector<Cluster>` op[]/end/next bug (guthrie). llvmForRef
     lowers every convention-laid-out type (computed class ANYWHERE — even the TU that completes
     the leaf — and any dynamic tuple/array) to the `{ i8 }` placeholder; codegen's
     dynamicStorage() mirrors that and switches allocas (locals, sret temps, discarded-call slots)

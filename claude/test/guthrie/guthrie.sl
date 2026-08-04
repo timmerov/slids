@@ -268,10 +268,10 @@ stdc import {
 
 /* number of trials. */
 //const int kNTrials = 1;
-//const int kNTrials = 10;
+const int kNTrials = 10;
 //const int kNTrials = 30;
 //const int kNTrials = 300;
-const int kNTrials = 1000;
+//const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
 //const int kNTrials = 30*1000;
 

@@ -80,9 +80,19 @@ $(BUILD_DIR)/vector.ll: $(LIB_HDR)/vector.sl $(BUILD_DIR)/bug.ll $(SLIDSC)
 $(BUILD_DIR)/vector.o: $(BUILD_DIR)/vector.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-# bug is this directory's only consumer of a template library, so it alone links the
-# aggregated flavors (an extra prerequisite; the template rule's `$^` picks it up).
-$(BIN_DIR)/bug: $(BUILD_DIR)/vector.o
+# dump is the directory's OTHER template library — and vector.sl calls dump
+# itself, so dump's TU compiles LAST, after bug's and vector's demand pools
+# both exist.
+$(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(BUILD_DIR)/bug.ll $(BUILD_DIR)/vector.ll $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
+
+$(BUILD_DIR)/dump.o: $(BUILD_DIR)/dump.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+# bug is this directory's only consumer of the template libraries, so it alone links
+# the aggregated flavors (extra prerequisites; the template rule's `$^` picks them up).
+$(BIN_DIR)/bug: $(BUILD_DIR)/vector.o $(BUILD_DIR)/dump.o
 
 # Built by lib's own Makefile (make.sh order); self-heals a standalone build.
 $(LIB_BUILD)/libslids.o:

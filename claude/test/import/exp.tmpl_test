@@ -28,6 +28,7 @@ nx1 = 0
 nx2 = 5
 nx3 = 1 0
 nx4 = true
+tstep = 1
 bl = 0
 bl2 = 1
 bl3 = 5

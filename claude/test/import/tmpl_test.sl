@@ -148,6 +148,18 @@ int32 main() {
     bool npk = tdiff(^nv, ^nv2);
     println(String + "nx4 = " + npk);
 
+    /* ITERATOR ARITHMETIC in an AGGREGATED flavor whose T is OPAQUE both here
+       AND in the emitting TU (tstep<Rope>/tgap<Rope> bodies land in
+       tmpl_lib.o, where Rope has no layout): the stride must be the
+       convention's — and must agree with THIS TU's array-index stride. */
+    Rope tw[3];
+    Rope[] tw0 = tw;
+    Rope[] tw2 = tstep(tw0, 2);
+    intptr twn = tgap(tw0, tw2);
+    int twok = 0;
+    if (twn == 2 && (<intptr> tw2) == (<intptr> ^tw[2])) { twok = 1; }
+    println(String + "tstep = " + twok);
+
     /* a LOCAL class instantiates an imported template INLINE: this TU loaded
        the template source's bodies and emits the flavor internal — it is the
        only TU that can. The aggregated flavors of the same templates are

@@ -82,6 +82,10 @@ crate method->direct: 44 id=1 rope=7
 Tagged:ctor: 3
 tcase: 3 8
 mcase: 11 4 6
+iter opaque: 1
+iter computed: 1
+iter bump: 1
+iter static: 1
 sizeof ok: 1
 Tagged:dtor: 3
 Tagged:dtor: 24

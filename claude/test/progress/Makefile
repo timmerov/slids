@@ -49,7 +49,8 @@ $(BIN_DIR)/string_test: $(BUILD_DIR)/string_test.o $(LIB_BUILD)/libslids.o
 
 vector_test: $(BIN_DIR)/vector_test
 
-$(BIN_DIR)/vector_test: $(BUILD_DIR)/vector_test.o $(BUILD_DIR)/vector.o $(LIB_BUILD)/libslids.o
+$(BIN_DIR)/vector_test: $(BUILD_DIR)/vector_test.o $(BUILD_DIR)/vector.o \
+		$(BUILD_DIR)/dump.o $(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
 
 # galaxy consumes every library: dump + string + vector are slids TUs linked in;
@@ -85,8 +86,11 @@ $(BUILD_DIR)/vector_test.ll: $(LIB_HDR)/vector_test.sl $(SLIDSC)
 
 # dump compiles from lib/hdr, but the demand pool's PROVENANCE imports name the
 # consumer's own headers (galaxy imports vector/math) — so the consumer's
-# directory joins the import path alongside lib/hdr.
-$(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(BUILD_DIR)/galaxy.ll $(SLIDSC)
+# directory joins the import path alongside lib/hdr. vector.sl calls dump too,
+# so BOTH vector consumers' pools and vector's own pool must exist first —
+# dump compiles last.
+$(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(BUILD_DIR)/galaxy.ll \
+		$(BUILD_DIR)/vector_test.ll $(BUILD_DIR)/vector.ll $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
 

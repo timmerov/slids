@@ -2,8 +2,8 @@
 define a vector class declared in a header file.
 */
 
+import dump;
 import string;
-
 import vector;
 
 Vector<T>(
@@ -221,8 +221,10 @@ Vector<T>(
         }
 
         /* reserve extra space. */
-        reserve_size = new_size * 3 / 2;
-        reserve(reserve_size);
+        if (new_size > capacity_) {
+            reserve_size = new_size * 3 / 2;
+            reserve(reserve_size);
+        }
 
         /* create new elements. */
         construct(size_, new_size);

@@ -3285,6 +3285,30 @@ inside dead code). The diagnostic now carries the suggestion note.
   Detail: readme.txt grammar statement dispatch, resolve 2A paragraph,
   classify constant-condition passage, codegen if-arm merge note.
 
+ITERATOR STEPS JOIN THE ELEMENT-ADDRESS FUNNEL (landed 2026-08-04).
+Found by guthrie: `Vector<Cluster>` op[]/end/next stepped ONE byte per
+element while `reserve` allocated `sizeof(T)*n` correctly — the aggregated
+bodies emit in the template source's TU, where Cluster (header-incomplete,
+completed by the consumer) is OPAQUE, and every iterator step GEP'd the
+element's LLVM type, i.e. the `{ i8 }` placeholder. THREE sites, one rule:
+  - `iter ± int` (emitBinary), `iter[i]` (the emitElementAddr iterator arm),
+    and the `++`/`--` bump (emitLeafBump) now step through emitElemAddr —
+    the one element-address funnel — so a static element keeps its typed
+    GEP (IR unchanged) and a runtime-sized one (opaque / computed layout)
+    gets the byte GEP at the convention's size16 stride, the SAME stride
+    the array-index path uses: `p + i` and `^arr[i]` land on the same
+    bytes in every TU.
+  - `iter - iter` divides by the matching stride via emitSizeValue (static:
+    the LLVM type's size; dynamic: size16). The old divisor (elemBytes,
+    deleted) was scalar-only and ASSERTED on any class element — so this
+    also unbroke class-element iterator differences outright.
+  - Coverage: test/import consumer.sl (opaque Rope, computed-layout Sack,
+    complete-class Brick: ±, difference, `iter[i]` + bump identities, all
+    against the array-index path) and tmpl_test.sl + tmpl_lib.slh/.sl
+    tstep/tgap<Rope> (the arithmetic emitted in the TU where T has no
+    layout — the guthrie shape).
+  Detail: readme-classes.txt COMPUTED LAYOUT "ONE ADDRESS FUNNEL" passage.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

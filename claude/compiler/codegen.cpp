@@ -281,16 +281,6 @@ widen::TypeRef pointeeTypeC(widen::TypeRef t) {
     return widen::kNoType;
 }
 
-// Byte size of a scalar element, for iterator element-stride arithmetic.
-int elemBytes(widen::TypeRef t) {
-    widen::TypeKind k;
-    if (widen::classify(t, k)) return k.bits / 8;
-    // Every iterator element today is a scalar, so classify always succeeds.
-    // A non-scalar element (a future slid iterator) needs its layout size here.
-    assert(false && "elemBytes: non-scalar element needs a layout sizeof");
-    __builtin_unreachable();
-}
-
 std::string newLabel(char const* tag) {
     static int n = 0;
     return std::string(tag) + "_" + std::to_string(n++);
@@ -537,6 +527,12 @@ std::string emitScalarShift(std::string const& op, std::string const& lv,
 }
 
 
+// Defined below (the computed-layout section); the iterator arithmetic in
+// emitBinary rides them so every element-stride site shares one funnel.
+std::string emitSizeValue(widen::TypeRef ty, bool round16, std::ostream& out);
+std::string emitElemAddr(std::string const& base, widen::TypeRef elem,
+                         std::string const& idx, std::ostream& out);
+
 std::string emitBinary(ast::Node const& expr, SymTab const& syms,
                        strings::Pool& pool, std::ostream& out,
                        diagnostic::Sink& diag,
@@ -587,27 +583,33 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
     // (Comparisons keep the generic path — they icmp the raw pointers.)
     if (isIteratorType(opty) && (op == "+" || op == "-")) {
         widen::TypeRef elem = pointeeTypeC(opty);
-        std::string elem_ll = llvmForRef(elem);
         bool lit = isIteratorType(lhs.inferred_type);
         bool rit = isIteratorType(rhs.inferred_type);
         if (op == "-" && lit && rit) {
-            // (a - b) / sizeof(element) -> element count.
+            // (a - b) / stride(element) -> element count. The divisor is the
+            // SAME stride emitElemAddr steps by: the LLVM type's size when the
+            // element is static, the convention's 16-rounded size when it is
+            // runtime-sized (opaque / computed layout).
             std::string a = emitExpr(lhs, syms, pool, out, diag,
                                      lhs.inferred_type);
             std::string b = emitExpr(rhs, syms, pool, out, diag,
                                      rhs.inferred_type);
+            std::string stride = emitSizeValue(elem,
+                widen::sizeIsDynamic(widen::strip(elem)), out);
             std::string ai = newTmp("p2i"), bi = newTmp("p2i");
             out << "  " << ai << " = ptrtoint ptr " << a << " to i64\n";
             out << "  " << bi << " = ptrtoint ptr " << b << " to i64\n";
             std::string byte = newTmp("psub");
             out << "  " << byte << " = sub i64 " << ai << ", " << bi << "\n";
             std::string d = newTmp("pdiv");
-            out << "  " << d << " = sdiv i64 " << byte << ", "
-                << elemBytes(elem) << "\n";
+            out << "  " << d << " = sdiv i64 " << byte << ", " << stride << "\n";
             return widen::convert(d, widen::intern("intptr"), dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
-        // iter ± int: GEP the iterator by (signed) the integer count.
+        // iter ± int: step by (signed) the integer count through the one
+        // element-address funnel — a typed GEP for a static element, a byte
+        // GEP at the convention stride for a runtime-sized one (the typed GEP
+        // over an opaque placeholder `{ i8 }` stepped ONE byte).
         ast::Node const& itnode = lit ? lhs : rhs;
         ast::Node const& intnode = lit ? rhs : lhs;
         std::string ptr = emitExpr(itnode, syms, pool, out, diag,
@@ -618,10 +620,7 @@ std::string emitBinary(ast::Node const& expr, SymTab const& syms,
             out << "  " << neg << " = sub i64 0, " << idx << "\n";
             idx = neg;
         }
-        std::string gep = newTmp("itadd");
-        out << "  " << gep << " = getelementptr " << elem_ll << ", ptr " << ptr
-            << ", i64 " << idx << "\n";
-        return gep;
+        return emitElemAddr(ptr, elem, idx, out);
     }
 
     std::string lv = emitExpr(lhs, syms, pool, out, diag, opty);
@@ -1053,16 +1052,15 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         widen::TypeRef cs = widen::strip(cur);
         widen::Type::Form f = widen::form(cs);
         if (f == widen::Type::Form::kIterator) {
-            // `addr` holds the sequence pointer — load it, GEP by element type.
+            // `addr` holds the sequence pointer — load it, then step through
+            // the element-address funnel (typed GEP for a static element, a
+            // convention-stride byte GEP for a runtime-sized one).
             std::string ptr = newTmp("itp");
             out << "  " << ptr << " = load ptr, ptr " << addr << "\n";
             std::string idx = emitExpr(idx_node, syms, pool, out, diag,
                                        widen::intern("int64"));
             widen::TypeRef pe = widen::get(cs).pointee;
-            std::string gep = newTmp("elt");
-            out << "  " << gep << " = getelementptr " << llvmForRef(pe) << ", ptr "
-                << ptr << ", i64 " << idx << "\n";
-            addr = gep;
+            addr = emitElemAddr(ptr, pe, idx, out);
             cur = pe;
         } else if (f == widen::Type::Form::kArray) {
             std::string idx = emitExpr(idx_node, syms, pool, out, diag,
@@ -1441,10 +1439,8 @@ std::string emitLeafBump(std::string const& addr, widen::TypeRef leaf,
     if (isIteratorType(leaf)) {
         std::string cur = newTmp("itld");
         out << "  " << cur << " = load ptr, ptr " << addr << "\n";
-        std::string elem_ll = llvmForRef(pointeeTypeC(leaf));
-        std::string nv = newTmp("itinc");
-        out << "  " << nv << " = getelementptr " << elem_ll << ", ptr "
-            << cur << ", i64 " << (op == "++" ? "1" : "-1") << "\n";
+        std::string nv = emitElemAddr(cur, pointeeTypeC(leaf),
+                                      op == "++" ? "1" : "-1", out);
         out << "  store ptr " << nv << ", ptr " << addr << "\n";
         return nv;
     }

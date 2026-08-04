@@ -86,6 +86,16 @@ T tpick<T>(T a, T b) { return b; }
    bindings only now). */
 bool tdiff<T>(T a, T b) { return a != b; }
 
+/* the iterator-arithmetic pair: minimal bodies — the whole test is WHERE
+   they emit (here, where an opaque T has no layout). The munge consts the
+   params' pointees, so the mutable return reinterprets first, the same
+   idiom as vector.sl's next(). */
+T[] tstep<T>(T[] p, intptr n) {
+    iter = <T[]> <mutable> p;
+    return iter + n;
+}
+intptr tgap<T>(T[] a, T[] b) { return b - a; }
+
 /* a body on a PRIVATE helper: aggregated flavors emit here and link `tick`
    internally; a consumer's local-type instance has no `tick` and errors. */
 T tpock<T>(T a, T b) { tick(); return b; }

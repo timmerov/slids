@@ -20,6 +20,7 @@ C. clustered - voters are normally distributed around one of several points.
 how many clusters? how much spread? to be determined.
 */
 
+import dump;
 import electorate;
 import math;
 import random;
