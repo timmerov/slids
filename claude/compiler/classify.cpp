@@ -548,6 +548,71 @@ int flatFieldWidth(parse::Tree& tree, widen::TypeRef cls) {
     return w;
 }
 
+// SOURCE-PRIVATE FIELDS. Everything a header (.slh) declares is public;
+// everything its template source (.sl) supplies is private to that file. A
+// field's provenance needs no new state: its stable kParam carries the
+// declaring file, and file_template_source marks a source loaded beside an
+// imported header. In the library's own TU that source is the PRIMARY file
+// (never marked), so its fields are public there — the boundary exists only
+// for importers. Cloned template bodies keep their source file_id, so a
+// library body touching `self.field` (or another instance's field) passes
+// this same test from inside a consumer TU.
+bool fieldVisibleAt(parse::Tree& tree, parse::ClassInfo const& info,
+                    int idx, int access_file) {
+    if (idx < 0 || idx >= static_cast<int>(info.field_params.size())) return true;
+    // The synthetic slot-0 spellings (`_$base`, `_$vptr`) are the compiler's
+    // own, never gated.
+    if (info.field_names[idx].rfind("_$", 0) == 0) return true;
+    parse::Node const* p = info.field_params[idx];
+    if (!p) return true;
+    int f = p->file_id;
+    if (f < 0 || f >= static_cast<int>(tree.file_template_source.size())) return true;
+    if (!tree.file_template_source[f] || f == access_file) return true;
+    // The source's PAIRED HEADER is the same module's public half: code
+    // positioned there is library-side too — including the SYNTHESIZED
+    // members (memberwise op=/op<--/op<-->, hook fills), whose generated
+    // accesses carry the class def's header position.
+    return f < static_cast<int>(tree.file_imported_by.size())
+        && tree.file_imported_by[f] == access_file;
+}
+
+// flatFieldWidth restricted to the fields VISIBLE from `access_file`: the flat
+// initializer arity a construction at that site may supply. A source-private
+// field is not a slot at all — the walk in classifyClassInit default-fills it
+// and consumes nothing — so it does not count here either.
+int flatVisibleFieldWidth(parse::Tree& tree, widen::TypeRef cls, int access_file) {
+    int w = 0;
+    int guard = (int)tree.classes.size() + 2;
+    for (widen::TypeRef c = widen::strip(cls); guard-- > 0; ) {
+        auto it = tree.classes.find(c);
+        if (it == tree.classes.end()) { w += 1; break; }   // a non-class type is one slot
+        parse::ClassInfo const& info = it->second;
+        widen::TypeRef next = parse::baseTypeOf(info);      // only the base (slot 0) splices
+        for (std::size_t i = 0; i < info.field_names.size(); i++) {
+            if (info.field_names[i].rfind("_$", 0) == 0) continue;
+            if (fieldVisibleAt(tree, info, (int)i, access_file)) w += 1;
+        }
+        if (next == widen::kNoType) break;
+        c = next;
+    }
+    return w;
+}
+
+// The private-field diagnostic: say PRIVATE — the field exists, so a "no
+// field" would deny a name the library's own interface documents — point at
+// the supplying completion, and give the header remedy.
+void reportPrivateField(parse::ClassInfo const& info, int idx,
+                        parse::Node const& e, diagnostic::Sink& diag) {
+    std::vector<diagnostic::Note> notes;
+    parse::Node const* p = info.field_params[idx];
+    if (p) notes.push_back({p->file_id, p->tok,
+        "'" + info.field_names[idx] + "' is supplied by the template source, "
+        "private to that file; declare it in the header to publish it."});
+    diagnostic::report(diag, {e.file_id, e.name_tok,
+        "Field '" + info.field_names[idx] + "' of class '" + info.name
+        + "' is private to its template source.", notes});
+}
+
 // Is `base` a TRANSITIVE base of `derived`?
 bool isTransitiveBase(parse::Tree& tree, widen::TypeRef base, widen::TypeRef derived) {
     base = widen::strip(base);
@@ -1992,6 +2057,13 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     c = b;
                 }
                 if (found >= 0) {
+                    // A source-private field stays private through a DERIVED
+                    // instance — inheriting does not launder visibility.
+                    parse::ClassInfo const& oinfo = tree.classes.at(owner);
+                    if (!fieldVisibleAt(tree, oinfo, found, e.file_id)) {
+                        reportPrivateField(oinfo, found, e, diag);
+                        return;
+                    }
                     std::unique_ptr<parse::Node> acc = std::move(e.children[0]);
                     for (int h = 0; h < depth; h++) {
                         auto hop = std::make_unique<parse::Node>();
@@ -2025,6 +2097,12 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Class '" + it->second.name + "' has no field '" + e.name
                     + "'.", {}});
+                return;
+            }
+            // The privacy gate: a field the template source supplied is
+            // nameable only from that file (see fieldVisibleAt).
+            if (!fieldVisibleAt(tree, it->second, idx, e.file_id)) {
+                reportPrivateField(it->second, idx, e, diag);
                 return;
             }
             e.inferred_type = it->second.field_types[idx];
@@ -3101,7 +3179,13 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
         std::string pname = widen::get(pat).name;
         for (std::size_t i = 0; i < names.size(); i++) {
             if (names[i] != pname) continue;
-            widen::TypeRef canon = widen::removeConst(widen::deepStrip(arg));
+            // T binds the argument's type with aliases canonicalized and
+            // BURIED const PRESERVED (canon 2026-08-18): a `(const int)^`
+            // argument binds T = `(const int)^`, so the munged param flows
+            // back out through T with nothing to drop. The argument's OUTER
+            // const was already peeled above (a value binding is a mutable
+            // copy — `same(ci)` still binds T = int).
+            widen::TypeRef canon = widen::deepAliasStrip(arg);
             // A by-VALUE T meeting an ARRAY argument binds the DECAYED iterator
             // type (`"za = "` — const char[6] — binds T = char[]), the same decay
             // a by-value parameter position performs on the argument. A reference
@@ -3116,7 +3200,9 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
                 canon = widen::internIterator(widen::removeConst(elem));
             }
             if (bound[i] == widen::kNoType) { bound[i] = canon; return true; }
-            if (widen::deepStrip(bound[i]) == canon) return true;
+            // Both sides are canonical (alias-free, buried const kept), so
+            // the comparison is exact: `int^` vs `(const int)^` CONFLICTS.
+            if (widen::deepAliasStrip(bound[i]) == canon) return true;
             conflict_name = pname;
             return false;
         }
@@ -3270,8 +3356,21 @@ bool bindTemplateTypeList(parse::Tree& tree, parse::Node& s, int tid,
     bound.assign(names.size(), widen::kNoType);
     if (!s.tmpl_args.empty()) {
         if (s.tmpl_args.size() != names.size()) return false;   // caller reports
-        for (std::size_t i = 0; i < names.size(); i++)
-            bound[i] = widen::removeConst(widen::deepStrip(s.tmpl_args[i]));
+        for (std::size_t i = 0; i < names.size(); i++) {
+            // Canonicalize like inference does: aliases shed, BURIED const
+            // kept (canon 2026-08-18 — `same<(const int)^>` is legal). A
+            // LEADING const is the recursive promise (`const int^` ==
+            // `(const int)^` as a binding), and the outer layer itself sheds
+            // — a value binding is a mutable copy (`same<const int>` binds
+            // T = int).
+            widen::TypeRef ta = widen::deepAliasStrip(s.tmpl_args[i]);
+            if (widen::form(ta) == widen::Type::Form::kConst) {
+                ta = widen::deepConst(ta);
+                while (widen::form(ta) == widen::Type::Form::kConst)
+                    ta = widen::get(ta).underlying;
+            }
+            bound[i] = ta;
+        }
         return true;
     }
     for (auto* a : args) if (a) inferExpr(tree, *a, widen::kNoType, diag);
@@ -4189,14 +4288,24 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
     // base, 1 for a single-field base, N for a wider/transitive one); every other field
     // consumes exactly one. A running index `pi` walks the flat initializer list; the
     // arity bound is the FLAT width, not the slot count.
-    int flatCap = flatFieldWidth(tree, info.type);
+    // The cap is the VISIBLE flat width: a source-private field is not a slot
+    // (it default-fills below, consuming nothing), so it does not widen the
+    // arity a consumer may supply. In a TU with no loaded template source the
+    // two widths are identical.
+    int flatCap = flatVisibleFieldWidth(tree, info.type, s.file_id);
     if ((int)provided.size() > flatCap) {
         // Caret the first EXTRA initializer (the offender), not the decl.
         parse::Node const& extra = *provided[flatCap];
+        std::vector<diagnostic::Note> notes;
+        int hidden = flatFieldWidth(tree, info.type) - flatCap;
+        if (hidden > 0) notes.push_back({info.def_file_id, info.def_tok,
+            "'" + info.name + "' has " + std::to_string(hidden)
+            + " more field(s), supplied by its template source and private "
+            "to it — they cannot be initialized here."});
         diagnostic::report(diag, {extra.file_id, extra.tok,
             "Class '" + info.name + "' has " + std::to_string(flatCap)
             + " field(s) but " + std::to_string(provided.size())
-            + " initializer(s) were given.", {}});
+            + " initializer(s) were given.", notes});
         provided.resize(flatCap);
     }
     auto tup = std::make_unique<parse::Node>();
@@ -4229,6 +4338,32 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             continue;
         }
 
+        // A SOURCE-PRIVATE field is not a slot at all: it cannot be supplied
+        // here, positionally or by an empty slot — it always takes its author
+        // default (else zero / default-construct) and consumes NO initializer,
+        // exactly like an under-filled tail. The tuple maps over the fields
+        // VISIBLE at the use site, so the same spelling legitimately supplies
+        // more fields inside the library's own TU. The default is library-
+        // authored data, so its sub-construction carries the DEFAULT's file
+        // (the library keeps its own visibility inside it).
+        if (!is_base && !fieldVisibleAt(tree, info, (int)i, s.file_id)) {
+            std::unique_ptr<parse::Node> slot;
+            if (widen::form(fts) == widen::Type::Form::kSlid && tree.classes.count(fts)) {
+                parse::ClassInfo const& sub = tree.classes.at(fts);
+                slot = constructClass(tree, sub,
+                                      fdefault ? cloneExpr(*fdefault) : nullptr,
+                                      fdefault ? fdefault->file_id : s.file_id,
+                                      fdefault ? fdefault->tok : s.tok, diag, true);
+            } else {
+                slot = fdefault ? cloneExpr(*fdefault)
+                                : classZeroValue(tree, ft, s.file_id, s.tok, diag);
+                inferExpr(tree, *slot, ft, diag);
+                checkValueAssign(tree, ft, *slot, diag);
+            }
+            tup->children.push_back(std::move(slot));
+            continue;
+        }
+
         // An EXPLICIT EMPTY SLOT — a null IN RANGE, from `Class c(,2,3)` / `(1,,3)` — takes
         // the field's author DEFAULT (else zero / default-construct) and CONSUMES its flat
         // position, so the values AFTER it still align. This differs from an under-filled TAIL
@@ -4240,8 +4375,11 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             std::unique_ptr<parse::Node> slot;
             if (widen::form(fts) == widen::Type::Form::kSlid && tree.classes.count(fts)) {
                 parse::ClassInfo const& sub = tree.classes.at(fts);
+                // A default is library-authored data: its sub-construction
+                // carries the DEFAULT's file for the visibility walk.
                 slot = constructClass(tree, sub, fdefault ? cloneExpr(*fdefault) : nullptr,
-                                      s.file_id, s.tok, diag, true);
+                                      fdefault ? fdefault->file_id : s.file_id,
+                                      fdefault ? fdefault->tok : s.tok, diag, true);
             } else {
                 slot = fdefault ? cloneExpr(*fdefault)
                                 : classZeroValue(tree, ft, s.file_id, s.tok, diag);
@@ -4323,7 +4461,9 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                 // FLAT: the base consumes its flat width of initializers (maybe 0). A base
                 // is a subobject — an abstract base is allowed (the concrete derived
                 // completes its pure slots), so its construction skips the abstract check.
-                int bw = flatFieldWidth(tree, ft);
+                // The base consumes its VISIBLE flat width: its own source-
+                // private fields are not slots in this site's sequence either.
+                int bw = flatVisibleFieldWidth(tree, ft, s.file_id);
                 if (bw <= 0) {
                     slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true,
                                           value_init);
@@ -4375,8 +4515,10 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                 slot = constructClass(tree, sub, std::move(provided[pi++]),
                                       s.file_id, s.tok, diag, true, value_init);
             } else if (fdefault) {
+                // Library-authored default: the sub-construction carries the
+                // default's file for the visibility walk (as above).
                 slot = constructClass(tree, sub, cloneExpr(*fdefault),
-                                      s.file_id, s.tok, diag, true);
+                                      fdefault->file_id, fdefault->tok, diag, true);
             } else {
                 slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true);
             }

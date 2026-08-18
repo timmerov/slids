@@ -388,6 +388,36 @@ std::vector<std::string> scopeSegments(parse::Tree const& tree, int frame) {
     return out;
 }
 
+// The `I..E` TYPE-ARGUMENT encoding: mangleType, except CONST-PRESERVING
+// (Itanium `K`) through pointer/iterator chains. Parameter encodings strip
+// const (transparent for overloading), but two INSTANCES may differ only by
+// a binding's buried const (`deref1<int^>` vs `deref1<(const int)^>`, canon
+// 2026-08-18) and their symbols must stay distinct. Leaf/array/tuple forms
+// defer to mangleType (a tuple leaf's vendor spelling already carries its
+// slot consts).
+std::string mangleTmplArg(widen::TypeRef ref) {
+    widen::Type const& t = widen::get(ref);
+    switch (t.form) {
+        case widen::Type::Form::kConst:
+            return "K" + mangleTmplArg(t.underlying);
+        case widen::Type::Form::kPointer:
+            return "P" + mangleTmplArg(t.pointee);
+        case widen::Type::Form::kIterator:
+            return "R" + mangleTmplArg(t.pointee);
+        case widen::Type::Form::kAlias:
+        case widen::Type::Form::kArray:
+        case widen::Type::Form::kTuple:
+        case widen::Type::Form::kSlid:
+        case widen::Type::Form::kPrimitive:
+        case widen::Type::Form::kVoid:
+        case widen::Type::Form::kAnyptr:
+        case widen::Type::Form::kNone:
+        case widen::Type::Form::kTmplUse:
+            return mangleType(ref);
+    }
+    return mangleType(ref);
+}
+
 // THE ONE MANGLER — every function and method symbol is minted here, from the ENTRY
 // alone (the four method call sites derived their `defCls` identically from
 // classEntryForFrame(owner_ns_frame), so the entry already carries the defining class).
@@ -434,7 +464,7 @@ std::string symbolFor(parse::Entry const& e, parse::Tree const& tree, int entry_
     std::string uq = unqualifiedName(e.name);
     if (!e.tmpl_args.empty()) {
         uq += "I";
-        for (widen::TypeRef t : e.tmpl_args) uq += mangleType(t);
+        for (widen::TypeRef t : e.tmpl_args) uq += mangleTmplArg(t);
         uq += "E";
     }
     if (segs.empty()) {

@@ -14,9 +14,89 @@ import dump;
 import string;
 import vector;
 
+/*
+status:
+binary segfaults.
+*/
+
+Container(int a) {
+    bool op<(Container^ rhs) {
+        return (a < rhs^.a);
+    }
+}
+
+void sort<T>(mutable T container) {
+
+    /* this doesn't work for non-class types like int[N]. */
+    sz = container.size();
+    subsort(0, sz-1);
+
+    void subsort(intptr first, intptr last) {
+        /* done */
+        if (first >= last) {
+            return;
+        }
+
+        /* grab the pivot. */
+        pivot = container[first];
+
+        /* loop. */
+        limit = first;
+        scan = last;
+        while {
+            /*
+            small values stay in place.
+            big values move to the end.
+            */
+            value = container[scan];
+            if (pivot < value) {
+                --scan;
+            } else {
+                container[limit] = value;
+                ++limit;
+                container[scan] = container[limit];
+            }
+        } (limit < scan);
+
+        /* place the pivot at the correct place. */
+        container[scan] = pivot;
+
+        /* recurse. */
+        subsort(first, scan-1);
+        subsort(scan+1, last);
+    }
+}
+
 int32 main() {
 
     //print("Hello, World!");
+
+    /*
+    int iarr[2] = (2, 1);
+    sort(iarr);
+    //dump(#iarr[0]);
+    //dump(#iarr[1]);
+    println(String + iarr[0] + " < " + iarr[1]);
+
+    float farr[2] = (4.1, 3.2);
+    sort(farr);
+    println(String + farr[0] + " < " + farr[1]);
+    */
+
+    Vector<Container> carr;
+    carr.resize(2);
+    carr[0].a = 6;
+    carr[1].a = 5;
+
+    /* thes should all work but don't. */
+    /* The 'mutable' qualifier applies only to a pointer (reference / iterator) or array parameter. */
+    sort(carr);
+    //sort<Container>(carr);
+    //sort<Container>(^carr);
+    /* A method call requires a class object; got 'T'. */
+    //sort(^carr);
+
+    println(String + carr[0].a + " < " + carr[1].a);
 
     return 0;
 }

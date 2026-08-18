@@ -7175,16 +7175,25 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
     bool is_recv = (p.name == "_$recv");   // synthesized method receiver — const-method = Phase 6
 
     // `mutable` is valid only on a pointer (reference / iterator) or array
-    // parameter. That includes a template's BARE-T param (canon ruling
-    // 2026-07-26): `mutable T` would mean something for SOME bindings and be
-    // invalid syntax for others (`fn<int>` -> `mutable int t`), breaking the
-    // one-spelling-serves-every-binding contract — an author who mutates
-    // spells the reference (`mutable T^ t`), which works for every binding.
+    // parameter — EXCEPT on a template's BARE-T param (canon 2026-08-18),
+    // where it modulates the CONVERTED form: a class / tuple binding falls
+    // through to the convention arm below, which mints the reference and
+    // lets `is_mutable` keep the const off it (body writes reach the
+    // caller); any by-value binding has no pointer to opt out of, so the
+    // keyword is IGNORED (cleared, so no downstream check reads a mutable
+    // that never materialized). A pointer binding never reaches this gate —
+    // its form is admitted — and its arm below already skips the pointee
+    // munge on `is_mutable`, which is exactly the un-munged footgun the
+    // canon documents. A CONCRETE non-pointer param keeps the rejection.
     if (p.is_mutable && f != F::kPointer && f != F::kIterator && f != F::kArray) {
-        diagnostic::report(diag, {p.file_id, p.tok,
-            "The 'mutable' qualifier applies only to a pointer "
-            "(reference / iterator) or array parameter.", {}});
-        return;
+        if (conv) {
+            if (f != F::kTuple && f != F::kSlid) p.is_mutable = false;
+        } else {
+            diagnostic::report(diag, {p.file_id, p.tok,
+                "The 'mutable' qualifier applies only to a pointer "
+                "(reference / iterator) or array parameter.", {}});
+            return;
+        }
     }
 
     if (f == F::kArray) {

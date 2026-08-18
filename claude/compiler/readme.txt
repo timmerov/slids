@@ -107,15 +107,30 @@ TYPE REPRESENTATION (the carrier; not a stage)
     that is already a reference to the wanted class — the only mismatch
     landing one there is constness, and the temp it would build silently
     breaks the aliasing (the retry then re-reports the real rejection).
-    THE BARE-T CONVENTION is hard-const by canon: `mutable T` is
-    rejected on the value spelling (it would be invalid syntax for some
-    bindings); mutation spells the reference, `mutable T^`, uniform for
-    every binding; a POINTER binding's pointee munges const
-    (`fn<Cp^>` -> `(const Cp)^`) — and BY CANON B (2026-07-26) a bare-T
-    body therefore cannot RETURN a pointer binding (`T tpick<T>(T a,T b)
-    { return b; }` rejects for `tpick<Bird^>`: the munged param cannot
-    flow into the mutable return; read-only bodies carry pointer
-    demands, and value/class bindings return by copy).
+    THE BARE-T CONVENTION is const by DEFAULT; `mutable T` is the
+    explicit opt-out (canon 2026-08-18, repealing the 2026-07-26
+    rejection), judged on the CONVERTED form: a by-value (primitive)
+    binding has no pointer to opt out of, so the keyword is IGNORED
+    (flag cleared); a class/tuple binding's convention reference is
+    minted MUTABLE — body writes reach the caller (an RVALUE argument
+    is allowed and the mutation discards into the temp); a POINTER
+    binding arrives UN-MUNGED with no deref rewrite — the documented
+    footgun: the same param spelling, but T is the pointer (sizeof(T)
+    is the witness; ##type spells `T` for every mutable binding since
+    no munge rebuilds the type). A CONCRETE non-pointer param keeps
+    the rejection. Without the keyword nothing changes: a POINTER
+    binding's pointee munges const (`fn<Cp^>` -> `(const Cp)^`) — and
+    BY CANON B (2026-07-26) a bare-T body therefore cannot RETURN a
+    MUTABLE pointer binding (`T tpick<T>(T a,T b) { return b; }`
+    rejects for `tpick<Bird^>`: the munged param cannot flow into the
+    mutable return; read-only bodies carry pointer demands, and
+    value/class bindings return by copy). An ALREADY-const pointer
+    binding is the exception that proves it (canon 2026-08-18): T
+    KEEPS a binding's buried const, so `same<(const int)^>` (either
+    spelling — a leading const on a type-arg applies the recursive
+    promise) returns with nothing to drop, while `same<int^>` stays
+    illegal; under `mutable T` there is no munge and any pointer
+    binding returns.
     THE FLOW RULE is landed (same day; canon mutable.sl): a value flows
     into a slot that PRESERVES or ADDS const, never one that DROPS it —
     at every position and depth (constWriteLayerOk, a positional
@@ -1066,11 +1081,20 @@ each flavor is compiled ONCE per project, by the template's own source TU)
 
   INSTANTIATION is demand-driven at classifyCall: a call whose resolved callee is a
   template diverts to classifyTemplateCall. Binding: an explicit type-list (resolved
-  + arity-checked at resolve, canonicalized removeConst∘deepStrip so add<Integer> IS
-  add<int>) or unification. Unification's ONE job is finding T: a marker leaf binds
-  its argument's type EXACTLY (conflicts error — widening never reconciles; a
+  + arity-checked at resolve) or unification. Both canonicalize through
+  widen::deepAliasStrip (canon 2026-08-18): aliases shed at every depth (add<Integer>
+  IS add<int>) but BURIED const KEPT — a `(const int)^` argument or type-arg binds
+  T = `(const int)^`, so the munged param flows back out through T (the
+  `same<(const int)^>` legality). OUTER const still sheds (a value binding is a
+  mutable copy — `same(ci)` binds T = int), and an explicit type-arg's LEADING const
+  applies the recursive promise first (`const int^` == `(const int)^` as a binding).
+  The old removeConst∘deepStrip pair erased const at depth and made every const-
+  pointer binding a const drop at the identity's return. Unification's ONE job is
+  finding T: a marker leaf binds its argument's type EXACTLY (conflicts error —
+  widening never reconciles, and `int^` vs `(const int)^` CONFLICT; a
   BY-VALUE T meeting an array argument binds the DECAYED elem[], what a by-value
-  position does), the NOT-template parts of a pattern impose no constraint (the
+  position does — elem const removed, the string-literal canon), the NOT-template
+  parts of a pattern impose no constraint (the
   instantiated call validates them through the normal machinery), and the shape
   conversions a normal call performs — array decay into a `T[]`/`T^` pattern, rvalue
   materialization into a `(...)^` pattern — apply only to REACH the T positions
@@ -1096,7 +1120,12 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   captures all come from existing code (candidate gathering excludes is_template
   entries and instances, which share the template's name). Downstream stages see
   nothing new: a file/namespace instance mangles the Itanium `I..E` type-args into
-  symbolFor's existing scheme (`_Z3addIiE...`); a block instance keeps the nested
+  symbolFor's existing scheme (`_Z3addIiE...`) — through mangleTmplArg, which is
+  mangleType EXCEPT const-preserving (Itanium `K`) down pointer/iterator chains:
+  parameter encodings strip const (overload-transparent), but two instances may
+  differ only by a binding's buried const (`deref1<int^>` vs `deref1<(const int)^>`,
+  canon 2026-08-18) and their symbols must stay distinct (tuple leaves already carry
+  slot consts in their vendor spelling). A block instance keeps the nested
   `name.<entry-id>` symbol. Inside an instance the parameter is a transparent
   kAlias (T -> the bound type): structural queries see through it, ##type says "T".
 
@@ -1310,7 +1339,9 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     ENTIRELY (a stripped twin beside the header's declaration is an ambiguous
     duplicate — found as "Ambiguous call to 'push'"); the header is the
     interface, so a source-only member (`priv2`) exists in the sibling's
-    flavors and is "no method" in a consumer's. The flavor is recorded in the
+    flavors and is "no method" in a consumer's. Source-only FIELDS cannot
+    drop (layout) — they ride the clone and are GATED instead (see
+    SOURCE-PRIVATE FIELDS below). The flavor is recorded in the
     .sli demand pool.
   - INLINE-LOCAL (an argument class is local to this TU): nobody else can
     emit the flavor, so it clones FULL bodies and emits internal, def_id-
@@ -1354,6 +1385,29 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   folds) because the source is always loaded beside its header. Canon
   test/import Grow (tmpl_lib.slh/.sl, both consumers). The "never
   completed" error fires only when NO loaded opening closes the template.
+
+  SOURCE-PRIVATE FIELDS (canon 2026-08-17): everything a header declares is
+  PUBLIC; everything its template source supplies is PRIVATE to that file —
+  importer-relative (the library's own TU, where the source is the PRIMARY
+  file, sees everything; test/import partpriv is the witness that the same
+  construction spelling maps MORE slots there, accepted deliberately).
+  Methods already had this via the aggregated fn-member drop above; FIELDS
+  must survive into the consumer (layout), so they ride in and get GATED
+  instead. Provenance needs no new class state: a field's stable kParam
+  carries its declaring file, file_template_source marks the loaded source,
+  and the PAIRED HEADER (Tree::file_imported_by — the file that loaded it)
+  counts as library-side too, because the synthesized memberwise operators
+  build `_$recv^.field` accesses carrying the class def's HEADER position.
+  Cloned template bodies keep their source file_id, so an inline-local
+  instance's self-access (and other-instance access, vector.sl's op=)
+  passes BY POSITION. Three gates, all classify: fieldVisibleAt at the
+  kFieldExpr arm — direct AND the inherited base-walk (deriving does not
+  launder), diagnostic says PRIVATE ("Field 'y' of class 'X' is private to
+  its template source", note at the supplying completion, header remedy) —
+  never "no field"; the construction walk (see readme-classes CONSTRUCTION:
+  a private field IS NOT A SLOT); and flatVisibleFieldWidth as the arity
+  cap (an all-private completion rejects "0 field(s)", byte-symmetric with
+  a plain opaque class's starvation). Canon test/import Part/PDer/Sack.
 
   THE .SLI POOL (human-readable, slids-shaped — the block statements are the
   reference's explicit-instantiation spelling, so the format can graduate
@@ -1404,6 +1458,14 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     entry sync can't confuse a class binding with a POINTER binding
     (`T=int^` stays a by-value pointer with the ordinary const-pointee;
     keying off the final form deref'd it — the landing's one real bug).
+    `mutable T` (canon 2026-08-18) threads through this same arm: the
+    "applies only to a pointer" gate exempts a conv-flagged param — a
+    class/tuple binding falls through and `is_mutable` keeps the const
+    off the minted reference, a pointer binding's arm already skipped
+    the pointee munge on `is_mutable` (un-munged, no rewrite), and a
+    by-value binding clears the flag (ignored). One gate change; the
+    caller-side const wall ("Cannot pass a const value to a 'mutable'
+    parameter") and rvalue spill were already in place.
   - ONE DEREF FUNNEL (classify's ident arm): a use of a converted param
     rewrites in place to `arg^`, so every consumer — field access,
     receiver, operand, return, argument — composes on the deref and the

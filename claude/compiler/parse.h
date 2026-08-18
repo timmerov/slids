@@ -810,6 +810,12 @@ struct Tree {
     // accepts a definition from such a file.
     std::vector<bool> file_template_source;
 
+    // Indexed by file_id: the file that pulled this one in (token::File::imported_by;
+    // -1 for the primary source). For a loaded template source this is its PAIRED
+    // HEADER — the same module's public half — which the field-privacy gate treats
+    // as library-side (synthesized members carry the class def's header position).
+    std::vector<int> file_imported_by;
+
     // Class layouts keyed by the class's interned kSlid handle (which is unique
     // per definition via def_id — see ClassInfo). Populated by resolve's class
     // pre-pass; read by classify + desugar.

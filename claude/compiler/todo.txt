@@ -26,6 +26,19 @@ BUGS
     Class shdw; shdw Amt = 5; should desugar to: shdw = (Amt=5);
     should work as long as Amt = 5; is valid and Class = Amt; is valid.
 
+  * this does not compile in bug.sl: int iarr[2] = (2,1); dump(#iarr[0]);
+    if you comment out all calls to dump, bug.sl still fails trying to compile a stale
+    .sli instantiation file.
+
+  * two pre-existing behaviors in inline-local template bodies: a cloned body can't
+    dispatch a local class's operator (Grow<Loc2> with a Loc2 op+ fails "Operator '+' is not defined on class 'T'"), and an
+    explicit T^ param store needs the <T^> <mutable> idiom because the munge consts the pointee (I used vector.sl's next()
+    idiom in Sack.put).
+
+  * the --instantiate demand-pool path still binds demand spellings const-stripped, so a
+    cross-TU demand for a const-pointer flavor wouldn't key identically to the consumer's instance. No canon exercises that
+    combination today.
+
 
 UNBLOCKED FEATURES
 
@@ -459,3 +472,15 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
   * does a template type in the type list need to be viable when used as a qualifier to access a
     template member?
     TClass<NotViableType>:IndependentHoistedClass obj;
+
+  * Vector<Container> carr = (6, 5);
+    the intent is to create a vector of size 2 where carr[0] is initialized to 6 and carr[1] is
+    initialized to 5.
+    we would need to do something like this:
+    Vector:op=<T=HomogeneousTupleType>( T^ tuple ) {
+        for (i : 0..tuple.size()) {
+            append(tuple[i]);
+        }
+    }
+    things not implemented: operator template, conditional template types, tuple.size(), access
+    tuple slot by runtime index.

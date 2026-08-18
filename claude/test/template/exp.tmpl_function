@@ -58,3 +58,15 @@ cv1 = 4
 const T
 (const CvP)^
 cv2 = 5
+mv = 11
+mp = 3,4
+mt = 5,6
+mz = 4
+sc1 = 5
+sc2 = 5
+sc3 = 5
+mo = 8
+mo2 = 8
+szT 4
+szT 8
+szT 8

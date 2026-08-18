@@ -24,34 +24,45 @@ passed by value if the template type is a primitive.
 otherwise it's passed by reference to const.
 this convention applies to all template functions regardless of where they are
 declared - including: file-scope, nested, namespace, nested in templates, etc.
+the template body must rewrite every usage of the argument when it is converted
+to a reference.
+the mutable qualifier may be applied to a template type parameter.
+it is ignored when the template type is not a pointer.
 
-    void template_function<T>(T arg);
+    void template_function<T>(mutable T arg) {
+        println(String + arg);
+    }
 
+    template_function(42);  -->
     template_function<int>(42);  -->
         void template_function(int arg);
 
     Class(int a_) { }
     Class obj(37);
+    template_function(obj);  -->
     template_function<Class>(obj);  -->
-        void template_function(Class^ arg);
+        void template_function(mutable Class^ arg) {
+            println(String + arg^);
+        }
 
     alias Tuple = (int,int);
     Tuple t = (1,2);
+    template_function(t);  -->
     template_function<Tuple>(t);  -->
-        void template_function(Tuple^ arg);
+        void template_function(mutable Tuple^ arg) {
+            println(String + arg^);
+        }
 
-the template body must rewrite every usage of the argument when it is converted
-to a reference.
+this usage is a potential footgun.
+T is infered to be Class^, not Class.
+arg is type mutable Class^.
+its usage in the body is un-munged.
 
-    void template_function<T>(T arg) {
-        println(String + arg);
-    }
-
-transforms - when T is not-primitive - to:
-
-    void template_function<T>(T^ arg) {
-        println(String + arg^);
-    }
+    template_function(^obj);  -->
+    template_function<Class^>(^obj);  -->
+        void template_function(mutable Class^ arg) {
+            println(String + arg);
+        }
 */
 
 /*
@@ -262,25 +273,42 @@ int plain(int v) { return v; }
 int shade(int v) { return v; }
 
 /* THE BARE-T PARAM CONVENTION (canon 2026-07-26): a class / tuple binding
-   arrives `(const T)^` behind the value spelling — HARD-const, no opt-out
-   on the value form (an author who mutates spells the REFERENCE,
-   `mutable T^`, which works for every binding); a POINTER binding's
-   pointee munges const the same way (`fn<CvP^>` -> `(const CvP)^`). */
+   arrives `(const T)^` behind the value spelling; a POINTER binding's
+   pointee munges const the same way (`fn<CvP^>` -> `(const CvP)^`).
+   `mutable T` (canon 2026-08-18) is the value spelling's explicit opt-out,
+   judged on the CONVERTED form: a by-value (primitive) binding has no
+   pointer to opt out of, so the keyword is IGNORED; a class / tuple
+   binding's convention reference is minted MUTABLE — body writes reach the
+   caller; a pointer binding arrives UN-MUNGED (the documented footgun: the
+   same param spelling, but T is the pointer and the body sees the pointer).
+   Without the keyword nothing changes — params are reference-to-const. */
 CvP(int v_ = 0) { }
 int cvread<T>(T s) { return s.v_; }
 void cvshow<T>(T s) { println(String + ##type(s)); s; }
 void cvbump<T>(mutable T^ t) { t^.v_ = t^.v_ + 1; }
+
+/* the `mutable T` fixtures: the identity (legal for EVERY binding kind — the
+   pointer binding has no munge, so nothing drops at the return), a writer
+   (the class binding's mutable reference reaches the caller), and the
+   ##type witness. */
+T mut<T>(mutable T v) { return v; }
+void mutbump<T>(mutable T c) { c.v_ = c.v_ + 1; }
+/* ##type would spell `T` for every mutable binding (no munge rebuilds the
+   type, so the pattern's label survives), and sizeof(param) is the pointer
+   for both — sizeof(T) is the witness that tells the class binding
+   (T = the class) from the pointer binding (T = the pointer, the footgun). */
+void mutshow<T>(mutable T s) { println(String + "szT " + sizeof(T)); s; }
 
 /* a bare-T body may not WRITE its param — the convention is const. */
 //-EXPECT-ERROR: Cannot write to a const value
 //int cv_neg_write<S>(S s) { s.v_ = 9; return s.v_; }
 //int cv_neg_use() { CvP c(1); return cv_neg_write(c); }
 
-/* `mutable T` on the VALUE spelling is out: it would mean something for
-   some bindings and be invalid syntax for others (`mutable int t`). */
+/* `mutable` on a CONCRETE non-pointer param keeps the plain rejection — the
+   value-spelling opt-in (canon 2026-08-18) is for TEMPLATE-typed params only. */
 //-EXPECT-ERROR: applies only to a pointer
-//void cv_neg_mut<S>(mutable S s) { s; }
-//void cv_neg_mut_use() { CvP c(1); cv_neg_mut(c); }
+//void cv_neg_mut<S>(S s, mutable int n) { s; n; }
+//void cv_neg_mut_use() { CvP c(1); cv_neg_mut(c, 2); }
 
 /* the CALLER side: a const class cannot flow into `mutable T^`. */
 //-EXPECT-ERROR: Cannot pass a const value
@@ -527,6 +555,49 @@ int32 main() {
     cvshow(cvp);                                  // (const CvP)^
     cvbump(^cvo);
     println(String + "cv2 = " + cvo.v_);                 // 5
+
+    /* `mutable T` (canon 2026-08-18): ignored for a by-value binding; the
+       identity returns for EVERY binding kind — including the pointer
+       binding the const spelling blocks (no munge here, nothing drops). */
+    int mv = mut(11); println(String + "mv = " + mv);
+    Pair mp = mut(p1); println(String + "mp = " + mp.x_ + "," + mp.y_);
+    (int, int) mtu = mut(tt); println(String + "mt = " + mtu[0] + "," + mtu[1]);
+    int^ mzp = mut(^zz); println(String + "mz = " + mzp^);
+
+    /* an ALREADY-const pointer binding flows through the PLAIN identity: T
+       carries the const, so the return drops nothing — every spelling. */
+    int cix = 5;
+    (const int)^ scp = ^cix;
+    (const int)^ sc1 = same(scp); println(String + "sc1 = " + sc1^);
+    (const int)^ sc2 = same<(const int)^>(scp); println(String + "sc2 = " + sc2^);
+    (const int)^ sc3 = same<const int^>(scp); println(String + "sc3 = " + sc3^);
+
+    /* the class binding's MUTABLE reference: the body's write lands in the
+       caller's object — the convention's explicit opt-out. */
+    CvP mo(7);
+    mutbump(mo);
+    println(String + "mo = " + mo.v_);
+    /* an RVALUE into the mutable-converted param is allowed: it materializes
+       into the temp and the mutation discards. */
+    mutbump(CvP(3));
+    println(String + "mo2 = " + mo.v_);
+    /* the ##type contrast with cvshow above: the class binding auto-derefs
+       off a MUTABLE reference; the pointer binding is UN-munged (the footgun
+       pin), inferred and explicit. */
+    mutshow(mo);
+    mutshow(^mo);
+    mutshow<CvP^>(^mo);
+
+    /* `same<int^>` is STILL illegal — the munge stands on the const spelling. */
+    //-EXPECT-ERROR: Cannot drop 'const'
+    //int mzz = 4;
+    //int^ nr = same<int^>(^mzz); println(String + "nr = " + nr^);
+
+    /* the caller's const cannot flow into the mutable-converted param. */
+    //-EXPECT-ERROR: Cannot pass a const value to a 'mutable' parameter
+    //const CvP cmo(1);
+    //mutbump(cmo);
+    //println(String + "cmo = " + cmo.v_);
 
     return 0;
 }

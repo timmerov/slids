@@ -93,6 +93,34 @@ Grow<T>(...) {
     intptr count();
 }
 
+/* SOURCE-PRIVATE FIELDS: the field list a header spells is the class's PUBLIC
+   interface; the fields a completing re-open supplies are private to the
+   template source file. `Part` publishes `pub_` and stays open; the source's
+   completion appends `sec_` — a real slot in every TU's layout, but nameable
+   (and initializer-mappable) only in the source's own TU. `PDer` derives from
+   a flavor IN THE HEADER, appending a public field AFTER the hidden one — the
+   initializer walk must skip `sec_` mid-layout. */
+Part<T>(T pub_ = 0, ...) {
+    T tally();
+}
+
+Part<int> : PDer(int zed_ = 0) {
+    int zz();
+}
+
+/* the library-side witness: the source's own TU sees BOTH of Part's fields. */
+int partpriv();
+
+/* the INLINE-LOCAL twin of the privacy rule: a pointer-field template (the
+   Box shape, so a local-type flavor can inline the bodies), its one field
+   supplied by the completion. The clone's `hold_` accesses are library code
+   BY POSITION even when they compile in the consumer's TU; the consumer's
+   own spelling of `hold_` still rejects. */
+Sack<T>(...) {
+    void put(T^ v);
+    int got();
+}
+
 /* a USER transfer operator declared here: it is the flavor's canonical copy,
    defined across the seam by the source's re-open. */
 Acc<T>(T v_ = 0) {

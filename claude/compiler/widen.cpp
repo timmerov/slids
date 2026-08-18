@@ -1459,6 +1459,34 @@ TypeRef deepStrip(TypeRef ref) {
     return ref;
 }
 
+TypeRef deepAliasStrip(TypeRef ref) {
+    Type const& t = get(ref);
+    switch (t.form) {
+        case Type::Form::kAlias:    return deepAliasStrip(t.underlying);
+        case Type::Form::kConst:    return internConst(deepAliasStrip(t.underlying));
+        case Type::Form::kPointer:  { TypeRef p = t.pointee; return internPointer(deepAliasStrip(p)); }
+        case Type::Form::kIterator: { TypeRef p = t.pointee; return internIterator(deepAliasStrip(p)); }
+        case Type::Form::kArray: {
+            TypeRef e = t.elem;
+            std::vector<int> d = t.dims;
+            return internArray(deepAliasStrip(e), d);
+        }
+        case Type::Form::kTuple: {
+            std::vector<TypeRef> s = t.slots;
+            for (TypeRef& x : s) x = deepAliasStrip(x);
+            return internTuple(s);
+        }
+        case Type::Form::kPrimitive:
+        case Type::Form::kVoid:
+        case Type::Form::kAnyptr:
+        case Type::Form::kSlid:
+        case Type::Form::kNone:
+        case Type::Form::kTmplUse:   // unresolved use — structure unknown; leave
+            return ref;
+    }
+    return ref;
+}
+
 // A child type spelled UNDER a `^` / `[]` / `[N]` suffix: a kConst child is
 // parenthesized so the const stays bound to the pointee/element — `(const T)^`
 // (shallow), distinct from the outer-const `const T^` (deep). Any other form

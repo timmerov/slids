@@ -209,6 +209,18 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     one" (grammar parseCallArgs allow_empty; the two construction-declarator sites
     only, a TRAILING comma rejected). The `= (tuple)` value-init form has no empty
     slots — it goes through buildClassFromValue's op= path, not this loop (todo).
+    A SOURCE-PRIVATE field (canon 2026-08-17 — a field an imported template's
+    SOURCE supplied; see readme.txt SOURCE-PRIVATE FIELDS for the provenance
+    test) IS NOT A SLOT in this walk: it cannot be supplied positionally or by
+    an empty slot — it always takes its author default (else zero /
+    default-construct) and consumes NO initializer, exactly like an under-filled
+    tail, even MID-LAYOUT (the tuple maps over the fields VISIBLE at the use
+    site — base splice included, its width filtered too). The arity cap is
+    flatVisibleFieldWidth, so the over-fill diagnostic counts visible fields and
+    notes the hidden remainder. The same spelling legitimately supplies more
+    fields inside the library's own TU (importer-relative visibility); a
+    class-typed field's DEFAULT sub-constructs under the DEFAULT's file, so
+    library-authored defaults keep library visibility.
     A class — OR an array/tuple whose leaves are classes (widen::hasInPlaceClass, recursing array
     elem + tuple slots, stopping at a pointer/iterator) — is definitely-initialized
     (DA) and default-constructed IN PLACE even with no initializer: resolve marks it

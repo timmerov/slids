@@ -3309,6 +3309,75 @@ element's LLVM type, i.e. the `{ i8 }` placeholder. THREE sites, one rule:
     layout — the guthrie shape).
   Detail: readme-classes.txt COMPUTED LAYOUT "ONE ADDRESS FUNNEL" passage.
 
+SOURCE-PRIVATE TEMPLATE FIELDS (landed 2026-08-17).
+The spec's boundary made checkable: everything a .slh declares is PUBLIC,
+everything its .sl supplies is PRIVATE to importers — the canon question was
+bug-of-the-day's `Vector<Container> carr = (6, 5)`, a consumer field-list
+blit onto a library's completion fields. Methods already obeyed (the
+aggregated fn-member drop); plain opaque classes already obeyed (layout
+starvation); template-instance FIELDS were the one category that must ride
+into the consumer (layout) and so needed a GATE, not a drop.
+  - Provenance is free: the field kParam's file_id + file_template_source,
+    plus the paired header via the new Tree::file_imported_by (synthesized
+    memberwise ops carry the class def's header position — the first suite
+    failure without it). Library bodies cloned into consumer TUs pass BY
+    POSITION; the library's own TU is unmarked, so privacy is
+    importer-relative by construction (partpriv pins the sanctioned
+    same-spelling-more-slots consequence).
+  - Three classify gates: fieldVisibleAt at the kFieldExpr arm (direct +
+    inherited base-walk; the diagnostic says PRIVATE with the header
+    remedy, never "no field"); the construction walk (a private field IS
+    NOT A SLOT — never supplied, positionally or by empty slot, always the
+    author default, even mid-layout; base splice width filtered);
+    flatVisibleFieldWidth as the arity cap (all-private completion rejects
+    "0 field(s)" — byte-symmetric with an opaque class's starvation).
+  - Coverage: test/import Part (header field + `...` + source completion),
+    header-derived PDer (mid-layout skip-and-default: `PDer pd = (1,2)` ->
+    pub_=1, sec_=default, zed_=2), Sack (the inline-local twin — cloned
+    bodies compile in the consumer TU and still pass), partpriv, 7
+    negatives (read / write / derived reach / pointer reach / inline-local
+    reach / visible-arity / zero-slot).
+  Detail: readme.txt SOURCE-PRIVATE FIELDS; readme-classes.txt CONSTRUCTION.
+
+MUTABLE-T PARAMS + BURIED-CONST BINDINGS (landed 2026-08-18).
+Canon rewrite in tmpl_function.sl: `mutable` becomes legal on a bare-T
+value param, judged on the CONVERTED form — by-value (primitive) binding
+IGNORES it, a class/tuple binding's convention reference is minted MUTABLE
+(body writes reach the caller; an rvalue argument is allowed, the mutation
+discards into the temp — ruled), a pointer binding arrives UN-MUNGED with
+no rewrite (the documented footgun: same param spelling, T is the pointer).
+Default unchanged: no keyword, hard-const convention, canon B stands
+(`same<int^>` still illegal).
+  - The compiler change is ONE gate: mungeParamType's "applies only to a
+    pointer" rejection exempts conv-flagged params (class/tuple fall
+    through to the convention arm, whose const was already conditional on
+    is_mutable; by-value clears the flag). Caller const wall + rvalue
+    spill were already in place.
+  - The ruling `same<(const int)^>`-is-legal exposed a binder bug: T
+    bindings canonicalized removeConst∘deepStrip — BOTH erase const at
+    depth — so T bound `int^` for every const-pointer argument/type-arg
+    and the identity's return was a const drop. New widen::deepAliasStrip
+    (aliases shed everywhere, const KEPT) canonicalizes both inference and
+    the explicit list; outer const still sheds (a value binding is a
+    mutable copy), a leading const on a type-arg applies the recursive
+    promise (`const int^` == `(const int)^`), conflicts are exact
+    (`int^` vs `(const int)^` conflict), array decay unchanged (string
+    literals still bind char[]).
+  - Const-distinct instances need distinct symbols: mangleTmplArg encodes
+    the I..E type-args const-preserving (Itanium `K`) through
+    pointer/iterator chains; parameter encodings still strip.
+  - OPEN EDGE: the --instantiate demand-pool binder still strips const
+    from demand spellings — a cross-TU const-pointer flavor demand would
+    not key to the consumer's instance; no canon exercises it.
+  - Coverage: tmpl_function.sl — the `mut` identity across every binding
+    kind, mutation-reaches-caller, rvalue discard, all three
+    `same<(const int)^>` spellings, the sizeof(T) footgun pin (##type
+    spells `T` for every mutable binding — no munge, no rebuilt type),
+    `same<int^>` still rejecting, const-into-mutable rejecting, and the
+    concrete-param `mutable` rejection (the repealed negative's successor).
+  Detail: readme.txt const-correctness passage + template INSTANTIATION
+  binding + the convention's munge arm + the I..E mangling note.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

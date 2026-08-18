@@ -4898,12 +4898,14 @@ void run(token::List& in, parse::Tree& out, diagnostic::Sink& diag) {
     out.file_imported.resize(in.files.size());
     out.file_sibling.resize(in.files.size());
     out.file_template_source.resize(in.files.size());
+    out.file_imported_by.resize(in.files.size());
     std::string self = in.files.empty() ? std::string() : baseNameOf(in.files[0].path);
     for (size_t i = 0; i < in.files.size(); i++) {
         out.file_imported[i] = in.files[i].imported_by != -1;
         out.file_sibling[i] =
             out.file_imported[i] && baseNameOf(in.files[i].path) == self;
         out.file_template_source[i] = in.files[i].template_source;
+        out.file_imported_by[i] = in.files[i].imported_by;
     }
     Parser p{in, out, diag};
     p.parseProgram();

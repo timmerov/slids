@@ -226,5 +226,79 @@ int32 main() {
     Loc nn = Spc2:nid(ml);
     println(String + "nn = " + nn.lv());
 
+    /* SOURCE-PRIVATE FIELDS: the header's field list is the public interface;
+       the completion's `sec_` exists in every TU's layout but is NOT a slot
+       here. The initializer tuple maps over the VISIBLE fields flat — `pub_`
+       (base, public) takes 1, `sec_` (private, mid-layout) silently takes its
+       author default, `zed_` takes 2. */
+    PDer pd = (1, 2);
+    println(String + "pv = " + pd.pub_ + " " + pd.zed_ + " " + pd.tally()
+        + " " + pd.zz());
+    /* the construction spelling filters identically. */
+    Part<int> pc(5);
+    println(String + "pc = " + pc.tally());
+    /* the library-side witness: its own TU maps BOTH fields with the same
+       spelling — privacy is importer-relative, deliberately. */
+    println(String + "ps = " + partpriv());
+    /* an EMPTY slot supplies a default to a VISIBLE field only — the slot
+       positions, like the values, map over the visible sequence. */
+    PDer pe(,6);
+    println(String + "pe = " + pe.pub_ + " " + pe.zed_);
+    /* a WHOLE-class copy is a transfer, not a field list: the synthesized
+       memberwise op= is library code and carries `sec_` along intact. */
+    Part<int> pcp = pc;
+    println(String + "pcp = " + pcp.tally());
+    /* the INLINE-LOCAL flavor keeps the boundary: Sack<Loc>'s bodies clone
+       from the source and compile HERE, and their `hold_` accesses pass by
+       POSITION; the consumer's own spelling rejects (negative below). */
+    Sack<Loc> sk;
+    println(String + "sk = " + sk.got());
+    sk.put(^ml);
+    println(String + "sk2 = " + sk.got());
+
+    /* a field the completion supplies cannot be READ by an importer. */
+    //-EXPECT-ERROR: is private to its template source
+    //Part<int> pr1(3);
+    //int prx = pr1.sec_;
+    //println(String + "prx = " + prx);
+
+    /* ...nor WRITTEN. */
+    //-EXPECT-ERROR: is private to its template source
+    //Part<int> pr2(3);
+    //pr2.sec_ = 9;
+    //println(String + "pr2 = " + pr2.tally());
+
+    /* ...nor reached through a DERIVED instance (the base-walk splice). */
+    //-EXPECT-ERROR: is private to its template source
+    //PDer pr3;
+    //int pr3x = pr3.sec_;
+    //println(String + "pr3 = " + pr3x);
+
+    /* private fields are not initializer slots: the VISIBLE arity is the cap
+       (the flat width counts `pub_` alone). */
+    //-EXPECT-ERROR: 1 field(s) but 2 initializer(s)
+    //Part<int> pr4(1, 2);
+    //println(String + "pr4 = " + pr4.tally());
+
+    /* an all-private completion (`Grow`) leaves NO visible slots — the same
+       rejection an opaque class's hidden fields produce. */
+    //-EXPECT-ERROR: 0 field(s) but 1 initializer(s)
+    //Grow<int> pr5 = (5);
+    //println(String + "pr5 = " + pr5.total());
+
+    /* the reach through a POINTER is the same access. */
+    //-EXPECT-ERROR: is private to its template source
+    //Part<int> pr6(3);
+    //Part<int>^ pr6p = ^pr6;
+    //int pr6x = pr6p^.sec_;
+    //println(String + "pr6 = " + pr6x);
+
+    /* the INLINE-LOCAL flavor's private field rejects like the aggregated
+       flavor's — position decides, not where the instance was emitted. */
+    //-EXPECT-ERROR: is private to its template source
+    //Sack<Loc> sn;
+    //sn.hold_ = nullptr;
+    //println(String + "sn = " + sn.got());
+
     return 0;
 }

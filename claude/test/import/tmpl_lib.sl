@@ -64,6 +64,39 @@ Grow<T>(
     intptr count() { return n_; }
 }
 
+/* the completing re-open of `Part`: `sec_` lands after the header's `pub_`,
+   private to this file; `tally` proves what an importer's construction left
+   in it (the author default). */
+Part<T>(
+    T sec_ = 40
+) {
+    T tally() { return pub_ + sec_; }
+}
+
+/* the derived header class's body: its own public field, past the hidden one. */
+int PDer:zz() { return zed_; }
+
+/* the witness: the same construction spelling that maps `(pub_)` alone for an
+   importer maps `(pub_, sec_)` here — privacy is importer-relative. */
+int partpriv() {
+    Part<int> q(7, 8);
+    return q.sec_;
+}
+
+/* Sack's completion: a private pointer field; the bodies are self-contained
+   (no TU-private helper), so a local-type flavor can inline them. */
+Sack<T>(
+    T^ hold_ = nullptr
+) {
+    /* the munge consts a class binding's pointee; store the mutable view
+       (the vector.sl next() idiom). */
+    void put(T^ v) { hold_ = <T^> <mutable> v; }
+    int got() {
+        if (hold_ == nullptr) { return 0; }
+        return 1;
+    }
+}
+
 Box<T>() {
     int has() {
         if (p_ == nullptr) { return 0; }

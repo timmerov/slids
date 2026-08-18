@@ -289,6 +289,13 @@ TypeRef strip(TypeRef ref);
 // same-pointee checks).
 TypeRef deepStrip(TypeRef ref);
 
+// Recursively remove EVERY alias, PRESERVING const (deepStrip erases both).
+// The template binder canonicalizes T bindings through this (canon 2026-08-18):
+// a binding's BURIED const is the write layer and must survive into T
+// (`same<(const int)^>` returns without a const drop), while aliases still
+// canonicalize (`add<Integer>` IS `add<int>`).
+TypeRef deepAliasStrip(TypeRef ref);
+
 // spell(), but kNoType renders as the empty string (the inverse of internOrNone).
 std::string spellOrEmpty(TypeRef ref);
 
