@@ -24,6 +24,7 @@ Container(int a) {
         return (a < rhs^.a);
     }
 }
+alias Containers = Vector<Container>;
 
 void sort<T>(mutable T container) {
 
@@ -83,16 +84,16 @@ int32 main() {
     println(String + farr[0] + " < " + farr[1]);
     */
 
-    Vector<Container> carr;
+    Containers carr;
     carr.resize(2);
     carr[0].a = 6;
     carr[1].a = 5;
 
     /* thes should all work but don't. */
     /* The 'mutable' qualifier applies only to a pointer (reference / iterator) or array parameter. */
-    sort(carr);
-    //sort<Container>(carr);
-    //sort<Container>(^carr);
+    //sort(carr);
+    //sort<Containers>(carr);
+    //sort<Containers>(^carr);
     /* A method call requires a class object; got 'T'. */
     //sort(^carr);
 
