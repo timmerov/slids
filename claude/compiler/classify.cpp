@@ -3447,6 +3447,8 @@ bool constraintAdmits(parse::Tree& tree, int tid, widen::TypeRef T) {
                 return resolve::typeInSet(tree, t, it->second.spec_set_id);
             return it->second.spec_type != widen::kNoType
                 && t == it->second.spec_type;
+        case parse::SpecConstraint::K::kInlineSet:
+            return resolve::typeInSetValue(tree, t, it->second.spec_inline);
         case parse::SpecConstraint::K::kArray:
             return widen::form(t) == F::kArray
                 && widen::get(t).dims.size() == sp.dim_binders.size();
@@ -3456,48 +3458,130 @@ bool constraintAdmits(parse::Tree& tree, int tid, widen::TypeRef T) {
     return false;
 }
 
+// The unconstrained same-scope sibling admitting `nargs` — the CATCH-ALL of a
+// mixed family (registration allows at most one per overlapping range).
+// Returns -1 when the family has none.
+int catchAllSibling(parse::Tree& tree, int tid, std::size_t nargs) {
+    parse::Entry const& e = tree.entries[tid];
+    for (std::size_t id = 0; id < tree.entries.size(); id++) {
+        parse::Entry const& c = tree.entries[id];
+        if (c.kind != parse::EntryKind::kFunction || !c.is_template
+            || !c.tmpl_args.empty() || c.name != e.name
+            || c.owner_ns_frame != e.owner_ns_frame
+            || c.parent_frame_id != e.parent_frame_id) continue;
+        auto it = tree.templates.find((int)id);
+        if (it == tree.templates.end() || !it->second.def
+            || it->second.def->spec) continue;
+        int lo, hi;
+        resolve::templateArityRange(tree, (int)id, lo, hi);
+        if ((int)nargs < lo || (int)nargs > hi) continue;
+        return (int)id;
+    }
+    return -1;
+}
+
 // A call whose resolved callee is a TEMPLATE: bind the type-list, instantiate on
 // demand, retarget the call at the instance entry. True = retargeted (the caller
 // falls through to the ordinary call path); false = an error was reported.
-// A SPECIALIZED family (the stamped arm carries a `T=` constraint) selects the
-// arm by set membership of the deduced T: exactly one arm must admit it — none
-// or several is a compile error (canon tmpl_special.sl; no catch-all yet).
+// A SPECIALIZED family (any same-scope sibling carries a `T=` constraint)
+// selects PER ARM: each constrained arm deduces T against ITS OWN patterns
+// (failures muted — arms may differ in shape), and membership filters the
+// successful binds. Exactly one arm wins; several is "Ambiguous
+// specialization" — a catch-all never rescues an ambiguity; none falls back
+// to the family's unconstrained CATCH-ALL sibling, bound against its own
+// patterns (canon tmpl_special.sl: specialized matches first).
 bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     int tid = s.resolved_entry_id;
     std::vector<parse::Node*> args;
     for (auto& ch : s.children) args.push_back(ch.get());
-    std::vector<widen::TypeRef> bound;
-    if (!bindTemplateTypeList(tree, s, tid, args, /*recv_offset=*/0, s.tok, diag,
-                              bound))
-        return false;   // explicit-arity mismatch was reported at resolve
-    auto ti = tree.templates.find(tid);
-    if (ti != tree.templates.end() && ti->second.def && ti->second.def->spec
-        && !bound.empty()) {
-        std::vector<int> arms = specializationArms(tree, tid, args.size());
-        std::vector<int> fit;
-        for (int a : arms)
-            if (constraintAdmits(tree, a, bound[0])) fit.push_back(a);
-        if (fit.empty()) {
-            diagnostic::report(diag, {s.file_id, s.tok,
-                "No specialization of '" + s.name + "' matches '"
-                + widen::spellOrEmpty(bound[0]) + "'.", {}});
-            return false;
-        }
-        if (fit.size() > 1) {
-            std::vector<diagnostic::Note> notes;
-            for (int a : fit) {
-                parse::Node const* d = tree.templates[a].def;
-                notes.push_back({d->file_id, d->name_tok, "matches this arm"});
-            }
-            diagnostic::report(diag, {s.file_id, s.tok,
-                "Ambiguous specialization: '" + widen::spellOrEmpty(bound[0])
-                + "' matches more than one arm of '" + s.name + "'.",
-                std::move(notes)});
-            return false;
-        }
-        tid = fit[0];
+    std::vector<int> arms = specializationArms(tree, tid, args.size());
+    if (arms.empty()) {
+        // No constrained sibling — the ordinary single-template path.
+        std::vector<widen::TypeRef> bound;
+        if (!bindTemplateTypeList(tree, s, tid, args, /*recv_offset=*/0, s.tok,
+                                  diag, bound))
+            return false;   // explicit-arity mismatch was reported at resolve
+        int iid = instantiateAndClassify(tree, tid, bound, s, diag);
+        if (iid < 0) return false;
+        s.resolved_entry_id = iid;
+        return true;
     }
-    int iid = instantiateAndClassify(tree, tid, bound, s, diag);
+    int catch_all = catchAllSibling(tree, tid, args.size());
+    std::vector<int> fit;                       // winning arms
+    std::vector<std::vector<widen::TypeRef>> fit_bound;  // their bindings
+    widen::TypeRef probe = widen::kNoType;      // a bound T, for diagnostics
+    if (!s.tmpl_args.empty()) {
+        // EXPLICIT type-list: one binding serves every arm (all single-T).
+        std::vector<widen::TypeRef> bound;
+        if (!bindTemplateTypeList(tree, s, tid, args, /*recv_offset=*/0, s.tok,
+                                  diag, bound))
+            return false;
+        probe = bound.empty() ? widen::kNoType : bound[0];
+        for (int a : arms) {
+            if (!bound.empty() && constraintAdmits(tree, a, bound[0])) {
+                fit.push_back(a);
+                fit_bound.push_back(bound);
+            }
+        }
+        if (fit.empty() && catch_all >= 0) {
+            int iid = instantiateAndClassify(tree, catch_all, bound, s, diag);
+            if (iid < 0) return false;
+            s.resolved_entry_id = iid;
+            return true;
+        }
+    } else {
+        // PER-ARM deduction, failures muted (arms may differ in shape).
+        for (int a : arms) {
+            diagnostic::Sink scratch;
+            std::vector<widen::TypeRef> bound;
+            if (!bindTemplateTypeList(tree, s, a, args, /*recv_offset=*/0,
+                                      s.tok, scratch, bound)
+                || bound.empty()) continue;
+            probe = bound[0];
+            if (constraintAdmits(tree, a, bound[0])) {
+                fit.push_back(a);
+                fit_bound.push_back(std::move(bound));
+            }
+        }
+        if (fit.empty() && catch_all >= 0) {
+            // The catch-all binds against its OWN patterns, real diagnostics.
+            std::vector<widen::TypeRef> bound;
+            if (!bindTemplateTypeList(tree, s, catch_all, args,
+                                      /*recv_offset=*/0, s.tok, diag, bound))
+                return false;
+            int iid = instantiateAndClassify(tree, catch_all, bound, s, diag);
+            if (iid < 0) return false;
+            s.resolved_entry_id = iid;
+            return true;
+        }
+        if (fit.empty() && probe == widen::kNoType) {
+            // NO arm even deduced — re-run the stamped arm's bind with the
+            // real sink so its pattern-mismatch diagnostic surfaces.
+            std::vector<widen::TypeRef> bound;
+            if (!bindTemplateTypeList(tree, s, arms[0], args, /*recv_offset=*/0,
+                                      s.tok, diag, bound))
+                return false;
+        }
+    }
+    if (fit.empty()) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "No specialization of '" + s.name + "' matches '"
+            + widen::spellOrEmpty(probe) + "'.", {}});
+        return false;
+    }
+    if (fit.size() > 1) {
+        std::vector<diagnostic::Note> notes;
+        for (int a : fit) {
+            parse::Node const* d = tree.templates[a].def;
+            notes.push_back({d->file_id, d->name_tok, "matches this arm"});
+        }
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "Ambiguous specialization: '" + widen::spellOrEmpty(probe)
+            + "' matches more than one arm of '" + s.name + "'.",
+            std::move(notes)});
+        return false;
+    }
+    int iid = instantiateAndClassify(tree, fit[0], fit_bound[0], s, diag);
     if (iid < 0) return false;
     s.resolved_entry_id = iid;
     return true;

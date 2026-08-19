@@ -3392,7 +3392,13 @@ so a lone paren identifier is always arity). Concrete membership is
 canonical per the binding canon: aliases shed, outer const peeled, buried
 const kept.
   - Arms: `countof<T=Set>` (or a concrete type name — a one-type set IS
-    full specialization), `<T=A[N]>`, `<T=[N][M]>`, `<T=(N)>`. Binders bind
+    full specialization), `<T=A[N]>`, `<T=[N][M]>`, `<T=(N)>`, and — added
+    with the canon's inline-typeset lines — `<T=<int|float>>` /
+    `<T=!<...>>`: an ANONYMOUS set with the full term grammar (named sets
+    and patterns included; patterns are wildcards there — inline sets bind
+    nothing), resolved at the snapshot point into the TemplateInfo, no
+    entry minted; the `...>>` tail splits like a nested type-arg group's.
+    Binders bind
     at instantiation off the matched T — element type as a transparent
     alias, dims/arity as pre-captured intptr CONST entries constfold
     substitutes like any named constant. `(A arg[N])` param spelling IS T
@@ -3434,6 +3440,34 @@ const kept.
     param list, method template, self/dup binders, set-with-template-list).
   Detail: readme.txt SPECIALIZATION + TYPE SETS (inside the TEMPLATES
   section) + the INSTANTIATION binding paragraph's array arm.
+
+MIXED SPECIALIZED + CATCH-ALL, TYPE-SPELLING CONSTRAINTS, PER-ARM
+DEDUCTION (landed 2026-08-18, same canon file — the canon's mixing and
+ambiguity-example additions).
+  - ONE unconstrained CATCH-ALL may share the constrained arms' arity
+    (registration now clashes only two unconstrained siblings; the
+    cross-TU decl/def merge gained a specMatches guard). Specialized arms
+    match first; the catch-all takes what no arm admits and NEVER rescues
+    an ambiguity. An exact-type arm gets NO priority over a set containing
+    it (the canon error<T=Integers>/error<T=int> pair is ambiguous).
+  - Selection is PER ARM: each constrained arm deduces T against its OWN
+    patterns (scratch sink — arms and the catch-all may differ in shape:
+    `shp<T=int>((T,T)^ x)` beside `shp<T=float>(T x)` beside `shp<T>`),
+    then membership filters. The catch-all binds its own patterns with
+    real diagnostics — full pattern language everywhere. With no
+    catch-all, a bound-but-unadmitted T reports "No specialization";
+    nothing-deduces re-runs the first arm's bind so the pattern-mismatch /
+    conflicting-bindings message surfaces.
+  - A constraint may be a full TYPE SPELLING — `T=int` (primitive
+    KEYWORDS parse now), `T=int^`, `T=(int,int)`, `T=int[]`, `T=Box<int>`
+    — a one-type set; bare identifiers still resolve set-first.
+  - Coverage: tmpl_special.sl — the canon mixed pair (inferred + explicit
+    both ways), shape-mixed arms + differently-shaped catch-all, all five
+    type-spelling kinds, body-scope mixed pair with `T=int`; negatives:
+    the canon error pair, ambiguity-not-rescued, two-unconstrained clash
+    (replaces the repealed same-arity clash), pattern-mismatch surfacing,
+    conflicting-bindings surfacing.
+  Detail: readme.txt SPECIALIZATION + TYPE SETS selection passage.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

@@ -2813,6 +2813,10 @@ struct Parser {
             if (peek().kind == token::Kind::kBitOr) { advance(); continue; }
             break;
         }
+        // An INLINE set inside a template list closes `...>>` — split the
+        // shift into the set's `>` and the list's (same as a nested type-arg
+        // group's close).
+        if (peek().kind == token::Kind::kRShift) splitRShift();
         return expect(token::Kind::kGt, ">");
     }
 
@@ -2857,9 +2861,28 @@ struct Parser {
             }
             return true;
         };
+        if (peek().kind == token::Kind::kLt
+            || (peek().kind == token::Kind::kNot
+                && peekKind(1) == token::Kind::kLt)) {
+            // `T=<int|float>` / `T=!<...>` — an INLINE type set: the full
+            // term grammar, anonymous (nothing enters the symbol table).
+            // Patterns inside are wildcards — an inline set binds nothing.
+            out->kind = parse::SpecConstraint::K::kInlineSet;
+            out->inline_set = std::make_unique<parse::TypeSetDecl>();
+            if (peek().kind == token::Kind::kNot) {
+                out->inline_set->complement = true;
+                advance();   // !
+            }
+            return parseTypeSetTerms(*out->inline_set);
+        }
         if (peek().kind == token::Kind::kIdentifier
-            && peekKind(1) == token::Kind::kLBracket) {
+            && peekKind(1) == token::Kind::kLBracket
+            && peekKind(2) == token::Kind::kIdentifier) {
             // `T=A[N]` — element-type binder plus per-dimension size binders.
+            // (An identifier dim IS a binder — a concrete sized type with a
+            // named const dim is not spellable here; use an alias or an
+            // inline set. `Name[]` — an iterator type — falls through to the
+            // type-spelling arm below.)
             out->kind = parse::SpecConstraint::K::kArray;
             if (!checkBinder(peek().text, {})) return false;
             out->elem_binder = peek().text;
@@ -2867,8 +2890,13 @@ struct Parser {
             advance();
             return parseDimBinders();
         }
-        if (peek().kind == token::Kind::kIdentifier) {
-            // `T=Primitives` — a type-set name (or a concrete type name).
+        if (peek().kind == token::Kind::kIdentifier
+            && (peekKind(1) == token::Kind::kGt
+                || peekKind(1) == token::Kind::kRShift)) {
+            // `T=Primitives` — a bare type-set name (or a concrete type
+            // name — resolve decides). Any identifier-led spelling with
+            // SUFFIXES (`ClassA^^`, `Vec<int>`, `ClassB[]`) is a type
+            // spelling, handled below.
             out->kind = parse::SpecConstraint::K::kSetName;
             out->set_name = peek().text;
             out->name_tok = pos;
@@ -2880,9 +2908,13 @@ struct Parser {
             out->kind = parse::SpecConstraint::K::kArray;
             return parseDimBinders();
         }
-        if (peek().kind == token::Kind::kLParen) {
+        if (peek().kind == token::Kind::kLParen
+            && (peekKind(1) == token::Kind::kRParen
+                || (peekKind(1) == token::Kind::kIdentifier
+                    && peekKind(2) == token::Kind::kRParen))) {
             // `T=()` / `T=(N)` — any tuple; a lone identifier binds the arity
-            // (slids has no 1-tuples, so it is never an element type).
+            // (slids has no 1-tuples, so it is never an element type). A
+            // multi-slot `(int,int)` is a tuple TYPE spelling, handled below.
             advance();   // (
             out->kind = parse::SpecConstraint::K::kTuple;
             if (peek().kind == token::Kind::kIdentifier) {
@@ -2892,9 +2924,25 @@ struct Parser {
             }
             return expect(token::Kind::kRParen, ")");
         }
-        error("Expected a type set name or a pattern after '=' in the "
-              "template list.");
-        return false;
+        // Everything else is a TYPE SPELLING — `T=int`, `T=int^`,
+        // `T=(int,int)`, `T=Vec<int>`, `T=ClassA^^` — a one-type set (full
+        // specialization).
+        {
+            Declarator d;
+            out->name_tok = pos;
+            if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
+                                 /*allow_qualified=*/false, nullptr, d)) {
+                return false;
+            }
+            out->kind = parse::SpecConstraint::K::kSetName;
+            out->type_spelling = widen::internOrNone(d.type);
+            if (out->type_spelling == widen::kNoType) {
+                error("Expected a type set name or a pattern after '=' in "
+                      "the template list.");
+                return false;
+            }
+            return true;
+        }
     }
 
     std::unique_ptr<parse::Node> parseAliasDecl() {
@@ -4278,17 +4326,44 @@ struct Parser {
                 if (peekKind(q + 1) == token::Kind::kGt) {
                     o = q + 2;
                 } else if (peekKind(q + 1) == token::Kind::kEquals) {
-                    // A SPECIALIZATION constraint — `countof<T=A[N]>(`. The
-                    // constraint holds identifiers, brackets, and parens only,
-                    // so the scan to the closing `>` is bounded; anything else
-                    // is a comparison, not a function shape.
+                    // A SPECIALIZATION constraint — `countof<T=A[N]>(`,
+                    // `is_zero<T=<int|float>>(`. The token set is bounded
+                    // (identifiers / type keywords / brackets / parens /
+                    // set punctuation), angle depth tracks an INLINE set,
+                    // and a `>>` closes two levels; anything outside the
+                    // set is a comparison, not a function shape.
                     int r = q + 2;
-                    while (peekKind(r) == token::Kind::kIdentifier
-                           || peekKind(r) == token::Kind::kLBracket
-                           || peekKind(r) == token::Kind::kRBracket
-                           || peekKind(r) == token::Kind::kLParen
-                           || peekKind(r) == token::Kind::kRParen) r++;
-                    if (peekKind(r) == token::Kind::kGt) o = r + 1;
+                    int adepth = 1;   // the template list's own `<`
+                    bool closed = false;
+                    while (true) {
+                        token::Kind k = peekKind(r);
+                        if (k == token::Kind::kGt) {
+                            r++;
+                            if (--adepth == 0) { closed = true; break; }
+                        } else if (k == token::Kind::kRShift) {
+                            r++;
+                            adepth -= 2;
+                            if (adepth <= 0) { closed = adepth == 0; break; }
+                        } else if (k == token::Kind::kLt) {
+                            adepth++;
+                            r++;
+                        } else if (k == token::Kind::kIdentifier
+                                   || isTypeStart(k)
+                                   || k == token::Kind::kConst
+                                   || k == token::Kind::kLBracket
+                                   || k == token::Kind::kRBracket
+                                   || k == token::Kind::kLParen
+                                   || k == token::Kind::kRParen
+                                   || k == token::Kind::kBitOr
+                                   || k == token::Kind::kBitXor
+                                   || k == token::Kind::kNot
+                                   || k == token::Kind::kComma) {
+                            r++;
+                        } else {
+                            break;
+                        }
+                    }
+                    if (closed) o = r;
                 }
             }
         }

@@ -14,11 +14,6 @@ import dump;
 import string;
 import vector;
 
-/*
-status:
-binary segfaults.
-*/
-
 Container(int a) {
     bool op<(Container^ rhs) {
         return (a < rhs^.a);

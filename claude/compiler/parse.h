@@ -224,17 +224,27 @@ struct TypeSetDecl {
 // spell the pattern and may go unused (canon tmpl_special.sl).
 struct SpecConstraint {
     enum class K {
-        kSetName,   // `T=Primitives` — a type-set name, or a concrete type name
-        kArray,     // `T=A[N]` / `T=[N]` / `T=[N][M]` — depth-exact fixed array
-        kTuple,     // `T=()` / `T=(N)` — any unnamed tuple
+        kSetName,    // `T=Primitives` — a type-set name, or a concrete type name
+        kArray,      // `T=A[N]` / `T=[N]` / `T=[N][M]` — depth-exact fixed array
+        kTuple,      // `T=()` / `T=(N)` — any unnamed tuple
+        kInlineSet,  // `T=<int|float>` / `T=!<...>` — an anonymous type set,
+                     //   the full term grammar; patterns are wildcards here
+                     //   (an inline set BINDS nothing — binders need the
+                     //   direct kArray / kTuple constraint forms)
     };
     K kind = K::kSetName;
-    std::string set_name;                   // kSetName
+    std::string set_name;                   // kSetName: a bare identifier (set
+                                            //   or type name — resolve decides)
+    widen::TypeRef type_spelling = widen::kNoType;  // kSetName: a full TYPE
+                                            //   spelling instead (`T=int`,
+                                            //   `T=int^`, `T=(int,int)`,
+                                            //   `T=Vec<int>`) — a one-type set
     int name_tok = -1;
     std::string elem_binder;                // kArray: optional element-type binder
     int elem_binder_tok = -1;
     std::vector<std::string> dim_binders;   // kArray: one identifier per dimension
     std::string arity_binder;               // kTuple: optional arity binder
+    std::unique_ptr<TypeSetDecl> inline_set;  // kInlineSet: the term list
 };
 
 struct Node {
@@ -700,6 +710,25 @@ struct ClassInfo {
 // element of Tree::tmpl_self_stack (hoisted so TemplateInfo can snapshot it).
 struct TmplSelf { int tmpl_entry; int instance_entry; };
 
+// A RESOLVED type set — the evaluation form of a TypeSetDecl. Membership walks
+// the terms LEFT TO RIGHT: an add-term match puts the type in, a remove-term
+// match takes it out; the complement flag flips the final answer. Referenced
+// sets stay references (kSetRef) and evaluate recursively — declaration order
+// (an alias must precede its use) makes cycles impossible.
+struct TypeSet {
+    struct Term {
+        enum class K { kConcrete, kSetRef, kAnyRef, kAnyIter, kArray, kAnyTuple };
+        K kind = K::kConcrete;
+        bool remove = false;
+        widen::TypeRef type = widen::kNoType;  // kConcrete: canonical (alias-shed,
+                                               //   outer const peeled, buried kept)
+        int set_id = -1;                       // kSetRef: the referenced set's entry
+        int depth = 0;                         // kArray: exact dimension count
+    };
+    bool complement = false;
+    std::vector<Term> terms;
+};
+
 // A registered function TEMPLATE: the pristine definition node plus the resolve-state
 // snapshot needed to re-enter resolution at the definition point when classify demands
 // an instance. Resolve's scope state (frames, live entries, open namespaces,
@@ -750,29 +779,12 @@ struct TemplateInfo {
     std::map<std::vector<widen::TypeRef>, int> instances;  // bound types -> instance entry
     // SPECIALIZED templates (def->spec != null): the resolved constraint target.
     // A kSetName constraint resolves to a type-set entry (spec_set_id) OR a
-    // concrete type (spec_type) — exactly one is set. Filled by
-    // resolveTemplatePatterns, read by classify's arm selection.
+    // concrete type (spec_type) — exactly one is set; a kInlineSet constraint
+    // resolves its terms into spec_inline (no entry — an inline set has no
+    // name). Filled at the snapshot point, read by classify's arm selection.
     int spec_set_id = -1;
     widen::TypeRef spec_type = widen::kNoType;
-};
-
-// A RESOLVED type set — the evaluation form of a TypeSetDecl. Membership walks
-// the terms LEFT TO RIGHT: an add-term match puts the type in, a remove-term
-// match takes it out; the complement flag flips the final answer. Referenced
-// sets stay references (kSetRef) and evaluate recursively — declaration order
-// (an alias must precede its use) makes cycles impossible.
-struct TypeSet {
-    struct Term {
-        enum class K { kConcrete, kSetRef, kAnyRef, kAnyIter, kArray, kAnyTuple };
-        K kind = K::kConcrete;
-        bool remove = false;
-        widen::TypeRef type = widen::kNoType;  // kConcrete: canonical (alias-shed,
-                                               //   outer const peeled, buried kept)
-        int set_id = -1;                       // kSetRef: the referenced set's entry
-        int depth = 0;                         // kArray: exact dimension count
-    };
-    bool complement = false;
-    std::vector<Term> terms;
+    TypeSet spec_inline;
 };
 
 struct Tree {

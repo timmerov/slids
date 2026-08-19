@@ -4,7 +4,7 @@
 
 #include "widen.h"
 
-namespace parse { struct Tree; struct Node; }
+namespace parse { struct Tree; struct Node; struct TypeSet; }
 namespace diagnostic { struct Sink; }
 
 namespace resolve {
@@ -37,11 +37,15 @@ int retargetTemplateByArity(parse::Tree const& tree, int tid,
                             std::size_t nargs);
 
 // TYPE-SET membership: is `t` in the set registered under kTypeSet entry
-// `set_id`? Terms evaluate LEFT TO RIGHT (an add-term match puts the type in,
-// a remove-term match takes it out; the complement flag flips the result).
-// `t` is canonicalized (aliases shed, OUTER const peeled, buried const kept)
-// before the walk. Serves classify's specialization-arm selection.
+// `set_id` — or in a set VALUE (an inline `T=<...>` constraint's resolved
+// terms, held on the TemplateInfo)? Terms evaluate LEFT TO RIGHT (an add-term
+// match puts the type in, a remove-term match takes it out; the complement
+// flag flips the result). `t` is canonicalized (aliases shed, OUTER const
+// peeled, buried const kept) before the walk. Serves classify's
+// specialization-arm selection.
 bool typeInSet(parse::Tree const& tree, widen::TypeRef t, int set_id);
+bool typeInSetValue(parse::Tree const& tree, widen::TypeRef t,
+                    parse::TypeSet const& ts);
 
 // CLASS-template instances minted AFTER resolve (a use inside a function
 // template's body — instantiated on demand from classify) arrive fully resolved

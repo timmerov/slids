@@ -783,6 +783,8 @@ widen::TypeRef canonSetType(widen::TypeRef t) {
 }
 
 bool typeInSetImpl(parse::Tree const& tree, widen::TypeRef t, int set_id);
+bool typeInSetValueImpl(parse::Tree const& tree, widen::TypeRef t,
+                        parse::TypeSet const& ts);
 
 bool typeMatchesSetTerm(parse::Tree const& tree, widen::TypeRef t,
                         parse::TypeSet::Term const& r) {
@@ -807,33 +809,39 @@ bool typeMatchesSetTerm(parse::Tree const& tree, widen::TypeRef t,
     return false;
 }
 
+bool typeInSetValueImpl(parse::Tree const& tree, widen::TypeRef t,
+                        parse::TypeSet const& ts) {
+    t = canonSetType(t);
+    bool in = false;
+    for (auto const& r : ts.terms)
+        if (typeMatchesSetTerm(tree, t, r)) in = !r.remove;
+    return ts.complement ? !in : in;
+}
+
 bool typeInSetImpl(parse::Tree const& tree, widen::TypeRef t, int set_id) {
     auto it = tree.typesets.find(set_id);
     if (it == tree.typesets.end()) return false;
-    t = canonSetType(t);
-    bool in = false;
-    for (auto const& r : it->second.terms)
-        if (typeMatchesSetTerm(tree, t, r)) in = !r.remove;
-    return it->second.complement ? !in : in;
+    return typeInSetValueImpl(tree, t, it->second);
 }
 
-// Resolve a registered type set's TERMS into Tree::typesets. Split from entry
-// registration: at FILE scope the entries register in the alias pre-pass but a
-// term may name a class, which registers later — terms resolve in the
-// alias-validate pass (membership is evaluated by entry id at query time, so
-// term-resolution order across sets does not matter). A bare-identifier term
-// resolves to a SET (kSetRef) or falls through to an ordinary type lookup
-// (kConcrete).
-void resolveTypeSetTerms(parse::Tree& tree, parse::Node& s,
+// Resolve a set declaration's TERMS into a TypeSet. Shared by the named form
+// (resolveTypeSetTerms -> Tree::typesets; split from entry registration
+// because at FILE scope the entries register in the alias pre-pass but a term
+// may name a class, which registers later — terms resolve in the
+// alias-validate pass) and the INLINE `T=<...>` constraint (resolved at the
+// snapshot point into TemplateInfo.spec_inline). Membership is evaluated by
+// entry id at query time, so term-resolution order across sets does not
+// matter. A bare-identifier term resolves to a SET (kSetRef) or falls through
+// to an ordinary type lookup (kConcrete).
+void resolveSetTermsInto(parse::Tree& tree, parse::TypeSetDecl const& decl,
+                         parse::TypeSet& ts, int file_id, int fallback_tok,
                          diagnostic::Sink& diag) {
-    int id = s.resolved_entry_id;
-    if (id < 0 || !s.type_set) return;
-    parse::TypeSet ts;
-    ts.complement = s.type_set->complement;
-    for (parse::SetTerm const& t : s.type_set->terms) {
+    ts.complement = decl.complement;
+    ts.terms.clear();
+    for (parse::SetTerm const& t : decl.terms) {
         parse::TypeSet::Term r;
         r.remove = t.remove;
-        int term_tok = t.tok >= 0 ? t.tok : s.tok;
+        int term_tok = t.tok >= 0 ? t.tok : fallback_tok;
         switch (t.kind) {
             case parse::SetTerm::K::kAnyRef:
                 r.kind = parse::TypeSet::Term::K::kAnyRef;
@@ -861,13 +869,21 @@ void resolveTypeSetTerms(parse::Tree& tree, parse::Node& s,
                 r.kind = parse::TypeSet::Term::K::kConcrete;
                 widen::TypeRef ty = !t.ident.empty()
                     ? widen::internOrNone(t.ident) : t.spelling;
-                resolveDeclType(tree, ty, s.file_id, term_tok, diag);
+                resolveDeclType(tree, ty, file_id, term_tok, diag);
                 r.type = canonSetType(ty);
                 break;
             }
         }
         ts.terms.push_back(r);
     }
+}
+
+void resolveTypeSetTerms(parse::Tree& tree, parse::Node& s,
+                         diagnostic::Sink& diag) {
+    int id = s.resolved_entry_id;
+    if (id < 0 || !s.type_set) return;
+    parse::TypeSet ts;
+    resolveSetTermsInto(tree, *s.type_set, ts, s.file_id, s.tok, diag);
     tree.typesets[id] = std::move(ts);
 }
 
@@ -5417,6 +5433,36 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 
 void collectBodyNames(parse::Node const& n, std::set<std::string>& out);
 
+// Do two template heads carry the SAME specialization constraint (both none,
+// or same kind + names + binders)? Guards the cross-TU decl/def merge — a
+// constrained definition must not silently complete an unconstrained header
+// declaration (or a differently-constrained one).
+bool specMatches(parse::SpecConstraint const* a, parse::SpecConstraint const* b) {
+    if (!a || !b) return !a && !b;
+    if (a->kind != b->kind
+        || a->set_name != b->set_name
+        || a->type_spelling != b->type_spelling
+        || a->elem_binder != b->elem_binder
+        || a->dim_binders != b->dim_binders
+        || a->arity_binder != b->arity_binder) return false;
+    if (a->kind != parse::SpecConstraint::K::kInlineSet) return true;
+    // Inline sets compare structurally, term by term.
+    if (!a->inline_set || !b->inline_set)
+        return !a->inline_set && !b->inline_set;
+    parse::TypeSetDecl const& x = *a->inline_set;
+    parse::TypeSetDecl const& y = *b->inline_set;
+    if (x.complement != y.complement || x.terms.size() != y.terms.size())
+        return false;
+    for (std::size_t i = 0; i < x.terms.size(); i++) {
+        parse::SetTerm const& s = x.terms[i];
+        parse::SetTerm const& t = y.terms[i];
+        if (s.kind != t.kind || s.remove != t.remove || s.ident != t.ident
+            || s.spelling != t.spelling || s.array_depth != t.array_depth)
+            return false;
+    }
+    return true;
+}
+
 void reportTemplateNameClash(diagnostic::Sink& diag, parse::Node const& node,
                              parse::Entry const& prev) {
     diagnostic::report(diag, {node.file_id, node.name_tok,
@@ -5539,7 +5585,8 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
             first_header_decl = (int)id0;
         if (c_header_decl && def_here
             && node.type_params == pit->second.def->type_params
-            && node.params.size() == pit->second.def->params.size()) {
+            && node.params.size() == pit->second.def->params.size()
+            && specMatches(node.spec.get(), pit->second.def->spec.get())) {
             merge_target = (int)id0;
             break;
         }
@@ -5547,14 +5594,16 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
         int lo, hi;
         templateArityRange(tree, (int)id0, lo, hi);
         if (!(this_hi < lo || hi < this_lo)) {
-            // CONSTRAINED siblings (both carry `T=`) may SHARE an arity — the
-            // call's deduced T selects the arm by set membership, and a T
-            // matching more than one arm is a call-site ambiguity error. Only
-            // an overlap where either side is unconstrained clashes.
-            bool both_spec = node.spec != nullptr
-                && pit != tree.templates.end() && pit->second.def
-                && pit->second.def->spec != nullptr;
-            if (!both_spec) overlap_clash = (int)id0;
+            // Same-arity siblings coexist when EITHER carries `T=`: two
+            // constrained arms select by membership, and a constrained arm
+            // plus ONE unconstrained sibling is the sanctioned catch-all mix
+            // (the specialized arm matches first; canon tmpl_special.sl).
+            // Only two UNCONSTRAINED siblings still clash — nothing would
+            // ever select between them.
+            bool either_spec = node.spec != nullptr
+                || (pit != tree.templates.end() && pit->second.def
+                    && pit->second.def->spec != nullptr);
+            if (!either_spec) overlap_clash = (int)id0;
         }
     }
     if (merge_target >= 0) {
@@ -5709,12 +5758,30 @@ void resolveTemplatePatterns(parse::Tree& tree, parse::Node& node, int entry_id,
 // order holds here, so a set declared above the template is live.
 void resolveSpecConstraint(parse::Tree& tree, parse::Node& node,
                            diagnostic::Sink& diag) {
-    if (!node.spec || node.spec->kind != parse::SpecConstraint::K::kSetName)
-        return;
+    if (!node.spec) return;
     auto ti = tree.templates.find(node.resolved_entry_id);
     if (ti == tree.templates.end()) return;
+    // An INLINE set (`T=<int|float>`): resolve the terms into the template's
+    // own TypeSet — anonymous, no entry.
+    if (node.spec->kind == parse::SpecConstraint::K::kInlineSet) {
+        if (node.spec->inline_set) {
+            resolveSetTermsInto(tree, *node.spec->inline_set,
+                                ti->second.spec_inline, node.file_id,
+                                node.name_tok, diag);
+        }
+        return;
+    }
+    if (node.spec->kind != parse::SpecConstraint::K::kSetName) return;
     int spec_tok = node.spec->name_tok >= 0 ? node.spec->name_tok
                                             : node.name_tok;
+    // A full TYPE SPELLING (`T=int`, `T=int^`, `T=(int,int)`) — a one-type
+    // set; no name to look up.
+    if (node.spec->type_spelling != widen::kNoType) {
+        widen::TypeRef ty = node.spec->type_spelling;
+        resolveDeclType(tree, ty, node.file_id, spec_tok, diag);
+        ti->second.spec_type = canonSetType(ty);
+        return;
+    }
     int rid = resolveName(tree, node.spec->set_name);
     if (rid >= 0 && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
         ti->second.spec_set_id = rid;
@@ -7560,9 +7627,13 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
 
 }  // namespace
 
-// The header-declared membership entry point (classify's arm selection).
+// The header-declared membership entry points (classify's arm selection).
 bool typeInSet(parse::Tree const& tree, widen::TypeRef t, int set_id) {
     return typeInSetImpl(tree, t, set_id);
+}
+bool typeInSetValue(parse::Tree const& tree, widen::TypeRef t,
+                    parse::TypeSet const& ts) {
+    return typeInSetValueImpl(tree, t, ts);
 }
 
 // Find a class def node named `name` directly among `nodes` (the first opening).

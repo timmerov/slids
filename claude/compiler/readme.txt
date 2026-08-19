@@ -1067,22 +1067,41 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   recursively; concrete members canonicalize exactly like T bindings —
   aliases shed, OUTER const peeled, buried const kept (canonSetType).
   A SPECIALIZED template (`countof<T=...>`, Node::spec) constrains its ONE
-  type parameter: a set name (or a concrete type name — a one-type set is a
-  full specialization; resolved at snapshotTemplate, where statement order
-  makes the sets above the template live), or a pattern with BINDERS
-  (`A[N]`, `[N]`, `[N][M]`, `()`, `(N)`). Binders bind at instantiation from
+  type parameter: a set name — or a concrete TYPE, by bare name or by FULL
+  SPELLING (`T=int`, `T=int^`, `T=(int,int)`, `T=int[]`, `T=Box<int>` —
+  SpecConstraint.type_spelling; a bare identifier resolves set-first) — a
+  one-type set, i.e. full specialization; resolved at snapshotTemplate,
+  where statement order makes the sets above the template live; an INLINE
+  set (`T=<int|float>` /
+  `T=!<...>` — the full term grammar, anonymous: terms resolve at the same
+  snapshot point into TemplateInfo.spec_inline, no entry minted; patterns
+  inside are WILDCARDS — an inline set binds nothing; the `...>>` tail
+  splits via splitRShift exactly like a nested type-arg group's), or a
+  pattern with BINDERS (`A[N]`, `[N]`, `[N][M]`, `()`, `(N)`). Binders bind at instantiation from
   the matched T: the element type as a transparent alias, each dimension —
   and a tuple's arity — as an intptr CONST entry (pre-captured literal_text,
   so constfold substitutes it into dims and body like any named constant). A
   param spelled through the binders (`(A arg[N])`) IS the constrained T: its
   PATTERN is the bare-T marker and instantiation substitutes the bound type
-  into the clone's param directly (no per-instance dim bake). Constrained
-  SIBLINGS may share an arity (the registration overlap check exempts the
-  both-constrained pair); classifyTemplateCall deduces T once, filters arms
-  by arity (specializationArms), then by membership (constraintAdmits):
-  zero matches = "No specialization", several = "Ambiguous specialization" —
-  CALL-site checks; there is no declaration-time disjointness pass and no
-  catch-all (an unconstrained same-arity sibling still clashes). An UNUSED
+  into the clone's param directly (no per-instance dim bake). Same-arity
+  SIBLINGS coexist when EITHER carries `T=` (the registration overlap check
+  clashes only two UNCONSTRAINED siblings — at most one CATCH-ALL per
+  range); the cross-TU decl/def merge additionally requires specMatches so
+  a constrained definition never completes an unconstrained (or different)
+  header declaration. Selection is PER ARM at classifyTemplateCall: each
+  constrained arity-fitting arm (specializationArms) deduces T against ITS
+  OWN patterns with a scratch sink (arms may differ in parameter shape),
+  membership (constraintAdmits) filters the successful binds, and exactly
+  one must survive. None falls back to the family's unconstrained catch-all
+  (catchAllSibling), bound against its own patterns with the real sink —
+  full pattern language there, canon: specialized matches first. Several =
+  "Ambiguous specialization" — a catch-all NEVER rescues an ambiguity, and
+  an exact-type arm gets NO priority over a set containing it (the canon
+  error<T=Integers>/error<T=int> example). With no catch-all: a bound-but-
+  unadmitted T reports "No specialization"; nothing deducing at all re-runs
+  the first arm's bind on the real sink so the pattern-mismatch /
+  conflicting-bindings diagnostic surfaces. An EXPLICIT type-list binds
+  once (all arms are single-T) and selects by the same membership. An UNUSED
   element-type binder errors at registration — a typo'd type name must not
   become a silent wildcard; size binders are required by the pattern's
   spelling and may go unused. Free functions only: a method template's `T=`

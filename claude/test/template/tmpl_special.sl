@@ -99,6 +99,12 @@ interesting side effect with string literals:
     five = sizeof("hello");
     six = countof("hello");
 
+inline type sets:
+
+    bool is_zero<T=<int|float>>(T arg) {
+        return (arg == (T=0));
+    }
+
 an unused optional-type is a compile error.
 
     /* compile error: A2 is not used. */
@@ -132,11 +138,19 @@ example usage:
     n = countof(carr);
     n = countof(carr[0]);
 
-ambiguous specialization is currently a compile error.
-this decision may be revisited in the future to allow a catch-all
-template with no specialization to co-exist with specialized templates.
-in that future, specialized templates would match before the
-non-specialized template.
+ambiguous specialized templates is a compile error.
+example:
+
+    void error<T=Integers>(T arg) { }
+    void error<T=int>(T arg) { }
+
+mixing specialized and non-specialized templates.
+the specialized templates may not be ambiguous with each other.
+the specialized template is matched before the non-specialized template.
+example:
+
+    T mixed<T=int>(T arg) { return 0; }
+    T mixed<T>(T arg) { return arg; }
 
 currently, explicit class types must match exactly.
 a derived type does not match a specialization for its base.
@@ -158,14 +172,33 @@ never matches `[N]`), `()` / `(N)` any unnamed tuple (slids has no 1-tuples,
 so a lone identifier in parens is always an arity, never an element type).
 
 specialization: `name<T=constraint>` arms share a name and an arity —
-registration permits the overlap only when BOTH siblings are constrained.
-the call deduces T (the bare-T binding), then membership selects the arm:
-no match is "No specialization", more than one is "Ambiguous specialization"
-(a CALL-site check; there is no declaration-time disjointness pass). an
-unconstrained same-arity sibling still clashes (no catch-all yet). a
-`T=Name` constraint may also name a concrete type — a one-type set is a
-full specialization. arity selection and plain-beats-template are unchanged
-upstream; a different-arity unconstrained sibling coexists as before.
+registration permits the overlap when EITHER sibling is constrained (only
+two unconstrained siblings still clash: at most one catch-all per range).
+selection is PER ARM at the call: each constrained arm deduces T against
+its OWN patterns (failures muted — arms may differ in shape), membership
+filters the successful binds, and exactly one arm must survive: none falls
+back to the family's unconstrained CATCH-ALL (bound against its own
+patterns, full pattern language — canon: specialized matches first), more
+than one is "Ambiguous specialization" — a catch-all NEVER rescues an
+ambiguity, and an exact-type arm gets NO priority over a set containing it
+(the canon error<T=Integers>/error<T=int> example). with no catch-all, no
+match is "No specialization"; if nothing even deduces, the pattern-mismatch
+(or conflicting-bindings) diagnostic surfaces instead. a constraint may
+also be a full TYPE SPELLING — `T=int`, `T=int^`, `T=(int,int)`, `T=int[]`,
+`T=Box<int>` — a one-type set (full specialization); a bare identifier
+still resolves set-first. arity selection and plain-beats-template are
+unchanged upstream; a different-arity unconstrained sibling coexists as
+before.
+
+inline typesets: `T=<int|float>` (and `T=!<...>`) is an ANONYMOUS set —
+the full term grammar applies (concrete types, named sets, patterns), the
+terms resolve at the same point a `T=Name` lookup does, and nothing enters
+the symbol table. patterns inside are WILDCARDS: an inline set binds
+nothing — binders need the direct `T=A[N]` / `T=(N)` forms. the `...>>`
+tail splits like a nested template type-arg's. note a float LITERAL binds
+`float` (the typeless-decl type — measured; the reference's "3.14 is
+float64" line is stale), so `is_zero(3.5)` lands in `<int|float>` while a
+declared float64 needs its own arm.
 
 binders bind at instantiation from the matched T: the element type as a
 transparent alias, each dimension — and a tuple's arity — as an intptr
@@ -277,6 +310,43 @@ intptr pick2<T=Primitives>(T a, T b) { return 1; }
 intptr pick2<T=Classes>(T a, T b) { return 2; }
 intptr pick2<T=Primitives>(T v) { return 3; }
 
+/* INLINE typesets (canon lines 102-106): `T=<terms>` is an anonymous set —
+   the full term grammar, nothing registered. Patterns inside are wildcards
+   (an inline set binds nothing). `!<...>` complements. */
+bool is_zero<T=<int|float>>(T arg) {
+    return (arg == (T=0));
+}
+intptr inl<T=<int|char>>(T v) { return 1; }
+intptr inl<T=<float|bool>>(T v) { return 2; }
+intptr noz<T=<int|float>>(T v) { return 1; }
+intptr noz<T=!<int|float>>(T v) { return 2; }
+intptr mix<T=<Floats|[Q]>>(T v) { return 1; }
+intptr mix<T=!<Floats|[Q]>>(T v) { return 2; }
+
+/* MIXED specialized + non-specialized (canon lines 147-153): the specialized
+   arm matches first; the unconstrained CATCH-ALL takes what no arm admits.
+   each constrained arm deduces against its OWN patterns, so the arms — and
+   the catch-all — may differ in shape. */
+T mixed<T=int>(T arg) { return 0; }
+T mixed<T>(T arg) { return arg; }
+
+intptr shp<T=int>((T,T)^ x) { return 1; }
+intptr shp<T=float>(T x) { return 2; }
+intptr shp<T>(T x) { return 3; }
+
+/* concrete TYPE SPELLINGS as constraints — each a one-type set. */
+intptr tsp<T=int^>(T v) { return 1; }
+intptr tsp<T=(int,int)>(T v) { return 2; }
+intptr tsp<T>(T v) { return 3; }
+intptr tbx<T=Box<int>>(T v) { return 1; }
+intptr tbx<T>(T v) { return 2; }
+intptr tit<T=int[]>(T v) { return 1; }
+intptr tit<T>(T v) { return 2; }
+
+/* the catch-all keeps its own pattern language. */
+intptr caf<T=char>(T v) { return 1; }
+intptr caf<T>(T^ p) { return 2; }
+
 /* the canon example class; size() is const so the convention's (const T)^
    receiver can call it. */
 Thing(int a) {
@@ -382,6 +452,69 @@ int32 main() {
     println(String + "tiny1   = " + tiny(i8));
     println(String + "tiny2   = " + tiny(3));
 
+    /* inline typesets: the canon example (a float LITERAL binds `float`, the
+       typeless-decl type), arm selection, the complement, a named set and a
+       wildcard pattern inside an inline set, and a body-scope inline arm. */
+    int zero = 0;
+    float fz = 0.0;
+    float f25 = 2.5;
+    float64 d35 = 3.5;
+    println(String + "iz1     = " + is_zero(zero));
+    println(String + "iz2     = " + is_zero(x));
+    println(String + "iz3     = " + is_zero(fz));
+    println(String + "iz4     = " + is_zero(f25));
+    println(String + "inl1    = " + inl(x));
+    println(String + "inl2    = " + inl(c));
+    println(String + "inl3    = " + inl(f25));
+    println(String + "inl4    = " + inl(true));
+    println(String + "noz1    = " + noz(x));
+    println(String + "noz2    = " + noz(true));
+    println(String + "noz3    = " + noz(3.5));
+    println(String + "noz4    = " + noz(d35));
+    println(String + "mix1    = " + mix(f25));
+    println(String + "mix2    = " + mix(iarr));
+    println(String + "mix3    = " + mix(d35));
+    println(String + "mix4    = " + mix(x));
+    intptr insm<T=<int8|uint8>>(T v) { return 1; }
+    intptr insm<T=!<int8|uint8>>(T v) { return 2; }
+    println(String + "insm1   = " + insm(i8));
+    println(String + "insm2   = " + insm(x));
+
+    /* mixed specialized + catch-all (canon): specialized matches first,
+       inferred and explicit. */
+    println(String + "mx1     = " + mixed(5));
+    println(String + "mx2     = " + mixed(f25));
+    println(String + "mx3     = " + mixed(true));
+    println(String + "mx4     = " + mixed<float>(f25));
+    println(String + "mx5     = " + mixed<int>(7));
+
+    /* per-arm deduction across DIFFERENT shapes, catch-all included. */
+    (int, int) tt = (1, 2);
+    println(String + "shp1    = " + shp(^tt));
+    println(String + "shp2    = " + shp(f25));
+    println(String + "shp3    = " + shp(true));
+    println(String + "shp4    = " + shp<int>(^tt));
+
+    /* type-spelling constraints: pointer, tuple, template instance,
+       iterator; the catch-all takes the rest. */
+    println(String + "tsp1    = " + tsp(p));
+    println(String + "tsp2    = " + tsp((1, 2)));
+    println(String + "tsp3    = " + tsp(c));
+    println(String + "tbx1    = " + tbx(bi));
+    println(String + "tbx2    = " + tbx(bf));
+    println(String + "tit1    = " + tit(it));
+    println(String + "tit2    = " + tit(x));
+
+    /* the catch-all's own composite pattern. */
+    println(String + "caf1    = " + caf(c));
+    println(String + "caf2    = " + caf(^x));
+
+    /* a body-scope mixed pair with a primitive-keyword constraint. */
+    intptr bmx<T=int>(T v) { return 1; }
+    intptr bmx<T>(T v) { return 2; }
+    println(String + "bmx1    = " + bmx(x));
+    println(String + "bmx2    = " + bmx(f25));
+
     return 0;
 }
 
@@ -418,9 +551,45 @@ int32 main() {
 //    Primitives bad = 0;
 //}
 
-/* an unconstrained SAME-arity sibling still clashes (no catch-all yet). */
+/* TWO unconstrained same-arity siblings still clash — at most one catch-all
+   per overlapping range. */
 //-EXPECT-ERROR: may not share its name
-//intptr countof<T>(T solo) { return 0; }
+//intptr uncon<T>(T solo) { return 0; }
+//intptr uncon<T>(T dup) { return 1; }
+
+/* the canon ambiguity example: int matches both Integers and int — an exact
+   type gets NO priority over a set containing it. */
+//-EXPECT-ERROR: Ambiguous specialization
+//void error<T=Integers>(T arg) { }
+//void error<T=int>(T arg) { }
+//void poke_error() {
+//    error(5);
+//}
+
+/* a catch-all never rescues an ambiguity. */
+//-EXPECT-ERROR: Ambiguous specialization
+//intptr resq<T=SignedIntegers>(T v) { return 1; }
+//intptr resq<T=int>(T v) { return 2; }
+//intptr resq<T>(T v) { return 3; }
+//void poke_resq() {
+//    intptr n = resq(5);
+//    n = n;
+//}
+
+/* with no catch-all, a shape no arm deduces reports the pattern mismatch. */
+//-EXPECT-ERROR: does not match the template pattern
+//intptr strict<T=int>((T,T)^ x) { return 1; }
+//void poke_strict() {
+//    intptr n = strict(true);
+//    n = n;
+//}
+
+/* a conflicting bare-T binding surfaces through the family path. */
+//-EXPECT-ERROR: Conflicting bindings
+//void poke_conflict() {
+//    intptr n = pick2(1, 2.5);
+//    n = n;
+//}
 
 /* the constraint owns its template list. */
 //-EXPECT-ERROR: single-parameter template list
@@ -437,6 +606,24 @@ int32 main() {
 /* binders are distinct. */
 //-EXPECT-ERROR: Duplicate binder name
 //intptr dupbind<T=A[N][N]>(A arg) { return N; }
+
+/* an inline set overlapping a named one is the same call-site ambiguity. */
+//-EXPECT-ERROR: Ambiguous specialization
+//intptr iamb<T=<int|bool>>(T v) { return 1; }
+//intptr iamb<T=Integers>(T v) { return 2; }
+//void poke_iamb() {
+//    intptr n = iamb(5);
+//    n = n;
+//}
+
+/* no arm admits a float64 through the canon inline pair. */
+//-EXPECT-ERROR: No specialization
+//intptr izonly<T=<int|float>>(T v) { return 1; }
+//void poke_izonly() {
+//    float64 d = 1.5;
+//    intptr n = izonly(d);
+//    n = n;
+//}
 
 /* a type set binds no type parameters. */
 //-EXPECT-ERROR: cannot have a template list
