@@ -26,10 +26,29 @@ Container(int a) {
 }
 alias Containers = Vector<Container>;
 
+alias SignedIntegers = <int|int8|int16|int32|int64>;
+alias UnsignedIntegers = <uint|uint8|uint16|uint32|uint64>;
+alias Integers = <SignedIntegers|UnsignedIntegers>;
+alias Floats = <float|float32|float64>;
+alias Numbers = <Integers|Floats>;
+alias Pointers = <^|[]>;
+alias Primitives = <bool|char|intptr|Numbers|Pointers>;
+alias Arrays = <[N]>;
+alias Tuples = <()>;
+alias Classes = !<Arrays|Tuples|Primitives>;
+
+intptr countof<T=[N]>(T arg) {
+    return N;
+}
+
+intptr countof<T=Classes>(T arg) {
+    return arg.size();
+}
+
 void sort<T>(mutable T container) {
 
     /* this doesn't work for non-class types like int[N]. */
-    sz = container.size();
+    sz = countof<T>(container);
     subsort(0, sz-1);
 
     void subsort(intptr first, intptr last) {
@@ -72,7 +91,6 @@ int32 main() {
 
     //print("Hello, World!");
 
-    /*
     int iarr[2] = (2, 1);
     sort(iarr);
     //dump(#iarr[0]);
@@ -82,7 +100,6 @@ int32 main() {
     float farr[2] = (4.1, 3.2);
     sort(farr);
     println(String + farr[0] + " < " + farr[1]);
-    */
 
     Containers carr;
     carr.resize(2);

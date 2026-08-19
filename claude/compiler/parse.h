@@ -184,6 +184,59 @@ enum class Kind {
     kParam,        // function parameter; name = ident, return_type = declared type
 };
 
+// One `|`-term of a TYPE SET (`alias Name = <a|b|!c>;`) in parse (spelling) form.
+// Resolve turns the list into a Tree::typesets TypeSet (names looked up, type
+// spellings resolved); membership is then tested left to right.
+struct SetTerm {
+    enum class K {
+        kType,      // a type spelling (`int`, `int^`, `(int,int)`, `Vec<int>`) or a
+                    //   bare identifier (a set name or a class/alias name — resolve
+                    //   decides which)
+        kAnyRef,    // `^`   — any reference/pointer type (any pointee, any depth)
+        kAnyIter,   // `[]`  — any iterator type
+        kArray,     // `[N]` / `[N][M]` — a fixed-size array of EXACTLY array_depth
+                    //   dimensions (depth-exact: a 2-D array does not match `[N]`).
+                    //   The bracket identifiers are wildcards here; they BIND only
+                    //   in a template's `T=` constraint (SpecConstraint).
+        kAnyTuple,  // `()` / `(N)` — any unnamed tuple (slids has no 1-tuples, so a
+                    //   lone identifier in parens is always an arity wildcard)
+    };
+    K kind = K::kType;
+    bool remove = false;            // `|!term` — a match REMOVES (sets are built L2R)
+    std::string ident;              // kType: bare-identifier element; else empty
+    widen::TypeRef spelling = widen::kNoType;  // kType: full type spelling otherwise
+    int array_depth = 0;            // kArray: number of `[..]` groups
+    int tok = -1;
+};
+
+// The `= <...>` / `= !<...>` payload of a TYPE-SET alias declaration.
+struct TypeSetDecl {
+    bool complement = false;        // leading `!` — matches everything EXCEPT members
+    std::vector<SetTerm> terms;
+};
+
+// A function template's SPECIALIZATION constraint (`countof<T=...>`). The
+// constraint restricts which deduced T selects this arm, and its fresh
+// identifiers BIND at instantiation: an array pattern's element type (elem_binder,
+// a type) and per-dimension extents (dim_binders, compile-time intptr consts);
+// a tuple pattern's arity (arity_binder, an intptr const). Only an unused
+// ELEMENT-TYPE binder is an error — a size binder is syntactically required to
+// spell the pattern and may go unused (canon tmpl_special.sl).
+struct SpecConstraint {
+    enum class K {
+        kSetName,   // `T=Primitives` — a type-set name, or a concrete type name
+        kArray,     // `T=A[N]` / `T=[N]` / `T=[N][M]` — depth-exact fixed array
+        kTuple,     // `T=()` / `T=(N)` — any unnamed tuple
+    };
+    K kind = K::kSetName;
+    std::string set_name;                   // kSetName
+    int name_tok = -1;
+    std::string elem_binder;                // kArray: optional element-type binder
+    int elem_binder_tok = -1;
+    std::vector<std::string> dim_binders;   // kArray: one identifier per dimension
+    std::string arity_binder;               // kTuple: optional arity binder
+};
+
 struct Node {
     Kind kind;
     std::string name;            // function name, callee name, variable name
@@ -408,6 +461,11 @@ struct Node {
     std::vector<int> type_param_toks;            // token per template-list name (carets)
     std::vector<widen::TypeRef> tmpl_args;
     std::vector<int> tmpl_arg_toks;
+    // TYPE-SET SPECIALIZATION. On a kAliasDecl, type_set holds a `= <...>` set
+    // payload (the node then declares a type SET, not a type). On a kFunctionDef
+    // template, spec holds the `<T=...>` constraint. Null on every other node.
+    std::unique_ptr<TypeSetDecl> type_set;
+    std::unique_ptr<SpecConstraint> spec;
     std::vector<widen::TypeRef> param_types;     // kCallStmt/kCallExpr: classify-cached resolved fn's param types
     // A NESTED function (kFunctionDef in a body) and each call to it carry the
     // entry ids of the enclosing-function locals/params it captures — passed
@@ -452,6 +510,9 @@ enum class EntryKind {
                    // (not stack) storage. slids_type = declared/inferred type;
                    // literal_text/literal_kind carry the folded static initializer.
     kAlias,        // type alias; slids_type = target spelling (may be another alias)
+    kTypeSet,      // a TYPE SET (`alias Name = <type-list>;`) — a specialization
+                   // constraint, NOT a type (using one in a type position errors).
+                   // The resolved term list lives in Tree::typesets[entry id].
     kNamespace,    // namespace name; ns_frame_id identifies its member set
     kClass,        // class name; a type (slids_type = its kSlid) AND a namespace
                    // (ns_frame_id holds its member aliases/consts/enums).
@@ -687,6 +748,31 @@ struct TemplateInfo {
     // rebind to that flavor when classify re-enters here.
     std::vector<TmplSelf> tmpl_self_stack;
     std::map<std::vector<widen::TypeRef>, int> instances;  // bound types -> instance entry
+    // SPECIALIZED templates (def->spec != null): the resolved constraint target.
+    // A kSetName constraint resolves to a type-set entry (spec_set_id) OR a
+    // concrete type (spec_type) — exactly one is set. Filled by
+    // resolveTemplatePatterns, read by classify's arm selection.
+    int spec_set_id = -1;
+    widen::TypeRef spec_type = widen::kNoType;
+};
+
+// A RESOLVED type set — the evaluation form of a TypeSetDecl. Membership walks
+// the terms LEFT TO RIGHT: an add-term match puts the type in, a remove-term
+// match takes it out; the complement flag flips the final answer. Referenced
+// sets stay references (kSetRef) and evaluate recursively — declaration order
+// (an alias must precede its use) makes cycles impossible.
+struct TypeSet {
+    struct Term {
+        enum class K { kConcrete, kSetRef, kAnyRef, kAnyIter, kArray, kAnyTuple };
+        K kind = K::kConcrete;
+        bool remove = false;
+        widen::TypeRef type = widen::kNoType;  // kConcrete: canonical (alias-shed,
+                                               //   outer const peeled, buried kept)
+        int set_id = -1;                       // kSetRef: the referenced set's entry
+        int depth = 0;                         // kArray: exact dimension count
+    };
+    bool complement = false;
+    std::vector<Term> terms;
 };
 
 struct Tree {
@@ -699,6 +785,9 @@ struct Tree {
     // Function templates, keyed by the template's entry id. Filled at resolve
     // (registration + snapshot); consumed by classify's on-demand instantiation.
     std::map<int, TemplateInfo> templates;
+    // Type sets, keyed by their kTypeSet entry id. Filled at registration
+    // (terms resolved eagerly, in declaration order); read by membership tests.
+    std::map<int, TypeSet> typesets;
     // Instance kFunctionDef nodes minted during classify's walk, each waiting to be
     // spliced into its host list once the walk is over. Spliced right AFTER the
     // template's own definition node (`after`) — never at the list's end, where a

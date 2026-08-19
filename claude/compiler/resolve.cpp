@@ -214,6 +214,7 @@ void requireKnownType(parse::Tree const& tree, widen::TypeRef t,
                 : tree.entries[id].kind == parse::EntryKind::kFunction  ? "function"
                 : tree.entries[id].kind == parse::EntryKind::kConst     ? "constant"
                 : tree.entries[id].kind == parse::EntryKind::kLocalVar  ? "variable"
+                : tree.entries[id].kind == parse::EntryKind::kTypeSet   ? "type set"
                 : nullptr;
             if (what) {
                 diagnostic::report(diag, {file_id, tok,
@@ -685,11 +686,13 @@ void resolveTmplArgs(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
 // registerDeclarator (reuse-reject), resolveAssignTarget, and resolveCallTarget.
 void resolveTemplatePatterns(parse::Tree& tree, parse::Node& node, int entry_id,
                              diagnostic::Sink& diag);
-void snapshotTemplate(parse::Tree& tree, parse::Node& node);
+void snapshotTemplate(parse::Tree& tree, parse::Node& node,
+                      diagnostic::Sink& diag);
 
 char const* entryKindNoun(parse::Entry const& e) {
     switch (e.kind) {
         case parse::EntryKind::kAlias:     return "type";
+        case parse::EntryKind::kTypeSet:   return "type set";
         case parse::EntryKind::kConst:     return "constant";
         case parse::EntryKind::kFunction:  return "function";
         case parse::EntryKind::kClass:     return "class";
@@ -768,10 +771,134 @@ int registerDeclarator(parse::Tree& tree, DeclInfo const& d, BindMode mode,
     return id;
 }
 
+// The canonical form a TYPE SET stores and tests against: aliases shed (buried
+// const KEPT — the binding canon), the OUTER const peeled (a value binding is a
+// mutable copy). Registration canonicalizes each concrete term; membership
+// canonicalizes the probe — both sides meet on interned handles.
+widen::TypeRef canonSetType(widen::TypeRef t) {
+    t = widen::deepAliasStrip(t);
+    while (widen::form(t) == widen::Type::Form::kConst)
+        t = widen::get(t).underlying;
+    return t;
+}
+
+bool typeInSetImpl(parse::Tree const& tree, widen::TypeRef t, int set_id);
+
+bool typeMatchesSetTerm(parse::Tree const& tree, widen::TypeRef t,
+                        parse::TypeSet::Term const& r) {
+    using F = widen::Type::Form;
+    switch (r.kind) {
+        case parse::TypeSet::Term::K::kConcrete:
+            return t == r.type;
+        case parse::TypeSet::Term::K::kSetRef:
+            return typeInSetImpl(tree, t, r.set_id);
+        case parse::TypeSet::Term::K::kAnyRef:
+            return widen::form(t) == F::kPointer;
+        case parse::TypeSet::Term::K::kAnyIter:
+            return widen::form(t) == F::kIterator;
+        case parse::TypeSet::Term::K::kArray:
+            // DEPTH-EXACT (canon tmpl_special.sl): `[N]` matches 1-D arrays
+            // only — a 2-D array reaches `[N][M]`, never `[N]`.
+            return widen::form(t) == F::kArray
+                && (int)widen::get(t).dims.size() == r.depth;
+        case parse::TypeSet::Term::K::kAnyTuple:
+            return widen::form(t) == F::kTuple;
+    }
+    return false;
+}
+
+bool typeInSetImpl(parse::Tree const& tree, widen::TypeRef t, int set_id) {
+    auto it = tree.typesets.find(set_id);
+    if (it == tree.typesets.end()) return false;
+    t = canonSetType(t);
+    bool in = false;
+    for (auto const& r : it->second.terms)
+        if (typeMatchesSetTerm(tree, t, r)) in = !r.remove;
+    return it->second.complement ? !in : in;
+}
+
+// Resolve a registered type set's TERMS into Tree::typesets. Split from entry
+// registration: at FILE scope the entries register in the alias pre-pass but a
+// term may name a class, which registers later — terms resolve in the
+// alias-validate pass (membership is evaluated by entry id at query time, so
+// term-resolution order across sets does not matter). A bare-identifier term
+// resolves to a SET (kSetRef) or falls through to an ordinary type lookup
+// (kConcrete).
+void resolveTypeSetTerms(parse::Tree& tree, parse::Node& s,
+                         diagnostic::Sink& diag) {
+    int id = s.resolved_entry_id;
+    if (id < 0 || !s.type_set) return;
+    parse::TypeSet ts;
+    ts.complement = s.type_set->complement;
+    for (parse::SetTerm const& t : s.type_set->terms) {
+        parse::TypeSet::Term r;
+        r.remove = t.remove;
+        int term_tok = t.tok >= 0 ? t.tok : s.tok;
+        switch (t.kind) {
+            case parse::SetTerm::K::kAnyRef:
+                r.kind = parse::TypeSet::Term::K::kAnyRef;
+                break;
+            case parse::SetTerm::K::kAnyIter:
+                r.kind = parse::TypeSet::Term::K::kAnyIter;
+                break;
+            case parse::SetTerm::K::kArray:
+                r.kind = parse::TypeSet::Term::K::kArray;
+                r.depth = t.array_depth;
+                break;
+            case parse::SetTerm::K::kAnyTuple:
+                r.kind = parse::TypeSet::Term::K::kAnyTuple;
+                break;
+            case parse::SetTerm::K::kType: {
+                if (!t.ident.empty()) {
+                    int rid = resolveName(tree, t.ident);
+                    if (rid >= 0
+                        && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
+                        r.kind = parse::TypeSet::Term::K::kSetRef;
+                        r.set_id = rid;
+                        break;
+                    }
+                }
+                r.kind = parse::TypeSet::Term::K::kConcrete;
+                widen::TypeRef ty = !t.ident.empty()
+                    ? widen::internOrNone(t.ident) : t.spelling;
+                resolveDeclType(tree, ty, s.file_id, term_tok, diag);
+                r.type = canonSetType(ty);
+                break;
+            }
+        }
+        ts.terms.push_back(r);
+    }
+    tree.typesets[id] = std::move(ts);
+}
+
+// Register `alias Name = <type-list>;` as a kTypeSet ENTRY. `resolve_terms`
+// resolves the term list immediately (a body-scope set, where every name is
+// already live); the file-scope pre-pass passes false and resolves terms in
+// the alias-validate pass, after classes register.
+void registerTypeSet(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag,
+                     bool resolve_terms) {
+    bool reused;
+    DeclInfo d;
+    d.name = s.name;
+    d.file_id = s.file_id;
+    d.name_tok = s.name_tok;
+    d.kind = parse::EntryKind::kTypeSet;
+    d.track_body_local = false;
+    s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare, reused,
+                                             diag);
+    if (resolve_terms) resolveTypeSetTerms(tree, s, diag);
+}
+
 // Register `alias Name = Type;` as a kAlias entry in the current frame. An alias
 // TEMPLATE (`alias Ref<T> = T^;`) additionally records its def in tree.templates;
-// its target stays raw until the pattern builds.
+// its target stays raw until the pattern builds. A TYPE-SET target (`= <...>`)
+// registers a kTypeSet instead (terms resolved immediately — this path is the
+// body-scope one; the file-scope pre-pass calls registerTypeSet directly).
 void registerAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    if (s.type_set) {
+        registerTypeSet(tree, s, diag, /*resolve_terms=*/true);
+        return;
+    }
     bool reused;
     DeclInfo d;
     d.name = s.name;
@@ -1428,7 +1555,8 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
 void registerClassTemplate(parse::Tree& tree, parse::Node& node,
                            std::vector<std::unique_ptr<parse::Node>>* host_list,
                            int owner, diagnostic::Sink& diag);
-void snapshotTemplate(parse::Tree& tree, parse::Node& node);
+void snapshotTemplate(parse::Tree& tree, parse::Node& node,
+                      diagnostic::Sink& diag);
 void checkClassCyclesAndNeeds(parse::Tree& tree, std::vector<parse::Node*> const& classes,
                               diagnostic::Sink& diag);
 void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
@@ -1679,13 +1807,13 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             // TYPES phase (resolveScopeTypes); the body is resolved here. A
             // kFunctionDecl (forward decl) has no body — legitimately no-op'd below.
             // A member TEMPLATE's body stays pristine — snapshot the scope instead.
-            if (!m->type_params.empty()) { snapshotTemplate(tree, *m); continue; }
+            if (!m->type_params.empty()) { snapshotTemplate(tree, *m, diag); continue; }
             resolveFunctionBody(tree, *m, diag, /*nested=*/false);
         } else if (m->kind == parse::Kind::kFunctionDecl
                    && !m->type_params.empty()) {
             // A header class's bodyless member-template DECLARATION: snapshot,
             // so a consumer can mint declaration-only instances from it.
-            snapshotTemplate(tree, *m);
+            snapshotTemplate(tree, *m, diag);
         } else if (m->kind == parse::Kind::kFunctionDecl) {
             // A plain member DECLARATION has no body, but its signature
             // const-exprs (defaults, dims) still resolve — same funnel and same
@@ -1704,7 +1832,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         } else if (m->kind == parse::Kind::kClassDef) {
             // A member CLASS TEMPLATE's body stays pristine; its file-level scope
             // snapshot (taken with this scope's frames open) serves instantiation.
-            if (!m->type_params.empty()) { snapshotTemplate(tree, *m); continue; }
+            if (!m->type_params.empty()) { snapshotTemplate(tree, *m, diag); continue; }
             resolveScopeBodies(tree, *m, /*isClass=*/true, diag);
         }
     }
@@ -4475,9 +4603,14 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kAliasDecl: {
             // Bare `alias Ns;` / `alias Ns:Sub;` (NO target) imports a namespace's
             // members into this scope — checked FIRST, so a qualified import isn't
-            // mistaken for a member decl.
-            if (s.return_type == widen::kNoType) {
+            // mistaken for a member decl. (A TYPE SET also has no target type —
+            // it registers below, through registerAlias's set branch.)
+            if (s.return_type == widen::kNoType && !s.type_set) {
                 resolveBareAlias(tree, s, diag);
+                return Completion::Normal;
+            }
+            if (s.type_set) {
+                registerAlias(tree, s, diag);
                 return Completion::Normal;
             }
             // A qualified alias WITH a target (`alias C:Num = int;`) was relocated into a
@@ -5282,6 +5415,8 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 // list, and — at the point the body WOULD have resolved — snapshots resolve's
 // transient scope state so instantiation can re-enter resolution there later.
 
+void collectBodyNames(parse::Node const& n, std::set<std::string>& out);
+
 void reportTemplateNameClash(diagnostic::Sink& diag, parse::Node const& node,
                              parse::Entry const& prev) {
     diagnostic::report(diag, {node.file_id, node.name_tok,
@@ -5316,6 +5451,47 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
             "A template '" + node.name + "' is not supported; the "
             "assignment and transfer operators take concrete types.", {}});
         return;
+    }
+    if (node.spec) {
+        // Specialization is a FREE-FUNCTION feature (canon tmpl_special.sl) —
+        // a method template's receiver already dispatches by class.
+        for (auto const& p : node.params) {
+            if (p && p->name == "_$recv") {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "A specialization constraint is not supported on a "
+                    "method template.", {}});
+                return;
+            }
+        }
+        // An UNUSED element-type binder is a compile error (canon: "A2 is not
+        // used") — a misspelled type would otherwise silently become a
+        // wildcard. Size binders are required by the pattern's spelling and
+        // may go unused.
+        if (node.spec->kind == parse::SpecConstraint::K::kArray
+            && !node.spec->elem_binder.empty()) {
+            std::vector<std::string> b = {node.spec->elem_binder};
+            bool used = node.return_type != widen::kNoType
+                && !findUnknownLeafNamed(node.return_type, b).empty();
+            for (auto const& p : node.params) {
+                if (p && p->return_type != widen::kNoType
+                    && !findUnknownLeafNamed(p->return_type, b).empty())
+                    used = true;
+            }
+            if (!used) {
+                std::set<std::string> names;
+                for (auto const& c : node.children)
+                    if (c) collectBodyNames(*c, names);
+                used = names.count(node.spec->elem_binder) > 0;
+            }
+            if (!used) {
+                diagnostic::report(diag, {node.file_id,
+                    node.spec->elem_binder_tok >= 0
+                        ? node.spec->elem_binder_tok : node.name_tok,
+                    "The pattern type '" + node.spec->elem_binder
+                    + "' is not used.", {}});
+                return;
+            }
+        }
     }
     // Collision scan — ARITY-ONLY OVERLOADING: same-name TEMPLATES coexist
     // when their arity ranges are DISJOINT (the call's argument count then
@@ -5370,7 +5546,16 @@ void registerTemplateFunction(parse::Tree& tree, parse::Node& node,
         if (c_header) header_owned = (int)id0;
         int lo, hi;
         templateArityRange(tree, (int)id0, lo, hi);
-        if (!(this_hi < lo || hi < this_lo)) overlap_clash = (int)id0;
+        if (!(this_hi < lo || hi < this_lo)) {
+            // CONSTRAINED siblings (both carry `T=`) may SHARE an arity — the
+            // call's deduced T selects the arm by set membership, and a T
+            // matching more than one arm is a call-site ambiguity error. Only
+            // an overlap where either side is unconstrained clashes.
+            bool both_spec = node.spec != nullptr
+                && pit != tree.templates.end() && pit->second.def
+                && pit->second.def->spec != nullptr;
+            if (!both_spec) overlap_clash = (int)id0;
+        }
     }
     if (merge_target >= 0) {
         // Adopt the DEFINITION as the pattern (it has the body to clone);
@@ -5477,11 +5662,35 @@ void resolveTemplatePatterns(parse::Tree& tree, parse::Node& node, int entry_id,
                              diagnostic::Sink& diag) {
     parse::pushFrame(tree);
     bindTypeParamMarkers(tree, node);
+    // A constraint's ELEMENT-TYPE binder resolves like a type parameter while
+    // the pattern signature builds (the instance clone binds it for real).
+    if (node.spec && !node.spec->elem_binder.empty()) {
+        parse::Entry a;
+        a.kind = parse::EntryKind::kAlias;
+        a.name = node.spec->elem_binder;
+        a.slids_type = widen::internSlid(node.spec->elem_binder, {},
+                                         widen::kTmplParamDefId);
+        a.file_id = node.file_id;
+        a.tok = node.spec->elem_binder_tok >= 0 ? node.spec->elem_binder_tok
+                                                : node.name_tok;
+        parse::addEntry(tree, std::move(a));
+    }
     std::vector<widen::TypeRef> ptypes;
     for (auto& p : node.params) {
         if (!p) continue;
         widen::TypeRef t = p->return_type;   // a COPY — the param node stays pristine
-        if (t != widen::kNoType) resolveDeclType(tree, t, p->file_id, p->tok, diag);
+        // A param spelled through the constraint's binders
+        // (`countof<T=A[N]>(A arg[N])`) IS the constrained parameter — its
+        // PATTERN type is the bare T (the whole matched type), exactly like
+        // the `(T arg)` spelling. The clone still resolves the spelled form;
+        // the binders bind there.
+        if (node.spec && !node.spec->elem_binder.empty() && t != widen::kNoType
+            && !findUnknownLeafNamed(t, {node.spec->elem_binder}).empty()) {
+            t = widen::internSlid(node.type_params[0], {},
+                                  widen::kTmplParamDefId);
+        } else if (t != widen::kNoType) {
+            resolveDeclType(tree, t, p->file_id, p->tok, diag);
+        }
         ptypes.push_back(t);
     }
     widen::TypeRef ret = node.return_type;
@@ -5491,6 +5700,29 @@ void resolveTemplatePatterns(parse::Tree& tree, parse::Node& node, int entry_id,
     parse::Entry& e = tree.entries[entry_id];
     e.slids_type = ret;
     e.param_types = std::move(ptypes);
+}
+
+// Resolve a `T=Name` constraint: the name is a TYPE SET or a concrete type (a
+// single-type set — full specialization). Runs at the SNAPSHOT point (where the
+// body would have resolved), not at registration — the function pre-pass
+// registers templates before the surrounding scope's aliases, but statement
+// order holds here, so a set declared above the template is live.
+void resolveSpecConstraint(parse::Tree& tree, parse::Node& node,
+                           diagnostic::Sink& diag) {
+    if (!node.spec || node.spec->kind != parse::SpecConstraint::K::kSetName)
+        return;
+    auto ti = tree.templates.find(node.resolved_entry_id);
+    if (ti == tree.templates.end()) return;
+    int spec_tok = node.spec->name_tok >= 0 ? node.spec->name_tok
+                                            : node.name_tok;
+    int rid = resolveName(tree, node.spec->set_name);
+    if (rid >= 0 && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
+        ti->second.spec_set_id = rid;
+        return;
+    }
+    widen::TypeRef ty = widen::internOrNone(node.spec->set_name);
+    resolveDeclType(tree, ty, node.file_id, spec_tok, diag);
+    ti->second.spec_type = canonSetType(ty);
 }
 
 // Every name mentioned anywhere in a subtree (idents, callees, assign targets).
@@ -5503,10 +5735,12 @@ void collectBodyNames(parse::Node const& n, std::set<std::string>& out) {
 // Capture resolve's transient scope state at the template's body-resolution point —
 // the same visibility an ordinary body would have had (all forward refs registered,
 // the enclosing frames live). Instantiation re-installs this to re-enter resolution.
-void snapshotTemplate(parse::Tree& tree, parse::Node& node) {
+void snapshotTemplate(parse::Tree& tree, parse::Node& node,
+                      diagnostic::Sink& diag) {
     auto it = tree.templates.find(node.resolved_entry_id);
     if (it == tree.templates.end()) return;   // registration failed (collision)
     parse::TemplateInfo& ti = it->second;
+    resolveSpecConstraint(tree, node, diag);
     ti.frame_id_stack = tree.frame_id_stack;
     ti.frame_entries_start_stack = tree.frame_entries_start_stack;
     ti.live_entry_ids = tree.live_entry_ids;
@@ -5668,7 +5902,7 @@ void resolveNestedFunctionBodies(parse::Tree& tree,
             // WOULD have resolved under (this scope's frame open, forward captures
             // included) for classify's on-demand instantiation.
             if (!ch->type_params.empty()) {
-                snapshotTemplate(tree, *ch);
+                snapshotTemplate(tree, *ch, diag);
                 continue;
             }
             resolveFunctionBody(tree, *ch, diag, /*nested=*/true);
@@ -7089,7 +7323,7 @@ void registerLocalClasses(parse::Tree& tree,
             if (s->resolved_entry_id >= 0) {
                 auto it = tree.templates.find(s->resolved_entry_id);
                 if (it != tree.templates.end() && it->second.def == s.get())
-                    snapshotTemplate(tree, *s);
+                    snapshotTemplate(tree, *s, diag);
             }
             continue;
         }
@@ -7325,6 +7559,11 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
 }
 
 }  // namespace
+
+// The header-declared membership entry point (classify's arm selection).
+bool typeInSet(parse::Tree const& tree, widen::TypeRef t, int set_id) {
+    return typeInSetImpl(tree, t, set_id);
+}
 
 // Find a class def node named `name` directly among `nodes` (the first opening).
 // Collect every class OR namespace def node named `name` among `scope` (ALL
@@ -8431,6 +8670,48 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
         a.tok = ti.def->name_tok;
         parse::addEntry(tree, std::move(a));
     }
+    // SPECIALIZATION binders derive from the bound T: the array element type
+    // binds as a transparent alias, each array size — and a tuple's arity — as
+    // an `intptr` constant (pre-captured, so constfold substitutes it into the
+    // clone's dims and body like any named constant).
+    if (ti.def->spec && !args.empty()) {
+        widen::TypeRef T = canonSetType(args[0]);
+        auto bindConst = [&](std::string const& name, long long v) {
+            if (name.empty()) return;
+            parse::Entry c;
+            c.kind = parse::EntryKind::kConst;
+            c.name = name;
+            c.slids_type = widen::intern("intptr");
+            c.const_strong_type = c.slids_type;
+            c.literal_text = std::to_string(v);
+            c.literal_kind = parse::Kind::kIntLiteral;
+            c.file_id = ti.def->file_id;
+            c.tok = ti.def->name_tok;
+            parse::addEntry(tree, std::move(c));
+        };
+        parse::SpecConstraint const& sp = *ti.def->spec;
+        if (sp.kind == parse::SpecConstraint::K::kArray
+            && widen::form(T) == widen::Type::Form::kArray) {
+            widen::TypeRef elem = widen::get(T).elem;
+            std::vector<int> dims = widen::get(T).dims;
+            if (!sp.elem_binder.empty()) {
+                parse::Entry a;
+                a.kind = parse::EntryKind::kAlias;
+                a.name = sp.elem_binder;
+                a.slids_type = elem;
+                a.file_id = ti.def->file_id;
+                a.tok = ti.def->name_tok;
+                parse::addEntry(tree, std::move(a));
+            }
+            for (std::size_t i = 0;
+                 i < sp.dim_binders.size() && i < dims.size(); i++)
+                bindConst(sp.dim_binders[i], dims[i]);
+        } else if (sp.kind == parse::SpecConstraint::K::kTuple
+                   && widen::form(T) == widen::Type::Form::kTuple) {
+            bindConst(sp.arity_binder,
+                      (long long)widen::get(T).slots.size());
+        }
+    }
 
     // Clone the pristine definition; the clone is an ORDINARY function from here on.
     auto clone = cloneDeep(*ti.def);
@@ -8454,6 +8735,21 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
             if (clone->params[i] && ti.def->params[i]
                 && isBareTypeParam(ti.def->params[i]->return_type, tp_names))
                 clone->params[i]->tmpl_value_param = true;
+        }
+        // A param spelled through the constraint's binders (`(A arg[N])`) IS
+        // the constrained T — substitute the BOUND type directly (concrete
+        // dims and all), so the spelling needs no per-instance dim bake. The
+        // binder entries above still serve the body's uses of A / N.
+        if (ti.def->spec && !ti.def->spec->elem_binder.empty()
+            && !args.empty()) {
+            for (auto& p : clone->params) {
+                if (p && p->return_type != widen::kNoType
+                    && !findUnknownLeafNamed(p->return_type,
+                           {ti.def->spec->elem_binder}).empty()) {
+                    p->return_type = canonSetType(args[0]);
+                    p->dim_exprs.clear();
+                }
+            }
         }
     }
     // An AGGREGATED flavor keeps the signature, sheds the body (the loaded
@@ -8683,20 +8979,21 @@ void stripListlessClone(parse::Node& c,
 // body phase would — so a depth-2 pattern (`P` holding `E<U>`) captures its
 // chain too. A nested TEMPLATE's own nested patterns register only at ITS
 // instantiation, which runs this walk again at that level.
-void snapshotNestedClassPatterns(parse::Tree& tree, parse::Node& node) {
+void snapshotNestedClassPatterns(parse::Tree& tree, parse::Node& node,
+                                 diagnostic::Sink& diag) {
     for (auto& m : node.children) {
         if (!m || m->kind != parse::Kind::kClassDef) continue;
         if (!m->type_params.empty()) {
             if (m->resolved_entry_id < 0) continue;
             auto it = tree.templates.find(m->resolved_entry_id);
             if (it != tree.templates.end() && !it->second.snapshot_taken)
-                snapshotTemplate(tree, *m);
+                snapshotTemplate(tree, *m, diag);
             continue;
         }
         if (m->resolved_entry_id < 0) continue;
         tree.open_ns_frames.push_back(
             tree.entries[m->resolved_entry_id].ns_frame_id);
-        snapshotNestedClassPatterns(tree, *m);
+        snapshotNestedClassPatterns(tree, *m, diag);
         tree.open_ns_frames.pop_back();
     }
 }
@@ -8998,7 +9295,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // may instantiate the sub-pattern before the drain's body phase gets there.
     for (auto& c : clones) {
         tree.open_ns_frames.push_back(tree.entries[iid].ns_frame_id);
-        snapshotNestedClassPatterns(tree, *c);
+        snapshotNestedClassPatterns(tree, *c, diag);
         tree.open_ns_frames.pop_back();
     }
     // registerClassBody stamped linkage off the clone's HEADER file_id
@@ -9215,8 +9512,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // `alias Time = Space;`). Bare `alias Ns;` (no target) is a namespace import,
     // handled at use scope. A qualified alias was relocated above.
     for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kAliasDecl
-            && ch->return_type != widen::kNoType) {
+        if (!ch || ch->kind != parse::Kind::kAliasDecl) continue;
+        if (ch->type_set) {
+            // A TYPE SET registers its entry now; its terms may name classes
+            // (registered below), so they resolve in the alias-validate pass.
+            registerTypeSet(tree, *ch, diag, /*resolve_terms=*/false);
+        } else if (ch->return_type != widen::kNoType) {
             if (isFuncAlias(tree, *ch)) recordFuncAlias(tree, *ch, kGlobalFrame);
             else registerAlias(tree, *ch, diag);
         }
@@ -9298,8 +9599,15 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // TEMPLATE builds (and thereby checks) its PATTERN instead — the node's
     // own target stays pristine.
     for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kAliasDecl
-            && ch->return_type != widen::kNoType && !isFuncAlias(tree, *ch)) {
+        if (!ch || ch->kind != parse::Kind::kAliasDecl) continue;
+        if (ch->type_set) {
+            // A TYPE SET's terms resolve here — classes exist now. (Membership
+            // evaluates by entry id at query time, so resolution order across
+            // sets does not matter.)
+            resolveTypeSetTerms(tree, *ch, diag);
+            continue;
+        }
+        if (ch->return_type != widen::kNoType && !isFuncAlias(tree, *ch)) {
             if (!ch->type_params.empty()) {
                 validateAliasTemplate(tree, *ch, diag);
                 continue;
@@ -9524,7 +9832,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // scope = the whole file), so all const inits and function bodies below see
     // its members unqualified.
     for (auto& ch : program->children) {
-        if (ch && ch->kind == parse::Kind::kAliasDecl && ch->return_type == widen::kNoType) {
+        if (ch && ch->kind == parse::Kind::kAliasDecl
+            && ch->return_type == widen::kNoType && !ch->type_set) {
             resolveBareAlias(tree, *ch, diag);
         }
     }
@@ -9563,7 +9872,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
             tree.open_ns_frames.push_back(*it);
-        snapshotTemplate(tree, *ti.def);
+        snapshotTemplate(tree, *ti.def, diag);
         for (std::size_t i = 0; i < chain.size(); i++)
             tree.open_ns_frames.pop_back();
     }
@@ -9605,7 +9914,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         // resolution needs the same visibility).
         if (ch->kind == parse::Kind::kFunctionDecl && !ch->type_params.empty()) {
             if (tree.templates.count(ch->resolved_entry_id))
-                snapshotTemplate(tree, *ch);
+                snapshotTemplate(tree, *ch, diag);
             continue;
         }
         if (ch->kind == parse::Kind::kFunctionDecl) {
@@ -9615,7 +9924,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             continue;
         }
         if (ch->kind != parse::Kind::kFunctionDef) continue;
-        if (!ch->type_params.empty()) { snapshotTemplate(tree, *ch); continue; }
+        if (!ch->type_params.empty()) { snapshotTemplate(tree, *ch, diag); continue; }
         resolveFunctionBody(tree, *ch, diag);
     }
 

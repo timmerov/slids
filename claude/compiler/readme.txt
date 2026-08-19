@@ -1049,6 +1049,45 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   back the instance id. The cross-TU decl/def merge picks the
   matching header declaration AMONG the siblings. Uniform across every
   template kind, declaration site, and class flavor.
+  SPECIALIZATION + TYPE SETS (canon tmpl_special.sl, 2026-08-18). A TYPE SET
+  (`alias Name = <type-list>;`) registers a kTypeSet entry — a specialization
+  constraint, NOT a type (a type position reports "is a type set, not a
+  type"). Terms separate on `|`: a type spelling (`int`, `int^`, `(int,int)`,
+  `Box<int>`), a bare identifier (a set or a type name — resolve decides), or
+  a pattern — `^` any reference, `[]` any iterator, `[N]` / `[N][M]`
+  DEPTH-EXACT fixed arrays (a 2-D array never matches `[N]`), `()` / `(N)`
+  any unnamed tuple (slids has no 1-tuples, so a lone identifier in parens is
+  always an arity wildcard). `|!term` REMOVES: membership walks the terms
+  LEFT TO RIGHT (typeInSet — removing an absent member is a no-op) and a
+  leading `!` complements the final answer. The kTypeSet entry lands in the
+  file-scope alias pre-pass but its TERMS resolve in the alias-validate pass
+  (a term may name a class, which registers between); a body-scope set
+  resolves immediately (registerTypeSet / resolveTypeSetTerms). The resolved
+  form (Tree::typesets) keeps referenced sets BY ENTRY ID and evaluates
+  recursively; concrete members canonicalize exactly like T bindings —
+  aliases shed, OUTER const peeled, buried const kept (canonSetType).
+  A SPECIALIZED template (`countof<T=...>`, Node::spec) constrains its ONE
+  type parameter: a set name (or a concrete type name — a one-type set is a
+  full specialization; resolved at snapshotTemplate, where statement order
+  makes the sets above the template live), or a pattern with BINDERS
+  (`A[N]`, `[N]`, `[N][M]`, `()`, `(N)`). Binders bind at instantiation from
+  the matched T: the element type as a transparent alias, each dimension —
+  and a tuple's arity — as an intptr CONST entry (pre-captured literal_text,
+  so constfold substitutes it into dims and body like any named constant). A
+  param spelled through the binders (`(A arg[N])`) IS the constrained T: its
+  PATTERN is the bare-T marker and instantiation substitutes the bound type
+  into the clone's param directly (no per-instance dim bake). Constrained
+  SIBLINGS may share an arity (the registration overlap check exempts the
+  both-constrained pair); classifyTemplateCall deduces T once, filters arms
+  by arity (specializationArms), then by membership (constraintAdmits):
+  zero matches = "No specialization", several = "Ambiguous specialization" —
+  CALL-site checks; there is no declaration-time disjointness pass and no
+  catch-all (an unconstrained same-arity sibling still clashes). An UNUSED
+  element-type binder errors at registration — a typo'd type name must not
+  become a silent wildcard; size binders are required by the pattern's
+  spelling and may go unused. Free functions only: a method template's `T=`
+  is rejected (out-of-line at registration; the inline spelling never parses
+  as a member).
   TEMPLATE OPERATORS (canon tmpl_operator.sl) are template methods named
   `op<sym>` — the machinery rides whole. Grammar: the template-list parses
   after the MAX-MUNCHED symbol (the `<`-family needs whitespace — `op< <T>`;
@@ -1092,8 +1131,12 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   pointer binding a const drop at the identity's return. Unification's ONE job is
   finding T: a marker leaf binds its argument's type EXACTLY (conflicts error —
   widening never reconciles, and `int^` vs `(const int)^` CONFLICT; a
-  BY-VALUE T meeting an array argument binds the DECAYED elem[], what a by-value
-  position does — elem const removed, the string-literal canon), the NOT-template
+  BY-VALUE T meeting an array argument binds the ARRAY TYPE ITSELF — canon
+  tmpl_special.sl 2026-08-18, superseding the earlier decayed-iterator
+  binding: arrays ride the class/tuple rung of the convention of convenience,
+  the instance's param munges to a pointer-to-(const)-array and the call
+  passes the whole-array reference; an iterator binding is still reachable
+  with an explicit type-list), the NOT-template
   parts of a pattern impose no constraint (the
   instantiated call validates them through the normal machinery), and the shape
   conversions a normal call performs — array decay into a `T[]`/`T^` pattern, rvalue

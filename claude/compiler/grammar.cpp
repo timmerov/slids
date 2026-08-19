@@ -2746,6 +2746,157 @@ struct Parser {
     //   value:  alias Name = Type;   (return_type = target spelling)
     //   bare:   alias Ns;            (return_type empty; qualifier/global mark the
     //                                 namespace whose members to import unqualified)
+    // The term list of a TYPE SET: `<` term ( `|` term )* `>`, each term
+    // optionally `!`-prefixed (removal — sets build left to right). A term is a
+    // structural pattern (`^`, `[]`, `[N]`/`[N][M]`, `()`/`(N)`) or a type
+    // spelling; a BARE identifier may name a set or a type — resolve decides.
+    // Bracket / paren identifiers are wildcards here (they bind only in a
+    // template's `T=` constraint). Consumes the closing `>`.
+    bool parseTypeSetTerms(parse::TypeSetDecl& out) {
+        if (!expect(token::Kind::kLt, "<")) return false;
+        while (true) {
+            parse::SetTerm term;
+            term.tok = pos;
+            if (peek().kind == token::Kind::kNot) { term.remove = true; advance(); }
+            if (peek().kind == token::Kind::kBitXor) {
+                // `^` — any reference
+                term.kind = parse::SetTerm::K::kAnyRef;
+                advance();
+            } else if (peek().kind == token::Kind::kLBracket
+                       && peekKind(1) == token::Kind::kRBracket) {
+                // `[]` — any iterator
+                advance();
+                advance();
+                term.kind = parse::SetTerm::K::kAnyIter;
+            } else if (peek().kind == token::Kind::kLBracket) {
+                // `[N]` / `[N][M]` — depth-exact fixed array (wildcard sizes)
+                term.kind = parse::SetTerm::K::kArray;
+                while (peek().kind == token::Kind::kLBracket) {
+                    advance();   // [
+                    if (peek().kind != token::Kind::kIdentifier) {
+                        error("Expected a size name in the array "
+                              "pattern '[N]'.");
+                        return false;
+                    }
+                    advance();   // the wildcard size name
+                    if (!expect(token::Kind::kRBracket, "]")) return false;
+                    term.array_depth++;
+                }
+            } else if (peek().kind == token::Kind::kLParen
+                       && (peekKind(1) == token::Kind::kRParen
+                           || (peekKind(1) == token::Kind::kIdentifier
+                               && peekKind(2) == token::Kind::kRParen))) {
+                // `()` / `(N)` — any tuple (slids has no 1-tuples, so a lone
+                // identifier is an arity wildcard, never an element type).
+                advance();   // (
+                if (peek().kind == token::Kind::kIdentifier) advance();
+                advance();   // )
+                term.kind = parse::SetTerm::K::kAnyTuple;
+            } else if (peek().kind == token::Kind::kIdentifier
+                       && (peekKind(1) == token::Kind::kBitOr
+                           || peekKind(1) == token::Kind::kGt)) {
+                // A bare identifier — a set name or a type name; resolve decides.
+                term.ident = peek().text;
+                advance();
+            } else {
+                // Anything else is a TYPE spelling (`int^`, `(int,int)`,
+                // `Vec<int>`, `ClassA^^`).
+                Declarator d;
+                if (!parseDeclarator(NamePolicy::Forbidden,
+                                     /*parse_name_dims=*/false,
+                                     /*allow_qualified=*/false, nullptr, d)) {
+                    return false;
+                }
+                term.spelling = widen::internOrNone(d.type);
+            }
+            out.terms.push_back(std::move(term));
+            if (peek().kind == token::Kind::kBitOr) { advance(); continue; }
+            break;
+        }
+        return expect(token::Kind::kGt, ">");
+    }
+
+    // A template list's `T=` constraint. `param` is the constrained parameter's
+    // name — binders (the array element type, the sizes, the tuple arity) must
+    // not collide with it or each other. Leaves `out` filled on success.
+    bool parseSpecConstraint(std::string const& param,
+                             std::unique_ptr<parse::SpecConstraint>& out) {
+        out = std::make_unique<parse::SpecConstraint>();
+        auto checkBinder = [&](std::string const& b,
+                               std::vector<std::string> const& taken) -> bool {
+            if (b == param) {
+                error("The binder '" + b + "' reuses the template "
+                      "parameter's name.");
+                return false;
+            }
+            for (auto const& t : taken) {
+                if (t == b) {
+                    error("Duplicate binder name '" + b + "'.");
+                    return false;
+                }
+            }
+            return true;
+        };
+        auto parseDimBinders = [&]() -> bool {
+            while (peek().kind == token::Kind::kLBracket) {
+                advance();   // [
+                if (peek().kind != token::Kind::kIdentifier) {
+                    error("Expected a size name in the array pattern '[N]'.");
+                    return false;
+                }
+                std::vector<std::string> taken = out->dim_binders;
+                if (!out->elem_binder.empty()) taken.push_back(out->elem_binder);
+                if (!checkBinder(peek().text, taken)) return false;
+                out->dim_binders.push_back(peek().text);
+                advance();
+                if (!expect(token::Kind::kRBracket, "]")) return false;
+            }
+            if (out->dim_binders.empty()) {
+                error("Expected a size name in the array pattern '[N]'.");
+                return false;
+            }
+            return true;
+        };
+        if (peek().kind == token::Kind::kIdentifier
+            && peekKind(1) == token::Kind::kLBracket) {
+            // `T=A[N]` — element-type binder plus per-dimension size binders.
+            out->kind = parse::SpecConstraint::K::kArray;
+            if (!checkBinder(peek().text, {})) return false;
+            out->elem_binder = peek().text;
+            out->elem_binder_tok = pos;
+            advance();
+            return parseDimBinders();
+        }
+        if (peek().kind == token::Kind::kIdentifier) {
+            // `T=Primitives` — a type-set name (or a concrete type name).
+            out->kind = parse::SpecConstraint::K::kSetName;
+            out->set_name = peek().text;
+            out->name_tok = pos;
+            advance();
+            return true;
+        }
+        if (peek().kind == token::Kind::kLBracket) {
+            // `T=[N]` / `T=[N][M]` — sizes only, element type anonymous.
+            out->kind = parse::SpecConstraint::K::kArray;
+            return parseDimBinders();
+        }
+        if (peek().kind == token::Kind::kLParen) {
+            // `T=()` / `T=(N)` — any tuple; a lone identifier binds the arity
+            // (slids has no 1-tuples, so it is never an element type).
+            advance();   // (
+            out->kind = parse::SpecConstraint::K::kTuple;
+            if (peek().kind == token::Kind::kIdentifier) {
+                if (!checkBinder(peek().text, {})) return false;
+                out->arity_binder = peek().text;
+                advance();
+            }
+            return expect(token::Kind::kRParen, ")");
+        }
+        error("Expected a type set name or a pattern after '=' in the "
+              "template list.");
+        return false;
+    }
+
     std::unique_ptr<parse::Node> parseAliasDecl() {
         int stmt_file = peek().file_id;
         int stmt_tok = pos;
@@ -2797,6 +2948,24 @@ struct Parser {
         }
         if (peek().kind == token::Kind::kEquals) {
             advance();   // =
+            // A TYPE SET — `alias Name = <type-list>;` / `= !<type-list>;`.
+            // Declares a specialization constraint, not a type. Never combines
+            // with a template list (a set has no type parameters to bind).
+            bool set_compl = peek().kind == token::Kind::kNot
+                && peekKind(1) == token::Kind::kLt;
+            if (set_compl || peek().kind == token::Kind::kLt) {
+                if (!node->type_params.empty()) {
+                    errorAt(node->name_tok,
+                            "A type set cannot have a template list.");
+                    return nullptr;
+                }
+                if (set_compl) advance();   // !
+                node->type_set = std::make_unique<parse::TypeSetDecl>();
+                node->type_set->complement = set_compl;
+                if (!parseTypeSetTerms(*node->type_set)) return nullptr;
+                if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+                return node;
+            }
             Declarator d;
             if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
                                  /*allow_qualified=*/false, nullptr, d)) {
@@ -4106,7 +4275,21 @@ struct Parser {
                 while (peekKind(q) == token::Kind::kIdentifier
                        && peekKind(q + 1) == token::Kind::kComma
                        && peekKind(q + 2) == token::Kind::kIdentifier) q += 2;
-                if (peekKind(q + 1) == token::Kind::kGt) o = q + 2;
+                if (peekKind(q + 1) == token::Kind::kGt) {
+                    o = q + 2;
+                } else if (peekKind(q + 1) == token::Kind::kEquals) {
+                    // A SPECIALIZATION constraint — `countof<T=A[N]>(`. The
+                    // constraint holds identifiers, brackets, and parens only,
+                    // so the scan to the closing `>` is bounded; anything else
+                    // is a comparison, not a function shape.
+                    int r = q + 2;
+                    while (peekKind(r) == token::Kind::kIdentifier
+                           || peekKind(r) == token::Kind::kLBracket
+                           || peekKind(r) == token::Kind::kRBracket
+                           || peekKind(r) == token::Kind::kLParen
+                           || peekKind(r) == token::Kind::kRParen) r++;
+                    if (peekKind(r) == token::Kind::kGt) o = r + 1;
+                }
             }
         }
         if (peekKind(o) != token::Kind::kLParen) return false;
@@ -4728,6 +4911,7 @@ struct Parser {
         // never has one (`_`/`~` have no name position for a list).
         std::vector<std::string> type_params;
         std::vector<int> type_param_toks;
+        std::unique_ptr<parse::SpecConstraint> spec;
         if (!is_hook && peek().kind == token::Kind::kLt) {
             advance();   // <
             while (true) {
@@ -4744,7 +4928,29 @@ struct Parser {
                 type_params.push_back(peek().text);
                 type_param_toks.push_back(pos);
                 advance();   // the name
-                if (peek().kind == token::Kind::kComma) { advance(); continue; }
+                // A SPECIALIZATION constraint — `<T=Primitives>`, `<T=A[N]>`,
+                // `<T=[N][M]>`, `<T=()>`, `<T=(N)>`. One constrained parameter,
+                // alone in its list. Fresh identifiers are binders: the array
+                // element type, the per-dimension sizes, the tuple arity.
+                if (peek().kind == token::Kind::kEquals) {
+                    if (type_params.size() > 1) {
+                        error("A specialization constraint applies to a "
+                              "single-parameter template list.");
+                        return nullptr;
+                    }
+                    advance();   // =
+                    if (!parseSpecConstraint(type_params[0], spec))
+                        return nullptr;
+                }
+                if (peek().kind == token::Kind::kComma) {
+                    if (spec) {
+                        error("A specialization constraint applies to a "
+                              "single-parameter template list.");
+                        return nullptr;
+                    }
+                    advance();
+                    continue;
+                }
                 break;
             }
             if (!expect(token::Kind::kGt, ">")) return nullptr;
@@ -4793,6 +4999,7 @@ struct Parser {
         node->qualifier_toks = std::move(qualifier_toks);
         node->type_params = std::move(type_params);
         node->type_param_toks = std::move(type_param_toks);
+        node->spec = std::move(spec);
         node->return_type = widen::internOrNone(ret_type);
         // A const-expr dim in the RETURN type (`(int[N],int) f()`): a function's
         // entry slids_type IS its return type, so bakeNodeDims bakes node->dim_exprs

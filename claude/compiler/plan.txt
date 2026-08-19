@@ -3378,6 +3378,63 @@ Default unchanged: no keyword, hard-const convention, canon B stands
   Detail: readme.txt const-correctness passage + template INSTANTIATION
   binding + the convention's munge arm + the I..E mangling note.
 
+TEMPLATE SPECIALIZATION + TYPE SETS (landed 2026-08-18).
+Canon tmpl_special.sl: same-name same-arity template ARMS selected by the
+deduced T's membership in a TYPE SET. `alias Name = <type-list>;` declares
+a set (kTypeSet — a constraint, never a type): `|` adds, `|!` removes,
+built LEFT TO RIGHT (removing an absent member is a no-op; `<!int8|Integers>`
+therefore CONTAINS int8), a leading `!` complements over everything.
+Members: concrete type spellings (incl. tuple types, typed pointers,
+template instances), set names (kept as entry-id REFERENCES, evaluated
+recursively), and category patterns — `^` reference, `[]` iterator,
+`[N]`/`[N][M]` DEPTH-EXACT arrays, `()`/`(N)` unnamed tuples (no 1-tuples,
+so a lone paren identifier is always arity). Concrete membership is
+canonical per the binding canon: aliases shed, outer const peeled, buried
+const kept.
+  - Arms: `countof<T=Set>` (or a concrete type name — a one-type set IS
+    full specialization), `<T=A[N]>`, `<T=[N][M]>`, `<T=(N)>`. Binders bind
+    at instantiation off the matched T — element type as a transparent
+    alias, dims/arity as pre-captured intptr CONST entries constfold
+    substitutes like any named constant. `(A arg[N])` param spelling IS T
+    (pattern = bare-T marker; the instance substitutes the bound type
+    directly, sidestepping per-instance dim baking).
+  - Selection at the CALL (classifyTemplateCall): deduce T, filter arms by
+    arity then membership — zero = "No specialization", two+ = "Ambiguous
+    specialization". No declaration-time disjointness pass, no catch-all:
+    an unconstrained same-arity sibling still clashes; a different-arity
+    one coexists (arity-only overloading unchanged). Plain-beats-template
+    unchanged.
+  - THE DECAY CHANGE (ruled with this landing): a bare-T param meeting an
+    ARRAY argument binds the ARRAY TYPE (was: the decayed iterator).
+    Arrays now ride the class/tuple convention rung — param munges to
+    pointer-to-(const)-array (the existing array-param arm), the call
+    passes the whole-array reference (rung 0), `mutable` opts writes in.
+    An iterator binding needs an explicit type-list (tmpl_function.sl's
+    string-literal call now spells `zork<char[]>`). This supersedes the
+    2026-08-18 buried-const entry's "array decay unchanged" line.
+  - Guard rails: an UNUSED element-type binder errors at registration (a
+    typo'd type must not become a silent wildcard; size binders may go
+    unused — canon's `[N]`-with-sizeof example); binder names can't reuse
+    T or each other; the constraint owns a single-param list; method
+    templates reject `T=`; a type position naming a set reports "is a
+    type set, not a type".
+  - CANON CONFLICT flagged, nothing changed: tmpl_special's comment
+    expects sizeof("hello") == 5, but sizeof counts the NUL (canon
+    test/misc/sizeof.sl: "Hello, World!" is 14; slids_reference.md's
+    sizeof section still claims 5) — sizeof and countof both yield 6.
+  - Coverage: tmpl_special.sl — the four canon shapes (1-D/2-D/class
+    array/element), every Primitives corner, string literal (N counts the
+    NUL), explicit lists (membership + literal-decay-into-Primitives),
+    alias/const canonicalization, L2R removal (BigIntegers), removal-
+    before-add no-op (Weird), category-minus-concrete (tuples, pointers),
+    exact-class arms, template-instance members (`<Box<int>>`), mutable
+    array write-through, two-arity constrained arms, body-scope sets +
+    arms, arity-sibling coexistence; 10 negatives (ambiguous, no-match,
+    unused binder, set-as-type, same-arity unconstrained clash, multi-
+    param list, method template, self/dup binders, set-with-template-list).
+  Detail: readme.txt SPECIALIZATION + TYPE SETS (inside the TEMPLATES
+  section) + the INSTANTIATION binding paragraph's array arm.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

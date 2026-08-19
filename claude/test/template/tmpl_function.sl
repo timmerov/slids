@@ -77,10 +77,13 @@ inference's one job is finding the T bindings: T binds an argument's type
 exactly (a literal binds the type a typeless `x = literal` would; conflicting
 bindings error). the NOT-template parts of a pattern match by the normal
 parameter rules — a t-free subtree imposes no constraint at inference, and on
-the way to a T the normal shape conversions apply (array decay, rvalue
-materialization into a reference). after binding (inferred or explicit) the
-call is an ordinary single-candidate call: widening / implicit casts / class
-coercion apply as spec.
+the way to a T inside a `T^` / `T[]` shape the normal conversions apply
+(array decay into the pointee, rvalue materialization into a reference). a
+BARE T meeting an array binds the ARRAY type itself (canon tmpl_special.sl —
+arrays ride the class/tuple rung of the convention of convenience; an
+iterator binding needs an explicit type-list). after binding (inferred or
+explicit) the call is an ordinary single-candidate call: widening / implicit
+casts / class coercion apply as spec.
 
 overloading: same-name templates coexist iff their ARITY ranges are disjoint
 (the argument count selects; no type ranking); a same-name PLAIN function
@@ -376,8 +379,11 @@ int32 main() {
     int s = sq(6); println(String + "s = " + s);
     int e = sq<int>(7); println(String + "e = " + e);
 
+    /* a string-literal argument binds T to its ARRAY type since the
+       tmpl_special landing (arrays no longer decay at inference); the explicit
+       iterator type-list keeps this the mixed-signature iterator case. */
     int za = 62;
-    zork("za = ", za);
+    zork<char[]>("za = ", za);
 
     /* mixed signature: T from the first argument, the second widens normally. */
     zork(a, i8);

@@ -3186,19 +3186,14 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
             // const was already peeled above (a value binding is a mutable
             // copy — `same(ci)` still binds T = int).
             widen::TypeRef canon = widen::deepAliasStrip(arg);
-            // A by-VALUE T meeting an ARRAY argument binds the DECAYED iterator
-            // type (`"za = "` — const char[6] — binds T = char[]), the same decay
-            // a by-value parameter position performs on the argument. A reference
-            // or iterator PATTERN (`T^` / `T[]`) reaches its element through the
-            // shape aligners below instead, so this fires only for a bare T.
-            if (widen::form(canon) == F::kArray) {
-                widen::Type const& at = widen::get(canon);
-                widen::TypeRef elem = at.dims.size() <= 1
-                    ? at.elem
-                    : widen::internArray(at.elem,
-                          std::vector<int>(at.dims.begin() + 1, at.dims.end()));
-                canon = widen::internIterator(widen::removeConst(elem));
-            }
+            // A by-VALUE T meeting an ARRAY argument binds the ARRAY type
+            // (canon tmpl_special.sl, 2026-08-18 — supersedes the earlier
+            // decayed-iterator binding): `"za = "` — const char[6] — binds
+            // T = (const char)[6]. Arrays ride the class/tuple rung of the
+            // convention of convenience: the instance's param is a pointer to
+            // the (const) array, and the call site passes the whole-array
+            // reference. A reference or iterator PATTERN (`T^` / `T[]`) still
+            // reaches its element through the shape aligners below.
             if (bound[i] == widen::kNoType) { bound[i] = canon; return true; }
             // Both sides are canonical (alias-free, buried const kept), so
             // the comparison is exact: `int^` vs `(const int)^` CONFLICTS.
@@ -3411,9 +3406,62 @@ bool bindTemplateTypeList(parse::Tree& tree, parse::Node& s, int tid,
     return true;
 }
 
+// The same-scope CONSTRAINED siblings of a template — the specialization arms
+// sharing its name — arity-filtered (mirrors retargetTemplateByArity's filter).
+std::vector<int> specializationArms(parse::Tree& tree, int tid,
+                                    std::size_t nargs) {
+    std::vector<int> arms;
+    parse::Entry const& e = tree.entries[tid];
+    for (std::size_t id = 0; id < tree.entries.size(); id++) {
+        parse::Entry const& c = tree.entries[id];
+        if (c.kind != parse::EntryKind::kFunction || !c.is_template
+            || !c.tmpl_args.empty() || c.name != e.name
+            || c.owner_ns_frame != e.owner_ns_frame
+            || c.parent_frame_id != e.parent_frame_id) continue;
+        auto it = tree.templates.find((int)id);
+        if (it == tree.templates.end() || !it->second.def
+            || !it->second.def->spec) continue;
+        int lo, hi;
+        resolve::templateArityRange(tree, (int)id, lo, hi);
+        if ((int)nargs < lo || (int)nargs > hi) continue;
+        arms.push_back((int)id);
+    }
+    return arms;
+}
+
+// Does the deduced T select this specialization arm? A set-name constraint
+// tests membership (or exact equality against a single concrete type); an
+// array pattern matches DEPTH-EXACT on the dimension count; a tuple pattern
+// matches any unnamed tuple.
+bool constraintAdmits(parse::Tree& tree, int tid, widen::TypeRef T) {
+    using F = widen::Type::Form;
+    auto it = tree.templates.find(tid);
+    if (it == tree.templates.end() || !it->second.def
+        || !it->second.def->spec) return false;
+    parse::SpecConstraint const& sp = *it->second.def->spec;
+    widen::TypeRef t = widen::deepAliasStrip(T);
+    while (widen::form(t) == F::kConst) t = widen::get(t).underlying;
+    switch (sp.kind) {
+        case parse::SpecConstraint::K::kSetName:
+            if (it->second.spec_set_id >= 0)
+                return resolve::typeInSet(tree, t, it->second.spec_set_id);
+            return it->second.spec_type != widen::kNoType
+                && t == it->second.spec_type;
+        case parse::SpecConstraint::K::kArray:
+            return widen::form(t) == F::kArray
+                && widen::get(t).dims.size() == sp.dim_binders.size();
+        case parse::SpecConstraint::K::kTuple:
+            return widen::form(t) == F::kTuple;
+    }
+    return false;
+}
+
 // A call whose resolved callee is a TEMPLATE: bind the type-list, instantiate on
 // demand, retarget the call at the instance entry. True = retargeted (the caller
 // falls through to the ordinary call path); false = an error was reported.
+// A SPECIALIZED family (the stamped arm carries a `T=` constraint) selects the
+// arm by set membership of the deduced T: exactly one arm must admit it — none
+// or several is a compile error (canon tmpl_special.sl; no catch-all yet).
 bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
     int tid = s.resolved_entry_id;
     std::vector<parse::Node*> args;
@@ -3422,6 +3470,33 @@ bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& d
     if (!bindTemplateTypeList(tree, s, tid, args, /*recv_offset=*/0, s.tok, diag,
                               bound))
         return false;   // explicit-arity mismatch was reported at resolve
+    auto ti = tree.templates.find(tid);
+    if (ti != tree.templates.end() && ti->second.def && ti->second.def->spec
+        && !bound.empty()) {
+        std::vector<int> arms = specializationArms(tree, tid, args.size());
+        std::vector<int> fit;
+        for (int a : arms)
+            if (constraintAdmits(tree, a, bound[0])) fit.push_back(a);
+        if (fit.empty()) {
+            diagnostic::report(diag, {s.file_id, s.tok,
+                "No specialization of '" + s.name + "' matches '"
+                + widen::spellOrEmpty(bound[0]) + "'.", {}});
+            return false;
+        }
+        if (fit.size() > 1) {
+            std::vector<diagnostic::Note> notes;
+            for (int a : fit) {
+                parse::Node const* d = tree.templates[a].def;
+                notes.push_back({d->file_id, d->name_tok, "matches this arm"});
+            }
+            diagnostic::report(diag, {s.file_id, s.tok,
+                "Ambiguous specialization: '" + widen::spellOrEmpty(bound[0])
+                + "' matches more than one arm of '" + s.name + "'.",
+                std::move(notes)});
+            return false;
+        }
+        tid = fit[0];
+    }
     int iid = instantiateAndClassify(tree, tid, bound, s, diag);
     if (iid < 0) return false;
     s.resolved_entry_id = iid;

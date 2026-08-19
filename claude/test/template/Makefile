@@ -24,7 +24,8 @@ SAMPLES = \
 	tmpl_function \
 	tmpl_method \
 	tmpl_nested \
-	tmpl_operator
+	tmpl_operator \
+	tmpl_special
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

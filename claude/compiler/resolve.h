@@ -36,6 +36,13 @@ void templateArityRange(parse::Tree const& tree, int tid, int& lo, int& hi);
 int retargetTemplateByArity(parse::Tree const& tree, int tid,
                             std::size_t nargs);
 
+// TYPE-SET membership: is `t` in the set registered under kTypeSet entry
+// `set_id`? Terms evaluate LEFT TO RIGHT (an add-term match puts the type in,
+// a remove-term match takes it out; the complement flag flips the result).
+// `t` is canonicalized (aliases shed, OUTER const peeled, buried const kept)
+// before the walk. Serves classify's specialization-arm selection.
+bool typeInSet(parse::Tree const& tree, widen::TypeRef t, int set_id);
+
 // CLASS-template instances minted AFTER resolve (a use inside a function
 // template's body — instantiated on demand from classify) arrive fully resolved
 // but have not seen the late stages. This hands their nodes to the caller
