@@ -90,9 +90,19 @@ $(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(BUILD_DIR)/bug.ll $(BUILD_DIR)/vector
 $(BUILD_DIR)/dump.o: $(BUILD_DIR)/dump.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
+# algorithm is the directory's THIRD template library (countof + quicksort,
+# specialized over bug's demand pool). It imports nothing beyond its own
+# header, so only bug's demand pool gates it.
+$(BUILD_DIR)/algorithm.ll: $(LIB_HDR)/algorithm.sl $(BUILD_DIR)/bug.ll $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/algorithm.d $(IFLAGS) --instantiate $(BUILD_DIR)
+
+$(BUILD_DIR)/algorithm.o: $(BUILD_DIR)/algorithm.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
 # bug is this directory's only consumer of the template libraries, so it alone links
 # the aggregated flavors (extra prerequisites; the template rule's `$^` picks them up).
-$(BIN_DIR)/bug: $(BUILD_DIR)/vector.o $(BUILD_DIR)/dump.o
+$(BIN_DIR)/bug: $(BUILD_DIR)/vector.o $(BUILD_DIR)/dump.o $(BUILD_DIR)/algorithm.o
 
 # Built by lib's own Makefile (make.sh order); self-heals a standalone build.
 $(LIB_BUILD)/libslids.o:

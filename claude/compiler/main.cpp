@@ -254,6 +254,12 @@ int main(int argc, char** argv) {
                 // An INLINE-local flavor (an argument type private to this TU)
                 // was emitted here, internal — it is no demand, and its
                 // argument has no spelling the template source could resolve.
+                // The instance entry's flag is authoritative (it also covers a
+                // NESTED local — `quicksort<Vector<Container>>`, where the
+                // local class hides inside an imported template's flavor); the
+                // scan below stays as the class-flavor arm's test.
+                if (iid >= 0 && iid < (int)parse_tree.entries.size()
+                    && parse_tree.entries[iid].tu_local_instance) continue;
                 bool local = false;
                 for (widen::TypeRef a : args) {
                     widen::TypeRef s = widen::strip(a);

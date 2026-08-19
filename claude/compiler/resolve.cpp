@@ -9145,6 +9145,17 @@ static widen::TypeRef firstLocalArg(parse::Tree& tree,
         auto ci = tree.classes.find(s);
         if (ci != tree.classes.end()
             && !fileIsImported(tree, ci->second.def_file_id)) return s;
+        // An imported TEMPLATE's flavor is still LOCAL when its own type-args
+        // are (`Vector<Container>` with a TU-local Container): the flavor was
+        // emitted inline/internal HERE — no other TU can spell it, so a
+        // template taking it cannot aggregate either. Recurse through the
+        // instance entry's type-args.
+        int ce = parse::classEntryForType(tree, widen::deepStrip(s));
+        if (ce >= 0 && !tree.entries[ce].tmpl_args.empty()) {
+            widen::TypeRef inner =
+                firstLocalArg(tree, tree.entries[ce].tmpl_args);
+            if (inner != widen::kNoType) return inner;
+        }
     }
     return widen::kNoType;
 }

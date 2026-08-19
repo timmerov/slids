@@ -1,0 +1,37 @@
+/*
+algorithm library.
+*/
+
+/*
+useful type sets for template specialization.
+*/
+alias SignedIntegers = <int|int8|int16|int32|int64>;
+alias UnsignedIntegers = <uint|uint8|uint16|uint32|uint64>;
+alias Integers = <SignedIntegers|UnsignedIntegers>;
+alias Floats = <float|float32|float64>;
+alias Numbers = <Integers|Floats>;
+alias Pointers = <^|[]>;
+alias Primitives = <bool|char|intptr|Numbers|Pointers>;
+alias Arrays = <[N]>;
+alias Tuples = <()>;
+alias Classes = !<Arrays|Tuples|Primitives>;
+
+/*
+return the number of elements in an array.
+*/
+intptr countof<T=[N]>(T arg);
+
+/*
+return the size of a container class.
+the class must define a size() method.
+*/
+intptr countof<T=Classes>(T arg);
+
+/*
+quicksort an array or a container class.
+a container class must be index-able.
+ie it must implement the index operator: op[].
+the contained type must be comparable by less-than.
+ie a contained class must implement op<.
+*/
+void quicksort<T>(mutable T container);
