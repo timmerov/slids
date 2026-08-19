@@ -36,6 +36,7 @@ it has some radius that's larger than the characteristic distance.
 the innermost ring is at this radius.
 */
 
+import algorithm;
 import dump;
 import math;
 import string;
@@ -100,7 +101,20 @@ Ring(
 }
 alias Rings = Vector<Ring>;
 
-alias Floats = Vector<float64>;
+Float(float64 value_) {
+    bool op<(Float^ rhs) {
+        x = value_;
+        y = rhs^.value_;
+        if (x < 0.0) {
+            x = - x;
+        }
+        if (y < 0.0) {
+            y = - y;
+        }
+        return (x < y);
+    }
+}
+alias Floats = Vector<Float>;
 
 /*
 math:sin and math:cos are only accurate to like 16 decimal places.
@@ -271,15 +285,15 @@ Galaxy(
         //velocity = ring^.velocity_;
         //velocity2 = velocity * velocity;
         //in = - velocity2 * radius;
-        //ins_.append(in);
+        //ins_.append(Float(in));
 
         /* gravity of central bulge. */
         radius2 = radius * radius;
         in = kG * kCentralBulgeMass / radius2;
-        ins_.append(in);
+        ins_.append(Float(in));
 
-        sort(ins_);
-        sort(spins_);
+        quicksort(ins_);
+        quicksort(spins_);
 
         inward = sum(ins_);
         spinward = sum(spins_);
@@ -327,10 +341,10 @@ Galaxy(
             d = math:sqrt(d2);
 
             in = a * dx / d;
-            ins_.append(in);
+            ins_.append(Float(in));
 
             spin = a * dy / d;
-            spins_.append(spin);
+            spins_.append(Float(spin));
 
             /* debugging: search for "wrong" values of sin and cos. */
             /*if (spin > -1e-27 && spin < 1e-27 && spin != 0.0) {
@@ -346,65 +360,17 @@ Galaxy(
         }
     }
 
-    void sort(Floats^ vec) {
-        sz = vec^.size();
-        sort(vec, 0, sz-1);
-
-        /*
-        println("sorted:");
-        for (value : vec^) {
-            println(String + value);
-        }
-        */
-    }
-
-    void sort(Floats^ vec, intptr first, intptr last) {
-        /* done */
-        if (first >= last) {
-            return;
-        }
-
-        /* grab the pivot. */
-        raw_pivot = vec^[last];
-        pivot = raw_pivot;
-        if (pivot < 0.0) {
-            pivot = - pivot;
-        }
-
-        /* loop. */
-        scan = first;
-        limit = last;
-        while {
-            /*
-            small values stay in place.
-            big values move to the end.
-            */
-            value = vec^[scan];
-            if (value < 0.0) {
-                value = - value;
-            }
-            if (value <= pivot) {
-                ++scan;
-            } else {
-                vec^[limit] = vec^[scan];
-                --limit;
-                vec^[scan] = vec^[limit];
-            }
-        } (scan < limit);
-
-        /* place the pivot at the correct place. */
-        vec^[scan] = raw_pivot;
-
-        /* recurse. */
-        sort(vec, first, scan-1);
-        sort(vec, scan+1, last);
-    }
-
     float64 sum(Floats^ vec) {
         float64 total = 0.0;
-        for (value : vec^) {
-            total += value;
+        for (ref : vec^) {
+            total += ref^.value_;
         }
+
+        /*println("sorted:");
+        for (ref : vec^) {
+            println(String + ref^.value_);
+        }*/
+
         return total;
     }
 }

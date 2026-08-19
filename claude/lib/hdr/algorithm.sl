@@ -18,7 +18,7 @@ intptr countof<T=[N]>(T arg) {
 return the size of a container class.
 the class must define a size() method.
 */
-intptr countof<T=Classes>(T arg) {
+intptr countof<T=ClassSet>(T arg) {
     return arg.size();
 }
 

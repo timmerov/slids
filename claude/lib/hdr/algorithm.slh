@@ -5,16 +5,16 @@ algorithm library.
 /*
 useful type sets for template specialization.
 */
-alias SignedIntegers = <int|int8|int16|int32|int64>;
-alias UnsignedIntegers = <uint|uint8|uint16|uint32|uint64>;
-alias Integers = <SignedIntegers|UnsignedIntegers>;
-alias Floats = <float|float32|float64>;
-alias Numbers = <Integers|Floats>;
-alias Pointers = <^|[]>;
-alias Primitives = <bool|char|intptr|Numbers|Pointers>;
-alias Arrays = <[N]>;
-alias Tuples = <()>;
-alias Classes = !<Arrays|Tuples|Primitives>;
+alias SignedIntegerSet = <int|int8|int16|int32|int64>;
+alias UnsignedIntegerSet = <uint|uint8|uint16|uint32|uint64>;
+alias IntegerSet = <SignedIntegerSet|UnsignedIntegerSet>;
+alias FloatSet = <float|float32|float64>;
+alias NumberSet = <IntegerSet|FloatSet>;
+alias PointerSet = <^|[]>;
+alias PrimitiveSet = <bool|char|intptr|NumberSet|PointerSet>;
+alias ArraySet = <[N]>;
+alias TupleSet = <()>;
+alias ClassSet = !<ArraySet|TupleSet|PrimitiveSet>;
 
 /*
 return the number of elements in an array.
@@ -25,7 +25,7 @@ intptr countof<T=[N]>(T arg);
 return the size of a container class.
 the class must define a size() method.
 */
-intptr countof<T=Classes>(T arg);
+intptr countof<T=ClassSet>(T arg);
 
 /*
 quicksort an array or a container class.
