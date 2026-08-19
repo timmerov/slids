@@ -101,17 +101,10 @@ Ring(
 }
 alias Rings = Vector<Ring>;
 
+/* store a list of floats that can be sorted by absolute value. */
 Float(float64 value_) {
     bool op<(Float^ rhs) {
-        x = value_;
-        y = rhs^.value_;
-        if (x < 0.0) {
-            x = - x;
-        }
-        if (y < 0.0) {
-            y = - y;
-        }
-        return (x < y);
+        return (math:fabs(value_) < math:fabs(rhs^.value_));
     }
 }
 alias Floats = Vector<Float>;
