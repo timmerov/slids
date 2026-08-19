@@ -21,6 +21,7 @@ IFLAGS    = -I $(LIB_HDR)
 
 # Every .sl in the directory is a TU of the one binary — no hand-maintained list.
 SL_SRCS = $(wildcard *.sl)
+SL_STEMS = $(SL_SRCS:.sl=)
 SL_OBJS = $(addprefix $(BUILD_DIR)/,$(SL_SRCS:.sl=.o))
 
 .PHONY: all clean guthrie
@@ -33,26 +34,23 @@ all: guthrie
 
 guthrie: $(BIN_DIR)/guthrie
 
-# The binary: every .sl object, the template library TUs (dump + vector), the
-# native random TU, and the library.
-$(BIN_DIR)/guthrie: $(SL_OBJS) $(BUILD_DIR)/dump.o $(BUILD_DIR)/vector.o \
+# THE IMPORT SCAN (slidsc --scan-deps): every TU's generated fragment wires
+# the template-library instantiation stage — each library it pulls in, the
+# ordering (that TU's demand pool before the library compiles; the fragments'
+# lines merge across TUs, so a library waits for EVERY consumer), the compile
+# flags (SLIDS_INST), and the objects the link needs (<stem>_TMPL_OBJS).
+# Included BEFORE the link rule so its prerequisites can read the variables;
+# a missing fragment is generated and make restarts itself.
+ifneq ($(MAKECMDGOALS),clean)
+-include $(SL_STEMS:%=$(BUILD_DIR)/%.deps.mk)
+endif
+
+# The binary: every .sl object, the UNION of the fragments' template-library
+# objects, the native random TU, and the library.
+$(BIN_DIR)/guthrie: $(SL_OBJS) \
+		$(sort $(foreach s,$(SL_STEMS),$($(s)_TMPL_OBJS))) \
 		$(BUILD_DIR)/random.o $(LIB_BUILD)/libslids.o
 	$(CXX) $^ -o $@
-
-# THE POST-COMPILE PRE-LINK STAGE (the test/import + test/progress shape):
-# dump and vector are TEMPLATE libraries, so each source compiles AFTER every
-# consumer, reading the demand pool (each consumer's .sli, dumped beside its
-# .ll) with --instantiate — every demanded flavor emitted once, externally, by
-# the library's own TU. The demand pool's PROVENANCE imports name the
-# consumers' own headers (guthrie.slh etc.), so this directory joins the
-# import path.
-$(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(SL_OBJS:.o=.ll) $(SLIDSC)
-	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
-
-$(BUILD_DIR)/vector.ll: $(LIB_HDR)/vector.sl $(SL_OBJS:.o=.ll) $(SLIDSC)
-	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
 
 # random.cc is a native C++ TU (the RNG wrapper). Only this one .cc builds; the
 # other .cc files are the C++ originals the .sl ports came from.
@@ -62,6 +60,17 @@ $(BUILD_DIR)/random.o: random.cc random.h
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
+
+# A TEMPLATE LIBRARY out of lib/hdr: the generated fragments supply the
+# ordering and the flags (SLIDS_INST = `-I . --instantiate <build>` — this
+# directory joins the import path for the pool's provenance imports).
+$(BUILD_DIR)/%.ll: $(LIB_HDR)/%.sl $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS) $(SLIDS_INST)
+
+$(BUILD_DIR)/%.deps.mk: %.sl $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< --scan-deps $@ $(IFLAGS)
 
 # slidsc writes a `.d` alongside each `.ll` (-MF): the make rule naming every
 # `.slh` that compile imported. Editing a header re-triggers the compiles that

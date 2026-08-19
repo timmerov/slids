@@ -643,6 +643,9 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                 if (t.kind == token::Kind::kSemicolon) {
                     state = State::Normal;
                     std::string module = saved_ident.text;
+                    // The statement is consumed below — record the edge first
+                    // (dedup included), so --scan-deps sees the full graph.
+                    out.import_edges.emplace_back(file_id, module);
                     std::string header = module + ".slh";
 
                     std::vector<std::string> search;

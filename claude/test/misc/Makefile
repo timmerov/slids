@@ -11,9 +11,8 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
-# The library headers (lib/hdr) are on every compile's import path; every
-# binary links the merged library object build/lib/libslids.o (extra
-# prerequisite below).
+# The library: headers on every compile's import path; every binary links
+# the merged library object build/lib/libslids.o.
 LIB       = ../../lib
 LIB_HDR   = $(LIB)/hdr
 LIB_BUILD = ../../build/lib
@@ -38,21 +37,47 @@ negatives:
 positives: all
 	@../run_positives.sh $(DIR) $(SAMPLES)
 
+# THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
+# its template-library instantiation stage — which imported modules are
+# template libraries, their build ordering (the consumer's demand pool first,
+# then library-to-library edges), their compile flags (a target-specific
+# SLIDS_INST the generic .ll rule splices in), and the extra objects the link
+# needs (<sample>_TMPL_OBJS). Included BEFORE the sample rules so the link
+# prerequisites can read the variables. A missing fragment has a rule below,
+# so make generates it and RESTARTS itself with full knowledge — the first
+# build links right with no hand-maintained library lists. (Guarded so
+# `make clean` doesn't generate fragments just to delete them.)
+ifneq ($(MAKECMDGOALS),clean)
+-include $(SAMPLES:%=$(BUILD_DIR)/%.deps.mk)
+endif
+
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)
 
-$(BIN_DIR)/$(1): $(BUILD_DIR)/$(1).o
+$(BIN_DIR)/$(1): $(BUILD_DIR)/$(1).o $($(1)_TMPL_OBJS)
 	$(CXX) $$^ -o $$@
-
-$(BUILD_DIR)/$(1).o: $(BUILD_DIR)/$(1).ll
-	$(LLC) $(LLCFLAGS) $$< -o $$@
 
 $(BUILD_DIR)/$(1).ll: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $$< -o $$@ -MF $(BUILD_DIR)/$(1).d $(IFLAGS)
+
+$(BUILD_DIR)/$(1).deps.mk: $(1).sl $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $$< --scan-deps $$@ $(IFLAGS)
 endef
 
 $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
+
+# One .ll -> .o step serves samples and template libraries alike.
+$(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
+	$(LLC) $(LLCFLAGS) $< -o $@
+
+# A TEMPLATE LIBRARY out of lib/hdr: the generated fragments supply the
+# ordering (after its consumers' demand pools) and the flags (SLIDS_INST =
+# `-I . --instantiate <build>`); this one rule builds any of them.
+$(BUILD_DIR)/%.ll: $(LIB_HDR)/%.sl $(SLIDSC)
+	mkdir -p $(BUILD_DIR)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS) $(SLIDS_INST)
 
 # slidsc writes a `.d` alongside each `.ll` (-MF): the make rule naming every
 # `.slh` that compile imported, transitively. Editing a header re-triggers the
@@ -65,44 +90,6 @@ $(foreach s,$(SAMPLES),$(eval $(call SAMPLE_RULES,$(s))))
 # Every sample links the library (an extra prerequisite onto the template
 # rule; $^ in the link recipe picks it up).
 $(addprefix $(BIN_DIR)/,$(SAMPLES)): $(LIB_BUILD)/libslids.o
-
-# THE POST-COMPILE PRE-LINK STAGE (the test/import + test/progress shape). vector is a
-# TEMPLATE library: a consumer only DEMANDS a flavor, and the flavor's synthesized hooks
-# (`__$ctor` / `__$dtor` / the transfer ops) are emitted ONCE, externally, by the
-# library's own TU compiled against the demand pool. So vector.sl compiles AFTER its
-# consumer here, reading the .sli slidsc dumps beside the consumer's .ll.
-$(BUILD_DIR)/vector.ll: $(LIB_HDR)/vector.sl $(BUILD_DIR)/bug.ll $(SLIDSC)
-	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/vector.d $(IFLAGS) --instantiate $(BUILD_DIR)
-
-# The library TU is not a SAMPLE, so it needs its own .ll -> .o step (the samples get
-# theirs from SAMPLE_RULES).
-$(BUILD_DIR)/vector.o: $(BUILD_DIR)/vector.ll
-	$(LLC) $(LLCFLAGS) $< -o $@
-
-# dump is the directory's OTHER template library — and vector.sl calls dump
-# itself, so dump's TU compiles LAST, after bug's and vector's demand pools
-# both exist.
-$(BUILD_DIR)/dump.ll: $(LIB_HDR)/dump.sl $(BUILD_DIR)/bug.ll $(BUILD_DIR)/vector.ll $(SLIDSC)
-	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/dump.d $(IFLAGS) -I . --instantiate $(BUILD_DIR)
-
-$(BUILD_DIR)/dump.o: $(BUILD_DIR)/dump.ll
-	$(LLC) $(LLCFLAGS) $< -o $@
-
-# algorithm is the directory's THIRD template library (countof + quicksort,
-# specialized over bug's demand pool). It imports nothing beyond its own
-# header, so only bug's demand pool gates it.
-$(BUILD_DIR)/algorithm.ll: $(LIB_HDR)/algorithm.sl $(BUILD_DIR)/bug.ll $(SLIDSC)
-	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/algorithm.d $(IFLAGS) --instantiate $(BUILD_DIR)
-
-$(BUILD_DIR)/algorithm.o: $(BUILD_DIR)/algorithm.ll
-	$(LLC) $(LLCFLAGS) $< -o $@
-
-# bug is this directory's only consumer of the template libraries, so it alone links
-# the aggregated flavors (extra prerequisites; the template rule's `$^` picks them up).
-$(BIN_DIR)/bug: $(BUILD_DIR)/vector.o $(BUILD_DIR)/dump.o $(BUILD_DIR)/algorithm.o
 
 # Built by lib's own Makefile (make.sh order); self-heals a standalone build.
 $(LIB_BUILD)/libslids.o:

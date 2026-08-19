@@ -2,6 +2,7 @@
 
 #include <deque>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace token {
@@ -103,6 +104,11 @@ struct File {
 struct List {
     std::vector<Token> tokens;
     std::deque<File> files;     // deque for stable references — Stream holds a pointer to source
+    // Every `import module;` statement the lexer consumed: (importing file id,
+    // module name) — INCLUDING deduplicated repeats, so the full import graph
+    // survives the statements' removal from the stream. Serves --scan-deps'
+    // library-ordering edges.
+    std::vector<std::pair<int, std::string>> import_edges;
 };
 
 void add(List& list, Token const& tok);
