@@ -26,6 +26,7 @@ IFLAGS    = -I $(LIB_HDR)
 # `vector_test` exercise their libraries; `galaxy` is the scratch sandbox.
 SAMPLES = \
 	galaxy \
+	gambler \
 	string_test \
 	vector_test
 
@@ -71,6 +72,7 @@ endef
 
 # galaxy's math.slh `import { }` block binds libm — its link takes -lm.
 $(eval $(call SAMPLE_RULES,galaxy,.,-lm))
+$(eval $(call SAMPLE_RULES,gambler,.,))
 $(eval $(call SAMPLE_RULES,string_test,.,))
 $(eval $(call SAMPLE_RULES,vector_test,$(LIB_HDR),))
 
