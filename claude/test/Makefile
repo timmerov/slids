@@ -11,6 +11,7 @@ SUBDIRS = \
 	misc \
 	pointer \
 	progress \
+	puzzles \
 	template \
 	tuple
 

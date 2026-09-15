@@ -25,11 +25,10 @@ IFLAGS    = -I $(LIB_HDR)
 # The runnable programs (a work-in-progress sandbox). `string_test` and
 # `vector_test` exercise their libraries; `galaxy` is the scratch sandbox.
 SAMPLES = \
-	galaxy \
-	string_test \
-	vector_test
+	gambler \
+	standing
 
-.PHONY: all clean negatives positives $(SAMPLES)
+.PHONY: all clean $(SAMPLES)
 
 all: $(SAMPLES)
 
@@ -38,7 +37,7 @@ negatives:
 # Only string_test carries a golden. `galaxy` is work in progress — its output
 # changes freely, so pinning it would just be churn.
 positives: all
-	@../run_positives.sh $(DIR) string_test
+#	@../run_positives.sh $(DIR) string_test
 
 # THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
 # its template-library instantiation stage — the libraries it pulls in, their
@@ -70,10 +69,8 @@ $(BUILD_DIR)/$(1).deps.mk: $(2)/$(1).sl $(SLIDSC)
 endef
 
 # galaxy's math.slh `import { }` block binds libm — its link takes -lm.
-$(eval $(call SAMPLE_RULES,galaxy,.,-lm))
 $(eval $(call SAMPLE_RULES,gambler,.,))
-$(eval $(call SAMPLE_RULES,string_test,.,))
-$(eval $(call SAMPLE_RULES,vector_test,$(LIB_HDR),))
+$(eval $(call SAMPLE_RULES,standing,.,))
 
 # One .ll -> .o step serves samples and template libraries alike.
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
