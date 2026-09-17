@@ -2571,9 +2571,8 @@ STAGE FILES (.h / .cpp pairs)
             link-time symbol / convention expression — so it IS allocatable);
             void / a tuple with a class slot / unsized -> "Cannot allocate" (carets
             the element type, name_tok). An ARRAY of an imported OPAQUE class — or of
-            a COMPUTED-layout class — is also
-            rejected (`new C[n]` — the element stride is not a static layout, the heap twin of
-            the stack `C a[n]` ban; single `new C` needs no stride and is fine — see
+            a COMPUTED-layout class — is LEGAL (since 2026-09-16; codegen lays it out
+            at the convention stride exactly like the stack `C a[n]` local — see
             readme-classes.txt OPAQUE CLASSES). An array size must be integer-class; a
             placement address must be a buffer-class pointer (isBufferClassPtr, the
             cast set void^/int8^/uint8^);
@@ -3008,7 +3007,11 @@ STAGE FILES (.h / .cpp pairs)
             default-constructs); an array WITH a size-matched initializer builds the
             whole `T[k]` in one emitConstructAt (the array<->tuple bridge distributes
             it + runs each element's ctor); an array with NO initializer broadcasts the
-            default value per slot, each finalized via emitConstructed. delete of a
+            default value per slot, each finalized via emitConstructed — a RUNTIME-SIZED
+            element (imported opaque / computed) instead mallocs at the convention
+            stride and builds each slot through emitConstructAt at an emitElemAddr
+            address; the cookie gate is delete's (`typeNeedsHook || sizeIsDynamic`) and
+            delete's reverse loop steps through emitElemAddr too. delete of a
             class runs its complete dtor — see readme-classes.txt. kDeleteStmt: load the pointer, `call void
             @free(ptr)`, store null back to its alloca. malloc / free are declared in
             the module preamble (the only C symbols the compiler declares itself

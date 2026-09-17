@@ -3,9 +3,6 @@ agenda:
 an incomplete class fails as a class field, array type, tuple slot,
 probably more.
 these should be valid:
-Class(String str_) { }
-String names[3];
-(int, String) tuple = (1, "hi");
 ptr = new String[3];
 global String s;
 Vector<String> vec; vec.append("segfaults");

@@ -1768,9 +1768,10 @@ Phase 8 — namespaces + cross-TU
       destruct through $ctor/$dtor — emitConstructed / emitDestructHooks / the emission gates now
       test `typeNeedsHook || sizeIsDynamic` (the POD-opaque rule, extended to opaque-BEARING
       storage), or the importer reads uninitialized hidden fields (the bug that was here).
-      Rejections in an importer: a bare opaque GLOBAL, `new C[n]`, a by-value PARAM (the standing
-      munge rule). By-value EMBEDDING (field/array/tuple) is LEGAL since 2026-07-29 — see
-      COMPUTED LAYOUT below. A bare local, a pointer, and single `new C` were always fine.
+      Rejections in an importer: a bare opaque GLOBAL, a by-value PARAM (the standing munge
+      rule). By-value EMBEDDING (field/array/tuple) is LEGAL since 2026-07-29 — see COMPUTED
+      LAYOUT below; `new C[n]` since 2026-09-16 (HEAP ARRAYS OF RUNTIME-SIZED ELEMENTS below).
+      A bare local, a pointer, and single `new C` were always fine.
       Canon test/import Rope / Mix (all field kinds) / Flat (POD).
       Detail: readme-classes.txt OPAQUE CLASSES. [[project_opaque_classes]]
       A CLASS-TEMPLATE INSTANCE IS NEVER OPAQUE — FIXED 2026-07-28. The opaque flag asks "can this
@@ -1809,8 +1810,9 @@ Phase 8 — namespaces + cross-TU
       precedes that symbol in any TU — the role-split $pctor left the sibling's synthesized ctor
       constructing hooks over unfilled fields), and the site fill of a computed class SKIPS its
       ctor-owned slots in every TU (emitConstructHooks in_ctor_body + slotCtorOwned). STILL
-      REJECTED: globals of convention types (static storage), `new C[n]` of imported-opaque /
-      computed elements, by-value params, and — completer-side — an opaque class whose exported
+      REJECTED: globals of convention types (static storage), by-value params [`new C[n]` of
+      imported-opaque / computed elements was rejected here too until 2026-09-16 — see HEAP
+      ARRAYS OF RUNTIME-SIZED ELEMENTS], and — completer-side — an opaque class whose exported
       layout cannot FOLD because a hidden field embeds another module's incomplete/computed class
       (checkOpaqueExportFoldable: an ELF symtab cannot hold a relocation; canon the SECOND header
       module extra.slh/extra.sl — BadPack completed with a hidden Rope / a hidden computed LPack).
@@ -1854,9 +1856,10 @@ Phase 8 — namespaces + cross-TU
       REJECTED: an initializer list in an importer (classifyClassInit — it can name the fields
       but not place them, and silently dropping the list is worse than refusing it); a `.sl`-LOCAL
       class over an opaque base (nothing outside the TU can name it, so no sibling exports its
-      offsets); a VIRTUAL one (the base holds the slot the vptr needs). A bare global and
-      `new T[n]` stay barred like the base's; by-value EMBEDDING of the derived class is legal
-      since 2026-07-29 (a computed-layout leaf riding `@C__$size16` — canon TCase).
+      offsets); a VIRTUAL one (the base holds the slot the vptr needs). A bare global stays
+      barred like the base's; by-value EMBEDDING of the derived class is legal since
+      2026-07-29 (a computed-layout leaf riding `@C__$size16` — canon TCase), and `new T[n]`
+      since 2026-09-16 (canon: the heap Tagged array in consumer.sl).
       checkClassByValueAcyclic still descends into the base for the cycle check.
       Canon test/import Tagged (own fields read + written through the offset symbols, base
       methods on a derived receiver, upcast, `new`, copy/move/swap/assign, negatives).
@@ -3468,6 +3471,33 @@ ambiguity-example additions).
     (replaces the repealed same-arity clash), pattern-mismatch surfacing,
     conflicting-bindings surfacing.
   Detail: readme.txt SPECIALIZATION + TYPE SETS selection passage.
+
+HEAP ARRAYS OF RUNTIME-SIZED ELEMENTS (landed 2026-09-16 — bug fix; canon
+test/import consumer.sl). `new C[n]` of an imported-opaque, computed-layout,
+or runtime-layout element was the last "STILL REJECTED" heap case (classify:
+"its element stride is not a static layout here"), left over from before
+emitElemAddr existed. The user's driver: `list = new String[3]` in a String
+importer. Since the iterator steps moved onto the element funnel (2026-08-04)
+indexing already strode by @C__$size16; only the heap-array arm itself still
+assumed a static LLVM element type. Three codegen changes, no new rule:
+  - kNewExpr's cookie gate became `typeNeedsHook || sizeIsDynamic` — the SAME
+    gate kDeleteStmt already read (they had drifted: a completer's own POD
+    opaque array would have had delete read a cookie new[] never wrote);
+  - the malloc strides by emitSizeValue(round16) when the element is
+    runtime-sized (what emitElemAddr steps by), and each slot is addressed
+    through emitElemAddr and built through emitConstructAt like the stack
+    `C a[n]` local (visible-field fill + routed @C__$ctor) — the placeholder
+    LLVM type has no whole value to broadcast, so the evaluate-once broadcast
+    stays for static elements only;
+  - kDeleteStmt's reverse dtor loop steps through emitElemAddr instead of a
+    typed GEP (the same one-byte-placeholder hazard the iterator fix removed).
+  Coverage: heap Rope (hooks), Flat (POD — cookie + routed ctor without hooks),
+  Sack (computed layout), Tagged (runtime layout; its printing hooks pin the
+  count and reverse destruction order). The three heap negatives retired.
+  STILL OPEN (deferred by the user): a GLOBAL of a runtime-sized type — the
+  proposed shape is a pointer slot the first-touch thunk mallocs at size16 and
+  the dtor registry frees, uniform in every TU incl. the completer.
+  Detail: readme-classes.txt NEW T[n] (class-operator chains) + OPAQUE CLASSES.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

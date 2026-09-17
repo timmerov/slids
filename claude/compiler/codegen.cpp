@@ -1737,13 +1737,24 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                              == widen::Type::Form::kArray;
                     if (is_class) {
                         // A HOOK class prepends an 8-byte count COOKIE so delete can
-                        // loop the dtor. Construction (default-broadcast or whole-array
-                        // init) routes through the funnel; `new` owns no SCOPE dtor
-                        // (delete frees it), so register_dtor=false / scope=nullptr.
-                        bool needs = typeNeedsHook(es, /*ctor=*/false);
+                        // loop the dtor — and so does any OPAQUE-BEARING element (the
+                        // routed obligation: its @C__$dtor must run per element, hooks
+                        // or not). This gate and kDeleteStmt's MUST agree, or delete
+                        // reads a cookie new[] never wrote. Construction (default-
+                        // broadcast or whole-array init) routes through the funnel;
+                        // `new` owns no SCOPE dtor (delete frees it), so
+                        // register_dtor=false / scope=nullptr.
+                        bool dyn = widen::sizeIsDynamic(es);
+                        bool needs = typeNeedsHook(es, /*ctor=*/false) || dyn;
+                        // The element STRIDE: a static class packs at its LLVM size;
+                        // a runtime-sized one at the convention stride (size16) —
+                        // the same value emitElemAddr steps by, so the allocation
+                        // covers every element the index path can reach.
+                        std::string stride = dyn
+                            ? emitSizeValue(es, /*round16=*/true, out) : elem_size;
                         std::string db = newTmp("nbytes");
                         out << "  " << db << " = mul i64 " << n << ", "
-                            << elem_size << "\n";
+                            << stride << "\n";
                         if (needs) {
                             std::string tot = newTmp("ntot");
                             out << "  " << tot << " = add i64 8, " << db << "\n";
@@ -1769,9 +1780,15 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                         } else {
                             // Uniform default: broadcast the one default value into
                             // every slot (evaluate-once), then FINALIZE each element
-                            // through emitConstructed (register_dtor=false).
-                            std::string defv = emitExpr(*expr.children[2], syms, pool,
-                                                        out, diag, expr.return_type);
+                            // through emitConstructed (register_dtor=false). A
+                            // RUNTIME-SIZED element has no whole value to broadcast
+                            // (its LLVM type is the placeholder): each slot is built
+                            // through emitConstructAt like the stack local — the
+                            // visible-field fill, then the routed @C__$ctor.
+                            std::string defv;
+                            if (!dyn)
+                                defv = emitExpr(*expr.children[2], syms, pool,
+                                                out, diag, expr.return_type);
                             std::string ll = llvmForRef(expr.return_type);
                             std::string pre = newLabel("newc_pre");
                             std::string cnd = newLabel("newc_cond");
@@ -1791,14 +1808,22 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                             out << "  br i1 " << cmp << ", label %" << bdy
                                 << ", label %" << fin << "\n";
                             out << bdy << ":\n";
-                            std::string elem = newTmp("celem");
-                            out << "  " << elem << " = getelementptr " << ll << ", ptr "
-                                << p << ", i64 " << i << "\n";
-                            out << "  store " << ll << " " << defv << ", ptr " << elem
-                                << "\n";
-                            emitConstructed(elem, expr.return_type,
-                                            /*register_dtor=*/false, /*scope=*/nullptr,
-                                            out);
+                            std::string elem = emitElemAddr(p, es, i, out);
+                            if (dyn) {
+                                emitConstructAt(elem, expr.return_type, ll,
+                                                expr.children[2].get(),
+                                                /*is_move=*/false,
+                                                /*sret_in_place=*/false,
+                                                /*register_dtor=*/false,
+                                                /*scope=*/nullptr, syms, pool, out,
+                                                diag);
+                            } else {
+                                out << "  store " << ll << " " << defv << ", ptr "
+                                    << elem << "\n";
+                                emitConstructed(elem, expr.return_type,
+                                                /*register_dtor=*/false,
+                                                /*scope=*/nullptr, out);
+                            }
                             out << "  " << inx << " = add i64 " << i << ", 1\n";
                             out << "  br label %" << cnd << "\n";
                             out << fin << ":\n";
@@ -2951,7 +2976,6 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     << ", i64 -8\n";
                 std::string cnt = newTmp("dcnt");
                 out << "  " << cnt << " = load i64, ptr " << hdr << "\n";
-                std::string ll = llvmForRef(pointee);
                 std::string cnd = newLabel("deld_cond");
                 std::string lb = newLabel("deld_body");
                 std::string le = newLabel("deld_end");
@@ -2967,9 +2991,10 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     << le << "\n";
                 out << lb << ":\n";
                 out << "  " << iprev << " = sub i64 " << i << ", 1\n";
-                std::string elem = newTmp("delem");
-                out << "  " << elem << " = getelementptr " << ll << ", ptr " << p
-                    << ", i64 " << iprev << "\n";
+                // The element funnel: a static element GEPs by its LLVM type, a
+                // runtime-sized one byte-steps at the convention stride — the SAME
+                // stride new[] allocated and `p[i]` indexes by.
+                std::string elem = emitElemAddr(p, pointee, iprev, out);
                 emitDestructHooks(elem, pointee, out);
                 out << "  br label %" << cnd << "\n";
                 out << le << ":\n";

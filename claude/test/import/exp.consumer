@@ -77,6 +77,14 @@ sack move: 61
 sack swap: 62
 sack assign: 63
 sack new: 70 7
+heap rope: 7 heap tail
+heap flat: 55 0 55
+heap sack: 2 5 71 7
+Tagged:ctor: 3
+Tagged:ctor: 3
+heap tagged: 13 23
+Tagged:dtor: 23
+Tagged:dtor: 13
 crate direct->method: 33
 crate method->direct: 44 id=1 rope=7
 Tagged:ctor: 3

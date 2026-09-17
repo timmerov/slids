@@ -15,41 +15,46 @@ import dump;
 import string;
 import vector;
 
-Container(int a) {
-    bool op<(Container^ rhs) {
-        return (a < rhs^.a);
-    }
-}
-alias Containers = Vector<Container>;
-
 int32 main() {
 
-    //print("Hello, World!");
+    //println("Hello, World!");
 
-    int iarr[2] = (2, 1);
-    quicksort(iarr);
-    //dump(#iarr[0]);
-    //dump(#iarr[1]);
-    println(String + iarr[0] + " < " + iarr[1]);
+    Class(
+        String s1_,
+        String s2_
+    ) {
+    }
+    Class cls;
+    cls.s1_ = "Hello";
+    cls.s2_ = "World";
+    println(cls.s1_ + ", " + cls.s2_);
 
-    float farr[2] = (4.1, 3.2);
-    quicksort(farr);
-    println(String + farr[0] + " < " + farr[1]);
+    String names[3] = ("one", "two", "three");
+    println(names[0] + ", " + names[1] + ", " + names[2] + "!");
 
-    Containers carr;
-    carr.resize(2);
-    carr[0].a = 6;
-    carr[1].a = 5;
+    (int, String) tuple = (1, "hi");
+    println(String + tuple[0] + ": " + tuple[1]);
 
-    /* thes should all work but don't. */
-    /* The 'mutable' qualifier applies only to a pointer (reference / iterator) or array parameter. */
-    quicksort(carr);
-    //quicksort<Containers>(carr);
-    //quicksort<Containers>(^carr);
-    /* A method call requires a class object; got 'T'. */
-    //quicksort(^carr);
+    /* this should work. */
+    list = new String[3];
+    list[0] = "ay";
+    list[1] = "be";
+    list[2] = "see";
+    println(list[0] + ", " + list[1] + ", " + list[2] + "!");
+    delete list;
 
-    println(String + carr[0].a + " < " + carr[1].a);
+    /* this should work. */
+    /*
+    global String g_s;
+    g_s = "global";
+    println(g_s);
+    */
+
+    Vector<String> table;
+    String top = "top";
+    table.append(top);
+    table.append("lamp");
+    println(String + "table: " + table[0] + ", " + table[1]);
 
     return 0;
 }

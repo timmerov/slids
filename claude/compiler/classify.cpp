@@ -2217,23 +2217,11 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     "Cannot allocate '" + elem + "'.", {}});
             }
             // `new C[n]` of an imported OPAQUE class — or of a COMPUTED-layout class
-            // (no static LLVM element type in ANY TU): the heap-array machinery
-            // (cookie, broadcast fill, delete's element loop) runs on a static
-            // element type, so reject the array form. A single `new C` is fine — no
-            // stride, just the size value for the one object. A completer's own
-            // opaque class is unaffected (its element type is the real struct), and
-            // the stack `C a[n]` LOCAL now lays out at the convention stride and is
-            // legal. (A pointer `C^` is always allowed.)
-            if (is_array && widen::form(es) == widen::Type::Form::kSlid
-                && ((widen::slidOpaque(es)
-                     && widen::slidLinkage(es) == widen::Type::Linkage::kDeclare)
-                    || widen::slidComputedLayout(es))) {
-                diagnostic::report(diag, {e.file_id, e.name_tok,
-                    "Cannot allocate an array of incomplete class '" + elem
-                    + "'; its element stride is not a static layout here (allocate a "
-                    "single '" + elem + "' with 'new " + elem
-                    + "', or hold each by pointer).", {}});
-            }
+            // (no static LLVM element type in ANY TU) — is legal: the heap array is
+            // laid out exactly like the stack `C a[n]` local, at the convention
+            // stride (@C__$size16), and codegen's kNewExpr / kDeleteStmt arms address
+            // every element through emitElemAddr and construct / destroy it through
+            // the routed chain. Nothing to gate here.
             // (The abstract-class check is not here: `new Class` builds its object through
             // constructClass -> classifyClassInit below, where the check lives.)
             // Constructor args (children[2]) belong to a SINGLE class object, OR — for

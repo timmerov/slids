@@ -315,6 +315,37 @@ int32 main() {
     println(String + "sack new: " + sp2^.post_ + " " + sp2^.r_.tag());
     delete sp2;
 
+    // ── HEAP ARRAYS of runtime-sized elements (the old negatives). `new C[n]`
+    // mallocs n x the CONVENTION stride (@C__$size16), lays down the count cookie
+    // whenever the element is opaque-bearing (the same gate delete reads — hooks or
+    // not), and constructs / destroys every element through the routed chain,
+    // addressed by the one element funnel: `p[i]` here and delete's reverse loop
+    // land on the same bytes.
+    Rope[] hr = new Rope[3];
+    hr[1].set("heap");
+    hr[2].set("tail");
+    println(String + "heap rope: " + hr[0].tag() + " " + hr[1].get() + " " + hr[2].get());
+    delete hr;
+    // the POD opaque leaf: no hooks, yet the cookie and @Flat__$ctor still apply —
+    // every element must arrive {55, 0}.
+    Flat[] hf = new Flat[2];
+    println(String + "heap flat: " + hf[0].a() + " " + hf[1].b() + " " + hf[1].a());
+    delete hf;
+    // an EMBEDDING (computed-layout) element: the static fields default-filled at
+    // the convention offsets, the Rope slot ctor-owned.
+    Sack[] hs = new Sack[2];
+    hs[1].post_ = 71;
+    println(String + "heap sack: " + hs[0].pre_ + " " + hs[0].post_ + " "
+            + hs[1].post_ + " " + hs[1].r_.tag());
+    delete hs;
+    // a derived-from-opaque (runtime-layout) element. Tagged prints its hooks, so
+    // the element COUNT and the REVERSE destruction order are visible.
+    Tagged[] ht = new Tagged[2];
+    ht[0].bump();
+    ht[1].bump(); ht[1].bump();
+    println(String + "heap tagged: " + ht[0].mark() + " " + ht[1].mark_);
+    delete ht;
+
     // THE SEAM TEST: Crate is a HEADER class embedding Rope, so both TUs compute
     // its layout independently by the convention. A direct write here must be seen
     // by a method the sibling compiled, and vice versa.
@@ -428,7 +459,6 @@ sizes. What REMAINS illegal is exactly what still needs a fact this TU cannot ha
   - reaching a hidden field / passing a construction initializer (no field to see);
   - any GLOBAL whose storage would need the layout (static storage can't be
     runtime-sized) — bare opaque, or an aggregate/computed-class embedding one;
-  - `new C[n]` (the heap-array machinery runs on a static element type);
   - a BY-VALUE parameter (the standing rule for every class: non-primitives pass
     by pointer).
 */
@@ -452,15 +482,6 @@ sizes. What REMAINS illegal is exactly what still needs a fact this TU cannot ha
 //-EXPECT-ERROR: embeds incomplete class 'Rope'
 //global Sack gsack;
 
-/* `new C[n]` stays out: the heap-array machinery (cookie, broadcast fill, delete's
-   element loop) runs on a static element type. A single `new C` is fine. */
-//-EXPECT-ERROR: array of incomplete class
-//void neg_newarr() { Rope[] p = new Rope[3]; delete p; }
-
-/* the heap twin for an EMBEDDING (computed-layout) class. */
-//-EXPECT-ERROR: array of incomplete class
-//void neg_newemb() { Sack[] p = new Sack[3]; delete p; }
-
 /* BY-VALUE parameters are prohibited — the standing non-primitive rule; an opaque
    class gets no special dispensation. */
 //-EXPECT-ERROR: A non-primitive parameter must be a pointer
@@ -471,8 +492,8 @@ Tagged DERIVES from Rope, so it inherits that unknown layout wholesale: this TU 
 its fields and read and write them, but it cannot PLACE them. Default construction is the
 only form here — an initializer would have to be written at an offset past a base only the
 completer can measure, and dropping it silently would be worse than refusing it. Embedding
-a Tagged by value is LEGAL now (TCase in main — the leaf rides @Tagged__$size16); the
-global and heap-array bans hold for the identical static-storage/static-stride reasons.
+a Tagged by value is LEGAL now (TCase in main — the leaf rides @Tagged__$size16), and
+so is a heap array of them (main); the global ban holds for the static-storage reason.
 */
 
 //-EXPECT-ERROR: can only be default-constructed here
@@ -480,6 +501,3 @@ global and heap-array bans hold for the identical static-storage/static-stride r
 
 //-EXPECT-ERROR: a global needs static storage
 //global Tagged gtbad;
-
-//-EXPECT-ERROR: array of incomplete class
-//void neg_derived_newarr() { Tagged[] p = new Tagged[3]; delete p; }

@@ -783,8 +783,17 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     uniformly default-inits each element (broadcast the default value into the slot,
     finalize per element via emitConstructed); a HOOK class additionally prepends an
     8-byte count COOKIE (the returned pointer is malloc+8) so delete can loop the dtor.
-    The cookie gates on needs; the broadcast does not (a trivial class still has field
-    defaults). WITH a size-matched initializer `new T[k](a, b, ...)` (k a LITERAL),
+    The cookie gates on `typeNeedsHook || sizeIsDynamic` — the SAME gate kDeleteStmt
+    reads, so an opaque-bearing element (routed @C__$dtor per element, hooks or not) is
+    cookie'd too; the broadcast does not gate (a trivial class still has field defaults).
+    A RUNTIME-SIZED element (imported opaque / computed layout — landed 2026-09-16, the
+    old "heap-array machinery needs a static element type" ban): the malloc is n x the
+    CONVENTION stride (emitSizeValue round16 — what emitElemAddr steps by), each slot is
+    addressed through emitElemAddr and built through emitConstructAt like the stack
+    `C a[n]` local (visible-field fill, then the routed @C__$ctor; the placeholder LLVM
+    type has no whole value to broadcast), and delete's reverse loop steps through
+    emitElemAddr at the same stride. Canon test/import consumer (heap Rope / Flat /
+    Sack / Tagged). WITH a size-matched initializer `new T[k](a, b, ...)` (k a LITERAL),
     classify types children[2] as the `T[k]` array (classifyArrayFromTuple — the same
     shape check + per-element construction as the stack `T arr[k](...)` form) and codegen
     builds the WHOLE array in ONE emitConstructAt: the array<->tuple bridge distributes it
@@ -1659,9 +1668,7 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     a bare local array — is LEGAL since 2026-07-29: the container gets a COMPUTED LAYOUT (next
     section). WHAT REMAINS REJECTED: a GLOBAL whose storage would need the layout (a bare
     imported-opaque global, or any convention-laid-out type — static storage cannot be
-    runtime-sized; the var-entry pass in resolve); `new C[n]` of an imported opaque or computed
-    class (classify — the heap-array machinery runs on a static element type; a completer's own
-    opaque element stays allowed, it is the real struct); a BY-VALUE parameter (the standing
+    runtime-sized; the var-entry pass in resolve); a BY-VALUE parameter (the standing
     non-primitive munge rule — no opaque dispensation); reaching a hidden field or passing a
     construction initializer (the importer sees no such field / zero fields); and, NEW,
     completer-side: an opaque class whose exported layout cannot FOLD because a (hidden) field
@@ -1713,8 +1720,9 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     OUTRIGHT: a `.sl`-LOCAL class over an opaque base (nothing outside the TU can name it, so no
     sibling exports its offsets, and it cannot fold them itself); a VIRTUAL one (the base occupies
     the slot the vptr needs, and the base's own vptr is hidden besides). Everything barred for the
-    base is barred for the derived class for the identical reason — by-value embedding, a bare
-    global, `new T[n]` — because runtime_layout implies opaque. checkClassByValueAcyclic lets the
+    base is barred for the derived class for the identical reason — a bare global — because
+    runtime_layout implies opaque (by-value embedding and `new T[n]` are legal for both, riding
+    the same convention stride). checkClassByValueAcyclic lets the
     `_$base` slot through while still descending into the base for the CYCLE check; a NAMED field
     of the same opaque type stays rejected.
     Canon test/import Tagged: own fields read and written through the table then read back through
@@ -1781,8 +1789,10 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     passes an EXPLICIT initializer for opaque content nested deeper (a tuple slot mixing opaque
     and static, inside a computed class) is refilled to defaults rather than rejected.
     STILL REJECTED: any GLOBAL of a convention-laid-out type (static storage cannot be
-    runtime-sized); `new C[n]` of an imported-opaque or computed element; by-value parameters
-    (the standing rule); the completer-unfoldable exports (checkOpaqueExportFoldable, above).
+    runtime-sized); by-value parameters (the standing rule); the completer-unfoldable exports
+    (checkOpaqueExportFoldable, above). `new C[n]` of a runtime-sized element is LEGAL since
+    2026-09-16 (the heap twin of the local array — see NEW T[n] under the class-operator
+    chains above).
     FIELD ORDER IS NOT SPEC'D, so a later pass may still REORDER statics first to maximize the
     constant-offset prefix — now purely a micro-optimization (fewer symbolic terms), not a
     correctness lever.
