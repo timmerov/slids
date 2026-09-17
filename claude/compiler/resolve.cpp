@@ -7331,41 +7331,6 @@ void checkOpaqueExportFoldable(parse::Tree& tree, parse::Node& node,
     }
 }
 
-// The OPAQUE class (ANY linkage — the layout convention is universal) that `t`
-// embeds BY VALUE as an aggregate member, or kNoType. The top-level type is NOT
-// itself flagged — a bare opaque instance is its own regime — only array
-// elements, tuple slots, and by-value class fields are. Used to attribute the
-// GLOBAL rejection (convention-laid-out storage has no static lowering). A
-// pointer / iterator breaks the walk. `seen` bounds recursion through class
-// fields (cycles are rejected elsewhere, but a self-referential graph must not
-// loop here).
-widen::TypeRef aggregateEmbedsOpaque(widen::TypeRef t, std::set<widen::TypeRef>& seen) {
-    widen::TypeRef s = widen::strip(t);
-    using F = widen::Type::Form;
-    F form = widen::form(s);
-    auto opaqueClass = [](widen::TypeRef r) {
-        return widen::form(r) == widen::Type::Form::kSlid && widen::slidOpaque(r);
-    };
-    if (form == F::kArray) {
-        widen::TypeRef e = widen::strip(widen::get(s).elem);
-        if (opaqueClass(e)) return e;
-        return aggregateEmbedsOpaque(e, seen);
-    }
-    // A tuple, or a NON-opaque class (whose real fields are visible here): scan slots. An
-    // opaque class's own slots are not the walk's business (hidden or partial), so don't
-    // descend into them.
-    if (form == F::kTuple || (form == F::kSlid && !widen::slidOpaque(s))) {
-        if (form == F::kSlid && !seen.insert(s).second) return widen::kNoType;
-        for (widen::TypeRef sl : widen::get(s).slots) {
-            widen::TypeRef ss = widen::strip(sl);
-            if (opaqueClass(ss)) return ss;
-            widen::TypeRef r = aggregateEmbedsOpaque(ss, seen);
-            if (r != widen::kNoType) return r;
-        }
-    }
-    return widen::kNoType;
-}
-
 // Register the classes defined DIRECTLY in one scope (a statement list), TWO-PHASE
 // like the file-scope passes, so a local class field may forward-reference a
 // sibling. Only processes not-yet-registered classes (idempotent — a function
@@ -10136,43 +10101,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         if (ch) mungeParamTypes(tree, *ch, diag);
     }
 
-    // A GLOBAL whose storage has no static lowering is rejected: a global's
-    // storage is STATIC (sized at compile/link of its own TU), and the
-    // runtime-sized-alloca trick locals use has no analogue. That is a bare
-    // imported-opaque global (size lives elsewhere), and any CONVENTION-laid-out
-    // type — a computed-layout class, or a tuple/array embedding an opaque class
-    // by value (EVEN in that class's completer: the convention lowers those to
-    // the placeholder in every TU so the layout agrees across the seam). LOCALS
-    // of all of these are legal now — a runtime-sized alloca plus convention
-    // offsets (COMPUTED LAYOUT); a bare opaque global in its COMPLETER stays
-    // legal too (real struct). Runs last: every class's opaque flag and every
-    // variable type is final.
-    for (parse::Entry const& e : tree.entries) {
-        if (e.kind != parse::EntryKind::kGlobalVar) continue;
-        widen::TypeRef s = widen::strip(e.slids_type);
-        if (isImportOpaque(s)) {
-            auto oit = tree.classes.find(s);
-            std::string oname = oit != tree.classes.end() ? oit->second.name : "?";
-            diagnostic::report(diag, {e.file_id, e.tok,
-                "Global '" + e.name + "' has imported incomplete class type '" + oname
-                + "'; its size is unknown here and a global needs static storage — "
-                "use a reference '" + oname + "^'.", {}});
-            continue;
-        }
-        bool convention = widen::slidComputedLayout(s)
-            || ((widen::form(s) == widen::Type::Form::kTuple
-                 || widen::form(s) == widen::Type::Form::kArray)
-                && widen::sizeIsDynamic(s));
-        if (!convention) continue;
-        std::set<widen::TypeRef> seen;
-        widen::TypeRef op = aggregateEmbedsOpaque(e.slids_type, seen);
-        auto oit = op != widen::kNoType ? tree.classes.find(op) : tree.classes.end();
-        std::string oname = oit != tree.classes.end() ? oit->second.name : "?";
-        diagnostic::report(diag, {e.file_id, e.tok,
-            "Global '" + e.name + "' embeds incomplete class '" + oname
-            + "' by value; its layout is not a static fact of this module and a "
-            "global needs static storage — use a reference '" + oname + "^'.", {}});
-    }
+    // A GLOBAL of a RUNTIME-SIZED type (a bare imported-opaque class, a computed-
+    // layout class, a tuple/array embedding one — sizeIsDynamic) is LEGAL since
+    // 2026-09-16: static storage cannot be sized by a link-time value, so codegen
+    // gives the symbol a POINTER SLOT and the global's first-touch thunk heap-
+    // allocates the object (readme.txt GLOBALS; readme-classes.txt OPAQUE CLASSES).
 
     parse::popFrame(tree);
 }

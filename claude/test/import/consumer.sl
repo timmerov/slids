@@ -83,6 +83,23 @@ Widget() {
 
 /* returns an OPAQUE class by value across the seam: the caller's result slot is sized at
    runtime (@String__$sizeof) and the return is built into it by NRVO — no copy. */
+/* GLOBALS of runtime-sized types (the old negatives). A global's storage is static and
+   none of these has a static size here, so the `@`-symbol holds a POINTER: the group's
+   first-touch ctor thunk heap-allocates the object (the size value, then the routed
+   @C__$ctor — exactly a `new`), and the registered dtor thunk destroys and frees it
+   (exactly a `delete`). Never touched, never allocated. Every access loads the slot
+   after the touch that fills it. A mixed group keeps its static members static; only
+   the runtime-sized member moves to the heap, in member order, so the user `_()` sees
+   it built and the user `~()` runs while it is still alive. */
+global Rope g_rope;
+global Rope g_ropes[2];
+global Sack g_sack;
+global Tagged g_tag;
+global gmix(int gx = 4, Tagged gt, int gy = 25) {
+    _() { gt.bump(); }
+    ~() { println(String + "gmix:dtor " + gt.mark_); }
+}
+
 Rope make_string() {
     Rope s;
     return s;
@@ -346,6 +363,25 @@ int32 main() {
     println(String + "heap tagged: " + ht[0].mark() + " " + ht[1].mark_);
     delete ht;
 
+    // ── RUNTIME-SIZED GLOBALS (declared at file scope above): a bare opaque, an
+    // array of them, a computed-layout class, a runtime-layout class (its hooks
+    // print at first touch and at teardown), a mixed group, address-of, and the
+    // HEADER global — written here, read back by the sibling through the one slot.
+    g_rope.set("global rope");
+    println(String + "global rope: " + g_rope.get() + " " + g_rope.tag());
+    g_ropes[1].set("g1");
+    println(String + "global ropes: " + g_ropes[0].tag() + " " + g_ropes[1].get());
+    g_sack.post_ = 81;
+    println(String + "global sack: " + g_sack.pre_ + " " + g_sack.post_ + " "
+            + g_sack.r_.tag());
+    g_tag.bump();
+    println(String + "global tagged: " + g_tag.mark() + " " + g_tag.mark_);
+    println(String + "global group: " + gmix:gx + " " + gmix:gt.mark_ + " " + gmix:gy);
+    Rope^ gp = ^g_rope;
+    println(String + "global addr: " + gp^.get());
+    hrope.set("header rope");
+    println(String + "header rope: " + hrope.get() + " " + hrope_tag());
+
     // THE SEAM TEST: Crate is a HEADER class embedding Rope, so both TUs compute
     // its layout independently by the convention. A direct write here must be seen
     // by a method the sibling compiled, and vice versa.
@@ -457,10 +493,10 @@ element, a tuple slot: see the Sack/Duo/Trio/Crate tests in main) are all legal:
 container is laid out by the cross-TU convention off the completer's exported absolute
 sizes. What REMAINS illegal is exactly what still needs a fact this TU cannot have:
   - reaching a hidden field / passing a construction initializer (no field to see);
-  - any GLOBAL whose storage would need the layout (static storage can't be
-    runtime-sized) — bare opaque, or an aggregate/computed-class embedding one;
   - a BY-VALUE parameter (the standing rule for every class: non-primitives pass
     by pointer).
+A GLOBAL of any of these is legal too (the file-scope g_* above): static storage can't
+be runtime-sized, so the symbol holds a pointer to a heap object built on first touch.
 */
 
 //-EXPECT-ERROR: has no field 'str_'
@@ -468,19 +504,6 @@ sizes. What REMAINS illegal is exactly what still needs a fact this TU cannot ha
 
 //-EXPECT-ERROR: initializer(s) were given
 //void neg_init() { Rope s("x"); s; }
-
-/* a GLOBAL is where a BARE opaque class is still illegal: its storage is static
-   (sized at compile time), so the runtime-sizing that makes a bare opaque LOCAL work
-   has no analogue. A global must be a pointer instead. */
-//-EXPECT-ERROR: a global needs static storage
-//global Rope gbad;
-
-//-EXPECT-ERROR: embeds incomplete class 'Rope'
-//global Rope garr[3];
-
-/* a global of an EMBEDDING class is the same static-storage problem one level up. */
-//-EXPECT-ERROR: embeds incomplete class 'Rope'
-//global Sack gsack;
 
 /* BY-VALUE parameters are prohibited — the standing non-primitive rule; an opaque
    class gets no special dispensation. */
@@ -493,11 +516,8 @@ its fields and read and write them, but it cannot PLACE them. Default constructi
 only form here — an initializer would have to be written at an offset past a base only the
 completer can measure, and dropping it silently would be worse than refusing it. Embedding
 a Tagged by value is LEGAL now (TCase in main — the leaf rides @Tagged__$size16), and
-so is a heap array of them (main); the global ban holds for the static-storage reason.
+so are a heap array of them and a global (main / g_tag).
 */
 
 //-EXPECT-ERROR: can only be default-constructed here
 //void neg_derived_init() { Tagged t(1); t; }
-
-//-EXPECT-ERROR: a global needs static storage
-//global Tagged gtbad;

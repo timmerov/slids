@@ -1666,9 +1666,9 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     importer reading fields it cannot see. Canon test/import Flat.
     EMBEDDING ONE BY VALUE — a class field, an array element (incl. an array FIELD), a tuple slot,
     a bare local array — is LEGAL since 2026-07-29: the container gets a COMPUTED LAYOUT (next
-    section). WHAT REMAINS REJECTED: a GLOBAL whose storage would need the layout (a bare
-    imported-opaque global, or any convention-laid-out type — static storage cannot be
-    runtime-sized; the var-entry pass in resolve); a BY-VALUE parameter (the standing
+    section); a GLOBAL of one is LEGAL since 2026-09-16 (a pointer slot filled by the first-
+    touch thunk with a heap object — readme.txt GLOBALS, "A RUNTIME-SIZED GLOBAL LIVES ON THE
+    HEAP"). WHAT REMAINS REJECTED: a BY-VALUE parameter (the standing
     non-primitive munge rule — no opaque dispensation); reaching a hidden field or passing a
     construction initializer (the importer sees no such field / zero fields); and, NEW,
     completer-side: an opaque class whose exported layout cannot FOLD because a (hidden) field
@@ -1719,10 +1719,10 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     but not PLACE them, and silently dropping the list is worse than refusing it). REJECTED
     OUTRIGHT: a `.sl`-LOCAL class over an opaque base (nothing outside the TU can name it, so no
     sibling exports its offsets, and it cannot fold them itself); a VIRTUAL one (the base occupies
-    the slot the vptr needs, and the base's own vptr is hidden besides). Everything barred for the
-    base is barred for the derived class for the identical reason — a bare global — because
-    runtime_layout implies opaque (by-value embedding and `new T[n]` are legal for both, riding
-    the same convention stride). checkClassByValueAcyclic lets the
+    the slot the vptr needs, and the base's own vptr is hidden besides). Everything the base
+    can do the derived class can, for the identical reason — runtime_layout implies opaque, so
+    by-value embedding, `new T[n]` and a global (the heap slot) all ride the base's machinery.
+    checkClassByValueAcyclic lets the
     `_$base` slot through while still descending into the base for the CYCLE check; a NAMED field
     of the same opaque type stays rejected.
     Canon test/import Tagged: own fields read and written through the table then read back through
@@ -1788,11 +1788,11 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     importer's can't fill them at all. KNOWN CORNER: a completer-side construction list that
     passes an EXPLICIT initializer for opaque content nested deeper (a tuple slot mixing opaque
     and static, inside a computed class) is refilled to defaults rather than rejected.
-    STILL REJECTED: any GLOBAL of a convention-laid-out type (static storage cannot be
-    runtime-sized); by-value parameters (the standing rule); the completer-unfoldable exports
-    (checkOpaqueExportFoldable, above). `new C[n]` of a runtime-sized element is LEGAL since
-    2026-09-16 (the heap twin of the local array — see NEW T[n] under the class-operator
-    chains above).
+    STILL REJECTED: by-value parameters (the standing rule); the completer-unfoldable exports
+    (checkOpaqueExportFoldable, above). LEGAL since 2026-09-16: `new C[n]` of a runtime-sized
+    element (the heap twin of the local array — see NEW T[n] under the class-operator chains
+    above) and a GLOBAL of a runtime-sized type (a pointer slot + a heap object built on first
+    touch — readme.txt GLOBALS).
     FIELD ORDER IS NOT SPEC'D, so a later pass may still REORDER statics first to maximize the
     constant-offset prefix — now purely a micro-optimization (fewer symbolic terms), not a
     correctness lever.

@@ -205,6 +205,13 @@ void bump_shared() {
 global int nums[3] = (7, 8, 9);
 /* from_bird is DEFINED in bird.sl, not here — this TU only declares it (via the header). */
 
+/* the opaque header global (see the header): defined HERE — this TU's thunk allocates
+   and constructs it on first touch (from whichever TU touches first) and frees it at
+   teardown. THIS TU completes Rope, and its global still rides the pointer slot: the
+   shape is decided by the universal size predicate, not by who can see the layout. */
+global Rope hrope;
+int hrope_tag() { return hrope.tag(); }
+
 /* complete the incomplete class */
 Rope(char[] str_ = nullptr, int tag_ = 7) {
     _() {}

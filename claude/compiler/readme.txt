@@ -987,6 +987,31 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
       identically (the linker keeps one), plus a static per-group `{ next, fn }` node
       PREPENDED at touch. Size-independent, so it composes across TUs (v1's design; it
       replaced a per-TU fixed `[K x ptr]` array that could neither size nor compose).
+    * A RUNTIME-SIZED GLOBAL LIVES ON THE HEAP (landed 2026-09-16). A global whose type
+      has no static size in this TU — an imported opaque class, a computed-layout class,
+      a tuple/array embedding one (widen::sizeIsDynamic) — cannot be static storage:
+      an LLVM global needs a concrete type and a `.bss` reservation a literal size, and
+      the size is a link-time absolute symbol. So its `@`-symbol is a POINTER SLOT
+      (`global ptr null`; `external global ptr` in an importer), and the lazy machinery
+      above does the rest: the group's synthesized ctor thunk MALLOCS the size value
+      (emitSizeValue — what a single `new` allocates), stores the pointer in the slot,
+      and constructs THERE through the same emitConstructAt every global uses
+      (emitGlobalConstruct); the dtor thunk destroys through the pointer, FREES, and
+      nulls the slot (emitGlobalDestruct) — i.e. `global String s;` behaves exactly as
+      `global (String $s^) { _() { $s = new String; } ~() { delete $s; } }` with every
+      use of `s` read as `$s^`. Every access loads the slot AFTER the touch that fills
+      it: codegen's ONE variable-address funnel `emitVarAddr(VarInfo)` (touch, then the
+      symbol / alloca, or for VarInfo.indirect the loaded pointer) serves the bare read,
+      the lvalue path, address-of, the index base and the assign target — a site cannot
+      touch without deriving the right address. A mixed group keeps its static members
+      static; only the runtime-sized member moves, in member order, so the user `_()`
+      sees it built and the user `~()` runs while it lives. Never touched, never
+      allocated. THE SHAPE IS UNIVERSAL: it keys on sizeIsDynamic, never on this TU's
+      view of the layout (dynamicStorage), because a header global is ONE symbol every
+      object file links — so the completer's own opaque global takes the slot too
+      (canon library.sl's `hrope`). Cost: one pointer load per access after the touch
+      call that already happens. Canon test/import consumer.sl g_rope / g_ropes /
+      g_sack / g_tag / gmix + the header `hrope`.
 
   THE `global;` SCOPE STATEMENT — a real scope-registered lifetime (a `DtorScope`
   entry): at its scope's exit the `__$global_dtor_all` registry walker runs. Auto-

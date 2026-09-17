@@ -1,12 +1,4 @@
 
-agenda:
-an incomplete class fails as a class field, array type, tuple slot,
-probably more.
-these should be valid:
-ptr = new String[3];
-global String s;
-Vector<String> vec; vec.append("segfaults");
-
 
 things to do before commits:
 check for silent defaults and mis/unattributed diagnostics.

@@ -145,6 +145,14 @@ global int nums[3];
 /* defined in bird.sl — a NON-SIBLING source. any one .sl may define a header global. */
 int from_bird = 77;
 
+/* a header global of the OPAQUE Rope: no TU but the completer knows its size, and even
+   there static storage can't be sized by a link-time symbol. So in EVERY TU the symbol
+   is a POINTER SLOT the definer's first-touch thunk fills with a heap object, and the
+   two TUs must agree on that shape — the consumer writes through it, the sibling
+   reads it back. */
+global Rope hrope;
+int hrope_tag();
+
 /* the header's initializer is a cross-check: a definition that gives a DIFFERENT value
    is an error (verified by the negative in library.sl). This decl is never defined or
    read in the normal build — a header value with no definer is a harmless external. */

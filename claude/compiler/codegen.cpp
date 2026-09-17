@@ -246,6 +246,24 @@ void emitTouch(std::string const& sym, std::ostream& out) {
     if (!sym.empty()) out << "  call void @" << sym << "()\n";
 }
 
+// THE variable-address funnel for a resolved entry: fire the lazy first-touch gate,
+// then hand back the storage address. A RUNTIME-SIZED global (sizeIsDynamic — an
+// imported opaque class, a computed-layout class, a tuple/array embedding one) has
+// no static storage LLVM could declare: its `@`-symbol is a POINTER SLOT that the
+// group's ctor thunk fills with a heap object (emitGlobalConstruct: malloc the size
+// value + the construction funnel — a `new`) and the dtor thunk destroys and frees
+// (emitGlobalDestruct — a `delete`). So its address is a LOAD of the slot, taken
+// AFTER the touch that fills it. Every access site that names a variable goes
+// through here, so a site cannot touch without also deriving the right address.
+// A local / static global returns its alloca / symbol unchanged.
+std::string emitVarAddr(VarInfo const& v, std::ostream& out) {
+    emitTouch(v.touch_symbol, out);
+    if (!v.indirect) return v.alloca_name;
+    std::string p = newTmp("gobj");
+    out << "  " << p << " = load ptr, ptr " << v.alloca_name << "\n";
+    return p;
+}
+
 // Seed a SymTab with every file-local global: a global is a variable whose address
 // is its `@`-symbol (an LLVM `ptr`), so every load / store / GEP / assign path treats
 // it exactly like a local — no separate global lookup. A LAZY global carries its
@@ -253,7 +271,8 @@ void emitTouch(std::string const& sym, std::ostream& out) {
 // populated by run() before any function or synthesized ctor is emitted.
 void seedGlobalSyms(SymTab& syms) {
     for (auto const& [id, gv] : g_globals)
-        syms[id] = {"@" + gv->symbol, llvmForRef(gv->type), gv->type, gv->touch_symbol};
+        syms[id] = {"@" + gv->symbol, llvmForRef(gv->type), gv->type, gv->touch_symbol,
+                    widen::sizeIsDynamic(gv->type)};
 }
 
 bool isFloatType(widen::TypeRef t) {
@@ -1028,8 +1047,7 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
             && "emitElementAddr: subscript base must be a variable or a deref");
         auto bit = syms.find(node->resolved_entry_id);
         assert(bit != syms.end() && "emitElementAddr: base not in SymTab");
-        emitTouch(bit->second.touch_symbol, out);   // lazy global first-access gate
-        addr = bit->second.alloca_name;
+        addr = emitVarAddr(bit->second, out);   // lazy-global gate + storage address
         cur = bit->second.slids_type;
         // Implicit deref for the ARRAY-BY-POINTER param shorthand: `int a[3]`
         // as a parameter has resolved type `int[3]^` (the mungeParamType array
@@ -1258,8 +1276,7 @@ std::string emitLvalueAddr(ast::Node const& lv, SymTab const& syms,
         auto it = syms.find(lv.resolved_entry_id);
         assert(it != syms.end()
             && "emitLvalueAddr: ident not in SymTab (local nor seeded global)");
-        emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
-        return it->second.alloca_name;
+        return emitVarAddr(it->second, out);   // lazy-global gate + storage address
     }
     if (lv.kind == ast::Kind::kIndexExpr) {
         // A PARTIAL array index (a sub-array slice) is a valid swap / move operand
@@ -1563,10 +1580,10 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             auto it = syms.find(expr.resolved_entry_id);
             assert(it != syms.end()
                 && "emitExpr kIdentExpr: entry not in SymTab (local nor seeded global)");
-            emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
+            std::string vaddr = emitVarAddr(it->second, out);   // gate + address
             std::string tmp = newTmp("ld");
             out << "  " << tmp << " = load " << it->second.llvm_type
-                << ", ptr " << it->second.alloca_name << "\n";
+                << ", ptr " << vaddr << "\n";
             return widen::convert(tmp, it->second.slids_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
@@ -1602,8 +1619,7 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                     && "kAddrOfExpr: operand must be a resolved variable");
                 auto it = syms.find(operand.resolved_entry_id);
                 assert(it != syms.end() && "kAddrOfExpr: operand not in SymTab");
-                emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
-                addr = it->second.alloca_name;
+                addr = emitVarAddr(it->second, out);   // gate + storage address
             }
             // `^lvalue` is a `ptr`; honor the destination type so an address taken
             // into an `intptr` lvalue lowers through ptrtoint (ptr->ptr is a no-op,
@@ -2749,7 +2765,9 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             auto it = syms.find(stmt.resolved_entry_id);
             assert(it != syms.end()
                 && "kAssignStmt: entry not in SymTab (alloca never emitted?)");
-            emitTouch(it->second.touch_symbol, out);   // lazy global first-access gate
+            // The target's address ONCE, up front: the gate + (for a runtime-sized
+            // global) the slot load, shared by every assign arm below.
+            std::string tgt = emitVarAddr(it->second, out);
             // Open a statement-temp seq around the rhs (see openRhsSeq): its temps are
             // constructed now and destroyed at closeRhsSeq — the SEMICOLON — while `rhs`
             // below is the seq's VALUE, so the in-place sret paths still see a raw call.
@@ -2766,7 +2784,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 && !typeNeedsHook(it->second.slids_type, /*ctor=*/true)
                 && widen::deepStrip(it->second.slids_type)
                        == widen::deepStrip(rhs->return_type)) {
-                emitCall(*rhs, syms, pool, out, diag, it->second.alloca_name);
+                emitCall(*rhs, syms, pool, out, diag, tgt);
                 closeRhsSeq(aseq, atemps, syms, pool, out, diag);
                 return;
             }
@@ -2805,16 +2823,14 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                 // destroy the temp.
                 widen::TypeRef sT = widen::strip(T);
                 if (widen::form(sT) == widen::Type::Form::kSlid) {
-                    emitCopy(it->second.alloca_name, slot, sT, out);
+                    emitCopy(tgt, slot, sT, out);
                 } else if (widen::hasInPlaceClass(sT)) {
-                    emitAggregateTransfer(it->second.alloca_name, slot, sT,
-                                          /*is_move=*/false, out);
+                    emitAggregateTransfer(tgt, slot, sT, /*is_move=*/false, out);
                 } else {
                     std::string raw = newTmp("mv");
                     out << "  " << raw << " = load " << Tll << ", ptr " << slot
                         << "\n";
-                    out << "  store " << Tll << " " << raw << ", ptr "
-                        << it->second.alloca_name << "\n";
+                    out << "  store " << Tll << " " << raw << ", ptr " << tgt << "\n";
                 }
                 emitDestructHooks(slot, sT, out);
                 out << "  call void @llvm.stackrestore.p0(ptr " << sp << ")\n";
@@ -2826,7 +2842,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             // (a cross-form aggregate assign is lowered by slot in desugar). The
             // target is live storage, so no ctor hooks / dtor registration.
             assert(rhs && "kAssignStmt: no rhs");
-            emitInitFill(it->second.alloca_name, it->second.slids_type,
+            emitInitFill(tgt, it->second.slids_type,
                          it->second.llvm_type, *rhs, /*is_move=*/false,
                          syms, pool, out, diag);
             closeRhsSeq(aseq, atemps, syms, pool, out, diag);
@@ -3810,6 +3826,18 @@ void collectForeignDecls(ast::Node const& s,
 void emitGlobalConstruct(ast::GlobalVar const& gv, strings::Pool& pool,
                          std::ostream& out, diagnostic::Sink& diag) {
     std::string addr = "@" + gv.symbol;
+    // A RUNTIME-SIZED global lives on the heap (see emitVarAddr): allocate at the
+    // size VALUE (the completer's absolute symbol / the convention expression —
+    // exactly what a single `new` mallocs), park the pointer in the slot, and
+    // construct THERE. The touch thunk set its sentinel before calling this, so an
+    // access inside the construction (or the user ctor) does not re-enter.
+    if (widen::sizeIsDynamic(gv.type)) {
+        std::string sz = emitSizeValue(gv.type, /*round16=*/false, out);
+        std::string p = newTmp("gnew");
+        out << "  " << p << " = call ptr @malloc(i64 " << sz << ")\n";
+        out << "  store ptr " << p << ", ptr " << addr << "\n";
+        addr = p;
+    }
     SymTab gsyms;
     seedGlobalSyms(gsyms);
     // A global constructs through the shared funnel: fill from its init (null →
@@ -3822,8 +3850,18 @@ void emitGlobalConstruct(ast::GlobalVar const& gv, strings::Pool& pool,
                     /*scope=*/nullptr, gsyms, pool, out, diag);
 }
 
-// Destruct one global in place (reverse-order field/base dtor chain).
+// Destruct one global in place (reverse-order field/base dtor chain). A RUNTIME-SIZED
+// global is destroyed through its slot's pointer, then freed and the slot nulled —
+// a `delete`. The thunk runs once per touched group, so the balance holds.
 void emitGlobalDestruct(ast::GlobalVar const& gv, std::ostream& out) {
+    if (widen::sizeIsDynamic(gv.type)) {
+        std::string p = newTmp("gobj");
+        out << "  " << p << " = load ptr, ptr @" << gv.symbol << "\n";
+        emitDestructHooks(p, gv.type, out);
+        out << "  call void @free(ptr " << p << ")\n";
+        out << "  store ptr null, ptr @" << gv.symbol << "\n";
+        return;
+    }
     emitDestructHooks("@" + gv.symbol, gv.type, out);
 }
 
@@ -3860,14 +3898,22 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // place on first touch. Only a STATIC global (no gate) emits a folded constant init.
     for (auto const& [id, gv] : tree.globals) {
         g_globals[id] = &gv;
-        std::string llty = llvmForRef(gv.type);
+        // A RUNTIME-SIZED global's symbol is a POINTER SLOT (null until its touch
+        // thunk heap-allocates the object — emitVarAddr). The shape rides the
+        // UNIVERSAL size predicate, never this TU's view of the layout: a header
+        // global is one symbol shared by every object file, so the completer's own
+        // global takes the slot too, or the TUs would disagree on what `@sym` holds.
+        bool indirect = widen::sizeIsDynamic(gv.type);
+        assert((!indirect || !gv.touch_symbol.empty())
+               && "runtime-sized global must be gated (class-bearing => lazy)");
+        std::string llty = indirect ? "ptr" : llvmForRef(gv.type);
         // A header-declared global NOT defined in this TU is a `declare` — an `external
         // global`, no storage, no init; every access links to the defining object's.
         if (gv.external_link && !gv.defined_here) {
             body << "@" << gv.symbol << " = external global " << llty << "\n";
             continue;
         }
-        std::string init = "zeroinitializer";
+        std::string init = indirect ? "null" : "zeroinitializer";
         if (gv.init && gv.touch_symbol.empty()) {
             SymTab no_syms;
             std::ostringstream scratch;

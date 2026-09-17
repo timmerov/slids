@@ -85,6 +85,15 @@ Tagged:ctor: 3
 heap tagged: 13 23
 Tagged:dtor: 23
 Tagged:dtor: 13
+global rope: global rope 7
+global ropes: 7 g1
+global sack: 2 81 7
+Tagged:ctor: 3
+global tagged: 13 13
+Tagged:ctor: 3
+global group: 4 13 25
+global addr: global rope
+header rope: header rope 7
 crate direct->method: 33
 crate method->direct: 44 id=1 rope=7
 Tagged:ctor: 3
@@ -108,4 +117,7 @@ Tagged:dtor: 50
 Bird:dtor: 5 6
 Vegetable:dtor: 3 4
 Animal:dtor: 1 2
+gmix:dtor 13
+Tagged:dtor: 13
+Tagged:dtor: 13
 Query:dtor

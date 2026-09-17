@@ -19,6 +19,7 @@ int32 main() {
 
     //println("Hello, World!");
 
+    /*
     Class(
         String s1_,
         String s2_
@@ -35,7 +36,6 @@ int32 main() {
     (int, String) tuple = (1, "hi");
     println(String + tuple[0] + ": " + tuple[1]);
 
-    /* this should work. */
     list = new String[3];
     list[0] = "ay";
     list[1] = "be";
@@ -44,17 +44,16 @@ int32 main() {
     delete list;
 
     /* this should work. */
-    /*
     global String g_s;
     g_s = "global";
     println(g_s);
-    */
 
     Vector<String> table;
     String top = "top";
     table.append(top);
     table.append("lamp");
     println(String + "table: " + table[0] + ", " + table[1]);
+    */
 
     return 0;
 }

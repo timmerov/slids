@@ -20,6 +20,10 @@ struct VarInfo {
     widen::TypeRef slids_type;     // structured type handle — for widening checks
     std::string touch_symbol = {}; // "" for a local / static global; else a LAZY
                                    // global's first-touch thunk, called before access.
+    bool indirect = false;         // a RUNTIME-SIZED global: alloca_name is a POINTER
+                                   // SLOT, not the object — the object is on the heap
+                                   // (built by the touch thunk); load the slot for its
+                                   // address. Only emitVarAddr reads this.
 };
 
 // Keyed by parse::Tree::entries index — every ident / lvalue node carries its
