@@ -2046,6 +2046,33 @@ STAGE FILES (.h / .cpp pairs)
             diagnostic careting the offending segment. A bare name matching
             members of two different open namespaces / enums is "ambiguous"
             (notes at both decls).
+            ENUM CONTEXT (LANDED 2026-09-17; canon enum.sl "simplified enums in
+            context"): a bare member name that resolves to NOTHING else is looked
+            up once more in the enum the TARGET is typed with, immediately
+            before the "needs a namespace qualifier" diagnostic (the kIdentExpr
+            arm) — fallback ONLY, so nothing that resolved before changes
+            meaning, and `int x = kMix;` still needs its qualifier or an
+            `alias Enum;`. Sites (each sets tree.ctx_enum_frame around its rhs
+            through the scoped EnumContext guard): a typed decl's init, an
+            assignment to an enum-typed variable, a parameter default, a field
+            default, `return member;` (tree.ctx_ret_enum, set per
+            resolveFunctionBody from the declared return type), a switch's
+            labels off an enum-typed scrutinee variable, and either side of a
+            comparison (each operand's enum is PEEKED without resolving, then
+            each side resolves under the other's). The enum is read off the
+            declared TYPE: an enum-typed declaration keeps its type as a
+            transparent kAlias node named after the enum over the underlying
+            (what ##type(var) reports), so enumFrameForType peels alias layers
+            and enumFrameForLabel resolves each spelling (`Lang`, `Geo:Dir`)
+            to its kNamespace facet's frame. An INFERRED variable initialized
+            from a member ref (`l = Lang:kC;`) gets Entry::enum_frame stamped
+            (stampInferredEnum) so a later `l = kSlids;` reads in context; one
+            inferred from a CALL does not (its enum is known only in classify)
+            and keeps the qualifier — as does a call ARGUMENT on its own (the
+            parameter is picked by overload ranking later). Resolve is the
+            stage because members are consts constfold substitutes right after
+            (switch labels and folded inits depend on that). Open: a store
+            through a FIELD (`obj.f = kC`) — todo.txt.
             Owns enums: `enum [type] [Name] ( members )` lowers here (not
             desugar — members must be kConst by constfold). Named -> a
             kNamespace whose slids_type carries the underlying (the name

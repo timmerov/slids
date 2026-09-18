@@ -1742,6 +1742,121 @@ int pushBaseChain(parse::Tree& tree, parse::Node const& node) {
     return (int)frames.size();
 }
 
+// ---- ENUM CONTEXT ------------------------------------------------------------
+// "Simplified enums in context" (canon enum.sl): a bare member name reads against
+// the enum its TARGET is typed with — `Lang l = kC;`, `l = kSlids;`, a param /
+// field default, `return kC;`, a switch's labels, a comparison's other operand.
+// FALLBACK ONLY: the context is consulted where ordinary lookup found NOTHING and
+// would report "needs a namespace qualifier" — so nothing that resolves today
+// changes meaning, and `int x = kMix;` still needs its qualifier (or an
+// `alias Enum;`). Resolve is the stage because members are consts that constfold
+// substitutes right after (switch labels and folded inits depend on that).
+
+// The enum namespace frame a declared spelling names (`Lang`, `Geo:Dir`), or -1
+// for anything else. Quiet: a label that doesn't resolve here is no context.
+int enumFrameForLabel(parse::Tree& tree, std::string const& label) {
+    if (label.empty() || label.compare(0, 2, "::") == 0) return -1;
+    std::vector<std::string> segs;
+    std::size_t start = 0;
+    for (;;) {
+        std::size_t colon = label.find(':', start);
+        if (colon == std::string::npos) { segs.push_back(label.substr(start)); break; }
+        segs.push_back(label.substr(start, colon - start));
+        start = colon + 1;
+    }
+    int id = -1;
+    int cur = -1;
+    for (std::size_t i = 0; i < segs.size(); i++) {
+        if (segs[i].empty() || segs[i].find('<') != std::string::npos) return -1;
+        id = (cur < 0) ? resolveName(tree, segs[i]) : findMemberLive(tree, cur, segs[i]);
+        if (id < 0) return -1;
+        if (i + 1 < segs.size()) {
+            cur = entryNamespaceFrame(tree, id);
+            if (cur < 0) return -1;
+        }
+    }
+    parse::Entry const& e = tree.entries[id];
+    if (e.kind != parse::EntryKind::kNamespace || e.slids_type == widen::kNoType)
+        return -1;   // a namespace, class, alias — not an enum facet
+    return e.ns_frame_id;
+}
+
+// The enum frame a resolved TYPE names. An enum-typed declaration keeps its type
+// as a transparent alias node carrying the enum's spelling over the underlying
+// (that is what ##type(var) reports), so peel the alias layers and try each
+// name; a plain / erased type names nothing.
+int enumFrameForType(parse::Tree& tree, widen::TypeRef t) {
+    int guard = 8;
+    while (t != widen::kNoType && guard-- > 0) {
+        widen::Type const& ty = widen::get(t);
+        if (ty.form == widen::Type::Form::kConst) { t = ty.underlying; continue; }
+        if (ty.form != widen::Type::Form::kAlias) return -1;
+        int f = enumFrameForLabel(tree, ty.name);
+        if (f >= 0) return f;
+        t = ty.underlying;
+    }
+    return -1;
+}
+
+// The enum frame an ENTRY is typed with: the frame resolve stamped (an inferred
+// var initialized from a member), else its declared type / label resolved here.
+int entryEnumFrame(parse::Tree& tree, int id) {
+    if (id < 0) return -1;
+    parse::Entry const& e = tree.entries[id];
+    if (e.enum_frame >= 0) return e.enum_frame;
+    int f = enumFrameForType(tree, e.slids_type);
+    if (f >= 0) return f;
+    return enumFrameForLabel(tree, e.alias_label);
+}
+
+// Scoped context: the frame holds for the guard's lifetime. A frame < 0 leaves
+// the enclosing context in place (a comparison inside a decl init, say).
+struct EnumContext {
+    parse::Tree& tree;
+    int saved;
+    EnumContext(parse::Tree& t, int frame) : tree(t), saved(t.ctx_enum_frame) {
+        if (frame >= 0) tree.ctx_enum_frame = frame;
+    }
+    ~EnumContext() { tree.ctx_enum_frame = saved; }
+};
+
+// The enum frame a comparison operand would lend the OTHER side: a bare ident
+// naming an enum-typed variable / const — peeked WITHOUT resolving the node.
+int peekEnumFrame(parse::Tree& tree, parse::Node const& n) {
+    if (n.kind != parse::Kind::kIdentExpr || isQualified(n)) return -1;
+    int id = resolveName(tree, n.name);
+    if (id < 0) return -1;
+    parse::EntryKind k = tree.entries[id].kind;
+    if (k != parse::EntryKind::kLocalVar && k != parse::EntryKind::kGlobalVar
+        && k != parse::EntryKind::kConst)
+        return -1;
+    return entryEnumFrame(tree, id);
+}
+
+// An INFERRED variable initialized from an enum member (`l = Lang:kC;`) is typed
+// by that enum: stamp the frame so a later `l = kSlids;` reads in context. Any
+// other init shape (a call, arithmetic) leaves it unstamped — its enum is known
+// only in classify, so the qualifier stays required there (negative in enum.sl).
+void stampInferredEnum(parse::Tree& tree, int var_id, parse::Node const* rhs) {
+    if (var_id < 0 || !rhs || rhs->kind != parse::Kind::kIdentExpr
+        || rhs->resolved_entry_id < 0)
+        return;
+    parse::Entry const& ce = tree.entries[rhs->resolved_entry_id];
+    if (ce.kind != parse::EntryKind::kConst || ce.owner_ns_frame < 0) return;
+    for (parse::Entry const& ns : tree.entries) {
+        if (ns.kind == parse::EntryKind::kNamespace
+            && ns.ns_frame_id == ce.owner_ns_frame
+            && ns.slids_type != widen::kNoType) {
+            tree.entries[var_id].enum_frame = ce.owner_ns_frame;
+            return;
+        }
+    }
+}
+
+bool isComparisonOp(std::string const& op) {
+    return op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=";
+}
+
 // A signature's CONST-EXPRESSIONS — parameter defaults and array dims (param and
 // return) — resolve in the ENCLOSING scope, never a body frame, so a default cannot
 // reference a parameter or a body local. One funnel for both node kinds: a
@@ -1753,6 +1868,7 @@ void resolveSignatureConstExprs(parse::Tree& tree, parse::Node& fn,
                                 diagnostic::Sink& diag) {
     for (auto& p : fn.params) {
         if (p && !p->children.empty() && p->children[0]) {
+            EnumContext ectx(tree, enumFrameForType(tree, p->return_type));   // `= kC`
             resolveExpr(tree, *p->children[0], diag);
         }
         // A const-expression array dim on a param (`int a[N]`) is likewise a
@@ -1808,6 +1924,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         // sibling member bare).
         for (auto& p : node.params) {
             if (p && !p->children.empty() && p->children[0]) {
+                EnumContext ectx(tree, enumFrameForType(tree, p->return_type));   // `= kC`
                 resolveExpr(tree, *p->children[0], diag);
             }
         }
@@ -2481,6 +2598,10 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 // `_$recv^.field` — the single field-access rewrite, so a body local of
                 // the same name (which resolveNameDetail found first) shadows the field.
                 if (lowerFieldRef(tree, e, id, diag)) return;
+                // ENUM CONTEXT fallback: nothing else has this name and the
+                // target is enum-typed — read the bare member against that enum.
+                if (id < 0 && tree.ctx_enum_frame >= 0)
+                    id = findMemberLive(tree, tree.ctx_enum_frame, e.name);
                 if (id < 0) {
                     if (reportPrivateNameInInline(tree, e.name, e.file_id,
                                                   e.tok, "references", diag)) {
@@ -2620,6 +2741,18 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         }
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
+            // ENUM CONTEXT across a comparison — `lang == kC` / `kC != lang`: peek
+            // each side's enum (a bare ident naming an enum-typed variable) WITHOUT
+            // resolving, then resolve each side under the OTHER's context.
+            if (isComparisonOp(e.text) && e.children.size() == 2
+                && e.children[0] && e.children[1]) {
+                int lf = peekEnumFrame(tree, *e.children[0]);
+                int rf = peekEnumFrame(tree, *e.children[1]);
+                { EnumContext c(tree, rf); resolveExpr(tree, *e.children[0], diag, unevaluated); }
+                { EnumContext c(tree, lf); resolveExpr(tree, *e.children[1], diag, unevaluated); }
+                return;
+            }
+            [[fallthrough]];
         case parse::Kind::kTupleExpr:   // resolve each slot expr
             for (auto& ch : e.children) {
                 if (ch) resolveExpr(tree, *ch, diag, unevaluated);
@@ -4373,8 +4506,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // skips a kConst target (no definite-assignment tracking — consts
             // are required-init by grammar and substituted away) and a qualified
             // namespace-member decl (handled above, never reaches here).
-            for (auto& ch : s.children) {
-                if (ch) resolveExpr(tree, *ch, diag);
+            {
+                EnumContext ectx(tree, entryEnumFrame(tree, s.resolved_entry_id));
+                for (auto& ch : s.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
+                }
             }
             if (s.resolved_entry_id >= 0
                 && tree.entries[s.resolved_entry_id].kind
@@ -4433,15 +4569,21 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     for (auto& ch : s.children) {
                         if (ch) resolveExpr(tree, *ch, diag);
                     }
+                    stampInferredEnum(tree, s.resolved_entry_id,
+                                      s.children.empty() ? nullptr : s.children[0].get());
                     tree.initialized_locals.insert(s.resolved_entry_id);
                     return Completion::Normal;
                 }
                 // an existing assignable variable -> the assignment path below.
             }
-            resolveAssignTarget(tree, s, diag);
+            bool target_ok = resolveAssignTarget(tree, s, diag);
             // rhs BEFORE marking, so `x = x;` with x uninitialized still fires.
-            for (auto& ch : s.children) {
-                if (ch) resolveExpr(tree, *ch, diag);
+            {
+                EnumContext ectx(tree, target_ok
+                    ? entryEnumFrame(tree, s.resolved_entry_id) : -1);
+                for (auto& ch : s.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
+                }
             }
             if (s.resolved_entry_id >= 0
                 && tree.entries[s.resolved_entry_id].kind
@@ -4694,8 +4836,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     "A 'return' statement is not allowed in a for-loop update "
                     "clause.", {}});
             }
-            for (auto& ch : s.children) {
-                if (ch) resolveExpr(tree, *ch, diag);
+            {
+                EnumContext ectx(tree, tree.ctx_ret_enum);
+                for (auto& ch : s.children) {
+                    if (ch) resolveExpr(tree, *ch, diag);
+                }
             }
             // A return transfers control out of the function — it never falls
             // through to its successor.
@@ -5324,6 +5469,9 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // dispatch target, so the direct-entry init-set dominates the join).
             assert(!s.children.empty() && "kSwitchStmt needs a scrutinee");
             resolveExpr(tree, *s.children[0], diag);
+            // ENUM CONTEXT for the labels: an enum-typed scrutinee variable.
+            int sw_enum = (s.children[0]->kind == parse::Kind::kIdentExpr)
+                ? entryEnumFrame(tree, s.children[0]->resolved_entry_id) : -1;
             std::set<int> entry = tree.initialized_locals;   // S
             bool has_default = false;
             std::set<int> after;
@@ -5338,8 +5486,12 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 parse::Node& clause = *s.children[i];   // kCaseClause
                 std::size_t nlabel = clause.children.size() - 1;   // body = back()
                 for (std::size_t j = 0; j < nlabel; j++) {
-                    if (clause.children[j]) resolveExpr(tree, *clause.children[j], diag);
-                    else has_default = true;
+                    if (clause.children[j]) {
+                        EnumContext ectx(tree, sw_enum);
+                        resolveExpr(tree, *clause.children[j], diag);
+                    } else {
+                        has_default = true;
+                    }
                 }
                 tree.initialized_locals = entry;                    // enter from S
                 Completion c = resolveStmt(tree, *clause.children.back(), diag);
@@ -6108,6 +6260,14 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     // (see resolveSignatureConstExprs; constfold then folds them and classify
     // requires the result to be a literal constant).
     resolveSignatureConstExprs(tree, fn, diag);
+    // ENUM CONTEXT for `return member;` — the declared return enum, if any;
+    // restored on exit (a nested body sets its own).
+    struct RetCtx {
+        parse::Tree& t;
+        int saved;
+        RetCtx(parse::Tree& tr, int f) : t(tr), saved(tr.ctx_ret_enum) { t.ctx_ret_enum = f; }
+        ~RetCtx() { t.ctx_ret_enum = saved; }
+    } ret_ctx(tree, enumFrameForType(tree, fn.return_type));
     int saved_floor = tree.capture_floor;
     parse::Node* saved_capture_node = tree.capture_node;
     // A METHOD body resolves inside a transient FIELD FRAME (pushed OUTSIDE the body

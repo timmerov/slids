@@ -877,8 +877,17 @@ Phase 4 — types beyond primitives
     stored value takes its DECLARED type's literal kind (tryCaptureConst →
     literalKindForType), so char/bool consts and `enum char`/`enum bool` members
     print as their declared type rather than the int-folded initializer. Canon:
-    test/constfold/enum.sl. Deferred enum items (reach-goal drop-qualifier,
-    reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
+    test/constfold/enum.sl. ENUM CONTEXT — LANDED 2026-09-17: a bare member
+    name reads against the enum its TARGET is typed with (a typed decl's init,
+    an assignment, a param / field default, a return, a switch's labels, either
+    side of a comparison), as a FALLBACK after ordinary lookup fails — never a
+    shadow, so `int x = kMix;` still needs its qualifier. The enum is read off
+    the declared type's alias node (or the frame stamped on a member-initialized
+    inferred var); resolve is the stage because constfold substitutes the
+    members right after. Not a site: a call argument on its own, a variable
+    inferred from a call, a store through a field (todo.txt). Canon: enum.sl
+    "simplified enums in context"; detail: readme.txt RESOLVE. Deferred enum
+    item (reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
     arithmetic result stays char when the folded value fits 0..255, else promotes
     to int (constfold's narrowCharKind, all arith operators; ##type folds its
     literal-only operand so `##type('A'+1)` reports char). Paired with the

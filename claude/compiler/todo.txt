@@ -211,14 +211,14 @@ REACH GOALS
         pair is a "Duplicate declaration". classifyCall restricts candidates to
         file scope (parent_frame_id == 0). Revisit if nested overloads are wanted.
 
-  * DROP THE ENUM QUALIFIER IN CONTEXT — when a variable's declared type is an
-    enum, a bare member name on the rhs should resolve against that enum's
-    namespace: `Language best = kRust;` then `best = kSlids;` (an implied
-    `alias Language;` scoped to the statement / variable). Today bare `kRust` is
-    "needs a namespace qualifier"; the canon block in enum.sl is commented
-    pending this. Needs type-directed name resolution (the lvalue/assignment
-    target type steering the rhs lookup) — no other feature needs it yet.
-    prerequisite: lvalues.
+  * ENUM CONTEXT THROUGH A FIELD STORE — `obj.tongue_ = kC;` (and the bare
+    `tongue_ = kC;` store inside a method) is not a context site: the field's
+    declared type is not reachable from the store target in resolve (the
+    kStoreStmt lvalue is a kFieldExpr; the method-body field frame's kField
+    entries carry no type label). A field DEFAULT (`Speaker(Lang tongue_ =
+    kPascal)`) already works. Extending it: resolve the store target first,
+    derive the field's type (ClassInfo::field_types by name), and wrap the rhs
+    in the same EnumContext guard the other sites use.
 
   * ACCESS A SHADOWED LOCAL CLASS — a class defined in a function body may be
     shadowed by a same-named class in a nested function (allowed; bare lookup is

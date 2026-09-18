@@ -9,7 +9,7 @@ values outside the range of int require an explicit type.
 the name is optional.
 if no name is specified, the enum constants are declared in the enclosing scope.
 
-the fully qualified name must be used.
+the fully qualified name must be used (see exception below).
 
     enum int Demo ( kMix, kTape );
     int x = Demo:kMix;
@@ -49,6 +49,18 @@ they cannot auto-increment.
         kPhi = 1.618,
         kOops  <-- compile error
     )
+
+the qualifier may be dropped in certain unambiguous contexts.
+for examples:
+
+    enum Language(kC, kCpp, kPascal, kForth, kSlids);
+    void fn(Language lang = kC) {
+        lang = kSlids;
+        switch (lang) {
+            kC: { }
+            kSlids: { }
+        }
+    }
 
 future todo:
 re-open enums.
@@ -207,10 +219,41 @@ void foo() {
     the statement could get an implied alias Language.
     which ends at the semicolon.
     */
-    /*
     Language best = kRust;
+    println(String + "best = " + best);          // 2
     best = kSlids;
-    */
+    println(String + "best = " + best);          // 0
+}
+
+/*
+SIMPLIFIED ENUMS IN CONTEXT (the canon block above): a bare member name reads
+against the enum the TARGET is typed with — and only when nothing else has the
+name: a fallback after ordinary lookup, never a shadow, so `int x = kMix;` still
+needs its qualifier or an `alias Enum;`. The sites: a typed declaration's init,
+an assignment to an enum-typed variable (declared, or inferred from a member),
+a parameter default, a field default, a return, a switch's labels off an
+enum-typed scrutinee, and either side of a comparison. A call argument on its
+own is not a site (the parameter is picked later, by overload ranking), nor is
+a variable inferred from a call — negatives in main.
+*/
+enum Lang ( kC, kCpp, kPascal, kForth, kSlids );
+
+/* a parameter default, an assignment to the param, switch labels off the
+   param, a return. */
+Lang ctx_fn(Lang lang = kC) {
+    println(String + "ctx param = " + lang);
+    lang = kSlids;
+    switch (lang) {
+        kC: { println(String + "ctx switch = C"); }
+        kSlids: { println(String + "ctx switch = Slids"); }
+        default: { println(String + "ctx switch = other"); }
+    }
+    return kForth;
+}
+
+/* a field default. */
+Speaker(Lang tongue_ = kPascal) {
+    int say() { return tongue_; }
 }
 
 enum Bonk1 ( kOops );
@@ -335,6 +378,40 @@ int32 main() {
     d2 = Direction:kEast;
     println(String + "##type(d2) = " + ##type(d2) + ", d2 = " + d2);
     println(String + "##type(kUnnamed1) = " + ##type(kUnnamed1));
+
+    /* simplified enums in context (fixtures above main). */
+    foo();
+    int cr = ctx_fn();
+    println(String + "ctx return = " + cr);                    // 3
+    Lang cl = kCpp;
+    println(String + "ctx decl = " + cl);                      // 1
+    cl = kPascal;
+    println(String + "ctx assign = " + cl);                    // 2
+    println(String + "ctx cmp = " + (cl == kPascal) + " " + (kForth != cl));   // true true
+    Speaker sp;
+    println(String + "ctx field = " + sp.say());               // 2
+    cli = Lang:kSlids;
+    cli = kC;
+    println(String + "ctx inferred = " + cli);                 // 0
+    Geo:Dir gd = west;
+    println(String + "ctx nested = " + gd);                    // 3
+
+    /* NOT in context: a plain int target still needs the qualifier... */
+    //-EXPECT-ERROR: 'kC' needs a namespace qualifier
+    //int nc1 = kC;
+
+    /* ...so does a member of a DIFFERENT enum than the target's... */
+    //-EXPECT-ERROR: 'kNorth' needs a namespace qualifier
+    //Lang nc2 = kNorth;
+
+    /* ...a call argument on its own (the parameter is chosen later)... */
+    //-EXPECT-ERROR: 'kCpp' needs a namespace qualifier
+    //int nc3 = ctx_fn(kCpp);
+
+    /* ...and a variable inferred from a CALL (its enum is known only in classify). */
+    //-EXPECT-ERROR: 'kC' needs a namespace qualifier
+    //nc4 = ctx_fn();
+    //nc4 = kC;
 
     alias Direction;
     println(String + "kNorth = " + kNorth);

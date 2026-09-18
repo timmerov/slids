@@ -68,4 +68,16 @@ deep0 = 0
 ##type(Direction:kNorth) = const Direction
 ##type(d2) = Direction, d2 = 2
 ##type(kUnnamed1) = const int
+lang = 1
+best = 2
+best = 0
+ctx param = 0
+ctx switch = Slids
+ctx return = 3
+ctx decl = 1
+ctx assign = 2
+ctx cmp = true true
+ctx field = 2
+ctx inferred = 0
+ctx nested = 3
 kNorth = 0

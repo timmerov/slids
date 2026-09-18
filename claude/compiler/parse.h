@@ -545,6 +545,10 @@ struct Entry {
                                   // spelling when the declared type was a named
                                   // type (else empty). slids_type holds the erased
                                   // underlying; this is what ##type(var) reports.
+    int enum_frame = -1;          // ENUM CONTEXT: the enum namespace frame an
+                                  // INFERRED variable took from its member-ref init
+                                  // (`l = Lang:kC;`); a declared enum type is read
+                                  // off slids_type's alias node instead.
     std::vector<widen::TypeRef> param_types;  // Function only
     // Function only — default parameters. num_required = count of leading params
     // without a default (required); params [num_required..param_types.size()) are
@@ -1025,6 +1029,14 @@ struct Tree {
     // update). Both saved/restored around the update walk.
     bool in_for_update = false;
     int  for_update_floor = -1;
+    // ENUM CONTEXT — the enum namespace frame a BARE member name falls back to
+    // when ordinary lookup finds nothing, set around the rhs of a site whose
+    // TARGET is enum-typed (decl init, assignment, param / field default, return,
+    // switch labels, a comparison's other operand). Fallback ONLY: it never wins
+    // over a name that resolves today, so `int x = kMix;` still needs its
+    // qualifier. ctx_ret_enum is the enclosing function's return enum.
+    int ctx_enum_frame = -1;
+    int ctx_ret_enum = -1;
 };
 
 constexpr int kGlobalFrame = 0;   // the file/program scope frame id
