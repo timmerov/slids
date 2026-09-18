@@ -58,6 +58,12 @@ is. neither file may add one.
 import string;
 
 import library;
+/* a template header this TU imports but never DEMANDS from: the compile writes
+   no demand file (and removes a stale one — the pool is every .sli in the
+   build dir, so a leftover would keep asking tmpl_lib2's instantiation stage
+   for flavors this TU no longer names). tmpl_lib2's compile still runs after
+   this one, with nothing to instantiate for it. */
+import tmpl_lib2;
 
 /* PRIVATE to this TU — same names as library.sl's, distinct bodies. A free function,
    a namespace member, and a local CLASS METHOD: all three mangle to the same symbol as

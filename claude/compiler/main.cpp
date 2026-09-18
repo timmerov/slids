@@ -396,11 +396,21 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        if (!targets.empty()) {
-            std::string sli_path = out_path;
+        std::string sli_path = out_path;
+        {
             auto pos = sli_path.rfind(".ll");
             if (pos != std::string::npos) sli_path.replace(pos, 3, ".sli");
             else sli_path += ".sli";
+        }
+        if (targets.empty()) {
+            // NO demands: REMOVE a leftover .sli. The pool is every .sli in the
+            // build dir, so a stale one from an earlier compile of this TU would
+            // keep demanding flavors this TU no longer names — the importer
+            // comments out its one `dump(...)` call, recompiles clean, and the
+            // library's --instantiate stage still fails on the old demand.
+            std::error_code ec;
+            std::filesystem::remove(sli_path, ec);
+        } else {
             std::ofstream sf(sli_path);
             if (!sf) {
                 std::cerr << "slidsc: warning: cannot write demand file '"

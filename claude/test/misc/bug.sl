@@ -15,6 +15,10 @@ import dump;
 import string;
 import vector;
 
+Class(int a, int b) {
+}
+global Class g_cls[3];
+
 int32 main() {
 
     //println("Hello, World!");

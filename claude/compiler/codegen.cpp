@@ -3983,7 +3983,12 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             if (!g.dtor_symbol.empty())
                 body << "@" << g.dtor_symbol << ".node = internal global { ptr, ptr } "
                      << "{ ptr null, ptr @" << g.dtor_symbol << " }\n";
-            body << "define void @" << g.touch_symbol << "() {\n"
+            // The touch thunk is the ONE symbol an importer may call (the shared
+            // stable name of a header-declared global); a private group's touch
+            // and every ctor/dtor thunk are per-TU NUMBERED names — internal, or
+            // two TUs whose numbering happens to overlap collide at link.
+            body << "define " << (g.external_link ? "" : "internal ")
+                 << "void @" << g.touch_symbol << "() {\n"
                  << "entry:\n"
                  << "  %s = load i1, ptr @" << g.sentinel_symbol << "\n"
                  << "  br i1 %s, label %done, label %init\n"
@@ -4010,14 +4015,14 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             if (g.external_link && !g.defined_here) continue;   // definer's, declared above
             std::vector<int> members = g.member_ids;
             if (g.synth_global_id >= 0) members = { g.synth_global_id };
-            body << "define void @" << g.ctor_symbol << "() {\nentry:\n";
+            body << "define internal void @" << g.ctor_symbol << "() {\nentry:\n";
             for (int id : members)
                 emitGlobalConstruct(tree.globals.at(id), pool, body, diag);
             if (!g.user_ctor_symbol.empty())
                 body << "  call void @" << g.user_ctor_symbol << "()\n";
             body << "  ret void\n}\n\n";
             if (!g.dtor_symbol.empty()) {
-                body << "define void @" << g.dtor_symbol << "() {\nentry:\n";
+                body << "define internal void @" << g.dtor_symbol << "() {\nentry:\n";
                 if (!g.user_dtor_symbol.empty())
                     body << "  call void @" << g.user_dtor_symbol << "()\n";
                 for (auto it = members.rbegin(); it != members.rend(); ++it)
