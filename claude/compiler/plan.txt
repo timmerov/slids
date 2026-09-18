@@ -2002,8 +2002,11 @@ Phase 9 — templates
     Itanium `I..E` type-args in symbolFor). INFERENCE finds T and nothing else:
     T binds exactly (a by-value T + array argument binds the decayed elem[];
     conflicts error), the not-template parts match by the NORMAL parameter
-    rules (no constraint at inference; decay / rvalue-materialization aligners
-    apply only to REACH a T — `dump(#answer)` infers through a tuple-ref). NO
+    rules (no constraint at inference; decay / iterator-into-reference /
+    rvalue-materialization aligners apply only to REACH a T — `dump(#answer)`
+    infers through a tuple-ref; the iterator aligner FIXED 2026-09-17: a `T^`
+    pattern meeting `^arr[i]` binds the ELEMENT, not the iterator — canon
+    tmpl_function.sl / tmpl_method.sl). NO
     overloading: a template owns its name; the call retargets at the instance
     and rides the single-candidate path. Two hard-won invariants: an instance
     entry is never name-live (a recursive call must re-unify via the TEMPLATE,

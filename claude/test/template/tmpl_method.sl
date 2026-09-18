@@ -229,6 +229,10 @@ int32 main() {
     int e6 = j.sum2(arr); println(String + "e6 = " + e6);
     int e7 = j.sum2(arr, 10); println(String + "e7 = " + e7);
 
+    /* `T^` meeting the address of an ELEMENT — an iterator argument: the
+       implicit iterator->reference conversion reaches T through the pointee. */
+    int ei = j.comb(^arr[0], ^arr[1]); println(String + "ei = " + ei);
+
     /* a method-call expression inside a larger expression. */
     int e8 = j.scaled(2) + k.scaled(1); println(String + "e8 = " + e8);
 

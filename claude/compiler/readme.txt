@@ -1183,9 +1183,14 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   with an explicit type-list), the NOT-template
   parts of a pattern impose no constraint (the
   instantiated call validates them through the normal machinery), and the shape
-  conversions a normal call performs — array decay into a `T[]`/`T^` pattern, rvalue
-  materialization into a `(...)^` pattern — apply only to REACH the T positions
-  (so `dump(#answer)` infers through a tuple-ref parameter). resolve::
+  conversions a normal call performs — array decay into a `T[]`/`T^` pattern, an
+  element-address ITERATOR into a `T^` pattern (`^arr[i]` IS an iterator; the
+  implicit iterator->reference reinterpretation reaches T through the pointee —
+  FIXED 2026-09-17: before, the materialization aligner below it bound T to the
+  iterator itself, so `dump(#arr[i])` instantiated `dump<int[]>` and the body's
+  `tuple^[4]^` was still a pointer), rvalue materialization into a `(...)^`
+  pattern — apply only to REACH the T positions (so `dump(#answer)` infers
+  through a tuple-ref parameter). resolve::
   instantiateTemplate then memoizes by bound-type vector (memo inserted BEFORE the
   body resolves, so same-binding recursion lands on the instance being built), saves
   the caller's transient state, installs the snapshot, aliases each parameter to its

@@ -3238,6 +3238,14 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
         return unifyTypePattern(widen::get(pat).pointee, decayed,
                                 names, bound, conflict_name);
     }
+    // Iterator into a reference parameter: the implicit `T[]` -> `T^`
+    // reinterpretation (an element address `^arr[i]` IS an iterator). A `T^`
+    // pattern reaches the element through the pointee — T binds `int`, never
+    // the iterator itself (which the materialization aligner below would do).
+    if (pform == F::kPointer && aform == F::kIterator) {
+        return unifyTypePattern(widen::get(pat).pointee, widen::get(arg).pointee,
+                                names, bound, conflict_name);
+    }
     // Materialization / auto-ref into a reference parameter: `(...)^` fed the
     // pointee's shape directly (an rvalue tuple, a class value).
     if (pform == F::kPointer) {

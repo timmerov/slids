@@ -78,7 +78,8 @@ exactly (a literal binds the type a typeless `x = literal` would; conflicting
 bindings error). the NOT-template parts of a pattern match by the normal
 parameter rules — a t-free subtree imposes no constraint at inference, and on
 the way to a T inside a `T^` / `T[]` shape the normal conversions apply
-(array decay into the pointee, rvalue materialization into a reference). a
+(array decay into the pointee, an element-address ITERATOR into a reference,
+rvalue materialization into a reference). a
 BARE T meeting an array binds the ARRAY type itself (canon tmpl_special.sl —
 arrays ride the class/tuple rung of the convention of convenience; an
 iterator binding needs an explicit type-list). after binding (inferred or
@@ -404,6 +405,15 @@ int32 main() {
     Pair p2(10, 20);
     Pair p3 = addc(^p1, ^p2);
     println(String + "p3 = " + p3.x_ + " " + p3.y_);
+
+    /* `T^` meeting an ITERATOR argument — the address of an array element.
+       The implicit iterator->reference conversion reaches T through the
+       pointee: T binds int, never the iterator `int[]`. A const element
+       carries its const into the binding like any const pointee. */
+    int ia[2] = (2, 1);
+    int p4 = addc(^ia[0], ^ia[1]); println(String + "p4 = " + p4);
+    const int ca[2] = (5, 6);
+    int p5 = addc(^ca[0], ^ca[1]); println(String + "p5 = " + p5);
 
     /* templates inside a method body: memoized across calls, field readable. */
     Tally ty(10);
