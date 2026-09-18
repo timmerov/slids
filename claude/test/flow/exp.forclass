@@ -133,3 +133,6 @@ ns-qualified global:
   6
 ref param deref: 6
 tuple-slot container: 6
+class_range: 6
+shadow: 12
+class head reuse: 0

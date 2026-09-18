@@ -469,6 +469,46 @@ int32 main() {
     for (x : makeArr()) { mcs = mcs + x; }
     println(String + "callsum= " + mcs);              // 24
 
+
+    /* the EMPTY STRING: `""` is `const char[1]` — the NUL is its one element,
+       so the loop runs once and sees 0. (A zero-length array is not a type:
+       "Array size must be a positive integer constant".) */
+    int en = 0;
+    int ez = 0;
+    for (c : "") { en = en + 1; ez = ez + c; }
+    println(String + "empty_str= " + en + " " + ez);      // 1 0
+    const char es[1] = "";
+    int en2 = 0;
+    for (c : es) { en2 = en2 + 1 + c; }
+    println(String + "empty_arr= " + en2);                // 1
+
+    /* an array-for nested with a DIFFERENT short form (range inner, bound from
+       the element): (1,2,3) -> 0 + (0+1) + (0+1+2) = 4. */
+    int nx[3] = (1, 2, 3);
+    int nrs = 0;
+    for (a : nx) { for (i : 0..a) { nrs = nrs + i; } }
+    println(String + "array_range= " + nrs);              // 4
+
+    /* a switch in the inner range loop breaking 2 — out of the array loop too,
+       so the outer's trailing statement is skipped that round. a=1: i=0 +1,
+       trailing +100; a=2: i=0 +2, i=1 breaks both: 103. */
+    int sb2 = 0;
+    for (a : nx) {
+        for (i : 0..a) {
+            switch (i) {
+                1: { break 2; }
+                default: { sb2 = sb2 + a; }
+            }
+        }
+        sb2 = sb2 + 100;
+    }
+    println(String + "array_switch_break2= " + sb2);      // 103
+
+    /* the body declares its own `x` shadowing the loop var: the read before
+       sees the element, the read after sees the local. 6 + 3*100 = 306. */
+    int shx = 0;
+    for (x : nx) { shx = shx + x; int x = 100; shx = shx + x; }
+    println(String + "shadow= " + shx);                   // 306
     return 0;
 }
 
@@ -642,4 +682,15 @@ int32 main() {
 //    for (int^ r : carr) {
 //        r^ = 9;
 //    }
+//}
+
+/* a fresh typed loop var lives in the loop's own frame — gone after the loop. */
+//-EXPECT-ERROR: Unresolved identifier 'v'.
+//int neg_array_var_scope() {
+//    int a[2] = (1, 2);
+//    int s = 0;
+//    for (int v : a) {
+//        s = s + v;
+//    }
+//    return s + v;
 //}

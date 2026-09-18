@@ -343,6 +343,19 @@ int32 main() {
     for (x : tt3[1]) { sl2 = sl2 + x; }
     println(String + "slot_typeless= " + sl2);          // 15
 
+
+    /* a tuple-for nested with a DIFFERENT short form (range inner, bound from
+       the slot value): (2, 3) -> (0+1) + (0+1+2) = 4. */
+    (int, int) ntp = (2, 3);
+    int ntr = 0;
+    for (v : ntp) { for (i : 0..v) { ntr = ntr + i; } }
+    println(String + "tuple_range= " + ntr);            // 4
+
+    /* the body declares its own `v` shadowing the loop var: the read before
+       sees the slot, the read after sees the local. 5 + 2*1 = 7. */
+    int shv = 0;
+    for (v : ntp) { shv = shv + v; int v = 1; shv = shv + v; }
+    println(String + "shadow= " + shv);                 // 7
     return 0;
 }
 
@@ -411,4 +424,15 @@ negatives — one //-block uncommented per run.
 //    for (int^ p : ct2) {
 //        p^ = 9;
 //    }
+//}
+
+/* a fresh typed loop var lives in the loop's own frame — gone after the loop. */
+//-EXPECT-ERROR: Unresolved identifier 'v'.
+//int neg_tuple_var_scope() {
+//    (int, int) t = (1, 2);
+//    int s = 0;
+//    for (int v : t) {
+//        s = s + v;
+//    }
+//    return s + v;
 //}

@@ -35,3 +35,5 @@ consttup= 18
 constinf= 4
 slot_typed= 3
 slot_typeless= 15
+tuple_range= 4
+shadow= 7

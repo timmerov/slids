@@ -120,20 +120,6 @@ for (int x : board) {
     /* what does this do? */
 }
 
-for loops: missing tests:
-test empty string.
-for int8 enum
-break and continue in loop body.
-break and continue in update.
-return from body.
-verfy scope of loop var.
-nested fors with different short forms.
-explicit types.
-type mismatches.
-empty clauses.
-switch break inside for.
-name shadowing.
-
 test incomplete templates.
 
 range tuples:

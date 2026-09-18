@@ -30,3 +30,5 @@ CtorVar dtor 7
 for_ctor_var() = 21
 for-ref body
 for-iter body
+for_switch(10) = 4
+for_all_empty(3) = 3

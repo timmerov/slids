@@ -65,6 +65,8 @@ enum char Letter ( a = 'a', b, c, d );
 enum int64 Big ( bx = 1000000000000, by, bz );
 /* a zero-member enum — used by a negative below. */
 enum Empty ( );
+/* an int8-underlying enum, negative-valued: -3 + -2 + -1 = -6. */
+enum int8 Small ( sa = -3, sb, sc );
 
 Space {
     enum Dir ( north, east, south, west );
@@ -300,6 +302,39 @@ int64 sum_big() {
     return s;
 }
 
+/* the int8 enum: typed by its enum, typed by int8, typeless (count). */
+int sum_small() {
+    int8 s = 0;
+    for (Small v : Small) { s = s + v; }
+    return s;
+}
+int sum_small_int8() {
+    int8 s = 0;
+    for (int8 v : Small) { s = s + v; }
+    return s;
+}
+int count_small() {
+    int n = 0;
+    for (v : Small) { n = n + 1; }
+    return n;
+}
+
+/* an enum-for nested with a DIFFERENT short form (range inner, bound from the
+   member value): 0 + 1 + 2 = 3. */
+int nested_enum_range() {
+    int n = 0;
+    for (Color c : Color) { for (i : 0..c) { n = n + 1; } }
+    return n;
+}
+
+/* the body declares its own `c` shadowing the loop var: the read before sees
+   the member, the read after sees the local. 3 + 3*7 = 24. */
+int enum_shadow() {
+    int s = 0;
+    for (int c : Color) { s = s + c; int c = 7; s = s + c; }
+    return s;
+}
+
 int32 main() {
     println(String + "count_colors() = " + count_colors());    // 3
     println(String + "sum_colors() = " + sum_colors());        // 3
@@ -324,6 +359,11 @@ int32 main() {
     println(String + "enum_labeled_continue() = " + enum_labeled_continue());  // 3
     println(String + "enum_typeless_reuse() = " + enum_typeless_reuse());    // 3
     println(String + "sum_big() = " + sum_big());                  // 3000000000003
+    println(String + "sum_small() = " + sum_small());              // -6
+    println(String + "sum_small_int8() = " + sum_small_int8());    // -6
+    println(String + "count_small() = " + count_small());          // 3
+    println(String + "nested_enum_range() = " + nested_enum_range());  // 3
+    println(String + "enum_shadow() = " + enum_shadow());          // 24
     return 0;
 }
 
@@ -374,4 +414,65 @@ negatives — one //-block uncommented per run.
 //        println(String + x);
 //    }
 //    return 0;
+//}
+
+/* a fresh typed loop var lives in the loop's own frame — gone after the loop. */
+//-EXPECT-ERROR: Unresolved identifier 'k'.
+//int neg_enum_var_scope() {
+//    int s = 0;
+//    for (Color k : Color) {
+//        s = s + k;
+//    }
+//    return s + k;
+//}
+
+/* TYPE MISMATCHES: the loop var takes the member value by the normal
+   conversion rules. char is its own kind — nothing converts in... */
+//-EXPECT-ERROR: Cannot implicitly convert 'int' to 'char'
+//int neg_enum_var_char() {
+//    int s = 0;
+//    for (char c : Color) {
+//        s = s + c;
+//    }
+//    return s;
+//}
+
+/* ...float does not take an int member implicitly... */
+//-EXPECT-ERROR: Cannot implicitly convert 'int' to 'float'
+//float neg_enum_var_float() {
+//    float s = 0.0;
+//    for (float c : Color) {
+//        s = s + c;
+//    }
+//    return s;
+//}
+
+/* ...nor bool... */
+//-EXPECT-ERROR: Cannot implicitly convert 'int' to 'bool'
+//int neg_enum_var_bool() {
+//    int s = 0;
+//    for (bool c : Color) {
+//        if (c) { s = s + 1; }
+//    }
+//    return s;
+//}
+
+/* ...an enum yields VALUES, so a reference var has nothing to bind... */
+//-EXPECT-ERROR: Cannot implicitly cast 'int' to 'int^'
+//int neg_enum_var_ref() {
+//    int s = 0;
+//    for (int^ c : Color) {
+//        s = s + c^;
+//    }
+//    return s;
+//}
+
+/* ...and a narrower var over a wider underlying type narrows. */
+//-EXPECT-ERROR: Cannot implicitly narrow 'int64' to 'int8'
+//int8 neg_enum_var_narrow() {
+//    int8 s = 0;
+//    for (int8 v : Big) {
+//        s = s + v;
+//    }
+//    return s;
 //}

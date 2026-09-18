@@ -38,3 +38,6 @@ range_int_bound_wide(5) = 5
 range_typeless_common(4) = 4
 range_typeless_common_step(10, 2) = 5
 common spell = intptr
+nested_range_array() = 18
+range_switch() = 2
+range_shadow() = 18

@@ -474,6 +474,47 @@ int range_int_bound_wide(int n) {
     return c;
 }
 
+/* a ranged-for NESTED in a DIFFERENT short form (array inner): each lowering
+   mints its own state. i in 0..2 over (1,2,3): 6*1 + 6*2 = 18. */
+int nested_range_array() {
+    int arr[3] = (1, 2, 3);
+    int s = 0;
+    for (i : 0..2) {
+        for (a : arr) {
+            s = s + a * (i + 1);
+        }
+    }
+    return s;
+}
+
+/* a switch inside a ranged-for body: switch is transparent — a naked break
+   exits the LOOP, a naked continue continues it. 0 counts, 1 continues,
+   2 counts, 3 breaks: 0 + 2 = 2. */
+int range_switch() {
+    int s = 0;
+    for (i : 0..10) {
+        switch (i) {
+            3: { break; }
+            1: { continue; }
+            default: { s = s + i; }
+        }
+    }
+    return s;
+}
+
+/* the body declares its own `i` (frame 3) shadowing the loop var (frame 1):
+   the read BEFORE the declaration sees the loop var, the read after sees the
+   local. 0+1+2 + 3*5 = 18. */
+int range_shadow() {
+    int s = 0;
+    for (i : 0..3) {
+        s = s + i;
+        int i = 5;
+        s = s + i;
+    }
+    return s;
+}
+
 int32 main() {
     println(String + "sum_range(5) = " + sum_range(5));        // 10
     println(String + "sum_incl(5) = " + sum_incl(5));          // 15
@@ -515,6 +556,9 @@ int32 main() {
     println(String + "range_typeless_common(4) = " + range_typeless_common(4));            // 4
     println(String + "range_typeless_common_step(10, 2) = " + range_typeless_common_step(10, 2));  // 5
     range_typeless_common_spell(3);                                                        // intptr
+    println(String + "nested_range_array() = " + nested_range_array());  // 18
+    println(String + "range_switch() = " + range_switch());              // 2
+    println(String + "range_shadow() = " + range_shadow());              // 18
     return 0;
 }
 
@@ -640,4 +684,14 @@ negatives — one //-block uncommented per run.
 //        println(String + i);
 //    }
 //    return 0;
+//}
+
+/* a fresh typed loop var lives in the loop's own frame — gone after the loop. */
+//-EXPECT-ERROR: Unresolved identifier 'i'.
+//int neg_range_var_scope(int n) {
+//    int s = 0;
+//    for (int i : 0..n) {
+//        s = s + i;
+//    }
+//    return s + i;
 //}

@@ -430,6 +430,31 @@ int for_ctor_var() {
     return sum;
 }
 
+/* a switch inside a long-for body: switch is transparent to break — 4 exits
+   the LOOP; 0..3 count: 4. */
+int for_switch(int n) {
+    int c = 0;
+    for (int i = 0) (i < n) { ++i; } {
+        switch (i) {
+            4: { break; }
+            default: { c = c + 1; }
+        }
+    }
+    return c;
+}
+
+/* ALL THREE clauses empty: the body is the whole loop, break the only exit. */
+int for_all_empty(int n) {
+    int i = 0;
+    for () () {} {
+        ++i;
+        if (i >= n) {
+            break;
+        }
+    }
+    return i;
+}
+
 int32 main() {
     println(String + "sum_for(5) = " + sum_for(5));                // 10
     println(String + "empty_clauses(4) = " + empty_clauses(4));    // 6
@@ -472,6 +497,8 @@ int32 main() {
             println(String + "for-iter body");
         }
     }
+    println(String + "for_switch(10) = " + for_switch(10));        // 4
+    println(String + "for_all_empty(3) = " + for_all_empty(3));    // 3
     return 0;
 }
 
@@ -659,3 +686,4 @@ negatives — one //-block uncommented per run.
 //    }
 //    return 0;
 //}
+

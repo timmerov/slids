@@ -611,6 +611,27 @@ int32 main() {
     }
     println(String + "tuple-slot container: " + slotsum);      // 6
 
+
+    // ---- a class-for nested with a DIFFERENT short form (range inner, bound
+    //      from the element): 1 + 2 + 3 = 6 ----
+    IdxVec nv;
+    int ncr = 0;
+    for (x : nv) { for (i : 0..x) { ncr = ncr + 1; } }
+    println(String + "class_range: " + ncr);                   // 6
+
+    // ---- the body declares its own `x` shadowing the loop var: the read
+    //      before sees the element, the read after the local: 6 + 3*2 ----
+    int shc = 0;
+    for (x : nv) { shc = shc + x; int x = 2; shc = shc + x; }
+    println(String + "shadow: " + shc);                        // 12
+
+    // ---- a typeless PRIMITIVE head naming an existing local: the class form
+    //      declares its var in the loop's own frame (the desugar's varlist),
+    //      so the enclosing local is untouched after the loop — unlike the
+    //      array / range / enum / tuple forms, which reuse it. ----
+    int cre = 0;
+    for (cre : nv) { cre; }
+    println(String + "class head reuse: " + cre);              // 0
     return 0;
 }
 
@@ -826,4 +847,15 @@ int32 main() {
 //        return x;
 //    }
 //    return 0;
+//}
+
+/* a fresh typed loop var lives in the loop's own frame — gone after the loop. */
+//-EXPECT-ERROR: Unresolved identifier 'v'.
+//int neg_class_var_scope() {
+//    IdxVec cv;
+//    int s = 0;
+//    for (int v : cv) {
+//        s = s + v;
+//    }
+//    return s + v;
 //}
