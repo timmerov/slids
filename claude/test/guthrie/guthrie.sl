@@ -575,13 +575,11 @@ GuthrieVoting(
 ) {
     void run() {
 
-    /*
         /* ==tsc== */
         test_map();
         return;
         /* suppress unreachable error. */
         void;
-    */
 
         /* initialize the random number generators. */
         rng:init(kSeedChoice);

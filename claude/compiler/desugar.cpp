@@ -758,6 +758,12 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
         bool decl_in_header = fid >= 0 && fid < (int)tree.file_imported.size()
                            && tree.file_imported[fid];
         node->internal_def = p.name != "main" && !decl_in_header;
+        // The self-instantiate stage's set, entry side. Stamped HERE and not only in
+        // liftMember, because a FILE-SCOPE free function's instance never goes through
+        // that lift — it is a child of the kProgram node, copied by the recursion
+        // above. liftMember adds the owner-class side on top of this.
+        node->tu_local_flavor = p.resolved_entry_id >= 0
+            && tree.entries[p.resolved_entry_id].tu_local_instance;
     }
     // ast.is_const means a SUBSTITUTED constant — codegen emits no storage for it.
     // A const VARIABLE (a non-foldable type routed to kLocalVar in resolve) is NOT
@@ -1353,6 +1359,14 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
         bool tu_local = f.resolved_entry_id >= 0
             && f.resolved_entry_id < (int)in.entries.size()
             && in.entries[f.resolved_entry_id].tu_local_instance;
+        // The self-instantiate stage's set: the function/method side is the entry flag,
+        // the CLASS side is the owner flavor's type flag. Stamped before the linkage
+        // arms below, because a namespace-member flavor leaves through copyNode's
+        // default and a class-flavor member through the owner-linkage arm — both still
+        // belong to that set.
+        fn->tu_local_flavor =
+            fn->tu_local_flavor || tu_local
+            || (owner != widen::kNoType && widen::slidTuLocalFlavor(owner));
         if (tu_local && owner != widen::kNoType) {
             fn->internal_def = true;
             return fn;

@@ -106,6 +106,14 @@ struct Type {
     //               definitions at all, only `declare`s to link against the sibling's.
     enum class Linkage { kInternal, kDefine, kDeclare };
     Linkage linkage = Linkage::kInternal;
+    // kSlid: this class is a TEMPLATE INSTANCE whose type-list names a type PRIVATE to
+    // this TU — an INLINE-LOCAL flavor. It is the twin of Entry::tu_local_instance (the
+    // function/method side) for the CLASS side, and the two together name every symbol
+    // the self-instantiate stage owns. Set by resolve at the one site that knows
+    // (instantiateClassTemplate's inline_local arm, beside the kInternal linkage it
+    // stamps there); linkage alone cannot answer, because an ORDINARY `.sl` class is
+    // kInternal too.
+    bool tu_local_flavor = false;
     // kSlid: the class is DECLARED incomplete (a trailing `...` in its header) — it has
     // PRIVATE fields hidden from an importer, whose layout/size the importer cannot know.
     // So its `__$sizeof` is an EXTERNAL function (the completer defines it, importers call
@@ -188,6 +196,12 @@ void setSlidNeeds(TypeRef ref, bool needs_ctor, bool needs_dtor);
 // from the file the class is DECLARED in; codegen reads it back via slidLinkage.
 void setSlidLinkage(TypeRef ref, Type::Linkage linkage);
 Type::Linkage slidLinkage(TypeRef ref);
+
+// Set/read whether the class is an inline-local template flavor (see
+// Type::tu_local_flavor). Resolve sets it; codegen reads it to decide which classes'
+// synthesized symbols belong to the self-instantiate module.
+void setSlidTuLocalFlavor(TypeRef ref, bool tu_local_flavor);
+bool slidTuLocalFlavor(TypeRef ref);
 
 // Set/read whether the class is DECLARED incomplete (opaque to importers; see
 // Type::opaque). Resolve sets it from a header's trailing `...`; codegen reads it.

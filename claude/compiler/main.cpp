@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "usage: slidsc <source.sl> [-o <out.ll>] [-I <path>...] "
                      "[-MF <deps.d>|-M] [--instantiate <dir>] "
+                     "[--instantiate-self] [--api-list <file>] "
                      "[--scan-deps <frag.mk>]\n";
         return 1;
     }
@@ -117,6 +118,12 @@ int main(int argc, char** argv) {
     std::string scan_path;      // --scan-deps <file>: lex-only import scan; write
                                 //   the make fragment wiring the consumer's
                                 //   template-library instantiation stage
+    bool inst_self = false;     // --instantiate-self: emit ONLY this TU's inline-local
+                                //   template flavors (see codegen::Options). The TU is
+                                //   read exactly as the main compile reads it, so the
+                                //   two agree on every mangled name — including the
+                                //   def_id a local class's symbol carries.
+    std::string api_path;       // --api-list <file>: the internalize allow-list
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" && i + 1 < argc) {
@@ -129,6 +136,10 @@ int main(int argc, char** argv) {
             deps_stdout = true;
         } else if (arg == "--instantiate" && i + 1 < argc) {
             inst_dir = argv[++i];
+        } else if (arg == "--instantiate-self") {
+            inst_self = true;
+        } else if (arg == "--api-list" && i + 1 < argc) {
+            api_path = argv[++i];
         } else if (arg == "--scan-deps" && i + 1 < argc) {
             scan_path = argv[++i];
         }
@@ -310,7 +321,11 @@ int main(int argc, char** argv) {
     //   import vector;
     //   import library;
     //   import vector { Vector<int>; tsum<int>; }
-    if (!out_path.empty()) {
+    // The demand pool is the MAIN compile's output. The self-instantiate run reads
+    // the same source and would compute the same demands, but writing them again
+    // would race the main compile for the file and could truncate it; and its own
+    // output (inline-local flavors) is excluded from the pool by construction.
+    if (!out_path.empty() && !inst_self) {
         auto moduleOfFile = [&](int fid) -> std::string {
             if (fid < 0 || fid >= (int)tokens.files.size()) return "";
             return moduleOf(tokens.files[fid].path);
@@ -433,7 +448,11 @@ int main(int argc, char** argv) {
     if (diagnostic::hasErrors(diag)) return bail();
 
     std::ostringstream codegen_buf;
-    codegen::run(ast_tree, codegen_buf, diag);
+    std::vector<std::string> api_symbols;
+    codegen::Options cg_opts;
+    cg_opts.self_instantiate = inst_self;
+    if (!api_path.empty()) cg_opts.api_symbols = &api_symbols;
+    codegen::run(ast_tree, codegen_buf, diag, cg_opts);
 
     if (diagnostic::hasErrors(diag)) return bail();
 
@@ -442,6 +461,27 @@ int main(int argc, char** argv) {
     } else {
         std::ofstream out(out_path);
         out << codegen_buf.str();
+    }
+
+    // --api-list: the allow-list for `opt -passes=internalize` after the IR merge.
+    // Sorted and deduped — the file is a build input, so a stable spelling keeps make
+    // from re-running the step on a reordering. One symbol per line, no `@`.
+    if (!api_path.empty()) {
+        std::sort(api_symbols.begin(), api_symbols.end());
+        api_symbols.erase(std::unique(api_symbols.begin(), api_symbols.end()),
+                          api_symbols.end());
+        std::filesystem::path ap(api_path);
+        if (ap.has_parent_path()) {
+            std::error_code ec;
+            std::filesystem::create_directories(ap.parent_path(), ec);
+        }
+        std::ofstream af(api_path);
+        if (!af) {
+            std::cerr << "slidsc: error: cannot write api-list file '"
+                      << api_path << "'\n";
+            return 1;
+        }
+        for (auto const& sym : api_symbols) af << sym << "\n";
     }
 
     return 0;

@@ -149,6 +149,11 @@ global int nums[3];
 /* defined in bird.sl — a NON-SIBLING source. any one .sl may define a header global. */
 int from_bird = 77;
 
+/* also defined in bird.sl: the window into THAT TU's private `Twin` class. the caller
+   has a private `Twin` of its own, same name and a different layout, and the two TUs'
+   flavors of the same imported template mangle to ONE symbol — see bird.sl. */
+int bird_twin();
+
 /* a header global of the OPAQUE Rope: no TU but the completer knows its size, and even
    there static storage can't be sized by a link-time symbol. So in EVERY TU the symbol
    is a POINTER SLOT the definer's first-touch thunk fills with a heap object, and the

@@ -21,6 +21,9 @@ import vector;
 
 int32 main() {
 
+    //String s = "Hello, World!";
+    //dump(#s);
+
     //println("Hello, World!");
 
     return 0;

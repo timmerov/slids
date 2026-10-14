@@ -21,6 +21,16 @@ tpick/tpock pair pins the private-helper asymmetry: tpock's aggregated
 flavor works (its body and `tick` live in tmpl_lib.o), its local-type
 instance errors — a body leaning on TU-private names is emittable only by
 its own TU.
+
+`Twin` is the other half of a pair with bird.sl: THE SAME SYMBOL FROM TWO
+TUs. both files declare a private file-scope class of that name with a
+different layout, and both instantiate Box<Twin> and tdiff<Twin^>. a
+file-scope class takes no def_id suffix, so the two TUs' flavors mangle to
+the IDENTICAL strings and both objects link into this binary. the
+local-type carve-out's `define internal` is the whole reason it works.
+promote such a flavor to an external symbol and one of the two numbers
+below reads the other TU's layout — silently, no diagnostic, no link
+error.
 */
 
 import string;
@@ -41,6 +51,12 @@ import library;
    (library.slh's Rope) is the opposite and still cannot be embedded — its completing
    re-open is stripped from the loaded source, so only its sibling ever sees the fields
    (consumer.sl's negatives). */
+/* THIS TU's private `Twin`: ONE field and a different `tv()` — deliberately not
+   bird.sl's shape, so a cross-TU mix-up would show in the printed number. */
+Twin(int t_ = 3) {
+    int tv() { return t_ + 1; }
+}
+
 Holder(
     Grow<int> a_,
     Grow<int> b_,
@@ -259,6 +275,24 @@ int32 main() {
     println(String + "sk = " + sk.got());
     sk.put(^ml);
     println(String + "sk2 = " + sk.got());
+
+    /* THE SAME SYMBOL FROM TWO TUs: this TU's flavors of Box<Twin> and
+       tdiff<Twin^> carry the same mangled names as bird.sl's, and both
+       objects are in this binary. Each call must reach ITS OWN TU's layout:
+       the first number is this TU's one-field Twin, the second is bird.sl's
+       two-field one, computed inside bird.o. */
+    Twin w1;
+    Box<Twin> bw;
+    int wr = bw.has();
+    bw.p_ = ^w1;
+    wr = wr * 10 + bw.has();
+    Twin w2(8);
+    int wd = 0;
+    if (tdiff(^w1, ^w2)) { wd = 1000; }
+    int wsum = bw.p_^.tv() + wr + wd;
+    println(String + "twin = " + wsum);
+    int bsum = bird_twin();
+    println(String + "btwin = " + bsum);
 
     /* a field the completion supplies cannot be READ by an importer. */
     //-EXPECT-ERROR: is private to its template source

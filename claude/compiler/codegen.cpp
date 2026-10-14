@@ -3663,6 +3663,20 @@ void emitDeclare(ast::Node const& fn, std::ostream& out) {
     out << ")\n";
 }
 
+// SELF-INSTANTIATE state, in the same file-static idiom as g_vtable_syms /
+// g_globals. `g_drop_internal` makes every definition this module still emits
+// external: in that mode the only things emitted are inline-local flavors, and an
+// `internal` definition cannot satisfy the main module's `declare` across llvm-link
+// (it is dropped, silently). `g_api` collects every EXTERNAL definition's symbol for
+// the internalize allow-list.
+bool g_drop_internal = false;
+std::vector<std::string>* g_api = nullptr;
+
+// Record an external definition on the allow-list (no-op when none was asked for).
+void apiSym(std::string const& sym) {
+    if (g_api) g_api->push_back(sym);
+}
+
 void emitFunction(ast::Node const& fn, strings::Pool& pool,
                   std::ostream& out, diagnostic::Sink& diag) {
     // A non-primitive (hook-bearing) return is lowered to sret: the function
@@ -3671,7 +3685,9 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     // unchanged (returned by value).
     bool sret = isSretReturn(fn.return_type);
     std::string ret_llty = sret ? "void" : llvmForRef(fn.return_type);
-    out << "define " << (fn.internal_def ? "internal " : "")
+    bool internal = fn.internal_def && !g_drop_internal;
+    if (!internal) apiSym(emitSymbol(fn));
+    out << "define " << (internal ? "internal " : "")
         << ret_llty << " @" << emitSymbol(fn) << "(";
     bool need_comma = false;
     if (sret) {
@@ -3867,8 +3883,33 @@ void emitGlobalDestruct(ast::GlobalVar const& gv, std::ostream& out) {
 
 }  // namespace
 
-void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
+void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag,
+         Options const& opts) {
     strings::Pool pool;
+
+    // SELF-INSTANTIATE: this module carries ONLY the inline-local template flavors.
+    // Everything else in the TU degrades to a `declare` / `external global`, so the
+    // module stands alone as valid IR and llvm-link binds the references to the main
+    // module's definitions. `self` is read at every emission site below that would
+    // otherwise write a definition.
+    bool self = opts.self_instantiate;
+    g_drop_internal = self;
+    g_api = opts.api_symbols;
+
+    // The flavor classes, by SYMBOL — ast::Vtable names its class that way, and the
+    // per-class loops below key off the type. Built once; empty unless some flavor
+    // exists at all.
+    std::set<std::string> flavor_class_syms;
+    for (widen::TypeRef ct : tree.classes)
+        if (widen::slidTuLocalFlavor(widen::strip(ct)))
+            flavor_class_syms.insert(widen::classSymbol(widen::strip(ct)));
+
+    // Self-instantiate: every symbol the program-scope loop below degraded from a
+    // definition to a `declare`. The per-class loop would otherwise declare some of
+    // them a SECOND time — a synthesized placement-new `@C__$ctor` is an ordinary
+    // kFunctionDef, so it arrives through both paths — and a repeated `declare` is
+    // invalid IR, not a no-op.
+    std::set<std::string> self_declared;
 
     std::ostringstream body;
     std::vector<ast::Node const*> nested;
@@ -3878,6 +3919,9 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // the forward reference.)
     g_vtable_syms.clear();
     for (ast::Vtable const& vt : tree.vtables) {
+        // Self-instantiate: a vtable is `private` storage belonging to whichever
+        // module defines the class's ctor (which stamps it). Only a flavor's is ours.
+        if (self && !flavor_class_syms.count(vt.class_symbol)) continue;
         g_vtable_syms.insert(vt.class_symbol);
         body << "@" << vt.class_symbol
              << "__$vtable = private unnamed_addr constant ["
@@ -3909,7 +3953,10 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         std::string llty = indirect ? "ptr" : llvmForRef(gv.type);
         // A header-declared global NOT defined in this TU is a `declare` — an `external
         // global`, no storage, no init; every access links to the defining object's.
-        if (gv.external_link && !gv.defined_here) {
+        // Self-instantiate owns no storage: every global degrades to a declaration,
+        // whatever its linkage here, and the merge binds it to the main module's
+        // definition. (llvm-link drops the ones no flavor body touched.)
+        if (self || (gv.external_link && !gv.defined_here)) {
             body << "@" << gv.symbol << " = external global " << llty << "\n";
             continue;
         }
@@ -3930,6 +3977,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         // A header-declared global DEFINED here is the external symbol importers link to;
         // a `.sl`-local global stays `internal`.
         char const* link = gv.external_link ? "" : "internal ";
+        if (gv.external_link) apiSym(gv.symbol);
         body << "@" << gv.symbol << " = " << link << "global " << llty << " "
              << init << "\n";
     }
@@ -3939,7 +3987,16 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // (before running the ctor, so registration order == ctor-invocation order and
     // the reverse-order teardown is correct), then run the ctor.
     g_has_lazy_globals = !tree.global_groups.empty();
-    if (g_has_lazy_globals) {
+    if (g_has_lazy_globals && self) {
+        // Self-instantiate: the registry and every group's machinery belong to the
+        // main module. Declare what a flavor body could reach — the shared head and
+        // walker, and each group's touch thunk (the one symbol a read of a global
+        // goes through) — and define none of it.
+        body << "@__$global_dtor_head = external global ptr\n\n";
+        body << "declare void @__$global_dtor_all()\n\n";
+        for (ast::GlobalGroup const& g : tree.global_groups)
+            body << "declare void @" << g.touch_symbol << "()\n\n";
+    } else if (g_has_lazy_globals) {
         // The global dtor registry is a program-wide singly-linked list: one
         // `linkonce_odr` head pointer + walker (every TU emits an identical copy and the
         // linker keeps ONE), plus a statically-allocated node per lazy group PREPENDED at
@@ -3950,6 +4007,11 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         // touch sets next = old head then head = node, so the newest is at the front and
         // the walker (head-first) tears down in reverse construction order. The walker
         // CLEARS the head, so a second `global;` sees an empty list.
+        // linkonce_odr, so EVERY TU emits a copy and the linker keeps one — which
+        // means internalize must not demote it, or each object gets its own registry
+        // and the program-wide reverse-order teardown silently splits per TU.
+        apiSym("__$global_dtor_head");
+        apiSym("__$global_dtor_all");
         body << "@__$global_dtor_head = linkonce_odr global ptr null\n\n";
         body << "define linkonce_odr void @__$global_dtor_all() {\n"
              << "entry:\n"
@@ -3987,6 +4049,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             // stable name of a header-declared global); a private group's touch
             // and every ctor/dtor thunk are per-TU NUMBERED names — internal, or
             // two TUs whose numbering happens to overlap collide at link.
+            if (g.external_link) apiSym(g.touch_symbol);
             body << "define " << (g.external_link ? "" : "internal ")
                  << "void @" << g.touch_symbol << "() {\n"
                  << "entry:\n"
@@ -4044,6 +4107,15 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                 // dispatch precisely because the second case is a kFunctionDef. A FOREIGN
                 // decl is skipped here — collected + deduped below (it may appear nested).
                 emitDeclare(*fn, body);
+            } else if (self && fn->kind == ast::Kind::kFunctionDef
+                       && !fn->tu_local_flavor) {
+                // Self-instantiate: not ours to define. It still has to be NAMED —
+                // a flavor body calls the local class's own methods — so the
+                // definition degrades to its declaration and the merge binds it.
+                // Its nested functions are not collected: nothing here can reach
+                // them once the parent body is gone.
+                self_declared.insert(emitSymbol(*fn));
+                emitDeclare(*fn, body);
             } else if (fn->kind == ast::Kind::kFunctionDef) {
                 emitFunction(*fn, pool, body, diag);
                 collectNestedFunctions(*fn, nested);
@@ -4094,9 +4166,15 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         if (diagnostic::hasErrors(diag)) break;
         widen::TypeRef cs = widen::strip(ct);
         std::string sym = widen::classSymbol(cs);
-        bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare;
-        char const* def = (widen::slidLinkage(cs) == widen::Type::Linkage::kInternal)
-                        ? "define internal void @" : "define void @";
+        // Self-instantiate: only a FLAVOR's complete methods are ours. Every other
+        // class degrades to the importer shape (`declare`), exactly as a non-sibling
+        // already does for a header class.
+        bool flavor = widen::slidTuLocalFlavor(cs);
+        bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare
+                         || (self && !flavor);
+        bool def_internal = widen::slidLinkage(cs) == widen::Type::Linkage::kInternal
+                         && !g_drop_internal;
+        char const* def = def_internal ? "define internal void @" : "define void @";
         // When we emit the complete method we emit a CALL to the user's hook body, so we
         // must also name that body. If it is not ours — a header's `_();` defined in some
         // other `.sl`, which the model allows for any declared member — the call needs a
@@ -4109,7 +4187,8 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             if (declare_only) {
                 // Importer: it calls @C__$ctor (full default construction). $pctor is the
                 // completer's private business — never referenced here.
-                body << "declare void @" << sym << "__$ctor(ptr)\n\n";
+                if (!self_declared.count(sym + "__$ctor"))
+                    body << "declare void @" << sym << "__$ctor(ptr)\n\n";
             } else if (opaque) {
                 // Completer of an incomplete class. The complete ctor @C__$ctor is a
                 // SYNTHESIZED placement-new method (resolve → the ordinary function path),
@@ -4125,6 +4204,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             } else {
                 if (widen::get(cs).has_ctor && !widen::slidCtorHere(cs))
                     body << "declare void @" << sym << "__$ctor__impl(ptr)\n\n";
+                if (!def_internal) apiSym(sym + "__$ctor");
                 body << def << sym << "__$ctor(ptr %o) {\n";
                 emitClassCtorBody("%o", cs, body);
                 body << "  ret void\n}\n\n";
@@ -4136,10 +4216,12 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         // even when the class is a POD with no hooks.
         if (typeNeedsHook(cs, /*ctor=*/false) || opaque) {
             if (declare_only) {
-                body << "declare void @" << sym << "__$dtor(ptr)\n\n";
+                if (!self_declared.count(sym + "__$dtor"))
+                    body << "declare void @" << sym << "__$dtor(ptr)\n\n";
             } else {
                 if (widen::get(cs).has_dtor && !widen::slidDtorHere(cs))
                     body << "declare void @" << sym << "__$dtor__impl(ptr)\n\n";
+                if (!def_internal) apiSym(sym + "__$dtor");
                 body << def << sym << "__$dtor(ptr %o) {\n";
                 emitClassDtorBody("%o", cs, body);
                 body << "  ret void\n}\n\n";
@@ -4169,12 +4251,16 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         widen::TypeRef cs = widen::strip(ct);
         if (!widen::slidOpaque(cs)) continue;
         std::string name = widen::classSymbol(ct);
-        if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
+        // Self-instantiate: an opaque class's size is the COMPLETER's export, and a
+        // flavor module is never the completer — read the symbols, define neither.
+        if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare || self) {
             body << "@" << name << "__$sizeof = external global i8\n";
             body << "@" << name << "__$size16 = external global i8\n\n";
             continue;
         }
         std::string llty = llvmForRef(ct);
+        apiSym(name + "__$sizeof");
+        apiSym(name + "__$size16");
         body << "@" << name << "__$sizeof = alias i8, inttoptr (i64 ptrtoint (ptr "
              << "getelementptr (" << llty << ", ptr null, i32 1) to i64) to ptr)\n";
         body << "@" << name << "__$size16 = alias i8, inttoptr (i64 ptrtoint (ptr "
@@ -4196,12 +4282,15 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
         if (!widen::slidRuntimeLayout(cs)) continue;
         std::size_t n = widen::get(cs).slots.size();
         std::string name = widen::classSymbol(ct);
-        bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare;
+        // Self-instantiate: the offsets are the completer's exports too.
+        bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare
+                         || self;
         std::string llty = llvmForRef(ct);
         for (std::size_t i = 1; i < n; i++) {
             if (declare_only) {
                 body << "@" << name << "__$off" << i << " = external global i8\n";
             } else {
+                apiSym(name + "__$off" + std::to_string(i));
                 body << "@" << name << "__$off" << i
                      << " = alias i8, inttoptr (i64 ptrtoint (ptr getelementptr ("
                      << llty << ", ptr null, i32 0, i32 " << i
