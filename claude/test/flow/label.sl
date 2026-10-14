@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test labels on for/while loops.
 include numbered and named breaks and continues.
 includes breaks and continues in switch statements.

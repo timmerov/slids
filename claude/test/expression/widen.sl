@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test widening of the built-in primitives.
 
 note: some of this prose is a bit stale. read claude's section.

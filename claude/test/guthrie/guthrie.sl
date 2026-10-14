@@ -258,6 +258,7 @@ cumulative voting - split 1.0 votes among candidates.
 import dump;
 import electorate;
 import guthrie;
+import map;
 import random;
 import string;
 import vector;
@@ -437,6 +438,7 @@ Candidate(
     /* utility */
     float64 utility_ = 0.0
 ) {
+    /* ==tsc== */
     /* for sorting */
     /*bool operator < (const Candidate& other) const
     {
@@ -484,6 +486,7 @@ ElectoralMethod(
     //void find_winner(bool quiet = kQuiet);
 }
 
+/* ==tsc== */
 /*
 example electoral method specialization:
 */
@@ -570,11 +573,13 @@ GuthrieVoting(
     int independence_ = 0,
     int irv_is_condorcet_ = 0
 ) {
-    /* nothing to ctor/dtor */
-    _() {}
-    ~() {}
-
     void run() {
+
+        /* ==tsc== */
+        test_map();
+        return;
+        /* suppress unreachable error. */
+        void;
 
         /* initialize the random number generators. */
         rng:init(kSeedChoice);
@@ -605,6 +610,7 @@ GuthrieVoting(
                 void; /* disable unreachable code error. */
                 electorate_.show_distribution();
             }
+/* ==tsc== */
 /*
             find_best_candidate();
             init_candidates();
@@ -618,6 +624,7 @@ GuthrieVoting(
             check_criteria();
 */
         }
+/* ==tsc== */
 /*
         /* log the results. */
         show_summary();
@@ -693,6 +700,7 @@ GuthrieVoting(
             println(String + "  The average utility is 90% best and 10% worst.");
         }
     }
+/* ==tsc== */
 /*
     /*
     find the voter that would make the best candidate.
@@ -1696,8 +1704,10 @@ GuthrieVoting(
         LOG(" instant runoff is Condorcet  : "<<irv_is_condorcet<<"%");
     }
 */
+/* ==tsc== */
 }
 
+/* ==tsc== */
 /*
 /*
 find the guthrie winner.
@@ -2857,3 +2867,4 @@ void GuthrieVoting::run() {
     impl->run();
 }
 */
+/* ==tsc== */

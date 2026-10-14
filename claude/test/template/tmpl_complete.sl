@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test template class completion.
 
 template classes may be incomplete, re-opened, and completed.

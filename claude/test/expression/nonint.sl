@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test implementation of expressions.
 
 ensure we parse non-int types correctly.

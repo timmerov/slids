@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test imported templates defined in another source file.
 this is the SECOND-LEVEL template header: its consumer is tmpl_lib.sl — a
 template source that is itself a consumer (the mixed-role case).

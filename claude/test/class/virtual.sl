@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test virtual classes.
 
 virtual classes have one or more virtual methods.

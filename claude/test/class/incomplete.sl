@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test completing incomplete classes.
 
 a trailing ellipsis means the class field tuple is incomplete.

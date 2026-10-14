@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test class as namespace.
 
 constants, globals, aliases, enums, etc may be defined inside a class body.

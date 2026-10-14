@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test combinations of arrays, tuples, and classes.
 
 array of tuples.

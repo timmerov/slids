@@ -46,7 +46,7 @@ Position() {
         }
         float64 dist = math:sqrt(sum2);
 
-        /** the simplest model for utility is 1.0 - distance. **/
+        /* the simplest model for utility is 1.0 - distance. */
         float64 utility = 1.0 - dist;
 
         /*
@@ -68,7 +68,7 @@ Position() {
         return utility;
     }
 
-    /** format the position as a string. **/
+    /* format the position as a string. */
     String to_string() {
         String s;
         int naxes = (int=axis_.size());
@@ -87,18 +87,18 @@ Position() {
         return s;
     }
 
-    /** for sorting **/
+    /* for sorting */
     /*bool operator < (const Position& other) const;*/
 }
 
 Cluster(
-    /** size **/
+    /* size */
     int count_ = 0,
 
-    /** position **/
+    /* position */
     Position position_
 ) {
-    /** for sorting **/
+    /* for sorting */
     /*bool operator < (const Cluster& other) const
     {
         return (position_ < other.position_);
@@ -106,13 +106,13 @@ Cluster(
 }
 
 /*
-/** for sorting **/
+/* for sorting */
 bool Position::operator < (const Position& other) const
 {
     return (axis_[0] < other.axis_[0]);
 }
 
-/** for sorting **/
+/* for sorting */
 bool Voter::operator < (const Voter& other) const
 {
     return (position_ < other.position_);
@@ -121,13 +121,13 @@ bool Voter::operator < (const Voter& other) const
 
 Electorate() {
     void init() {
-        /** allocate space for the voters and candidates **/
+        /* allocate space for the voters and candidates */
         voters_.resize(nvoters_);
 
-        /** allocate space for the positions. **/
+        /* allocate space for the positions. */
         size_position_axes();
 
-        /** distribute the voter by the chosen method. **/
+        /* distribute the voter by the chosen method. */
         switch (method_) {
             default:
             kElectorateUniform: {
@@ -139,23 +139,23 @@ Electorate() {
             }
         }
 
-        /** normalize non-uniform distributions. **/
+        /* normalize non-uniform distributions. */
         if (method_ != kElectorateUniform) {
             normalize();
         }
     }
 
-    /** allocate space for the voter positions. **/
+    /* allocate space for the voter positions. */
     void size_position_axes() {
         for (voter : voters_) {
             voter^.position_.axis_.resize(naxes_);
         }
     }
 
-    /**
+    /*
     evenly distribute voters from 0 to 1 along a single axis.
     this is the simplest model of the electorate.
-    **/
+    */
     void ranked() {
         println(String + "Electorate is uniform ranked order.");
         nvoters float64 = nvoters_;
@@ -166,9 +166,9 @@ Electorate() {
         }
     }
 
-    /**
+    /*
     randomly distribute voters along the axes.
-    **/
+    */
     void random() {
         println(String + "Electorate is random.");
         for (int i : 0..nvoters_) {
@@ -179,13 +179,13 @@ Electorate() {
         }
     }
 
-    /**
+    /*
     chinese restaurant process.
-    **/
+    */
     void clusters() {
         println(String + "Electorate is clustered.");
 
-        /** create empty clusters. **/
+        /* create empty clusters. */
         Clusters clusters;
         clusters.resize(nclusters_);
         for (cluster : clusters) {
@@ -204,7 +204,7 @@ Electorate() {
         }
     }
 
-    /**
+    /*
     pick a random cluster and join it.
     or create a new one.
 
@@ -212,26 +212,26 @@ Electorate() {
     and the first voters fill empty clusters.
     how many clusters?
     maybe 2 times number of candidates.
-    **/
+    */
     void seat_voter(
         Clusters^ clusters,
         int k
     ) {
-        /**
+        /*
         what should the standard deviation be?
         should it start small and grow with the size of the table?
         this number found by trial and error.
-        **/
+        */
         const float64 kStdDev = 0.07;
 
-        /** pick a cluster. **/
+        /* pick a cluster. */
         int where = 0;
         nclusters int = clusters^.size();
         if (k < nclusters) {
-            /** seat the first n voters in their own cluster. **/
+            /* seat the first n voters in their own cluster. */
             where = k;
         } else {
-            /** populare clusters attract more people. **/
+            /* populare clusters attract more people. */
             int rn = rng:generate_int(k);
             for (cluster : clusters^) {
                 rn -= cluster^.count_;
@@ -245,11 +245,11 @@ Electorate() {
             }
         }
 
-        /** add the voter to the cluster. **/
+        /* add the voter to the cluster. */
         cluster = ^clusters^[where];
         cluster^.count_ += 1;
 
-        /** position the voter. **/
+        /* position the voter. */
         voter = ^voters_[k];
         for (int i : 0..naxes_) {
             float64 rn = rng:normal() * kStdDev;
@@ -258,9 +258,9 @@ Electorate() {
         }
     }
 
-    /**
+    /*
     normalize all axes.
-    **/
+    */
     void normalize() {
         float64 weight = 1.0;
         for (int axis : 0..naxes_) {
@@ -272,9 +272,9 @@ Electorate() {
         //std::sort(voters_.begin(), voters_.end());
     }
 
-    /**
+    /*
     normalize the voters so they range from 0 to 1 along this axis.
-    **/
+    */
     void normalize(
         int axis,
         float64 weight
@@ -298,9 +298,9 @@ Electorate() {
         }
     }
 
-    /**
+    /*
     show all axes.
-    **/
+    */
     void show_distribution() {
         println(String + "Electorate distribution:");
         for (int axis : 0..naxes_) {
@@ -311,9 +311,9 @@ Electorate() {
         }
     }
 
-    /**
+    /*
     show distribution for one axis.
-    **/
+    */
     void show_distribution(
         int axis
     ) {

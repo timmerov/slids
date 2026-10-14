@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test type conversion aka value conversion
 
 conceptually type conversion is an assignment to a temporary variable.

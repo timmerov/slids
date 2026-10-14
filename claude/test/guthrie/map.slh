@@ -1,0 +1,17 @@
+/*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
+std c++ map
+
+need minimum:
+for (it : map) { }
+clear()
+find()
+end()
+insert()
+size()
+*/
+
+void test_map();

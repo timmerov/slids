@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test bare code blocks — a `{ stmts }` statement that opens a nested lexical
 scope.
 

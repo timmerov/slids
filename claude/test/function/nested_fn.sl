@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test nested functions.
 
 a nested function has read/write visibility to the local variables

@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test hoisted classes.
 
 hoisted classes are declared inside the body of another class.

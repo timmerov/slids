@@ -7,8 +7,5 @@ analyze guthrie voting.
 */
 
 GuthrieVoting(...) {
-    _();
-    ~();
-
     void run();
 }

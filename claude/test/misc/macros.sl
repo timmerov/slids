@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test the stringify macros.
 
     ##date      current date: Mmm DD YYYY

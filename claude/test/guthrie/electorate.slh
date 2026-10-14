@@ -9,7 +9,7 @@ model the electorate.
 import string;
 import vector;
 
-/** initialization options. **/
+/* initialization options. */
 const int kElectorateUniform = 0;
 const int kElectorateRandom = 1;
 const int kElectorateClusters = 2;
@@ -17,21 +17,21 @@ const int kElectorateClusters = 2;
 Position(
     Vector<float64> axis_
 ) {
-    /** return the utility to another position. **/
+    /* return the utility to another position. */
     float64 utility(Position^ other);
 
-    /** format the position as a string. **/
+    /* format the position as a string. */
     String to_string();
 
-    /** for sorting **/
+    /* for sorting */
     /*bool operator < (const Position& other) const;*/
 }
 
 Voter(
-    /** position along the axis ranges from 0..1 **/
+    /* position along the axis ranges from 0..1 */
     Position position_
 ) {
-    /** for sorting **/
+    /* for sorting */
     //bool operator < (const Voter& other) const;
 }
 alias Voters = Vector<Voter>;
@@ -40,21 +40,21 @@ Cluster(...) { }
 alias Clusters = Vector<Cluster>;
 
 Electorate(
-    /** configuration. **/
+    /* configuration. */
     int nvoters_ = 100,
     int method_ = kElectorateUniform,
     int naxes_ = 1,
 
-    /** minor axes have reduced range (and utility). **/
+    /* minor axes have reduced range (and utility). */
     float64 axis_weight_decay_ = 1.0,
     int nclusters_ = 6,
 
-    /** data **/
+    /* data */
     Voters voters_
 ) {
-    /** set configuration parameters above. required. **/
+    /* set configuration parameters above. required. */
     void init();
 
-    /** what did we get. **/
+    /* what did we get. */
     void show_distribution();
 }

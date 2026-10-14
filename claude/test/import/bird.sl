@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test import and linked files.
 this is an auxiliary library file.
 it defines things declared in library.slh.

@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test variable declarations + definite assignment + unused locals.
 
 definite assignment: a local must be written before it is read. reading an

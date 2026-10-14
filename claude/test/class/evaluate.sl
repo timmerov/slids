@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 optimize the evaluation of expressions that need temporary class objects.
 
     String s = String + a + b + c + d;

@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test the handling of numeric literals.
 
 lex emits +/- as tokens. they are not folded into a numeric constant.

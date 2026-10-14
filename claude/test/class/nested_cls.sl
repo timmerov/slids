@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test classes defined in local (nested) scopes.
 
 classes may be defined in any code body.

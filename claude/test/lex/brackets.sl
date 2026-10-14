@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test unbalanced brackets.
 
 each //-EXPECT-ERROR case is exercised by run_negatives.sh.

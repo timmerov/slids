@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test constant folding.
 
 constant folding determines the nominal size of all literals.

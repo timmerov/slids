@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test complex expression on the lhs of an assignment.
 
 test const correctness.

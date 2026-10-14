@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test sizeof built-in function.
 
 sizeof returns the size in bytes of the type or expression.

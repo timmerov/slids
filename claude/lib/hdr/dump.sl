@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 dump prints the type name and value of a variable.
 uses the stringification operator #.
 */

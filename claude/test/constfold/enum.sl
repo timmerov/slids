@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test enums.
 
 enums may be defined in any scope where constants may be defined.

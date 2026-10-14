@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test casting of pointers.
 
 the term cast is exclusive to pointers.

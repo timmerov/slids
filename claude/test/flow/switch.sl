@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test switch statements.
 
 switch keyword, value tuple, code block of case statements.

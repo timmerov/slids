@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test for over a fixed size array.
 
 to iterate by value, the array must be a primitive type.

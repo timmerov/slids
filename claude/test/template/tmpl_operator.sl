@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test operator overload templates.
 
 excludes: op= op<-- op<-->.

@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test suppressing the unreachable code diagnostic.
 
     if (0) { void; }

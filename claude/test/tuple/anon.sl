@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test anonymous tuples.
 
 a tuple is a comma separated list of types or data.

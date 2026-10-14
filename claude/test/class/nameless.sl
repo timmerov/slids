@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test nameless class instantiation.
 
 the author can instantiate a class object without a name.

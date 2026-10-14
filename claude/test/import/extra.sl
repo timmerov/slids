@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test import and linked files.
 this is the second library's source file — extra.slh's sibling.
 

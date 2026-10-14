@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test templates declared within templates.
 
 not all template nesting is supported for practical reasons.

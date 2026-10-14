@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 test using class fields in statements and expressions.
 test inferring field types from default values.
 
