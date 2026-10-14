@@ -4707,6 +4707,14 @@ void classifyConstruction(parse::Tree& tree, parse::Node& s,
                           diagnostic::Sink& diag) {
     assert(s.is_construction && s.resolved_entry_id >= 0
         && "classifyConstruction: not a marked construction");
+    // ALREADY LOWERED on a prior inferExpr pass — idempotent: its type is the class.
+    // An OVERLOADED call infers its args twice (context-free to rank, then with the
+    // chosen param), and this arm REWRITES its node, so without this the second pass
+    // wraps the first pass's construction tuple as a lone initializer. Nothing here
+    // reads the inference context (the class comes from resolved_entry_id, the field
+    // types from the class), so re-running could only ever destroy work. The
+    // kConvertExpr arm guards itself the same way, for the COERCED twin of this node.
+    if (s.ctor_lowered) { s.inferred_type = s.return_type; return; }
     widen::TypeRef ctype = widen::strip(tree.entries[s.resolved_entry_id].slids_type);
     auto it = tree.classes.find(ctype);
     if (it == tree.classes.end()) {
@@ -4734,6 +4742,7 @@ void classifyConstruction(parse::Tree& tree, parse::Node& s,
     classifyClassInit(tree, s, it->second, diag);   // children[0] := construction tuple
     s.return_type = it->second.type;
     s.inferred_type = it->second.type;
+    s.ctor_lowered = true;
 }
 
 std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty,

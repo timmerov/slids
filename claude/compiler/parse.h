@@ -345,6 +345,13 @@ struct Node {
                                  // a DEFAULT head may be seeded with the cheaper `op=`, but a
                                  // head built WITH args must use `op<OP>=` — an `op=` there
                                  // would discard the very arguments it was constructed with.
+    bool ctor_lowered = false;   // kCallExpr[is_construction]: classifyConstruction has
+                                 // ALREADY wrapped the args into the per-field construction
+                                 // tuple. inferExpr has no re-entry guard and an OVERLOADED
+                                 // call infers its args TWICE — context-free to rank, then
+                                 // again with the chosen param type — so a second lowering
+                                 // would wrap the FIRST pass's tuple as a lone initializer
+                                 // and check it against the class's field count.
     bool class_op_chain = false; // kBinaryExpr / kUnaryExpr: a class-PRODUCING operator.
                                  // classify RESOLVES it and STAMPS it (the candidate ids below +
                                  // inferred_type = the result class = the OPERAND's class — the

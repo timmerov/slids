@@ -31,10 +31,20 @@ candidate is "No matching overload" — the same wording as a free function.
   arity 1.
 - the implicit receiver `_$recv` (params[0]) is held OUT of ranking + the arity range;
   it always matches the object.
+- a CONSTRUCTION argument follows the free-function rule exactly (overload_fn.sl):
+  `Class` / `Class(args)` passed to an overloaded METHOD is a TEMPORARY, rung 0 against
+  a `Class^` param, never an initializer list — through every receiver spelling
+  (`obj.m`, `p^.m`, a bare SIBLING call). Parity here is not a coincidence: both sides
+  reach the same classifyConstruction, so the once-only lowering rule lands on both.
 - a single (non-overloaded) method keeps its detailed arity / cast errors.
 */
 
 import string;
+
+/* the three field-count shapes a construction argument is checked against. */
+Nil0() { _() {} ~() {} }
+Box1(int32 v_ = 7) { _() {} ~() {} }
+Box2(int32 a_ = 3, int32 b_ = 4) { _() {} ~() {} }
 
 Calc(int base_) {
     // arity overload
@@ -79,6 +89,28 @@ Calc(int base_) {
     // overloading on a CLASS-typed (by-reference) param vs a primitive.
     int g(int x) { return 1; }
     int g(Calc^ x) { return 2; }
+
+    // A CONSTRUCTION argument to an OVERLOADED METHOD — the SAME rule as the
+    // free-function case in overload_fn.sl. The class value binds the reference
+    // param by the value->reference convenience (rung 0), so the argument is a
+    // TEMPORARY, never an initializer list. Field count is the axis: 0, 1, 2.
+    int ctor0(Nil0^ n) { return 10; }
+    int ctor0(bool b)  { return 11; }
+    int ctor1(Box1^ o) { return o^.v_; }
+    int ctor1(bool b)  { return 0; }
+    int ctor2(Box2^ t) { return t^.a_ * 10 + t^.b_; }
+    int ctor2(bool b)  { return 0; }
+
+    // three candidates, not two.
+    int ctor3(Box2^ t) { return t^.a_ * 10 + t^.b_; }
+    int ctor3(int64 x) { return 0; }
+    int ctor3(bool b)  { return 0; }
+
+    // the SINGLE-candidate control.
+    int lone(Box2^ t)  { return t^.a_; }
+
+    // reached through a bare SIBLING call, which rewrites to self.ctor2().
+    int viactor() { return ctor2(Box2); }
 }
 
 int32 main() {
@@ -125,6 +157,19 @@ int32 main() {
     // overload on a class-typed param vs a primitive.
     println(String + "g_int = " + c.g(5));                 // 1
     println(String + "g_ref = " + c.g(^c));                // 2
+
+    // a CONSTRUCTION temporary passed to an overloaded METHOD.
+    println(String + "ctor0 = " + c.ctor0(Nil0));          // 10 (0 fields)
+    println(String + "ctor0p = " + c.ctor0(Nil0()));       // 10 (explicit parens)
+    println(String + "ctor1 = " + c.ctor1(Box1));          // 7  (1 field)
+    println(String + "ctor2 = " + c.ctor2(Box2));          // 34 (2 fields)
+    println(String + "ctor2a = " + c.ctor2(Box2(8, 9)));   // 89 (args, not default)
+    println(String + "ctor3 = " + c.ctor3(Box2));          // 34 (three candidates)
+    Box2 bx;
+    println(String + "ctor2l = " + c.ctor2(bx));           // 34 (lvalue control)
+    println(String + "lone = " + c.lone(Box2));            // 3  (one candidate)
+    println(String + "viactor = " + c.viactor());          // 34 (bare sibling call)
+    println(String + "ptr_ctor2 = " + p^.ctor2(Box2));     // 34 (deref receiver)
 
     return 0;
 }

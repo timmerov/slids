@@ -18,5 +18,5 @@ import map;
 import string;
 
 void test_map() {
-    println(String + "Hello, World!");
+    println("Hello, World!");
 }

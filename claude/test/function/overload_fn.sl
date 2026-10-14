@@ -128,6 +128,14 @@ claude says:
   match one arg exactly and widen the other tie (amb_sym). (A literal's exactness
   is judged against its default type; the whole-array `^arr` and value->reference
   convenience are exact = rung 0.)
+- A CONSTRUCTION is an ordinary argument. `Class` / `Class(args)` in an argument
+  position is a TEMPORARY of that class, ranked at rung 0 against a `Class^` param by
+  the same value->reference convenience a named lvalue gets — it is never an
+  initializer list for the parameter. The bare and parenthesized spellings are
+  identical, and the candidate COUNT does not change the answer: a construction that
+  binds as the lone overload binds the same way against two or ten. (Inside,
+  classifyConstruction lowers the args ONCE and guards itself against the second
+  inference pass an overloaded call performs.)
 - DEFAULT PARAMETERS: a trailing param may carry a default (`int32 b = 100`), so a
   candidate's arity is a RANGE — num_required .. param-count. A call within the
   range is viable; the omitted trailing args fill from THE CHOSEN overload's
@@ -316,6 +324,33 @@ char chsel(uint64 x) { return 'U'; }
 char chsel_i(int64 x) { return 'I'; }
 char chonly(char c) { return c; }
 
+/* A CONSTRUCTION argument to an OVERLOADED function. The class value binds the
+   reference param by the value->reference convenience (rung 0, exact), exactly
+   as a named lvalue does — the argument is a TEMPORARY, never an initializer
+   list. Field count is the axis, because that is what a mis-routed construction
+   would be checked against: 0 fields, 1 field, 2 fields. */
+/* the field DEFAULTS carry the no-args values, so an explicit `(8, 9)` field list
+   survives: a ctor that WROTE the fields would clobber it (fields are initialized
+   first, the ctor runs after — construct.sl pins that order). */
+Nil0() { _() {} ~() {} }
+Box1(int32 v_ = 7) { _() {} ~() {} }
+Box2(int32 a_ = 3, int32 b_ = 4) { _() {} ~() {} }
+
+int32 ctor0(Nil0^ n) { return 10; }
+int32 ctor0(bool b)  { return 11; }
+int32 ctor1(Box1^ o) { return o^.v_; }
+int32 ctor1(bool b)  { return 0; }
+int32 ctor2(Box2^ t) { return t^.a_ * 10 + t^.b_; }
+int32 ctor2(bool b)  { return 0; }
+
+/* three candidates, not two — the rule is not specific to a pair. */
+int32 ctor3(Box2^ t) { return t^.a_ * 10 + t^.b_; }
+int32 ctor3(int64 x) { return 0; }
+int32 ctor3(bool b)  { return 0; }
+
+/* the SINGLE-candidate control: one overload takes the same construction. */
+int32 lone(Box2^ t)  { return t^.a_; }
+
 int32 main() {
     println(String + "area(5) = " + area(5));              // 25
     println(String + "area(3, 4) = " + area(3, 4));        // 12
@@ -397,6 +432,18 @@ int32 main() {
     println(String + "chsel(ch) = " + chsel(cch));      // Q (char exact)
     println(String + "chsel(65) = " + chsel(65));       // U (an int literal never matches char)
     println(String + "chsel_i(ch) = " + chsel_i(cch));  // I (char widens out into int64)
+
+    /* a CONSTRUCTION temporary passed to an overloaded function — same answer as
+       the lvalue, and the same whether the parens are written or not. */
+    println(String + "ctor0(Nil0) = " + ctor0(Nil0));         // 10 (0 fields)
+    println(String + "ctor0(Nil0()) = " + ctor0(Nil0()));     // 10 (explicit parens)
+    println(String + "ctor1(Box1) = " + ctor1(Box1));         // 7  (1 field)
+    println(String + "ctor2(Box2) = " + ctor2(Box2));         // 34 (2 fields)
+    println(String + "ctor2(Box2(8,9)) = " + ctor2(Box2(8, 9)));  // 89 (args, not default)
+    println(String + "ctor3(Box2) = " + ctor3(Box2));         // 34 (three candidates)
+    Box2 bx;
+    println(String + "ctor2(lvalue) = " + ctor2(bx));         // 34 (lvalue control)
+    println(String + "lone(Box2) = " + lone(Box2));           // 3  (one candidate)
 
     return 0;
 }

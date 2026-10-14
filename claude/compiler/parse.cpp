@@ -212,6 +212,7 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
     c->is_construction = n.is_construction;
     c->is_temp_init = n.is_temp_init;
     c->ctor_no_args = n.ctor_no_args;
+    c->ctor_lowered = n.ctor_lowered;
     c->class_op_chain = n.class_op_chain;
     c->op_collapse_head = n.op_collapse_head;
     c->op_bin_eid = n.op_bin_eid;
