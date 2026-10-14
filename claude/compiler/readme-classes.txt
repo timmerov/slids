@@ -264,6 +264,26 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     No new codegen — construction reuses the zero-arg machinery, the read the expr-stmt path.
     Canon: `NoInitClass;` / `(NoInitClass, 7)` / `NoInitClass a[2] = (NoInitClass,
     NoInitClass)` in test/class/nameless.sl.
+  * A CONSTRUCTION IS LOWERED EXACTLY ONCE (2026-10-14). classifyConstruction REWRITES its
+    node — it moves the arg children into the `Type name(args)` init tuple and leaves
+    children[0] = the per-field construction tuple — so running it twice wraps the FIRST
+    pass's tuple as a lone initializer and checks it against the class's field count. It
+    therefore guards itself on `ctor_lowered` (set beside the two type stamps; cloned in
+    parse::cloneExpr) and a second pass only re-stamps inferred_type from return_type,
+    exactly as the kConvertExpr arm guards itself on `class_conversion`. THIS IS NOT
+    DEFENSIVE CODING — an OVERLOADED call infers each argument TWICE by design (readme.txt,
+    classify: context-free to rank, then again with the chosen param type so a strong-const
+    literal obeys the typed-value widen rules), and inferExpr has no re-entry guard of its
+    own. A construction argument could not survive that: the symptom was spelled by the
+    class's field count, which is why it read as an arity complaint rather than an
+    overload one — 0 fields reported "has 0 field(s) but 1 initializer(s) were given", 2
+    fields misassigned slot 0 ("Cannot assign '(int, int)' to 'int'"), and 1 field passed
+    SILENTLY because 1-vs-1 satisfies the check. Nothing in classifyConstruction reads the
+    inference context (the class comes from resolved_entry_id, the field types from the
+    class), so re-running could only ever destroy work. Canon
+    test/function/overload_fn.sl (ctor0/ctor1/ctor2/ctor3/lone) +
+    test/class/overload_cls.sl (the method twin, incl. a bare SIBLING call and a deref
+    receiver).
   * INIT FROM A TUPLE-LIKE VALUE: a class also initializes from any aggregate VALUE
     source — an array / tuple variable or constant, a sub-array row, a function
     return, an op result — spread across the fields BY SLOT (a class IS a named

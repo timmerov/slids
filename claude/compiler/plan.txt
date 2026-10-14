@@ -3536,6 +3536,41 @@ assumed a static LLVM element type. Three codegen changes, no new rule:
   Detail: readme.txt GLOBALS "A RUNTIME-SIZED GLOBAL LIVES ON THE HEAP";
   readme-classes.txt NEW T[n] (class-operator chains) + OPAQUE CLASSES.
 
+CROSS-CUTTING — A CONSTRUCTION ARGUMENT TO AN OVERLOADED CALL (LANDED 2026-10-14)
+  `Class` / `Class(args)` in an argument position is a TEMPORARY of that class, rung 0
+  against a `Class^` param by the value->reference convenience — the same rung a named
+  lvalue gets. It was rejected whenever the callee had 2+ candidates, and the diagnostic
+  named the class's FIELD COUNT, so it read as an arity complaint about the construction
+  rather than anything to do with overloads:
+    - 0 fields -> "Class 'Nil' has 0 field(s) but 1 initializer(s) were given.";
+    - 2 fields -> "Cannot assign '(int, int)' to 'int'." — the field tuple spread into
+      slot 0, and the giveaway: the call site passes NO arguments, so `(int, int)` could
+      only have come from a prior classification pass;
+    - 1 field -> compiled and ran CORRECTLY, because 1-vs-1 satisfies the arity check.
+      The silent row is why this sat unnoticed.
+  ROOT CAUSE: an OVERLOADED call infers each arg TWICE (context-free to rank, then with
+  the chosen param type — readme.txt, classify), inferExpr has no re-entry guard, and
+  classifyConstruction REWRITES its node. The second pass wrapped the first pass's
+  construction tuple as a lone initializer. A LONE candidate infers once and was always
+  fine, which is why `println(String)` worked until io.slh gave `println` a second
+  overload — the landing that exposed this, not the one that broke it.
+  FIX: classifyConstruction guards itself on a new `ctor_lowered` (parse.h beside
+  ctor_no_args, cloned in parse::cloneExpr); a second pass re-stamps inferred_type from
+  return_type and returns. Guarding the ARM, not the call sites, lands the rule on all
+  four doubling routes at once — the function ranker, the method ranker, and both
+  plain-vs-template probes — and it is the pattern kConvertExpr already follows with
+  `class_conversion`. Fixing the re-infer loops instead would have broken the literal
+  widen rule they exist for. It also retired a silent `ctor_no_args` corruption: pass 2
+  recomputed it from a non-empty children, so a DEFAULT construction recorded `false`,
+  which the operator-chain lowering reads to choose op= vs op<OP>=.
+  Coverage: test/function/overload_fn.sl + test/class/overload_cls.sl — 0/1/2-field
+  classes, bare and parenthesized spellings, construction WITH args, three candidates,
+  an lvalue control, a single-candidate control, and (methods) a bare SIBLING call and a
+  deref receiver. METHOD/FUNCTION PARITY held through the bug: both sides reach the same
+  classifyConstruction, so both broke identically and both are fixed by the one guard.
+  Detail: readme-classes.txt A CONSTRUCTION IS LOWERED EXACTLY ONCE; readme.txt classify
+  AN OVERLOADED CALL INFERS ITS ARGS TWICE.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

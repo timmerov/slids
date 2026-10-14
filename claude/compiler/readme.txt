@@ -2691,6 +2691,22 @@ STAGE FILES (.h / .cpp pairs)
             prefixes and cancels); an identical-param_types pair is skipped (a forward decl
             + its definition, owned by the duplicate-definition check). Canon
             test/function/overload_fn.sl + test/class/overload_cls.sl.
+            AN OVERLOADED CALL INFERS ITS ARGS TWICE — BY DESIGN (2026-10-14). With 2+
+            candidates classifyCall / inferMethodCall infer every argument CONTEXT-FREE
+            (the ranker must see each arg's own type before it knows which param it will
+            face), rank, and then RE-INFER with the chosen param type so a strong-const
+            literal obeys the typed-value widen rules into that param. A LONE candidate
+            infers once, with the param type in hand from the start — which is the whole
+            difference between the two paths, and why a bug can hide on one and not the
+            other. inferExpr has NO re-entry guard (deliberate — kForRangedStmt re-stamps
+            its loop var on purpose), so any arm that REWRITES its node must guard ITSELF:
+            kConvertExpr on `class_conversion` (the coercion-built twin) and
+            kCallExpr[is_construction] on `ctor_lowered`. The two are disjoint, not
+            alternatives — coerceOperandToClass declines an operand already of the class
+            type, so a construction never becomes a kConvertExpr; the conversion guard
+            covers the arg the COMPILER synthesizes when ranking FAILS, the construction
+            guard the arg the AUTHOR wrote when ranking SUCCEEDS. Detail:
+            readme-classes.txt A CONSTRUCTION IS LOWERED EXACTLY ONCE.
   desugar   parse tree -> ast (separate node-type set). Today: identity
             copy that propagates every annotation classify and constfold
             stamped (nominal_type, inferred_type, op_type, resolved_entry_id,
