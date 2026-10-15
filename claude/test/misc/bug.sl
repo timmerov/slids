@@ -22,7 +22,7 @@ import string;
 int32 main() {
 /*
     Class(String s, String t) { }
-    Class cls("Hello", "World!");
+    Class cls = ("Hello", "World!");
     println(String + cls.s + " " + cls.t);
 */
     //println("Hello, World!");

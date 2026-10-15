@@ -13,6 +13,19 @@ BUGS
     initializer for opaque content nested in a mixed tuple slot of a computed class is silently refilled to defaults
     rather than rejected
 
+  * a hybrid opaque class — public fields before the `...`, the rest the completer's — silently
+    drops the public initializer in an importer. Hybrid(int a, ...) completed privately with
+    hid_: both Hybrid ok(10) and Hybrid vi = (10) leave a == 0 and emit the same IR as
+    Hybrid plain; yet ok.a = 10 one line later works, and the completer's own TU fills it
+    correctly. readme-classes "CONSTRUCTION IS DIVIDED BETWEEN TWO SITES" says the public
+    prefix IS filled at the site; in an importer it never is. Nothing caught it because no
+    opaque class in the tree has a public prefix (only Part<T>, a template, which is never
+    opaque). Fixing it needs the site to store the prefix after @C__$ctor returns, which is
+    the same missing seam as the class-field transfer below.
+    Related, same shape: the OVER-fill (Hybrid nope(1,2)) should say "has private fields that
+    can't be set using initializer list syntax" — the extra values are reaching private fields
+    — rather than counting the visible ones.
+
   * A second, non-crashing wrinkle: when a same-TU definition merges with a declaration, the def's signature wins and the
     decl's default is silently dropped — void helper(bool q = kQuiet); + void helper(bool q) {} makes helper() fail with
     "expects 1 arguments, got 0". Where defaults canonically live (decl vs def, C++ says decl) is a semantic call that's
