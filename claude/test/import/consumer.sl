@@ -559,8 +559,28 @@ be runtime-sized, so the symbol holds a pointer to a heap object built on first 
 //-EXPECT-ERROR: has no field 'str_'
 //void neg_field() { Rope h; int x = h.str_; x; }
 
-//-EXPECT-ERROR: initializer(s) were given
+/* An initializer here would be setting fields that belong to the completer, so the
+   message says that rather than counting the fields this file can see (it sees none,
+   which read as a claim about the TYPE). The gate is INITIALIZER-LIST syntax — a tuple
+   child — so the `= (tuple)` form lands in the same arm, while a same-class copy
+   (`Rope cp2 = cp`, live above) keeps the whole-value path it had. */
+//-EXPECT-ERROR: has private fields that cannot be set using initializer list syntax
 //void neg_init() { Rope s("x"); s; }
+
+//-EXPECT-ERROR: has private fields that cannot be set using initializer list syntax
+//void neg_init_tuple() { Rope s = ("x", 2); s; }
+
+/* THE SAME RULE ONE STEP IN: an opaque class as a FIELD (Sack's `r_`). It reaches a
+   different arm — the field loop constructs the subobject, so the whole-object arms
+   above never see it — and only that loop still knows WHICH field and whose, so the
+   message names both. Slot 0 fills `pre_`, slot 1 is the Rope. Both spellings land
+   here because Rope has no op= that accepts the value; a field class that HAS one
+   keeps the "cannot dispatch 'C.op='" message instead (construct.sl's Boxed). */
+//-EXPECT-ERROR: of 'Sack' has type 'Rope', whose private fields cannot be set
+//void neg_field_init() { Sack k(1, "x"); k; }
+
+//-EXPECT-ERROR: of 'Sack' has type 'Rope', whose private fields cannot be set
+//void neg_field_init_value() { Sack k = (1, "x", 3); k; }
 
 /* BY-VALUE parameters are prohibited — the standing non-primitive rule; an opaque
    class gets no special dispensation. */

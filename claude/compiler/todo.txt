@@ -39,6 +39,25 @@ BUGS
     cross-TU demand for a const-pointer flavor wouldn't key identically to the consumer's instance. No canon exercises that
     combination today.
 
+  * when we import a header .slh, the associated source .sl file is side-loaded. and compiled.
+    always. the fuck? the design is that templates are compiled exactly once per instantiation.
+    String is an opaque class. but we can use it. main.sl does not know the sizeof String. but
+    we can do layout for classes with String fields.
+    Vector is an opaque template. we should be able to use public templates with public classes.
+    Vector<String> for example. we should never need to load vector.sl.
+    we write a .sli file that imports string, vector and instantiates Vector<String>.
+    as with String, main.sl does not know the size of Vector<String>. but we should be able to
+    do layout for classes with Vector<String> fields. exactly the same way we did for classes
+    with String fields.
+    the tricky bit is using Vector with a private class Priv.
+    proposal: handle them exactly the same way. the .sli file imports main.sl, vector and
+    instantiates Vector<Priv>. there are issues:
+    main.o imports symbols exported by inst_priv.o. those files need to be combined so the private
+    symbols are not visible during the link stage.
+    claude suggested that this might be done using ll tools like llvm-link. first attempt failed.
+    maybe try again.
+    next issue: every class in main.sl gets a unique name when it's compiled to main.o.
+    every class must get the exact same unique name when it's compiled to inst_priv.o.
 
 UNBLOCKED FEATURES
 

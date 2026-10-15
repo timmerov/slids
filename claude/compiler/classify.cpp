@@ -4395,10 +4395,10 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
     // so skipping the check there avoids a duplicate report.
     if (!subobject) rejectAbstractInstantiation(tree, info.type, s.file_id, s.tok, diag);
     // An OPAQUE class an importer only DECLARES is default-constructed by @C__$ctor in the
-    // completer — the site places nothing, so it has nowhere to put an initializer. A class
-    // with no visible fields already fails the arity check below (0 fields, N given); one
+    // completer — the site places nothing, so it has nowhere to put an initializer. One
     // deriving from an opaque base has visible fields and would otherwise accept the list
-    // and silently drop it, since codegen skips the site fill.
+    // and silently drop it, since codegen skips the site fill; one with no visible fields
+    // is the arm below.
     widen::TypeRef its = widen::strip(info.type);
     if (!subobject && !s.children.empty() && s.children[0]
         && widen::slidRuntimeLayout(its)
@@ -4408,6 +4408,37 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             "can only be default-constructed here; its fields are placed by the module "
             "that completes the base.", {}});
         return;
+    }
+    // THE SAME RULE, ONE STEP CLOSER IN: the class IS the imported incomplete one, so it
+    // has no visible fields at all and an initializer list has nothing it may set. The
+    // arity check below does catch this (0 fields, N given), but only as a count — which
+    // reads as a claim about the TYPE ("String has no fields") when it is a fact about
+    // THIS FILE's view of it, and names neither the cause nor the legal form. Say what it
+    // is, beside its derived sibling above.
+    // An EMPTY list is the ALL-DEFAULT form (`Rope r()` == `Rope r;`) and stays legal.
+    // ONLY AN INITIALIZER LIST — a TUPLE child, which is both the `(args)` construction
+    // form and the `= (tuple)` value-init one. A non-tuple source is a different
+    // operation and keeps its own path: a same-class value is a COPY (`Rope cp2 = cp`,
+    // live in consumer.sl — catching it here broke that TU), and a scalar is a value
+    // init that dispatchAssignInit has already had its chance at.
+    if (!subobject && !s.children.empty() && s.children[0]
+        && s.children[0]->kind == parse::Kind::kTupleExpr
+        && widen::slidOpaque(its)
+        && widen::slidLinkage(its) == widen::Type::Linkage::kDeclare
+        && flatVisibleFieldWidth(tree, info.type, s.file_id) == 0) {
+        // Caret the first supplied slot, where the arity check used to point (an empty
+        // slot is a nullptr, so find the first real one).
+        parse::Node const* first = nullptr;
+        for (auto& ch : s.children[0]->children)
+            if (ch) { first = ch.get(); break; }
+        if (first) {
+            diagnostic::report(diag, {first->file_id, first->tok,
+                "Class '" + info.name + "' has private fields that cannot be set "
+                "using initializer list syntax.",
+                {{info.def_file_id, info.def_tok,
+                  "'" + info.name + "' is declared incomplete ('...') here."}}});
+            return;
+        }
     }
     std::size_t n = info.field_names.size();
     std::vector<std::unique_ptr<parse::Node>> provided;
@@ -4689,6 +4720,30 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                         {op.file_id, op.tok,
                          "'" + sub.name + ".op=' (which accepts this value) declared here."},
                         }});
+                }
+                // AN IMPORTED INCOMPLETE FIELD CLASS has no visible fields, so there is
+                // nothing here this initializer may set — the same rule the two arms near
+                // this function's head state for the whole object, one step in. Reported
+                // HERE because only this loop still knows WHICH field and whose; the
+                // recursion below would otherwise report `sub`'s bare field count, which
+                // reads as a claim about that type. Only when the value-init probe above
+                // found nothing: a matching op= is the better story and keeps its message.
+                if (op_id < 0 && widen::slidOpaque(fts)
+                    && widen::slidLinkage(fts) == widen::Type::Linkage::kDeclare
+                    && flatVisibleFieldWidth(tree, ft, s.file_id) == 0) {
+                    parse::Node const& v = *provided[pi];
+                    diagnostic::report(diag, {v.file_id, v.tok,
+                        "Class field '" + info.field_names[i] + "' of '" + info.name
+                        + "' has type '" + sub.name + "', whose private fields cannot "
+                        "be set using initializer list syntax.",
+                        {{sub.def_file_id, sub.def_tok,
+                          "'" + sub.name + "' is declared incomplete ('...') here."}}});
+                    // DEFAULT-construct the slot instead of recursing with the value: the
+                    // inner walk would add its own arity miss, two errors for one mistake.
+                    pi++;
+                    slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true);
+                    tup->children.push_back(std::move(slot));
+                    continue;
                 }
                 slot = constructClass(tree, sub, std::move(provided[pi++]),
                                       s.file_id, s.tok, diag, true, value_init);
