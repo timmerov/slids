@@ -277,7 +277,7 @@ Flat(int a_ = 55, int b_) {
 
 /* Crate's methods (see the header): compiled HERE against the same computed-layout
    convention the consumer computes for its direct field accesses — tail_ sits one
-   S+A relocation past @Rope__$size16 in BOTH TUs, or the seam test fails. */
+   S+A relocation past @Rope__$sizeof in BOTH TUs, or the seam test fails. */
 void Crate:stamp(int v) { tail_ = v; }
 int Crate:tail() { return tail_; }
 

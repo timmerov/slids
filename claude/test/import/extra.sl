@@ -15,10 +15,10 @@ claude says:
 
 this TU is the completer of extra.slh's BadPack, and it imports library.slh —
 so it can spell the one thing a completer must not: a hidden field whose size
-lives in ANOTHER module. The exported @BadPack__$sizeof/__$size16 are absolute
+lives in ANOTHER module. The exported @BadPack__$sizeof are absolute
 symbols (values folded at compile time by llc); an ELF symbol table cannot hold
 a relocation, so a hidden `Rope` field (imported incomplete) or a hidden `LPack`
-field (a computed-layout class — its own layout rides @Rope__$size16) would make
+field (a computed-layout class — its own layout rides @Rope__$sizeof) would make
 those exports unmintable. checkOpaqueExportFoldable rejects both at the
 completer — an importer could never even see the offending field.
 

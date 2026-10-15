@@ -117,8 +117,8 @@ Rope make_string() {
 
 /* ── COMPUTED LAYOUT: local classes EMBEDDING imported incomplete classes BY VALUE.
    Each is laid out by the convention — static fields at natural offsets, an opaque
-   field at the fixed opaque alignment (16) with its size read from the completer's
-   absolute @<C>__$size16 — so every offset below is a compile-time constant plus a
+   field at the fixed opaque alignment (8) with its size read from the completer's
+   absolute @<C>__$sizeof — so every offset below is a compile-time constant plus a
    link-time relocation (or, past one symbolic term, a runtime sum of them). */
 
 /* ONE opaque field between statics: post_'s offset is a single S+A relocation. */
@@ -129,12 +129,12 @@ Sack(int pre_ = 2, Rope r_, int post_ = 5) { }
    its fields still arrive {55, 0} through the routed @Flat__$ctor. */
 Duo(Rope r_, int mid_ = 3, Flat f_, int end_ = 9) { }
 
-/* an ARRAY of an opaque class as a FIELD: rs_[i] strides by @Rope__$size16 at run
-   time, and z_ sits past a 2·size16 term. */
+/* an ARRAY of an opaque class as a FIELD: rs_[i] strides by @Rope__$sizeof at run
+   time, and z_ sits past a 2·size term. */
 Trio(int n_ = 1, Rope rs_[2], int z_ = 4) { }
 
 /* a RUNTIME-LAYOUT class (derives from Rope) as the embedded leaf: w_ rides
-   @Tagged__$size16 — a size the completer folded over the real derived struct. */
+   @Tagged__$sizeof — a size the completer folded over the real derived struct. */
 TCase(Tagged t_, int w_ = 8) { }
 
 /* Mix BY VALUE: its hidden fields (a nested Cell, an array) are built by the
@@ -234,6 +234,43 @@ int32 main() {
     println(String + "mix a=" + mx.a() + " b=" + mx.b() + " s=" + mx.s()
             + " r=" + mx.r(0) + mx.r(1) + mx.r(2));
 
+    // SIZEOF IS THE ELEMENT STRIDE, for a PUBLIC INCOMPLETE class. The importer cannot see
+    // the layout, so both numbers come from the completer's one exported @C__$sizeof — and
+    // they have to BE one number. A hand-rolled container allocates `sizeof(T) * n` bytes
+    // and then indexes through `T[]`; lib/hdr/vector.sl is exactly that, so if sizeof were
+    // the TRUE size while the index path strode the kOpaqueAlign-rounded one, every such
+    // container would write past its buffer. It did: Mix is 28 bytes and rounds to 32, so
+    // before 2026-10-14 sizeof(Mix) was 28 against a 32-byte stride, and Vector<Mix> would
+    // have overrun by 4 bytes per element.
+    // The stride here is MEASURED, not asserted against a literal — the delta between two
+    // real element addresses is whatever emitElemAddr actually emits — so these rows stay
+    // honest if Mix's fields ever change. Mix (hidden fields, rounds 28->32) and Tagged
+    // (runtime layout past an opaque base, also rounds) are the discriminating cases; Rope
+    // is the control, already a multiple of kOpaqueAlign, where the two agreed all along.
+    Mix zm[3];
+    intptr zm_of = sizeof(zm);
+    intptr zm_1 = sizeof(Mix);
+    intptr zm_step = (<intptr> ^zm[1]) - (<intptr> ^zm[0]);
+    bool zm_ok = zm_1 == zm_step;
+    bool zm_tot = zm_of == zm_1 * 3;
+    println(String + "mix stride: " + zm_ok + " " + zm_tot);
+
+    Tagged zt[3];
+    intptr zt_of = sizeof(zt);
+    intptr zt_1 = sizeof(Tagged);
+    intptr zt_step = (<intptr> ^zt[1]) - (<intptr> ^zt[0]);
+    bool zt_ok = zt_1 == zt_step;
+    bool zt_tot = zt_of == zt_1 * 3;
+    println(String + "tagged stride: " + zt_ok + " " + zt_tot);
+
+    Rope zr[3];
+    intptr zr_of = sizeof(zr);
+    intptr zr_1 = sizeof(Rope);
+    intptr zr_step = (<intptr> ^zr[1]) - (<intptr> ^zr[0]);
+    bool zr_ok = zr_1 == zr_step;
+    bool zr_tot = zr_of == zr_1 * 3;
+    println(String + "rope stride: " + zr_ok + " " + zr_tot);
+
     // A POD incomplete class (no hooks). The importer can't see its fields, so it must
     // still call @Flat__$ctor — the "trivial POD, construct nothing" shortcut would leave
     // a_ / b_ uninitialized here. Expect a=55 (default), b=0 (no default).
@@ -311,7 +348,7 @@ int32 main() {
             + " " + du.r_.tag() + " " + du.end_);
 
     // an ARRAY FIELD of an opaque class: per-element construction, runtime stride,
-    // and a static field past the 2·size16 term.
+    // and a static field past the 2·size term.
     Trio tr;
     tr.rs_[0].set("zero");
     tr.rs_[1].set("one");
@@ -319,7 +356,7 @@ int32 main() {
             + tr.rs_[1].get() + " " + tr.rs_[1].tag() + " " + tr.z_);
 
     // a LOCAL ARRAY of an opaque class (the old negative): runtime-sized alloca,
-    // stride off @Rope__$size16, each element routed through @Rope__$ctor/$dtor.
+    // stride off @Rope__$sizeof, each element routed through @Rope__$ctor/$dtor.
     Rope ra[3];
     ra[1].set("mid");
     println(String + "rope arr: " + ra[0].tag() + " " + ra[1].get());
@@ -343,7 +380,7 @@ int32 main() {
     delete sp2;
 
     // ── HEAP ARRAYS of runtime-sized elements (the old negatives). `new C[n]`
-    // mallocs n x the CONVENTION stride (@C__$size16), lays down the count cookie
+    // mallocs n x the CONVENTION stride (@C__$sizeof), lays down the count cookie
     // whenever the element is opaque-bearing (the same gate delete reads — hooks or
     // not), and constructs / destroys every element through the routed chain,
     // addressed by the one element funnel: `p[i]` here and delete's reverse loop
@@ -410,7 +447,7 @@ int32 main() {
 
     // ── ITERATOR ARITHMETIC over runtime-sized elements: `iter ± int` and
     // `iter - iter` stride by the SAME convention size the array layout uses
-    // (@Rope__$size16 / the layout expression) — never the opaque
+    // (@Rope__$sizeof / the layout expression) — never the opaque
     // placeholder's single byte. The identities against the array-index path
     // pin the agreement; the difference pins the divisor.
     int it1 = 0;
@@ -525,7 +562,7 @@ Tagged DERIVES from Rope, so it inherits that unknown layout wholesale: this TU 
 its fields and read and write them, but it cannot PLACE them. Default construction is the
 only form here — an initializer would have to be written at an offset past a base only the
 completer can measure, and dropping it silently would be worse than refusing it. Embedding
-a Tagged by value is LEGAL now (TCase in main — the leaf rides @Tagged__$size16), and
+a Tagged by value is LEGAL now (TCase in main — the leaf rides @Tagged__$sizeof), and
 so are a heap array of them and a global (main / g_tag).
 */
 

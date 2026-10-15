@@ -39,6 +39,12 @@ from_bird = 77
 consumer priv: 5
 goodbye 7
 mix a=11 b=0 s=4 r=000
+mix stride: true true
+Tagged:ctor: 3
+Tagged:ctor: 3
+Tagged:ctor: 3
+tagged stride: true true
+rope stride: true true
 flat a=55 b=0
 Tagged:ctor: 3
 tagged mark=3 pad=! extra=0
@@ -114,6 +120,9 @@ Tagged:dtor: 22
 Tagged:dtor: 21
 Tagged:dtor: 21
 Tagged:dtor: 50
+Tagged:dtor: 3
+Tagged:dtor: 3
+Tagged:dtor: 3
 Bird:dtor: 5 6
 Vegetable:dtor: 3 4
 Animal:dtor: 1 2

@@ -3630,10 +3630,19 @@ CROSS-CUTTING — SIZEOF IS THE ELEMENT STRIDE (LANDED 2026-10-14)
   `mul i64 1, ptrtoint (ptr @String__$sizeof to i64)` for the iterator step — the same
   symbol, where it used to be two. End to end, `Vector<String>` compiles, appends and
   reads back.
-  Coverage: test/misc/sizeof.sl — `clsarr= 8 8 24` (a new hook-free `Pod`, so an array of
-  it adds no lifecycle output) and `opqarr= 24 24 72` (String, opaque, completed in
-  another TU). The n==1 rows are the invariant's sharpest form: a one-element array's
-  total size IS one element's stride.
+  Coverage, two files. test/misc/sizeof.sl — `clsarr= 8 8 24` (a new hook-free `Pod`, so
+  an array of it adds no lifecycle output) and `opqarr= 24 24 72` (String, opaque,
+  completed in another TU); the n==1 rows are the invariant's sharpest form, since a
+  one-element array's total size IS one element's stride. And test/import/consumer.sl —
+  the same rule for a PUBLIC INCOMPLETE class ACROSS THE SEAM, where the importer can see
+  no layout at all and both numbers must come from the one exported `@C__$sizeof`. There
+  the stride is MEASURED rather than asserted against a literal — the delta between two
+  real element addresses, `(<intptr> ^arr[1]) - (<intptr> ^arr[0])`, is whatever
+  emitElemAddr actually emits — so the rows stay honest if the classes' fields change:
+  `mix stride: true true`, `tagged stride`, `rope stride`. Mix (28 -> 32) and Tagged
+  (runtime layout past an opaque base, also rounds) are the DISCRIMINATING cases and both
+  would print `false true` before this landing; Rope is the control, already a multiple of
+  kOpaqueAlign, where the two numbers agreed all along.
   STILL OPEN: a class-array TYPE spelling (`sizeof(Point[2])`) and a tuple-type spelling
   (`sizeof((int, Point))`) fail in the GRAMMAR — an identifier in a sizeof operand parses
   as an expression — so only declared array variables work. Pre-existing, not this
