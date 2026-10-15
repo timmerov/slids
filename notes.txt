@@ -10,6 +10,17 @@ remove landed items from todo.txt. update stale entries.
 one of claude's current favorite fuck-ups is to use default move
 @Class_$move/copy/swap instead of calling the class's operator.
 
+claude "fixed" a bug by making it loud.
+weird.
+need to actually fix the mixed public/private class field initialization bug.
+Hybrid(int a, ...) { }
+Hybrid h(10);
+should compile and set h.a = 10;
+meanwhile, in the completing source file:
+Hybrid(int b) { }
+Hybrid h1(10,20);
+should compile and set h1.a=10; h1.b=20;
+
 this was after landing the import leak:
 
   Import order is not free to edit. My first sticky-public pin reordered consumer.sl's imports — that changed class

@@ -4409,28 +4409,48 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             "that completes the base.", {}});
         return;
     }
-    // THE SAME RULE, ONE STEP CLOSER IN: the class IS the imported incomplete one, so it
-    // has no visible fields at all and an initializer list has nothing it may set. The
-    // arity check below does catch this (0 fields, N given), but only as a count — which
-    // reads as a claim about the TYPE ("String has no fields") when it is a fact about
-    // THIS FILE's view of it, and names neither the cause nor the legal form. Say what it
-    // is, beside its derived sibling above.
+    // THE SAME RULE, ONE STEP CLOSER IN: the class IS the imported incomplete one, so an
+    // initializer list cannot place anything. The arity check below catches the
+    // all-hidden shape (0 fields, N given), but only as a count — which reads as a claim
+    // about the TYPE ("String has no fields") when it is a fact about THIS FILE's view of
+    // it, and names neither the cause nor the legal form.
+    // IT ALSO CATCHES THE HYBRID SHAPE (`Hybrid(int a, ...)` — public fields before the
+    // `...`), which the arity check does NOT: a list within the visible arity passed the
+    // check and was then DISCARDED, because an importer's site emits no field fill at all
+    // (it calls @C__$ctor, which default-fills everything). Measured: `Hybrid ok(10)` and
+    // `Hybrid plain;` emitted identical IR. A silent wrong answer is worse than a refusal,
+    // so the whole list is refused until the site can actually place the prefix — see
+    // todo.txt, which carries the @C__$ictor design that would make it work.
     // An EMPTY list is the ALL-DEFAULT form (`Rope r()` == `Rope r;`) and stays legal.
     // ONLY AN INITIALIZER LIST — a TUPLE child, which is both the `(args)` construction
     // form and the `= (tuple)` value-init one. A non-tuple source is a different
     // operation and keeps its own path: a same-class value is a COPY (`Rope cp2 = cp`,
     // live in consumer.sl — catching it here broke that TU), and a scalar is a value
     // init that dispatchAssignInit has already had its chance at.
-    if (!subobject && !s.children.empty() && s.children[0]
-        && s.children[0]->kind == parse::Kind::kTupleExpr
+    // A ONE-SLOT list COLLAPSES to its scalar (`Hyb h = (10)` arrives as the literal, not
+    // a tuple), so the tuple test alone leaves that spelling silently dropping. Admit a
+    // non-tuple VALUE too — but only one whose type is known and is NOT this class: a
+    // same-class value is a COPY (`Rope cp2 = cp`, live below in main; catching it here
+    // broke this whole TU once already), and an unknown type means nothing upstream typed
+    // it, where firing would be a guess. dispatchAssignInit has already inferred this
+    // child on the non-tuple path, so this reads its answer rather than inferring again.
+    bool init_list = !s.children.empty() && s.children[0]
+        && (s.children[0]->kind == parse::Kind::kTupleExpr
+            || (s.children[0]->inferred_type != widen::kNoType
+                && widen::deepStrip(s.children[0]->inferred_type)
+                     != widen::deepStrip(info.type)));
+    if (!subobject && init_list
         && widen::slidOpaque(its)
-        && widen::slidLinkage(its) == widen::Type::Linkage::kDeclare
-        && flatVisibleFieldWidth(tree, info.type, s.file_id) == 0) {
+        && widen::slidLinkage(its) == widen::Type::Linkage::kDeclare) {
         // Caret the first supplied slot, where the arity check used to point (an empty
-        // slot is a nullptr, so find the first real one).
-        parse::Node const* first = nullptr;
-        for (auto& ch : s.children[0]->children)
-            if (ch) { first = ch.get(); break; }
+        // slot is a nullptr, so find the first real one). A collapsed one-slot list has
+        // no slots to walk — the value itself is the caret.
+        parse::Node const* first = s.children[0].get();
+        if (first->kind == parse::Kind::kTupleExpr) {
+            first = nullptr;
+            for (auto& ch : s.children[0]->children)
+                if (ch) { first = ch.get(); break; }
+        }
         if (first) {
             diagnostic::report(diag, {first->file_id, first->tok,
                 "Class '" + info.name + "' has private fields that cannot be set "

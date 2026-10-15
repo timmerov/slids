@@ -281,6 +281,15 @@ Flat(int a_ = 55, int b_) {
 void Crate:stamp(int v) { tail_ = v; }
 int Crate:tail() { return tail_; }
 
+/* the HYBRID's completing re-open: `pub_` is the header's, `hid_` is ours. The scale
+   makes the two distinguishable in a printed number — a dropped pub_ reads as 41, a
+   placed one as 1041. */
+Hyb(int hid_ = 41) {
+    _() {}
+    ~() {}
+    int total() { return pub_ * 100 + hid_; }
+}
+
 /*
 in a source file, we cannot add a ctor/dtor or copy, move, swap operator to a class
 first declared in a header file. these five are IMPLICITLY invoked, so every importing

@@ -40,6 +40,8 @@ nums  = 7 8 9
 from_bird = 77
 consumer priv: 5
 goodbye 7
+hyb default: 41
+hyb write:   1041
 mix a=11 b=0 s=4 r=000
 mix stride: true true
 Tagged:ctor: 3

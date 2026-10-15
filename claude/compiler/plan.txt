@@ -3810,6 +3810,41 @@ CROSS-CUTTING — THE VISIBILITY RULE (LANDED 2026-10-14)
   Detail: readme.txt THE VISIBILITY RULE (under TEMPLATES) + the lex / resolve / classify /
   parse stage entries; readme-classes.txt SOURCE-PRIVATE field slot rule.
 
+CROSS-CUTTING — AN IMPORTED INCOMPLETE CLASS REFUSES AN INITIALIZER LIST (LANDED 2026-10-14)
+  An opaque class's fields belong to the module that completes it, so an importer's site places
+  none of them: emitConstructHooks routes kDeclare to @C__$ctor, which default-fills everything.
+  The arity check caught the all-hidden shape as a COUNT — "Class 'String' has 0 field(s) but 1
+  initializer(s) were given" — which is true of this TU's VIEW and reads as a claim about the
+  type. Both depths now say what it is instead: "has private fields that cannot be set using
+  initializer list syntax", with a note at the incomplete declaration.
+  TWO ARMS, because two different things still know the answer. The WHOLE OBJECT is an arm at the
+  head of classifyClassInit beside the derived-from-opaque one it mirrors. A FIELD of such a class
+  is in the field loop — only that loop still knows WHICH field and whose, so it names both — and
+  it sits AFTER the value-init op= probe, so "cannot dispatch 'C.op='" keeps precedence where an
+  operator really exists; the slot then DEFAULT-constructs rather than recursing with the value,
+  or the recursion adds its own arity miss and one mistake reports twice.
+  TWO GATES THAT ARE LOAD-BEARING, both found by the suite rather than by reading. (1) The value
+  shape must exclude a SAME-CLASS value: a first cut fired on `Rope cp2 = cp` — a copy, live in
+  consumer.sl — and broke that whole TU, which then reported the new note as the error for two
+  unrelated negatives. (2) It must ADMIT a non-tuple value whose type is known and differs,
+  because a one-slot list COLLAPSES to its scalar: gated on a tuple child alone, `Rope s = ("x")`
+  slipped through and kept dropping silently.
+  AND IT CLOSED A SILENT WRONG ANSWER. The HYBRID shape — public fields before the `...` — passed
+  the count whenever the list fit the visible arity, and was then DISCARDED: `Hyb h(10)` emitted
+  IR identical to `Hyb h;`, no store, no diagnostic. Measured with a throwaway module, then
+  pinned: `Hyb h; h.pub_ = 10;` works (41 -> 1041), both initializer forms are refused, and the
+  completer's own TU fills it correctly — so the same text meant different things across the seam
+  and only one side was right. Nothing had caught it because no opaque class in the tree had a
+  public prefix; the only `(field, ..., )` anywhere was Part<T>, a template, which is never
+  opaque. test/import's Hyb is the first canon the shape has ever had.
+  STILL OPEN (todo.txt): PLACING the prefix at the site. Not the class-field seam — storing before
+  the call is fine and the hooks then see every field initialized. It needs a parameterized
+  @C__$ictor beside synthesizeOpaqueCtor, taking the visible prefix as parameters so the hidden
+  tail under-fills to defaults; five pieces, all inside the construction funnel.
+  Detail: readme-classes.txt A CLASS FIELD THAT WOULD NEED A TRANSFER (the bullet after it) and
+  OPAQUE CLASSES (THE PUBLIC HALF IS ONLY TRUE IN THE COMPLETER); readme.txt SOURCE-PRIVATE
+  FIELDS (THE OPAQUE TWIN OF THAT ARITY CAP).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

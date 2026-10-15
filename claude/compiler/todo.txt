@@ -20,11 +20,16 @@ BUGS
     correctly. readme-classes "CONSTRUCTION IS DIVIDED BETWEEN TWO SITES" says the public
     prefix IS filled at the site; in an importer it never is. Nothing caught it because no
     opaque class in the tree has a public prefix (only Part<T>, a template, which is never
-    opaque). Fixing it needs the site to store the prefix after @C__$ctor returns, which is
-    the same missing seam as the class-field transfer below.
-    Related, same shape: the OVER-fill (Hybrid nope(1,2)) should say "has private fields that
-    can't be set using initializer list syntax" — the extra values are reaching private fields
-    — rather than counting the visible ones.
+    opaque). The initializer forms are now REFUSED rather than dropped, and the field write
+    (`Hyb h; h.pub_ = 10;`) is the route — canon test/import Hyb. STILL OPEN is placing the
+    prefix at the site. NOT the class-field seam: storing BEFORE the call is fine and the
+    hooks then see every field initialized. What it needs is a parameterized @C__$ictor —
+    a second synthesized placement-new (beside synthesizeOpaqueCtor) taking the visible
+    prefix as parameters and passing them as the new's ctor args, so the hidden tail
+    under-fills to defaults. Five pieces: synthesize it; declare it in importers; map
+    _$ictor -> C__$ictor in the symbol path as _$octor -> C__$ctor is mapped; lower a
+    hybrid site to a call in classify; suppress codegen's routed @C__$ctor so the object
+    is not constructed twice.
 
   * A second, non-crashing wrinkle: when a same-TU definition merges with a declaration, the def's signature wins and the
     decl's default is silently dropped — void helper(bool q = kQuiet); + void helper(bool q) {} makes helper() fail with
@@ -71,6 +76,22 @@ BUGS
     maybe try again.
     next issue: every class in main.sl gets a unique name when it's compiled to main.o.
     every class must get the exact same unique name when it's compiled to inst_priv.o.
+
+  * revisit class object initialization.
+    Class c(initializer-list); -> blit fields from list. then call ctor. fail if a field can't
+    blit because the field is private or the types don't match or a field class has a user
+    defined non-trivial move/assign operator.
+    Class c = tuple; -> use c.op=(tuple) if it exists. otherwise treat tuple *exactly* like an
+    initializer list.
+    this last part needs improvement because the initializer list method can fail.
+    the user specifically used the assignment syntax instead of the initializer syntax.
+    if the initializer list method fails then try assignment:
+    Class c; c.f0 = tuple[0]; c.f1 = tuple[1]; etc.
+    error if too many tuple elements.
+    in other words, initalizer list is an optimization that avoid double assignment.
+    but wouldn't the ll optimizer clean that up? hrm...
+    currently there's a bug with classes with both public and private fields.
+    public fields may be initialized by list but they are blindly overwritten by the ctor.
 
 UNBLOCKED FEATURES
 

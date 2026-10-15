@@ -490,6 +490,26 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     MITIGATION until the construction interleave lands (field hooks -> field transfers -> own ctor;
     todo.txt): a clean compile error instead of the old silent wrong-order blit. Canon construct.sl
     neg_field_copy / neg_field_move / neg_field_value_init_op / neg_field_*_oponly / neg_base_copy.
+  * AN IMPORTED INCOMPLETE CLASS REFUSES AN INITIALIZER LIST (2026-10-14), at two depths, because
+    an importer's site places no fields at all (OPAQUE CLASSES below: kDeclare routes to
+    @C__$ctor, which default-fills everything). Both say "has private fields that cannot be set
+    using initializer list syntax" with a note at the incomplete declaration — never a FIELD COUNT,
+    which the arity check used to give and which reads as a claim about the TYPE rather than about
+    this file's view of it.
+    - THE WHOLE OBJECT (`Rope s("x")`, `Hyb h(10)`): an arm beside the derived-from-opaque one at
+      the head of classifyClassInit. It admits a TUPLE child (the `(args)` and `= (tuple)` forms)
+      and ALSO a non-tuple value whose type is known and is NOT this class — a one-slot list
+      COLLAPSES to its scalar, so the tuple test alone let `= (10)` through. The same-class
+      exclusion is load-bearing: a same-class value is a COPY (`Rope cp2 = cp`), and catching it
+      here breaks every TU that copies an opaque class.
+    - A FIELD of such a class (`Sack k(1, "x")`): in the field loop, AFTER the value-init op=
+      probe above and only when that found nothing, so the "cannot dispatch 'C.op='" story keeps
+      precedence where it applies. Only this loop still knows WHICH field and whose, so the message
+      names both ("Class field 'r_' of 'Sack' has type 'Rope', whose..."), and the slot then
+      DEFAULT-constructs rather than recursing with the value — the recursion would otherwise add
+      its own arity miss, two errors for one mistake.
+    An EMPTY list is the all-default form (`Rope r()` == `Rope r;`) and stays legal. Canon
+    test/import: Rope + Sack + Hyb negatives in consumer.sl.
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field
@@ -1716,7 +1736,20 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     against the alignment of every round-trip spelling and fails loudly instead.
     CONSTRUCTION IS DIVIDED BETWEEN TWO SITES, and this is the whole feature: the PUBLIC fields
     (any before the `...`) are filled at the call site as usual; the HIDDEN fields are filled by
-    the class's OWN ctor. Two symbols carry the split:
+    the class's OWN ctor.
+    THE PUBLIC HALF IS ONLY TRUE IN THE COMPLETER (measured 2026-10-14). An IMPORTER's site
+    emits no field fill at all — emitConstructHooks routes kDeclare to @C__$ctor, which
+    default-fills EVERYTHING — so a public prefix supplied at an importer's site was accepted
+    and then DISCARDED: `Hyb h(10)` emitted IR identical to `Hyb h;`. Nothing caught it because
+    until then no opaque class in the tree had a public prefix (the only `(field, ..., )` was
+    Part<T>, a template, which is never opaque). The initializer forms are now REFUSED rather
+    than dropped ("has private fields that cannot be set using initializer list syntax"); the
+    field WRITE works and is the route (`Hyb h; h.pub_ = 10;` — appending hidden fields never
+    moves an earlier one, so the offset is known). Canon test/import Hyb. Making the site place
+    the prefix needs a parameterized @C__$ictor — a second synthesized placement-new taking the
+    visible prefix as parameters, so the hidden tail under-fills to defaults and the hooks still
+    see every field initialized; see todo.txt.
+    Two symbols carry the split:
       @C__$ctor  (external) is the COMPLETE ctor an importer calls. It fully default-constructs
                  the object — every hidden field to its author default, else ZERO, recursing into
                  class / array / tuple fields exactly as a normal `C c;` site does — then runs the
