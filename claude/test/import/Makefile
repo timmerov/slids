@@ -4,8 +4,6 @@
 
 SLIDSC    = ../../bin/slidsc
 LLC       = llc
-LLVM_LINK = llvm-link
-OPT       = opt
 CXX       = g++
 LLCFLAGS  = --filetype=obj --relocation-model=pic
 
@@ -88,7 +86,7 @@ $(BIN_DIR)/$(1): $(BUILD_DIR)/$(1).o $($(1)_TMPL_OBJS) $(2)
 
 $(BUILD_DIR)/$(1).ll: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $$< -o $$@ -MF $(BUILD_DIR)/$(1).d --api-list $(BUILD_DIR)/$(1).api $(IFLAGS)
+	$(SLIDSC) $$< -o $$@ -MF $(BUILD_DIR)/$(1).d $(IFLAGS)
 
 $(BUILD_DIR)/$(1).deps.mk: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
@@ -100,85 +98,16 @@ $(eval $(call SAMPLE_RULES,math,,-lm))
 $(eval $(call SAMPLE_RULES,tmpl_test,$(BIRD),))
 $(eval $(call SAMPLE_RULES,tmpl_test2,$(BIRD),))
 
-# THE IR MERGE (phase A of the self-instantiate landing; this directory is the
-# spike, the other test dirs still go straight from .ll to .o). Every TU here
-# now reaches its object through llvm-link:
-#
-#   <stem>.ll  the main compile          \
-#   <stem>.ill the self-instantiate module > llvm-link -> <stem>.mll -> <stem>.o
-#
-# The .ill is the module that will hold this TU's LOCAL-TYPE template flavors —
-# the ones whose type-list names a class private to this TU, which no other TU
-# can spell and whose symbols must end up `internal` (bird.sl's and
-# tmpl_test.sl's `Twin` flavors mangle to the IDENTICAL strings and both
-# objects are in the tmpl_test binary). Merging at the IR level keeps those
-# symbols out of every linkable object: they are global only inside this TU's
-# own .mll, between this link and the internalize step that follows it, and
-# never in a .o that another TU's symbols could bind to.
-#
-# They CANNOT be `internal` in the .ill itself. Measured on LLVM 21: an
-# `internal` definition does not satisfy another module's `declare`, and
-# llvm-link drops it, silently, exit 0 — it also drops every unreferenced
-# local and linkonce symbol, which is why a merged object here has fewer
-# `t`/`W` entries than a direct llc of the same .ll (no global definition is
-# ever lost). So the .ill defines them GLOBAL and the internalize pass demotes
-# them, driven by an allow-list of the TU's real exports.
-#
-# Today the .ill is an EMPTY module, always emitted: one unconditional rule per
-# TU, no conditional make logic, and the merge is the no-op the goldens prove
-# transparent. The internalize step arrives with the .ill's first real content.
-#
-# Three distinct extensions on purpose — `%.ll`, `%.ill`, `%.mll` cannot match
-# each other's pattern rules, so there is no implicit-rule ambiguity and no
-# search for a `<stem>.inst.sl` that does not exist.
-# Still the EMPTY module: slidsc's `--instantiate-self` already emits the real one
-# (verified standalone — valid IR, and its definition set is a subset of the main
-# compile's internal definitions), but wiring it here while the main compile ALSO
-# defines those flavors would put two definitions of each body in the merge. It takes
-# over this rule when the main compile stops defining them.
-#
-# When it does, this rule must take $(BUILD_DIR)/%.ll as a PREREQUISITE. That ordering
-# is the whole answer to duplicate diagnostics: every diagnostic slidsc has is an
-# error, and errors render only on failure, so a clean main compile prints nothing and
-# the self stage — which only ever runs after one — can report just what it alone can
-# see: a type error inside a flavor body.
-$(BUILD_DIR)/%.ill:
-	mkdir -p $(BUILD_DIR)
-	printf 'target triple = "x86_64-pc-linux-gnu"\n' > $@
-
-$(BUILD_DIR)/%.mll: $(BUILD_DIR)/%.ll $(BUILD_DIR)/%.ill
-	$(LLVM_LINK) $^ -S -o $@
-
-# THE INTERNALIZE STEP. `internalize` is an ALLOW-list pass: every definition whose
-# symbol is absent from the list is demoted to `internal`. slidsc writes the list
-# (`--api-list`, the same invocation that writes the .ll — it decides linkage, so it
-# knows the set exactly), which is why `main` and every exported global appear in it;
-# the pass preserves NOTHING automatically. An omission is an undefined reference at
-# link, never a silent miscompile.
-#
-# With today's empty .ill the pass has nothing of its own to demote, so it must be a
-# no-op — which is exactly the gate: it proves the list is complete against the whole
-# suite before the .ill carries anything. Once it does, this is the step that takes the
-# flavors back out of the global namespace before they reach an object file.
-$(BUILD_DIR)/%.oll: $(BUILD_DIR)/%.mll
-	$(OPT) -passes=internalize \
-		-internalize-public-api-file=$(BUILD_DIR)/$*.api $< -S -o $@
-
-$(BUILD_DIR)/%.o: $(BUILD_DIR)/%.oll
+# One .ll -> .o step serves the samples and the sibling libraries alike.
+$(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
-
-# The chained intermediates (.ll, .ill, .mll, .oll) are not deleted after the build —
-# they are the inspection surface for this work, as in the other test dirs. An
-# always-emitted .ill with no prerequisites also must survive, or every build
-# would re-mint it and force a needless re-merge and re-llc.
-.SECONDARY:
 
 # Any OTHER .sl in this directory: the sibling library sources (the fragments
 # set SLIDS_INST — `-I . --instantiate <build>` — on the ones that read the
 # demand pool) and plain extra TUs like bird.sl (empty SLIDS_INST).
 $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d --api-list $(BUILD_DIR)/$*.api $(IFLAGS) $(SLIDS_INST)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS) $(SLIDS_INST)
 
 # slidsc writes a `.d` alongside the `.ll` (-MF): the make rule naming every
 # `.slh` the source textually imported. Editing a header then re-triggers the

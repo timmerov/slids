@@ -163,13 +163,6 @@ struct Node {
                                                  // temporary — emit the operand against the
                                                  // TARGET (decl-init fit-check), widen up;
                                                  // NOT the truncating conversion grid.
-    // kFunctionDef: this definition belongs to an INLINE-LOCAL template flavor — a
-    // flavor whose type-list names a type private to this TU. Set by desugar from
-    // Entry::tu_local_instance (the function/method side) or the owner class's
-    // widen::Type::tu_local_flavor (the class side). It is the self-instantiate
-    // stage's whole output set, and it is NOT the same question as internal_def: an
-    // ordinary private class's members are internal too and stay in the main module.
-    bool tu_local_flavor = false;
     bool internal_def = false;                   // kFunctionDef: a member of a class this TU
                                                  // keeps PRIVATE (declared in a `.sl`, so
                                                  // nothing outside can name it) — codegen

@@ -1584,46 +1584,53 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   tool; a MIXED-ROLE TU (a template source consuming another library) dumps
   its own .sli and chains (tmpl_lib before tmpl_lib2).
 
-  THE SELF-INSTANTIATE STAGE (`--instantiate-self`, LANDED 2026-10-14 —
-  emission only; see plan.txt). An INLINE-LOCAL flavor — one whose type-list
-  names a type PRIVATE to this TU — is the one flavor no library's
-  --instantiate pass can emit, because no other TU can spell its argument.
-  `slidsc <tu>.sl --instantiate-self -o <tu>.ill` reads the TU exactly as the
-  main compile reads it and emits ONLY those flavors; every other definition
-  degrades to a `declare` (or an `external global`), so the module is valid IR
-  alone and llvm-link binds the references to the main module. It writes no
-  .sli — the demand pool is the main compile's output, and an inline-local
-  flavor is excluded from it by construction.
-  THE SET is ast::Node.tu_local_flavor, stamped in desugar from two sources:
-  parse::Entry.tu_local_instance (the function/method side) in copyNode — not
-  only in liftMember, because a FILE-SCOPE free function's instance is a child
-  of the kProgram node and never reaches that lift — and the owner class's
-  widen::Type.tu_local_flavor (the class side), which resolve stamps in
-  instantiateClassTemplate's inline_local arm beside the kInternal linkage.
-  Linkage alone cannot answer: an ordinary `.sl` class is kInternal too.
-  THEY CANNOT BE `internal` IN THAT MODULE. Measured on LLVM 21: an `internal`
-  definition does not satisfy another module's `declare` — llvm-link DROPS it,
-  silently, exit 0, in either link order. So the .ill defines them with
-  EXTERNAL linkage and an `opt -passes=internalize` pass after the merge
-  demotes them, driven by `--api-list <file>`: every symbol the main compile
-  defines externally. internalize is an ALLOW-list — `main` is not preserved
-  automatically and neither are globals — so the list must be complete; an
-  omission is an undefined reference at link, never a silent miscompile. The
-  linkonce_odr `__$global_dtor_head` / `__$global_dtor_all` are on it, or every
-  TU gets its own dtor registry.
-  NO DUPLICATE DIAGNOSTICS, with no code: every slidsc diagnostic is an error
-  and render() runs only on failure, so a clean main compile prints nothing.
-  Order the .ill AFTER the .ll in make and the self stage only ever runs on a
-  TU that already compiled clean — it then reports exactly what it alone can
-  see, a type error inside a flavor body.
-  THE SPIKE is test/import's Makefile: `<stem>.ll` + `<stem>.ill` -> llvm-link
-  -> `<stem>.mll` -> internalize -> `<stem>.oll` -> llc. The .ill is still the
-  EMPTY module, because the main compile also still defines those flavors and
-  wiring the real one would put two definitions of each body in the merge.
-  llvm-link is not transparent, by the way: it drops every UNREFERENCED local
-  and linkonce symbol even with a single input (a bitcode round-trip keeps
-  them), so a merged object has fewer `t`/`W` entries than a direct llc of the
-  same .ll — measured across all 9 TUs, no global definition ever lost.
+  THE SELF-INSTANTIATE STAGE — SPIKED, MEASURED, ROLLED BACK (2026-10-14).
+  An INLINE-LOCAL flavor is the one flavor no library's --instantiate pass can
+  emit, because no other TU can spell its argument, so the main compile emits it
+  here. A spike added a second per-TU stage (`--instantiate-self` + `--api-list`)
+  plus an IR-merge build chain in test/import, so the main compile could
+  eventually stop defining those flavors. It worked and it was inert: the main
+  compile's `.ll` stayed byte-identical and internalize was a measured no-op on
+  all 9 TUs. The follow-on phase — the main compile dropping the template-source
+  load — is BLOCKED at its premise (readme-classes, SO THE MAIN COMPILE CAN NEVER
+  STOP LOADING A TEMPLATE SOURCE), and the IMPORT LEAK the stage was also meant to
+  close was closed instead by scoping (THE VISIBILITY RULE above). With no
+  reachable payoff the spike was REMOVED rather than left as dead branches in
+  codegen; test/import goes `.ll` -> `.o` like every other test dir again.
+  WHAT IT MEASURED, kept because it is what any retry needs:
+  - An `internal` definition does NOT satisfy another module's `declare`.
+    llvm-link DROPS it, silently, exit 0, in either link order (LLVM 21.1.8). So
+    a flavor cannot be born `internal` in a separate module; the route is
+    external linkage plus `opt -passes=internalize
+    -internalize-public-api-file=<f>` after the merge. internalize is an
+    ALLOW-list: `main` is NOT preserved automatically and neither are globals, so
+    the list must be complete, and the linkonce_odr `__$global_dtor_head` /
+    `__$global_dtor_all` must be on it or every TU gets its own dtor registry. An
+    omission is an undefined reference at link, never a silent miscompile.
+  - llvm-link is not transparent: it drops every UNREFERENCED local and linkonce
+    symbol even with a SINGLE input (bird.ll, 14 defines -> 7; a bitcode
+    round-trip keeps all 14), so a merged object has fewer `t`/`W` entries than a
+    direct llc of the same `.ll`. Measured across all 9 TUs: no global definition
+    ever lost, nothing added.
+  - No duplicate-diagnostics code is needed. Every slidsc diagnostic is an error
+    and render() runs only on failure, so a clean main compile prints nothing;
+    order the self stage AFTER the main `.ll` in make and it only ever runs on a
+    TU that already compiled clean.
+  - A self-demand FILE is impossible: a local flavor's argument is often a
+    function-local class with no file-scope spelling, so the `.sli` text format
+    could never name it. The stage has to re-read the TU instead.
+  - The flavor set wants an ast::Node / widen::Type `tu_local_flavor` pair, and
+    the entry side must be stamped in desugar's copyNode, not only in liftMember:
+    a FILE-SCOPE free function's instance is a child of the kProgram node and
+    never reaches that lift.
+  - An opaque class's synthesized placement-new `@C__$ctor` arrives through BOTH
+    the program-scope path and the per-class loop, so a declare-only mode emits it
+    twice — a repeated `declare` is invalid IR, not a no-op, and needs a dedup set.
+  THE HAZARD IT GUARDED IS REAL AND STILL PINNED, independently of the stage: a
+  flavor whose type-list names a TU-LOCAL type emits `define internal`, and a
+  file-scope private class takes NO def_id suffix, so two TUs mangle such flavors
+  to IDENTICAL strings. Canon test/import `Twin` (bird.sl + tmpl_test.sl, both
+  objects in the one binary) — kept.
 
   HARD-WON: tree.entries is a VECTOR — an Entry& held across addEntry DANGLES
   (bindTypeParamMarkers and recursive resolution both addEntry; the pattern write
@@ -3277,15 +3284,11 @@ PLUMBING
 
   main.cpp        Pipeline orchestrator. Parses argv (-o, -I, the
                   dependency flags -MF <file> / -M, --scan-deps <frag.mk>,
-                  --instantiate <dir>, --instantiate-self, --api-list
-                  <file>), opens the root via lex::run, walks the seven
-                  stages, prints diagnostics + exits 1 if any errors,
-                  otherwise runs codegen. The last three carry the
-                  cross-TU template machinery: --instantiate reads the .sli
-                  demand pool addressed to this module, --instantiate-self
-                  emits only this TU's inline-local flavors, and --api-list
-                  writes the internalize allow-list (see THE SELF-
-                  INSTANTIATE STAGE above; both ride codegen::Options).
+                  --instantiate <dir>), opens the root via lex::run, walks
+                  the seven stages, prints diagnostics + exits 1 if any
+                  errors, otherwise runs codegen. --instantiate carries the
+                  cross-TU template machinery: it reads the .sli demand pool
+                  addressed to this module.
                   --scan-deps is lex-only and exits before the pipeline:
                   dependency generation must not require the program to
                   compile. -M / -MF

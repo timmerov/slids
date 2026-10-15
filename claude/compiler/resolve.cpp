@@ -9621,10 +9621,6 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     if (inline_local) {
         widen::setSlidLinkage(widen::strip(clones[0]->return_type),
                               widen::Type::Linkage::kInternal);
-        // ...and MARK it as a flavor, not merely as private. Linkage alone cannot
-        // tell this class from an ordinary `.sl` class, and the self-instantiate
-        // stage needs exactly this set (widen::Type::tu_local_flavor).
-        widen::setSlidTuLocalFlavor(widen::strip(clones[0]->return_type), true);
     }
     checkClassCyclesAndNeeds(tree, classes, diag);
     for (std::size_t i = 1; i < clones.size(); i++)

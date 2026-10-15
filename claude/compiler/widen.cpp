@@ -1322,12 +1322,6 @@ bool slidRuntimeLayout(TypeRef ref) {
     return get(ref).runtime_layout;
 }
 
-void setSlidTuLocalFlavor(TypeRef ref, bool tu_local_flavor) {
-    arena().types[ref].tu_local_flavor = tu_local_flavor;
-}
-
-bool slidTuLocalFlavor(TypeRef ref) { return get(ref).tu_local_flavor; }
-
 void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here) {
     arena().types[ref].ctor_here = ctor_here;
     arena().types[ref].dtor_here = dtor_here;

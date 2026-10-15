@@ -39,27 +39,6 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                      diagnostic::Sink& diag,
                      widen::TypeRef dest_type);
 
-// How `run` emits this module.
-struct Options {
-    // --instantiate-self: emit ONLY this TU's INLINE-LOCAL template flavors — the
-    // flavors whose type-list names a type private to this TU, which no other TU can
-    // spell and which the main compile therefore cannot leave to a library's
-    // --instantiate pass. Every OTHER definition becomes a `declare` (or an `external
-    // global`), so the module is valid IR on its own and llvm-link resolves the
-    // references against the main module. The flavors are emitted with EXTERNAL
-    // linkage, because an `internal` definition in one module does not satisfy
-    // another's `declare` — llvm-link drops it, silently. The internalize pass that
-    // follows the merge demotes them again, driven by `api_symbols`.
-    bool self_instantiate = false;
-    // --api-list: when set, every symbol this module DEFINES with external linkage is
-    // appended here — the allow-list `opt -passes=internalize` needs, since anything
-    // absent from it is demoted. `main` is not preserved automatically, and neither are
-    // globals, so the list has to be complete; an omission is an undefined reference at
-    // link, never a silent miscompile.
-    std::vector<std::string>* api_symbols = nullptr;
-};
-
-void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag,
-         Options const& opts = {});
+void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag);
 
 }  // namespace codegen

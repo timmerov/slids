@@ -3651,7 +3651,8 @@ CROSS-CUTTING — SIZEOF IS THE ELEMENT STRIDE (LANDED 2026-10-14)
   IS THE LANGUAGE'S MAXIMUM ALIGNMENT); readme.txt classify sizeof lowering.
 
 CROSS-CUTTING — THE SELF-INSTANTIATE STAGE + IR MERGE
-                (PHASES A/B LANDED 2026-10-14; PHASE C BLOCKED — see below)
+                (SPIKED, MEASURED, ROLLED BACK 2026-10-14 — nothing of it is in
+                 the tree; this entry is the record of what it proved)
   MOTIVE: the IMPORT LEAK. lex's importModule reads `<m>.slh`, processFiles it, then
   immediately loadTemplateSource reads `<m>.sl` and processFiles THAT — into the same
   token stream and the same imported_once set, so the sibling's own `import` lines are
@@ -3668,7 +3669,7 @@ CROSS-CUTTING — THE SELF-INSTANTIATE STAGE + IR MERGE
   leak.]
   THE PLAN WAS: treat every `.slh` template as external, let loadTemplateSource leave the
   main compile, and have a second per-TU stage emit the flavors the libraries cannot.
-  PHASE A — the build step (test/import is the spike dir). `<stem>.ll` + `<stem>.ill` ->
+  PHASE A (removed) — the build step (test/import was the spike dir). `<stem>.ll` + `<stem>.ill` ->
   llvm-link -> `<stem>.mll` -> `opt -passes=internalize` -> `<stem>.oll` -> llc, for every
   TU in the directory. Three distinct extensions on purpose, so no pattern rule can match
   another's target. The .ill is an always-emitted EMPTY module: one unconditional rule per
@@ -3678,8 +3679,8 @@ CROSS-CUTTING — THE SELF-INSTANTIATE STAGE + IR MERGE
   definition lost and nothing added. llvm-link is not transparent — it drops every
   unreferenced local and linkonce symbol even with a SINGLE input (bird.ll: 14 defines ->
   7; a bitcode round-trip keeps all 14), so that is its own dead-code strip, not the merge.
-  PHASE B — `--instantiate-self` + `--api-list`, emission only. See readme.txt THE
-  SELF-INSTANTIATE STAGE for the mechanism, the tu_local_flavor stamping, and why the
+  PHASE B (removed) — `--instantiate-self` + `--api-list`, emission only. See readme.txt
+  THE SELF-INSTANTIATE STAGE for the mechanism, the tu_local_flavor stamping, and why the
   flavors must be EXTERNAL in that module. Validated: all 9 self modules are valid IR
   (llvm-as) and every definition in one is also an `internal` definition in the main .ll —
   0 not-in-main, 0 not-internal-in-main — and the main compile's .ll stayed BYTE-IDENTICAL.
@@ -3709,17 +3710,34 @@ CROSS-CUTTING — THE SELF-INSTANTIATE STAGE + IR MERGE
   never opaque and so cannot ship its size as a link-time symbol either. The claim that
   "layout needs nothing from the .sl, only bodies are missing" was simply false.
   CONSEQUENCE — the leak and the stage are INDEPENDENT. The sibling's imports are
-  load-bearing FOR LAYOUT, so the leak cannot be closed by skipping or deferring the load,
-  only by SCOPING the names it brings in (the fieldVisibleAt rule, extended from fields to
-  declarations). The self-instantiate stage no longer closes the leak; it serves "templates
-  are compiled once" and is a prerequisite for any later lazy loading. Also open before C
+  load-bearing FOR LAYOUT, so the leak could not be closed by skipping or deferring the
+  load, only by SCOPING the names it brings in (the fieldVisibleAt rule, extended from
+  fields to declarations — landed, see THE VISIBILITY RULE below). That left the stage
+  serving only "templates are compiled once", with no caller, which is why it came out. Also open before C
   could proceed: a flavor body calls the local class's own methods, which are `internal` in
   the main module and therefore unreachable from the merged-in module too — so C would have
   to emit every TU-private symbol as global and let internalize demote them all, a wider
   change to the main compile's output than "declare the flavors".
-  Detail: readme.txt THE SELF-INSTANTIATE STAGE; readme-classes.txt OPAQUE CLASSES (SO THE
-  MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE SOURCE).
-  THE LEAK ITSELF IS NOW CLOSED, by scoping — see THE VISIBILITY RULE below.
+  ROLLED BACK (same day, after the visibility rule landed). With C blocked at its
+  premise and the leak closed by scoping, A and B had no reachable payoff — and they were
+  provably inert, which is exactly what made them worth removing rather than keeping: the
+  main compile's .ll was byte-identical and internalize a measured no-op, so the only
+  thing they could still cost was comprehension. What came out: the test/import merge
+  chain (.ill/.mll/.oll, OPT/LLVM_LINK, --api-list on both slidsc rules, .SECONDARY — back
+  to one `%.o: %.ll`); codegen::Options with its two file statics, apiSym and its 10 call
+  sites, the self_declared dedup set and all 10 `self` branches (run() back to three
+  params); main.cpp's two flags, the api-list writer and the .sli guard; and
+  widen/ast/desugar/resolve's `tu_local_flavor` field, accessors and three write sites —
+  which had THREE readers in codegen, two of them computed on every compile. Verified: the
+  .ll files are byte-identical across the rollback too, and the suite is unchanged.
+  KEPT: the `Twin` canon test (the same-symbol-from-two-TUs hazard is real with or without
+  the stage), and every measurement above — which is the whole point of this entry. A retry
+  does not have to rediscover that llvm-link silently drops an `internal` definition a
+  `declare` needs, that `main` is not auto-preserved, that copyNode is the stamping site,
+  or that the opaque placement-new ctor arrives through two paths and needs a dedup.
+  Detail: readme.txt THE SELF-INSTANTIATE STAGE — SPIKED, MEASURED, ROLLED BACK;
+  readme-classes.txt OPAQUE CLASSES (SO THE MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE
+  SOURCE). THE LEAK ITSELF IS CLOSED, by scoping — see THE VISIBILITY RULE below.
 
 CROSS-CUTTING — THE VISIBILITY RULE (LANDED 2026-10-14)
   Everything a header (`.slh`) declares is public; everything its template source (`.sl`)
