@@ -3845,6 +3845,54 @@ CROSS-CUTTING — AN IMPORTED INCOMPLETE CLASS REFUSES AN INITIALIZER LIST (LAND
   OPAQUE CLASSES (THE PUBLIC HALF IS ONLY TRUE IN THE COMPLETER); readme.txt SOURCE-PRIVATE
   FIELDS (THE OPAQUE TWIN OF THAT ARITY CAP).
 
+CROSS-CUTTING — THE TWO INSTANTIATION SHAPES ARE TWO OPERATIONS (LANDED 2026-10-15)
+  `Class c(args)` initializes the fields FROM THE LIST and then runs the ctor hook, so the hook
+  reads what was passed — simple copies only, no operator. `Class c = value` initializes every
+  field to its DEFAULT, runs the ctor hook, and only THEN assigns the rhs elements to the fields,
+  iteratively and recursively, through each field's own op= wherever a USER one accepts the value.
+  construct.sl's canon spells both sequences out. Before this they were the SAME operation
+  wherever no op= matched the whole value, and the difference was observable only when a hook
+  read a field — which is why it could sit this long.
+  THE MECHANISM IS A SINK, NOT A SECOND WALK (classify's ValuePeel). classifyClassInit walks the
+  fields exactly as before — one arity check, one default rule, one base splice, one
+  source-private skip — but a field whose value came from the rhs takes its DEFAULT in the
+  construction tuple and its value LEAVES as an assignment statement against the object's path.
+  placeAfterDecl, extracted from applyTransferSplit and now shared by both peels, puts the decl
+  in the prelude and the statements after it (last-becomes-the-statement), so there is ONE
+  implementation of the order every binding owes: alloc, init, ctor, THEN the transfers. A
+  spilled source groups into one block with the statements, so `Trkpair xp = mkTrkTup()` still
+  lets its temp die at the semicolon. Three copies of the default rule and two of the
+  imported-incomplete-field message collapsed into one each on the way through.
+  WHAT IT RETIRED. A class FIELD can take a transfer in the `=` spelling now: a same-class COPY
+  or MOVE, a user op= that accepts the value, or — failing both — a recursive walk to the
+  leaves, at any depth and any position (Dw->Cw->Bw->Aop threads one scalar three levels down;
+  Multi's op= field is the second by flat index; HasBaseWithOp's is inside a BASE, through the
+  flat splice). Four of construct.sl's negatives are positives now, in one block. The
+  CONSTRUCTION spelling keeps every one of its rejections — there the transfer really would have
+  to hoist past the enclosing ctor, and that seam does not exist (todo.txt).
+  AND IT CLOSED A BLIT PAST AN OPERATOR. The whole-aggregate SPREAD idiom was EXEMPT from the
+  field-transfer rejection on the grounds that it is "a whole-object transfer, a different
+  operation". What it actually did was copy each element into its field and then run the field's
+  ctor over the copied bytes. Measured in evaluate.sl X1: `Trkpair xp = mkTrkTup()` printed
+  `Trk:ctor: 1` / `Trk:ctor: 2` for the FIELDS — the hook reading the already-copied value — and
+  no `Trk:op=:` line anywhere. It sat green because Trk's op= copies the same field the blit
+  copied, so only the print and the ORDER were missing; every other class in that file prints
+  rather than computes in its ctor, which is the same reason Ord and Ret had to be written.
+  THE ELIDE IS PRESERVED, deliberately. An in-place CONSTRUCTION slot is never peeled — it BUILDS
+  the field, so there is no object to copy from (pinned by a new row: `Boxed bc = (8,
+  TupleInit(3,4))` emits ONE TupleInit ctor, reading (3,4), and no op=) — and a same-class RVALUE
+  at the root still builds in place, NRVO untouched. A CONST and a GLOBAL keep the construction
+  form: a const cannot be assigned after construction, and a global's initializer becomes the
+  body of a synthesized lazy ctor with no statement list to peel into.
+  GOLDENS — four moved, and the ctor/dtor line counts are IDENTICAL in all four (the balance
+  check, which is the one that matters here): one line in exp.construct (`ForwardCtorDtor fcd1 =
+  57` now reads 0 in the hook and 57 in the dtor); exp.inheritance and exp.reopen likewise read
+  DEFAULTS in the hooks (`Derived:ctor: 7 8` is kSeven/kEight, not zeros); exp.evaluate GAINS two
+  lines, which are the two op= dispatches the spread used to skip.
+  Detail: readme-classes.txt THE TWO INSTANTIATION SHAPES ARE TWO OPERATIONS, plus the
+  CLASS-FROM-A-VALUE and A CLASS FIELD THAT WOULD NEED A TRANSFER bullets on either side of it;
+  readme.txt's op= matrix cell and the copy-into bullet.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

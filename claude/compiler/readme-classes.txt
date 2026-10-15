@@ -390,13 +390,15 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     funnel (buildClassFromValue) and NRVO's into the caller's slot. A CONSTRUCTION return
     (`return P(1,2)`) and a whole-value lvalue return are excluded — the arm below already builds
     / transfers them. canon construct.sl (retTuple / retScalar).
-    NOT DONE, and NOT the same problem: a class FIELD initialized from a class LVALUE
-    (`Holder h( c )`) is still filled and then constructed over. A construction's arguments
-    are FIELD INITIALIZERS, and a ctor must see its fields ALREADY INITIALIZED (evaluate.sl
-    Q4's Hook computes `a_ + b_` in its ctor body), so a field's copy cannot be hoisted past
-    the enclosing ctor the way a tuple slot's can — it has to land BETWEEN the field's own
-    ctor and the enclosing ctor body, inside emitConstructed's hook recursion, where the
-    initializer expressions no longer exist. todo.txt.
+    NOT DONE IN THE CONSTRUCTION SPELLING, and not the same problem: a class FIELD given a
+    class LVALUE there (`Holder h( c )`) cannot be peeled at all — it is REJECTED instead (the
+    mitigation bullet below). A construction's arguments are FIELD INITIALIZERS, and a ctor must
+    see its fields ALREADY INITIALIZED (evaluate.sl Q4's Hook computes `a_ + b_` in its ctor
+    body), so a field's copy cannot be hoisted past the enclosing ctor the way a tuple slot's
+    can — it has to land BETWEEN the field's own ctor and the enclosing ctor body, inside
+    emitConstructed's hook recursion, where the initializer expressions no longer exist.
+    todo.txt. The ASSIGNMENT spelling (`Holder h = (c)`) is a different operation and needs no
+    such seam: it peels through the fields (THE TWO INSTANTIATION SHAPES, below).
     A GLOBAL had the same wrong answer (`global Add gb = ga;` read back the ctor's value, not
     ga's) and CANNOT be fixed the same way — a global declaration is not lowered here at all;
     its initializer becomes the body of a synthesized LAZY CTOR (desugar's collectGlobals), so
@@ -453,6 +455,36 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     slot `Wrap w Amt = 6;` — while `x Amt = e` stays a decl spelling (long form there).
     A chain's INTERIOR link may be identifier-led too (`(Wrap = Amt = 9)` — the temp of
     the inner class conversion feeds the outer op=(Amt^)). test/assign/typeconv.sl.
+  * THE TWO INSTANTIATION SHAPES ARE TWO OPERATIONS (2026-10-15). `Class c(args)` initializes
+    the fields FROM THE LIST and then runs the ctor hook — simple copies only, no operator, so
+    the hook reads what was PASSED. `Class c = value` initializes every field to its DEFAULT,
+    runs the ctor hook, and only THEN assigns the rhs elements to the fields, iteratively and
+    recursively, through each field's own op= wherever a USER one accepts the value — so the
+    hook reads the DEFAULTS and the fields are overwritten after it. construct.sl's canon
+    spells both sequences out; grammar's `construction_init` is what tells the spellings apart.
+    Before this they were the SAME operation wherever no op= matched the whole value, and the
+    difference showed only when a hook read a field.
+    THE MECHANISM IS A SINK, NOT A SECOND WALK — classify's `ValuePeel`. classifyClassInit walks
+    the fields exactly as it does for a construction — one arity check, one default rule
+    (`defaultSlot`), one base splice, one source-private skip — but with a sink, a field whose
+    value came from the rhs takes its DEFAULT in the construction tuple and its value LEAVES as
+    an assignment statement against the object's path. `placeAfterDecl` (shared with the
+    transfer peel) puts the decl in the prelude and the statements after it, last-becomes-the-
+    statement, so BOTH peels produce the one order: alloc, init, ctor, THEN the transfers. A
+    spilled source shares ONE BLOCK with the statements, so it still dies at the semicolon.
+    PER FIELD the sink chooses what the canon says: a same-class value is a COPY (lvalue) or a
+    MOVE (rvalue); a USER op= that accepts the value is dispatched; failing both, it RECURSES
+    into that field's own fields, to the leaves — at any depth and any position (construct.sl:
+    Dw->Cw->Bw->Aop threads one scalar three levels down, Multi's op= field is the second by
+    flat index, HasBaseWithOp's is inside a BASE, reached through the flat splice).
+    ONLY THE ROOT OF A `= value` CLASS DECL OPENS A SINK. An array / tuple ELEMENT keeps
+    per-element CONSTRUCTION (`CtorDtor arr[3] = (36,37,38)` builds each element from its own
+    one-field list — the `=` belongs to the array, not to an element); a CONST and a GLOBAL have
+    nowhere to peel to (a const cannot be assigned after construction, and a global's
+    initializer becomes the body of a synthesized lazy ctor), so both keep the construction
+    form. An in-place CONSTRUCTION slot is never peeled — it BUILDS the field, so there is no
+    object to copy FROM — and a same-class RVALUE at the root still elides into its storage
+    (NRVO untouched).
   * CLASS-FROM-A-VALUE — op= VS FIELD-LIST, ONE FUNNEL (2026-07-15). A class slot built from a
     VALUE (a tuple / scalar, not a same-class copy) chooses between an op= ASSIGNMENT and a
     field-list CONSTRUCTION, and the choice lives in ONE place — classify::buildClassFromValue:
@@ -464,8 +496,9 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     peeled IN PLACE by splitTransferInit (the peel bullet above): it retargets the conversion's
     op= fill onto the slot and drops the `_$cret` temp, so the slot is default-constructed then
     op='d with NO temp and NO copy. EXCLUDED from op= (they stay their old paths): a same-class
-    VALUE (a copy — the whole-value store), and a class FIELD (constructClass field-list — a
-    field's transfer cannot hoist past the enclosing ctor; todo.txt). THE TWO SPELLINGS ARE TOLD
+    VALUE (a copy — the whole-value store), and a class FIELD reached WITHOUT a peel sink
+    (constructClass field-list — there a field's transfer cannot hoist past the enclosing ctor;
+    todo.txt). WITH a sink the field reaches its op= like any other slot — the bullet above. THE TWO SPELLINGS ARE TOLD
     APART IN THE PARSER: `Class c(args)` and `Class c = (tuple)` both lower to one tuple child, so
     grammar sets `construction_init` on the `(args)` form — ALWAYS field-list, never a value op=
     (the `= Class(args)` construction->tuple rewrite sets it too, so a `(5)` collapsing to a
@@ -474,19 +507,28 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
   * A CLASS FIELD THAT WOULD NEED A TRANSFER IT CANNOT HAVE IS REJECTED (2026-07-15), not silently
     field-listed past the operator. A field's transfer cannot hoist past the enclosing ctor (the
     class-FIELD exclusion above), so rather than blit and skip a user operator, classifyClassInit's
-    field loop diagnoses the three shapes that would otherwise do so: (a) a VALUE-INIT field
-    (`Super s = ((1,2,3),4)`) whose field class has a matching user op= — "cannot dispatch
-    'Class.op='"; (b) a COPY of a same-class LVALUE into a field (`Holder h(c)`) — "cannot be
-    initialized by copying"; (c) a MOVE of a same-class RVALUE into a field (`Holder h(mk())`) —
-    "cannot be initialized by moving". The copy/move gate is `sub.needs_ctor || sub.needs_dtor ||
+    field loop diagnoses the two shapes that would otherwise do so: (a) a COPY of a same-class
+    LVALUE into a field (`Holder h(c)`) — "cannot be initialized by copying"; (b) a MOVE of a
+    same-class RVALUE into a field (`Holder h(mk())`) — "cannot be initialized by moving".
+    A THIRD SHAPE USED TO BE HERE and is LANDED instead (2026-10-15): a VALUE-INIT field
+    (`Super s = ((1,2,3),4)`) whose field class has a matching user op= used to report "cannot
+    dispatch 'Class.op='". The `=` spelling peels, so that operator now dispatches after the
+    enclosing ctor and the diagnostic is gone (THE TWO INSTANTIATION SHAPES). What is left here
+    is the CONSTRUCTION spelling, where there is no seam to put a transfer in. The copy/move gate is `sub.needs_ctor || sub.needs_dtor ||
     userSelfTransferOpId(field, op) >= 0`: the last term (a DIRECT scan of the class + base frames
     for a NON-synthesized self-transfer op `op=(Self^)` / `op<--(Self^)`) catches a TRIVIAL-BUCKET
     field class — a user op= / op<-- but NO ctor/dtor — that needs_ctor/needs_dtor and
     findClassOperator both MISS (findClassOperator does not surface a trivial-bucket class's
     self-op), and whose blit would silently skip the operator. EXEMPT (legal): an in-place
-    CONSTRUCTION slot (`Holder h(C(1))` — field-lists, one ctor, no transfer), a truly trivial POD
-    field (a memberwise blit is byte-identical — nothing to skip), and the whole-aggregate SPREAD
-    idiom (`Pair p = mkPair()` — a whole-object transfer, a different operation). This is the
+    CONSTRUCTION slot (`Holder h(C(1))` — field-lists, one ctor, no transfer) and a truly trivial
+    POD field (a memberwise blit is byte-identical — nothing to skip).
+    THE WHOLE-AGGREGATE SPREAD USED TO BE EXEMPT TOO ("a whole-object transfer, a different
+    operation") AND THAT EXEMPTION WAS A BLIT PAST THE OPERATOR. `Trkpair xp = mkTrkTup()` copied
+    each element into its field and then ran the field's ctor over the copied bytes: evaluate.sl
+    X1 printed `Trk:ctor: 1` / `Trk:ctor: 2` for the FIELDS — the hook reading an already-copied
+    value — with no `Trk:op=:` line anywhere. It sat green because Trk's op= copies the same field
+    the blit copied, so only the print and the ORDER were missing. The spread is an ordinary
+    `= value` now: defaults, hooks, then op= per field. This is the
     MITIGATION until the construction interleave lands (field hooks -> field transfers -> own ctor;
     todo.txt): a clean compile error instead of the old silent wrong-order blit. Canon construct.sl
     neg_field_copy / neg_field_move / neg_field_value_init_op / neg_field_*_oponly / neg_base_copy.

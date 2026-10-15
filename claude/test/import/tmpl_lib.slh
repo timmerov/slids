@@ -192,3 +192,8 @@ Gauge(int g_ = 0) {
     T tsel<T>(T a, T b);
     int base();
 }
+
+/* public and private fields. */
+Hybrid(int a, ...) {
+    void print();
+}

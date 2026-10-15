@@ -357,6 +357,29 @@ int32 main() {
     //Sack<Loc> sn;
     //sn.hold_ = nullptr;
     //println(String + "sn = " + sn.got());
-
+/*
+    /* public and private fields. */
+    /*
+    this syntax means copy the initializer list to the fields
+    - iteratively and recursively.
+    simple copy only.
+    assignment operators may not be used.
+    fields are initialized before the object constructor is called.
+    */
+    Hybrid hyba(1); hyba.print();
+    /*
+    this syntax means default construct the object.
+    then copy/assign the rhs tuple elements to the fields
+    - iteratively and recursively.
+    fields are default initialized.
+    the object constructor is called.
+    then the fields are overwritten.
+    */
+    Hybrid hybb = 2; hybb.print();
+    // error
+    Hybrid hybc(3,4); hybc.print();
+    // error
+    Hybrid hybd = (5,6); hybd.print();
+*/
     return 0;
 }

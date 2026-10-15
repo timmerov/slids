@@ -613,6 +613,30 @@ void reportPrivateField(parse::ClassInfo const& info, int idx,
         + "' is private to its template source.", notes});
 }
 
+// AN IMPORTED INCOMPLETE FIELD CLASS has no visible fields, so an initializer naming
+// one can set nothing — the same rule the whole-object arms state, one step in. Reported
+// at the FIELD, because only the field loop still knows WHICH field and whose: recursing
+// into the subobject would report `sub`'s bare field count instead, which reads as a claim
+// about that TYPE rather than about this file's view of it. The caller DEFAULT-constructs
+// the slot rather than recursing, so one mistake draws one error.
+bool opaqueFieldInitRejected(parse::Tree& tree, parse::ClassInfo const& info,
+                             std::size_t idx, parse::ClassInfo const& sub,
+                             parse::Node const& v, int access_file,
+                             diagnostic::Sink& diag) {
+    widen::TypeRef fts = widen::strip(info.field_types[idx]);
+    if (!widen::slidOpaque(fts)
+        || widen::slidLinkage(fts) != widen::Type::Linkage::kDeclare
+        || flatVisibleFieldWidth(tree, info.field_types[idx], access_file) != 0)
+        return false;
+    diagnostic::report(diag, {v.file_id, v.tok,
+        "Class field '" + info.field_names[idx] + "' of '" + info.name
+        + "' has type '" + sub.name + "', whose private fields cannot "
+        "be set using initializer list syntax.",
+        {{sub.def_file_id, sub.def_tok,
+          "'" + sub.name + "' is declared incomplete ('...') here."}}});
+    return true;
+}
+
 // Is `base` a TRANSITIVE base of `derived`?
 bool isTransitiveBase(parse::Tree& tree, widen::TypeRef base, widen::TypeRef derived) {
     base = widen::strip(base);
@@ -1568,6 +1592,32 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
 // post-inference check run at every assignment-family site.
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag);
+// ── THE VALUE-INIT PEEL ────────────────────────────────────────────────────────
+// `Class c(args)` and `Class c = value` are NOT the same operation (construct.sl's
+// canon). The CONSTRUCTION form initializes the fields FROM THE LIST and then runs the
+// ctor hook, so the hook reads what was passed — simple copies only, no operator. The
+// ASSIGNMENT form initializes every field to its DEFAULT, runs the ctor hook, and only
+// THEN assigns the rhs elements to the fields, iteratively and recursively — so an
+// operator may dispatch per field, which a field INITIALIZER can never do (its transfer
+// cannot hoist past the enclosing ctor).
+//
+// `ValuePeel` is the sink that makes the second form that. classifyClassInit walks the
+// fields exactly as before — one arity check, one default rule, one base splice — but a
+// field whose value came from the rhs takes its DEFAULT in the construction tuple and
+// its value LEAVES as an assignment statement against `path`. placeAfterDecl puts those
+// statements after the decl, so the object is fully constructed before anything is
+// assigned into it.
+//
+// ONLY THE ROOT OF A `= value` CLASS DECL OPENS A SINK. An array / tuple element, a
+// class field reached without a sink, a return slot, a const and a global have no
+// statement list to peel into — a const cannot be assigned after construction at all,
+// and a global's initializer becomes the body of a synthesized lazy ctor — so they keep
+// the construction form, and the value-init field rejections below stay reachable there.
+struct ValuePeel {
+    parse::Node const* path;                          // the object being built
+    std::vector<std::unique_ptr<parse::Node>>* post;   // the assignments, in order
+};
+
 // Build a constructed value for a class from an optional init (defined later).
 // `value_init` records that we arrived through the VALUE-INIT routing (`Class c = value`,
 // buildClassFromValue's field-list fallthrough) rather than a CONSTRUCTION (`Class c(args)`).
@@ -1579,7 +1629,8 @@ std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             int file_id, int tok,
                                             diagnostic::Sink& diag,
                                             bool subobject = false,
-                                            bool value_init = false);
+                                            bool value_init = false,
+                                            ValuePeel* peel = nullptr);
 // Rank a class's op<sym> overloads against a source value; -1 none, -2 ambiguous
 // (defined later, near the operator machinery).
 int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& rhs,
@@ -1594,7 +1645,8 @@ std::unique_ptr<parse::Node> buildClassFromValue(parse::Tree& tree,
                                                  std::unique_ptr<parse::Node> init,
                                                  int file_id, int tok,
                                                  diagnostic::Sink& diag,
-                                                 bool subobject = false);
+                                                 bool subobject = false,
+                                                 ValuePeel* peel = nullptr);
 
 // THE argument/parameter check — the one place an ARG is validated against its PARAM
 // (classifyCall's single-candidate + overload arms, and inferMethodCall). A non-primitive
@@ -4325,6 +4377,62 @@ std::unique_ptr<parse::Node> cloneExpr(parse::Node const& n) {
     return c;
 }
 
+// `path.<field>` — the lvalue naming one field of the class at `path`. A BASE
+// subobject is reached through its own `_$base` field name, the same hop classify
+// synthesizes for an inherited field access.
+std::unique_ptr<parse::Node> makeFieldPath(parse::Node const& path,
+                                           std::string const& field,
+                                           widen::TypeRef field_ty) {
+    auto f = std::make_unique<parse::Node>();
+    f->kind = parse::Kind::kFieldExpr;
+    f->name = field;
+    f->inferred_type = field_ty;
+    f->file_id = path.file_id;
+    f->tok = path.tok;
+    f->name_tok = path.name_tok;
+    f->children.push_back(cloneExpr(path));
+    return f;
+}
+
+// THE STATEMENT a peeled initializer is re-emitted as. The shape follows the TARGET: a
+// bare name is a kAssignStmt (target in `name`, rhs in child 0) — kStoreStmt is for a
+// PATH (`t[0]`, `h.c_`) — while a move carries its lhs as a child either way. Shared by
+// the value-init peel and splitTransferInit so both re-emit alike.
+std::unique_ptr<parse::Node> makeTransferStmt(parse::Node const& path,
+                                              std::unique_ptr<parse::Node> value,
+                                              bool is_move) {
+    auto st = std::make_unique<parse::Node>();
+    st->file_id = value->file_id;
+    st->tok = value->tok;
+    if (is_move) {
+        st->kind = parse::Kind::kMoveStmt;
+        st->children.push_back(cloneExpr(path));
+    } else if (path.kind == parse::Kind::kIdentExpr) {
+        st->kind = parse::Kind::kAssignStmt;
+        st->name = path.name;
+        st->name_tok = path.name_tok;
+        st->resolved_entry_id = path.resolved_entry_id;
+    } else {
+        st->kind = parse::Kind::kStoreStmt;
+        st->children.push_back(cloneExpr(path));
+    }
+    st->children.push_back(std::move(value));
+    return st;
+}
+
+// The lvalue naming the variable a DECL declares — the root path of a peel.
+std::unique_ptr<parse::Node> makeDeclPath(parse::Node const& s) {
+    auto path = std::make_unique<parse::Node>();
+    path->kind = parse::Kind::kIdentExpr;
+    path->name = s.name;
+    path->name_tok = s.name_tok;
+    path->resolved_entry_id = s.resolved_entry_id;
+    path->inferred_type = s.return_type;
+    path->file_id = s.file_id;
+    path->tok = s.tok;
+    return path;
+}
+
 // A zero-valued node for a field with no init slot and no author default: the
 // "appropriate zero value" — 0 / 0.0 / false / nullptr / (for a class field) a
 // recursively default-constructed tuple.
@@ -4337,7 +4445,8 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
 // zero. The result is a kTupleExpr typed as the class; codegen fills the struct.
 void classifyClassInit(parse::Tree& tree, parse::Node& s,
                        parse::ClassInfo const& info, diagnostic::Sink& diag,
-                       bool subobject = false, bool value_init = false);
+                       bool subobject = false, bool value_init = false,
+                       ValuePeel* peel = nullptr);
 
 // Build a fully-constructed value for class `info` from an optional init value
 // (a scalar / tuple / same-class value), filling the field defaults / zeros.
@@ -4348,13 +4457,14 @@ std::unique_ptr<parse::Node> constructClass(parse::Tree& tree,
                                             std::unique_ptr<parse::Node> init,
                                             int file_id, int tok,
                                             diagnostic::Sink& diag,
-                                            bool subobject, bool value_init) {
+                                            bool subobject, bool value_init,
+                                            ValuePeel* peel) {
     auto holder = std::make_unique<parse::Node>();
     holder->kind = parse::Kind::kVarDeclStmt;
     holder->file_id = file_id;
     holder->tok = tok;
     if (init) holder->children.push_back(std::move(init));
-    classifyClassInit(tree, *holder, info, diag, subobject, value_init);
+    classifyClassInit(tree, *holder, info, diag, subobject, value_init, peel);
     return std::move(holder->children[0]);
 }
 
@@ -4385,7 +4495,7 @@ int userSelfTransferOpId(parse::Tree& tree, widen::TypeRef cls,
 
 void classifyClassInit(parse::Tree& tree, parse::Node& s,
                        parse::ClassInfo const& info, diagnostic::Sink& diag,
-                       bool subobject, bool value_init) {
+                       bool subobject, bool value_init, ValuePeel* peel) {
     // THE construction funnel: every instantiation of a class — a local, a `new`, a
     // temporary, an array/tuple element (init or default) — reaches here, so the
     // abstract-instantiation check lives here and nowhere else. `subobject` is set only
@@ -4541,6 +4651,30 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
     tup->kind = parse::Kind::kTupleExpr;
     tup->file_id = s.file_id;
     tup->tok = s.tok;
+    // THE DEFAULT for field i: the author default, else a zero / recursive default
+    // construction. Every arm that consumes NO initializer takes it — a source-private
+    // field, an explicit empty slot, and a field whose value the peel carried off — so
+    // "what a defaulted field holds" has one implementation. A default is library-
+    // authored data, so a class field's sub-construction carries the DEFAULT's file (the
+    // library keeps its own visibility inside it).
+    auto defaultSlot = [&](std::size_t i) -> std::unique_ptr<parse::Node> {
+        widen::TypeRef dft = info.field_types[i];
+        widen::TypeRef dfts = widen::strip(dft);
+        parse::Node* dparam = info.field_params[i];
+        parse::Node* dflt = (dparam && !dparam->children.empty())
+            ? dparam->children[0].get() : nullptr;
+        if (widen::form(dfts) == widen::Type::Form::kSlid && tree.classes.count(dfts)) {
+            parse::ClassInfo const& sub = tree.classes.at(dfts);
+            return constructClass(tree, sub, dflt ? cloneExpr(*dflt) : nullptr,
+                                  dflt ? dflt->file_id : s.file_id,
+                                  dflt ? dflt->tok : s.tok, diag, true);
+        }
+        auto slot = dflt ? cloneExpr(*dflt)
+                         : classZeroValue(tree, dft, s.file_id, s.tok, diag);
+        inferExpr(tree, *slot, dft, diag);
+        checkValueAssign(tree, dft, *slot, diag);
+        return slot;
+    };
     std::size_t pi = 0;   // running index into the FLAT initializer list
     // UNDER-FILL IS INTENTIONAL, NOT A SILENT DEFAULT: when fewer initializers are given
     // than the class has flat fields (`B b = (10)` for a wider B, or the base sub-tuple
@@ -4576,20 +4710,7 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
         // authored data, so its sub-construction carries the DEFAULT's file
         // (the library keeps its own visibility inside it).
         if (!is_base && !fieldVisibleAt(tree, info, (int)i, s.file_id)) {
-            std::unique_ptr<parse::Node> slot;
-            if (widen::form(fts) == widen::Type::Form::kSlid && tree.classes.count(fts)) {
-                parse::ClassInfo const& sub = tree.classes.at(fts);
-                slot = constructClass(tree, sub,
-                                      fdefault ? cloneExpr(*fdefault) : nullptr,
-                                      fdefault ? fdefault->file_id : s.file_id,
-                                      fdefault ? fdefault->tok : s.tok, diag, true);
-            } else {
-                slot = fdefault ? cloneExpr(*fdefault)
-                                : classZeroValue(tree, ft, s.file_id, s.tok, diag);
-                inferExpr(tree, *slot, ft, diag);
-                checkValueAssign(tree, ft, *slot, diag);
-            }
-            tup->children.push_back(std::move(slot));
+            tup->children.push_back(defaultSlot(i));
             continue;
         }
 
@@ -4601,21 +4722,7 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
         // leave a base to the splice branch below.
         if (!is_base && pi < provided.size() && !provided[pi]) {
             pi++;   // the empty slot consumes its position
-            std::unique_ptr<parse::Node> slot;
-            if (widen::form(fts) == widen::Type::Form::kSlid && tree.classes.count(fts)) {
-                parse::ClassInfo const& sub = tree.classes.at(fts);
-                // A default is library-authored data: its sub-construction
-                // carries the DEFAULT's file for the visibility walk.
-                slot = constructClass(tree, sub, fdefault ? cloneExpr(*fdefault) : nullptr,
-                                      fdefault ? fdefault->file_id : s.file_id,
-                                      fdefault ? fdefault->tok : s.tok, diag, true);
-            } else {
-                slot = fdefault ? cloneExpr(*fdefault)
-                                : classZeroValue(tree, ft, s.file_id, s.tok, diag);
-                inferExpr(tree, *slot, ft, diag);
-                checkValueAssign(tree, ft, *slot, diag);
-            }
-            tup->children.push_back(std::move(slot));
+            tup->children.push_back(defaultSlot(i));
             continue;
         }
 
@@ -4631,6 +4738,43 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                 inferExpr(tree, *provided[pi], ft, diag);
                 sameClass =
                     widen::deepStrip(provided[pi]->inferred_type) == widen::deepStrip(ft);
+            }
+            // THE VALUE-INIT PEEL AT A CLASS FIELD. The field default-constructs here and
+            // the value is ASSIGNED into it after the ctor, so all three things a field
+            // INITIALIZER cannot do become ordinary statements: a same-class COPY (an
+            // lvalue) or MOVE (an rvalue), a USER op= that accepts the value, and — failing
+            // both — a recursive walk that assigns the value's elements to the field's own
+            // fields, down to the leaves. This is what the rejections below say is not
+            // available; with a sink it is. A BASE joins only for a WHOLE same-base value:
+            // a flat scalar run belongs to the splice, which inherits the sink instead.
+            //
+            // AN IN-PLACE CONSTRUCTION IS THE ELIDE and is never peeled: it BUILDS the field
+            // (one ctor, no temp), so there is no object to copy FROM — the same rule that
+            // keeps `C c = mkC()` building straight into its storage.
+            bool ctor_slot = pi < provided.size() && provided[pi] && sameClass
+                          && provided[pi]->is_construction;
+            if (peel && !ctor_slot && pi < provided.size() && provided[pi]
+                && (sameClass || !is_base)) {
+                auto fpath = makeFieldPath(*peel->path, info.field_names[i], ft);
+                if (sameClass
+                    || findClassOperator(tree, ft, *provided[pi], "op=", diag) >= 0) {
+                    // An rvalue has no object to copy FROM, so a same-class one MOVES.
+                    bool is_move = sameClass && !isBareLvalue(*provided[pi]);
+                    peel->post->push_back(
+                        makeTransferStmt(*fpath, std::move(provided[pi++]), is_move));
+                    tup->children.push_back(defaultSlot(i));
+                } else if (opaqueFieldInitRejected(tree, info, i, sub, *provided[pi],
+                                                  s.file_id, diag)) {
+                    pi++;
+                    tup->children.push_back(defaultSlot(i));
+                } else {
+                    ValuePeel sub_peel{fpath.get(), peel->post};
+                    tup->children.push_back(
+                        constructClass(tree, sub, std::move(provided[pi++]),
+                                       s.file_id, s.tok, diag, true, value_init,
+                                       &sub_peel));
+                }
+                continue;
             }
             std::unique_ptr<parse::Node> slot;
             if (pi < provided.size() && provided[pi] && sameClass) {
@@ -4706,9 +4850,18 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                     for (int k = 0; k < bw && pi < provided.size(); k++)
                         subtup->children.push_back(std::move(provided[pi++]));
                     // The base subobject inherits the enclosing value-init context, so a field
-                    // inside a BASE whose op= would need to dispatch is diagnosed too.
+                    // inside a BASE whose op= would need to dispatch is diagnosed too. Under a
+                    // PEEL it inherits the SINK instead — reached through the base's own
+                    // `_$base` hop — so the base's fields assign after the ctor like any other.
+                    std::unique_ptr<parse::Node> bpath;
+                    ValuePeel base_peel{nullptr, peel ? peel->post : nullptr};
+                    if (peel) {
+                        bpath = makeFieldPath(*peel->path, info.field_names[i], ft);
+                        base_peel.path = bpath.get();
+                    }
                     slot = constructClass(tree, sub, std::move(subtup),
-                                          s.file_id, s.tok, diag, true, value_init);
+                                          s.file_id, s.tok, diag, true, value_init,
+                                          peel ? &base_peel : nullptr);
                 }
             // A regular class field is a subobject too: its abstractness (if any) is
             // reported once at the class definition (classifyScope), so skip the check.
@@ -4741,28 +4894,13 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
                          "'" + sub.name + ".op=' (which accepts this value) declared here."},
                         }});
                 }
-                // AN IMPORTED INCOMPLETE FIELD CLASS has no visible fields, so there is
-                // nothing here this initializer may set — the same rule the two arms near
-                // this function's head state for the whole object, one step in. Reported
-                // HERE because only this loop still knows WHICH field and whose; the
-                // recursion below would otherwise report `sub`'s bare field count, which
-                // reads as a claim about that type. Only when the value-init probe above
-                // found nothing: a matching op= is the better story and keeps its message.
-                if (op_id < 0 && widen::slidOpaque(fts)
-                    && widen::slidLinkage(fts) == widen::Type::Linkage::kDeclare
-                    && flatVisibleFieldWidth(tree, ft, s.file_id) == 0) {
-                    parse::Node const& v = *provided[pi];
-                    diagnostic::report(diag, {v.file_id, v.tok,
-                        "Class field '" + info.field_names[i] + "' of '" + info.name
-                        + "' has type '" + sub.name + "', whose private fields cannot "
-                        "be set using initializer list syntax.",
-                        {{sub.def_file_id, sub.def_tok,
-                          "'" + sub.name + "' is declared incomplete ('...') here."}}});
-                    // DEFAULT-construct the slot instead of recursing with the value: the
-                    // inner walk would add its own arity miss, two errors for one mistake.
+                // Only when the value-init probe above found nothing: a matching op= is
+                // the better story and keeps its message.
+                if (op_id < 0
+                    && opaqueFieldInitRejected(tree, info, i, sub, *provided[pi],
+                                               s.file_id, diag)) {
                     pi++;
-                    slot = constructClass(tree, sub, nullptr, s.file_id, s.tok, diag, true);
-                    tup->children.push_back(std::move(slot));
+                    tup->children.push_back(defaultSlot(i));
                     continue;
                 }
                 slot = constructClass(tree, sub, std::move(provided[pi++]),
@@ -4779,8 +4917,17 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             continue;
         }
 
-        // A non-class field: provided slot / author default / zero.
+        // A non-class field: provided slot / author default / zero. Under a PEEL a
+        // provided value is the LEAF of the recursion — the field defaults here and the
+        // value is stored into it after the ctor.
         std::unique_ptr<parse::Node> slot;
+        if (peel && pi < provided.size() && provided[pi]) {
+            auto fpath = makeFieldPath(*peel->path, info.field_names[i], ft);
+            peel->post->push_back(
+                makeTransferStmt(*fpath, std::move(provided[pi++]), /*is_move=*/false));
+            tup->children.push_back(defaultSlot(i));
+            continue;
+        }
         if (pi < provided.size() && provided[pi]) slot = std::move(provided[pi++]);
         else if (fdefault) slot = cloneExpr(*fdefault);
         else slot = classZeroValue(tree, ft, s.file_id, s.tok, diag);
@@ -5896,29 +6043,11 @@ void splitTransferInit(parse::Tree& tree, std::unique_ptr<parse::Node>& init,
     if (isBareLvalue(*init) || chain_slot) {
         if (!chain_slot) inferExpr(tree, *init, type, diag);
         if (widen::deepStrip(init->inferred_type) == widen::deepStrip(type)) {
-            auto st = std::make_unique<parse::Node>();
-            st->file_id = init->file_id;
-            st->tok = init->tok;
-            // The statement shape follows the TARGET: a bare name is a kAssignStmt (target
-            // in `name`, rhs in child 0) — kStoreStmt is deref/index-only — while a slot
-            // path (`t[0]`, `h.c_`) is a kStoreStmt. A move is a kMoveStmt either way (it
-            // already carries its lhs as an expression child) — EXCEPT from a CHAIN, which
-            // is an rvalue: a move needs a source OBJECT to husk, and a chain has none (it
-            // IS the value). It assigns into the slot, whatever the binding was spelled.
-            if (is_move && !chain_slot) {
-                st->kind = parse::Kind::kMoveStmt;
-                st->children.push_back(cloneExpr(path));
-            } else if (path.kind == parse::Kind::kIdentExpr) {
-                st->kind = parse::Kind::kAssignStmt;
-                st->name = path.name;
-                st->name_tok = path.name_tok;
-                st->resolved_entry_id = path.resolved_entry_id;
-            } else {
-                st->kind = parse::Kind::kStoreStmt;
-                st->children.push_back(cloneExpr(path));
-            }
-            st->children.push_back(std::move(init));
-            post.push_back(std::move(st));
+            // A move is a kMoveStmt — EXCEPT from a CHAIN, which is an rvalue: a move
+            // needs a source OBJECT to husk, and a chain has none (it IS the value). It
+            // assigns into the slot, whatever the binding was spelled.
+            post.push_back(makeTransferStmt(path, std::move(init),
+                                            is_move && !chain_slot));
             init = classZeroValue(tree, type, path.file_id, path.tok, diag);
             init->inferred_type = type;
         }
@@ -5955,6 +6084,59 @@ void splitTransferInit(parse::Tree& tree, std::unique_ptr<parse::Node>& init,
 // the prelude, and the transfer statements follow it, the last one BECOMING `s` (the same
 // idiom desugarDestructure and swap-init use). So the object is fully CONSTRUCTED and only
 // then copied into: alloc, init, ctor, op=.
+// PLACE the statements peeled off a class decl. The decl — now initializing to
+// DEFAULTS wherever a value was carried off — goes into the prelude, the statements
+// follow it, and the LAST one BECOMES `s` (the idiom desugarDestructure and swap-init
+// use). `spills` are source temps those statements READ, so they share ONE BLOCK with
+// them: the temp dies at the statement's end, not at the enclosing scope's.
+// Shared by the transfer split and the value-init peel — the ORDER both exist to
+// produce is alloc, init, ctor, THEN the assignments.
+void placeAfterDecl(parse::Tree& tree, parse::Node& s, widen::TypeRef fn_return_type,
+                    diagnostic::Sink& diag,
+                    std::vector<std::unique_ptr<parse::Node>>* prelude,
+                    std::vector<std::unique_ptr<parse::Node>>& spills,
+                    std::vector<std::unique_ptr<parse::Node>>& post) {
+    auto decl = std::make_unique<parse::Node>();
+    decl->kind = parse::Kind::kVarDeclStmt;
+    decl->name = s.name;
+    decl->name_tok = s.name_tok;
+    decl->resolved_entry_id = s.resolved_entry_id;
+    decl->return_type = s.return_type;
+    decl->file_id = s.file_id;
+    decl->tok = s.tok;
+    decl->children.push_back(std::move(s.children[0]));
+    prelude->push_back(std::move(decl));
+    if (!spills.empty()) {
+        std::vector<std::unique_ptr<parse::Node>> body;
+        for (auto& sp : spills) body.push_back(std::move(sp));
+        for (auto& pst : post) {
+            classifyStmt(tree, *pst, fn_return_type, diag, &body);
+            body.push_back(std::move(pst));
+        }
+        s.kind = parse::Kind::kBlockStmt;
+        s.name.clear();
+        s.resolved_entry_id = -1;
+        s.return_type = widen::kNoType;
+        s.default_move_init = false;
+        s.children.clear();
+        for (auto& b : body) s.children.push_back(std::move(b));
+        return;
+    }
+    for (std::size_t k = 0; k + 1 < post.size(); k++) {
+        classifyStmt(tree, *post[k], fn_return_type, diag, prelude);
+        prelude->push_back(std::move(post[k]));
+    }
+    auto last = std::move(post.back());
+    s.kind = last->kind;
+    s.name = last->name;
+    s.name_tok = last->name_tok;
+    s.resolved_entry_id = last->resolved_entry_id;
+    s.return_type = last->return_type;
+    s.default_move_init = false;
+    s.children = std::move(last->children);
+    classifyStmt(tree, s, fn_return_type, diag, prelude);
+}
+
 void applyTransferSplit(parse::Tree& tree, parse::Node& s,
                         widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                         std::vector<std::unique_ptr<parse::Node>>* prelude) {
@@ -5965,14 +6147,7 @@ void applyTransferSplit(parse::Tree& tree, parse::Node& s,
     if (!prelude || s.is_const || s.is_global) return;
     if (s.resolved_entry_id < 0 || s.children.empty() || !s.children[0]) return;
     if (!widen::hasInPlaceClass(widen::strip(s.return_type))) return;
-    auto path = std::make_unique<parse::Node>();
-    path->kind = parse::Kind::kIdentExpr;
-    path->name = s.name;
-    path->name_tok = s.name_tok;
-    path->resolved_entry_id = s.resolved_entry_id;
-    path->inferred_type = s.return_type;
-    path->file_id = s.file_id;
-    path->tok = s.tok;
+    auto path = makeDeclPath(s);
     // THE SLOT-WISE EXPLODE wraps its result in an agg_conv_spill SEQ when an operand had to
     // be evaluated exactly once (a call). That seq HIDES the tuple literal from the peel
     // below — and merely looking THROUGH it would be wrong: the spill's decl rides on the
@@ -6001,47 +6176,7 @@ void applyTransferSplit(parse::Tree& tree, parse::Node& s,
         }
         return;
     }
-    auto decl = std::make_unique<parse::Node>();
-    decl->kind = parse::Kind::kVarDeclStmt;
-    decl->name = s.name;
-    decl->name_tok = s.name_tok;
-    decl->resolved_entry_id = s.resolved_entry_id;
-    decl->return_type = s.return_type;
-    decl->file_id = s.file_id;
-    decl->tok = s.tok;
-    decl->children.push_back(std::move(s.children[0]));
-    prelude->push_back(std::move(decl));
-    // GROUP placement: a spilled source is read by the transfer STATEMENTS, so it and they
-    // share a block — the temp dies at the statement's end, not at the enclosing scope's.
-    if (!spills.empty()) {
-        std::vector<std::unique_ptr<parse::Node>> body;
-        for (auto& sp : spills) body.push_back(std::move(sp));
-        for (auto& p : post) {
-            classifyStmt(tree, *p, fn_return_type, diag, &body);
-            body.push_back(std::move(p));
-        }
-        s.kind = parse::Kind::kBlockStmt;
-        s.name.clear();
-        s.resolved_entry_id = -1;
-        s.return_type = widen::kNoType;
-        s.default_move_init = false;
-        s.children.clear();
-        for (auto& b : body) s.children.push_back(std::move(b));
-        return;
-    }
-    for (std::size_t k = 0; k + 1 < post.size(); k++) {
-        classifyStmt(tree, *post[k], fn_return_type, diag, prelude);
-        prelude->push_back(std::move(post[k]));
-    }
-    auto last = std::move(post.back());
-    s.kind = last->kind;
-    s.name = last->name;
-    s.name_tok = last->name_tok;
-    s.resolved_entry_id = last->resolved_entry_id;
-    s.return_type = last->return_type;
-    s.default_move_init = false;
-    s.children = std::move(last->children);
-    classifyStmt(tree, s, fn_return_type, diag, prelude);
+    placeAfterDecl(tree, s, fn_return_type, diag, prelude, spills, post);
 }
 
 // Does this initializer TRANSFER a class into a SLOT — copy/move an existing object in,
@@ -6707,7 +6842,7 @@ std::unique_ptr<parse::Node> buildClassFromValue(parse::Tree& tree,
                                                  std::unique_ptr<parse::Node> init,
                                                  int file_id, int tok,
                                                  diagnostic::Sink& diag,
-                                                 bool subobject) {
+                                                 bool subobject, ValuePeel* peel) {
     if (init) {
         // Infer once to probe for a matching op=. constructClass / classifyClassInit
         // re-infer each field slot with its field-type context, so this context-free
@@ -6732,7 +6867,7 @@ std::unique_ptr<parse::Node> buildClassFromValue(parse::Tree& tree,
     // `= value` site — so mark the field-list `value_init` so a nested class field that DOES
     // have a matching op= is diagnosed rather than silently field-listed.
     return constructClass(tree, info, std::move(init), file_id, tok, diag, subobject,
-                          /*value_init=*/true);
+                          /*value_init=*/true, peel);
 }
 
 // STAMP a class-PRODUCING binary `a op b` — RESOLVE it, but do NOT lower it.
@@ -7326,10 +7461,27 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     // no temp), and no match falls back to field-list construction. The `(args)`
                     // CONSTRUCTION form (construction_init) and every non-tuple source
                     // field-list / spread via classifyClassInit directly.
+                    // THE VALUE-INIT PEEL (see ValuePeel): `Class c = value` initializes
+                    // every field to its DEFAULT, runs the ctor hook, and only then assigns
+                    // the rhs elements to the fields. Only a LOCAL decl can — a const cannot
+                    // be assigned after construction, and a global's initializer becomes the
+                    // body of a synthesized lazy ctor with no statement list to peel into —
+                    // so both keep the construction form.
+                    std::vector<std::unique_ptr<parse::Node>> peeled;
+                    std::unique_ptr<parse::Node> peel_path;
+                    ValuePeel peel{nullptr, &peeled};
+                    bool value_peel = !s.construction_init && prelude && !s.is_const
+                                   && !s.is_global && s.resolved_entry_id >= 0;
+                    if (value_peel) {
+                        peel_path = makeDeclPath(s);
+                        peel.path = peel_path.get();
+                    }
+                    ValuePeel* sink = value_peel ? &peel : nullptr;
                     if (!s.construction_init && !s.children.empty() && s.children[0]
                         && s.children[0]->kind == parse::Kind::kTupleExpr) {
                         s.children[0] = buildClassFromValue(tree, it->second,
-                            std::move(s.children[0]), s.file_id, s.tok, diag);
+                            std::move(s.children[0]), s.file_id, s.tok, diag,
+                            /*subobject=*/false, sink);
                     } else {
                         // A non-tuple source (a scalar, a same-class value) does not route through
                         // buildClassFromValue, but a VALUE-INIT one (`Bw bw = 5`) still carries
@@ -7337,7 +7489,18 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         // would need to dispatch is diagnosed, exactly as a tuple source's is. A
                         // `(args)` CONSTRUCTION (construction_init) does not.
                         classifyClassInit(tree, s, it->second, diag, /*subobject=*/false,
-                                          /*value_init=*/!s.construction_init);
+                                          /*value_init=*/!s.construction_init, sink);
+                    }
+                    // The peel carried every supplied value off into assignment statements:
+                    // place them after the decl, GROUPED with a spilled source so the temp
+                    // outlives the reads (placeAfterDecl). Nothing is left in the tuple but
+                    // defaults, so there is no transfer for the split below to find.
+                    if (!peeled.empty()) {
+                        std::vector<std::unique_ptr<parse::Node>> spills;
+                        if (cinit_decl) spills.push_back(std::move(cinit_decl));
+                        placeAfterDecl(tree, s, fn_return_type, diag, prelude, spills,
+                                       peeled);
+                        return;
                     }
                     // The init is now this class's FIELD TUPLE (or an op= conversion). A field
                     // taking a class LVALUE is a COPY INTO a field that does not exist yet —

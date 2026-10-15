@@ -18,14 +18,23 @@ they must appear together.
 defining one without the other is a compile error.
 the compiler will generate default (possibly) ctor/dtor if the author does not.
 
-example declaration:
+example class declarations:
 
-    Class(int f1_, int f2_) {
+    Class(int a, int b) {
         _() {
             println(String + "Class:ctor");
         }
         ~() {
             println(String + "Class:dtor");
+        }
+    }
+
+    Pair(String s, String t) {
+        _() {
+            println(String + "Pair:ctor");
+        }
+        ~() {
+            println(String + "Pair:dtor");
         }
     }
 
@@ -38,10 +47,99 @@ code path handles class construction and destruction properly.
 
 there are two syntactical shapes for object instantiation:
 instantiation by 1) tuple or 2) assignment.
-the two shapres are usually interchangeable.
+the two shapes are somewhat interchangeable.
 
     Class name ( initializer ) ;
     Class name = initializer ;
+
+initializer-list syntax copies fields iteratively and recursively.
+then the constructor is called.
+simple copies only.
+assignment operators are not allowed.
+
+    Class name(1, 2);
+
+    is equivalent to:
+        name.a = 1;
+        name.b = 2;
+        name._();
+
+    Pair pair("hello", "world");
+
+    error:
+        assigning a string literal to a String class is not a simple copy.
+        it requires an assignment operator.
+
+the construct-assignment syntax initializes class fields with default values.
+the constructor hook is called.
+then we check for (and use) a matching user defined assignment operator.
+if there is none and the rhs is a scalar, tuple, or array then the fields
+are assigned iteratively and recursively from the rhs elements.
+assignment operators are used when appropriate.
+
+    Class name = (1,2);
+
+    is equivalent to:
+        name.a = 0;
+        name.b = 0;
+        name._();
+        name.a = 1;
+        name.b = 2;
+
+    Pair pair = ("hello", "world");
+
+    is equivalent to:
+        pair.a; // default construction
+        pair.b; // default construction
+        pair._();
+        pair.a.op=("hello");
+        pair.b.op=("world");
+
+possible exception for optimization:
+a plain-old-data object construct-assigned from another object of the same
+type with no matching user defined assignment operator copies the fields.
+
+    PodClass lhs = rhs;
+
+    is equivalent to:
+        lhs.a = rhs.a;
+        lhs.b = rhs.b;
+        lhs._();
+
+canon clarification regarding the construction sequence:
+
+    Class obj;  -->
+        initialize all fields to default values.
+        call the ctor hook.
+
+    Class obj( initialization-tuple ); -->
+        initialize fields from the initialization tuple.
+        simple copies only.
+        initialize remaining fields to default values.
+        call the ctor hook.
+
+    PodClass obj = same-pod-class-initializer;
+        initialize fields from the initialization pod object.
+        call the ctor hook.
+
+    Class obj = rhs-with-assignment-operator; -->
+        initialize all fields to default values.
+        call the ctor hook.
+        call the assignment operator.
+
+    Class obj = initialization-tuple; -->
+        initialize all fields to default values.
+        call the ctor hook.
+        assign fields from the initialization-tuple elements
+        - iteratively and recursively.
+
+notes:
+
+naming conventions are optional.
+they are never used to resolve parse.
+
+this file covers construction/destruction.
+other class features are hendled elsewhere.
 
 things to test:
     ctor/dtor balance
@@ -57,43 +155,6 @@ things to test:
 
 deferred tests:
     temporary class objects in expressions and type conversions.
-
-canon clarification regarding the construction sequence:
-
-    Class obj;  -->
-        initialize all fields to default values.
-        call the ctor hook.
-
-    Class obj( initialization-tuple ); -->
-        initialize fields from the initialization tuple.
-        initialize remaining fields to default values.
-        call the ctor hook.
-
-    PodClass obj = same-pod-class-initializer;
-        initialize fields from the initialization pod object.
-        call the ctor hook.
-
-    Class obj = assignment-operator-rhs; -->
-        initialize all fields to default values.
-        call the ctor hook.
-        call the assignment operator.
-
-    Class obj = initialization-tuple; -->
-        initialize fields from the initialization tuple.
-        initialize remaining fields to default values.
-        call the ctor hook.
-
-non-default assignment operator has precedence over initialization by tuple.
-the initialization tuple may contain objects as long as no matching assignment
-operator exists.
-
-notes:
-
-naming conventions are optional.
-they are never used to resolve parse.
-
-this file covers construction/destruction.
-other class features are hendled elsewhere.
 */
 
 /*
@@ -122,9 +183,10 @@ CtorDtor(int c_) {
     }
 }
 
-/* the two instantiation shapes are NOT interchangeable when the class defines a tuple
-   op=: `X x(a,b)` field-list-constructs in place (ctor only), while `X x = (a,b)` is
-   value-init — default-construct then dispatch op=((int,int)^). */
+/* the two instantiation shapes are NOT interchangeable: `X x(a,b)` field-list-constructs
+   in place, so the ctor hook reads what was passed, while `X x = (a,b)` default-constructs
+   (the hook reads the DEFAULTS) and then assigns — here through op=((int,int)^), since a
+   user op= accepting the whole value wins over the per-field walk. */
 TupleInit(int p_, int q_) {
     _() { println(String + "TupleInit:ctor: (" + p_ + "," + q_ + ")"); }
     ~() { println(String + "TupleInit:dtor: (" + p_ + "," + q_ + ")"); }
@@ -143,11 +205,13 @@ ScalarOp(int v_) {
     op=(int x) { v_ = x; println(String + "ScalarOp:op=int: " + v_); }
 }
 
-/* a class with a class-typed FIELD. In the CONSTRUCTION spelling (`Boxed bx(7,(1,2))`) the
-   field FIELD-LISTS (one ctor, no op=). The VALUE-INIT spelling (`Boxed bx = (7,(1,2))`) and a
-   field COPY (`Boxed bx(7, t)`) would each need the field to dispatch its op= / copy, which a
-   field's transfer cannot hoist past the enclosing ctor to do (splitTransferInit's field note /
-   todo) — so both are rejected rather than silently field-listed or blitted (negatives below). */
+/* a class with a class-typed FIELD, and the clearest place the two shapes part. In the
+   CONSTRUCTION spelling (`Boxed bx(7,(1,2))`) the field FIELD-LISTS (one ctor, no op=). In the
+   VALUE-INIT spelling (`Boxed bx = (7,(1,2))`) the field is default-constructed with everything
+   else and then ASSIGNED — its op= dispatches, because the assignment happens after the
+   enclosing ctor instead of inside it. A field COPY in the CONSTRUCTION spelling
+   (`Boxed bx(7, t)`) is still rejected: there the transfer would have to hoist into the
+   enclosing ctor, which it cannot (splitTransferInit's field note / todo). */
 Boxed(int tag_, TupleInit inner_) {
     _() { println(String + "Boxed:ctor: " + tag_); }
     ~() { println(String + "Boxed:dtor: " + tag_); }
@@ -503,6 +567,34 @@ int32 main() {
     }
     println(String + "bx dtors before.");
 
+    /* ...and the VALUE-INIT spelling is the OTHER operation: the object is built from
+       DEFAULTS, its hooks run, and only THEN are the rhs elements assigned to the fields —
+       iteratively and recursively, through each field's own op= wherever one accepts the
+       value. So every field transfer the construction spelling must refuse becomes an
+       ordinary statement here, at any depth and any position: Dw->Cw->Bw->Aop threads one
+       scalar to a field THREE LEVELS down; Multi's op= field is the SECOND, reached by the
+       flat init index; HasBaseWithOp's is inside a BASE subobject, reached through the
+       base's flat splice. (Aop's hooks are silent, so the field values are the witness.) */
+    {
+        println(String + "Boxed bx = (7,(1,2)) [value-init]:");
+        println(String + "  expect TupleInit + Boxed ctors on DEFAULTS, then op=tuple (1,2).");
+        Boxed bx = (7, (1, 2));
+        println(String + "  bx.tag=" + bx.tag_ + " bx.inner=(" + bx.inner_.p_ + "," + bx.inner_.q_ + ")");
+        Dw dw = 5;
+        println(String + "  Dw dw = 5:             c_.b_.a_.v_=" + dw.c_.b_.a_.v_);
+        Multi m = (1, 5, 9);
+        println(String + "  Multi m = (1,5,9):     x_=" + m.x_ + " a_.v_=" + m.a_.v_ + " y_=" + m.y_);
+        HasBaseWithOp h = (5, 9);
+        println(String + "  HasBaseWithOp h=(5,9): base a_.v_=" + h.a_.v_ + " own_=" + h.own_);
+        /* ...but an in-place CONSTRUCTION slot is the ELIDE even here: it BUILDS the field,
+           so there is no object to copy from and nothing to peel — ONE ctor, reading what
+           was passed, and no op= after it. */
+        println(String + "  Boxed bc = (8, TupleInit(3,4)) [construction slot elides]:");
+        Boxed bc = (8, TupleInit(3, 4));
+        println(String + "  bc.tag=" + bc.tag_ + " bc.inner=(" + bc.inner_.p_ + "," + bc.inner_.q_ + ")");
+    }
+    println(String + "bx value-init dtors before.");
+
     /* a TRIVIAL (no ctor/dtor) class FIELD is exempt from the rejections: a copy from an lvalue,
        a move from a call rvalue, and a value-init are all legal — the blit is byte-correct with
        nothing to skip. No lifecycle output (Pod/SuperPod are silent); the field values prove it. */
@@ -758,16 +850,6 @@ one at a time and asserts the marked error substring.
 //    return t.p_;
 //}
 
-/* a class-typed FIELD in the VALUE-INIT spelling would need the field to dispatch its op=
-   (default-construct, then assign) — a transfer that cannot hoist past the enclosing ctor. It
-   is rejected rather than silently field-listed. (The CONSTRUCTION spelling `Boxed b(7,(1,2))`
-   is legal and field-lists — a positive above.) */
-//-EXPECT-ERROR: cannot dispatch 'TupleInit.op='
-//int neg_field_value_init_op() {
-//    Boxed b = (7, (1, 2));
-//    return b.inner_.p_;
-//}
-
 /* copying a class VALUE into a class FIELD would need the field's op=(Class^) copy under the
    copy-into order (the field default-constructed first, its ctor observing the default). The
    copy cannot hoist between the field's ctor and the enclosing ctor body, so it is rejected
@@ -788,30 +870,6 @@ one at a time and asserts the marked error substring.
 //int neg_field_move() {
 //    Boxed b(9, retTuple());
 //    return b.inner_.p_;
-//}
-
-/* the value-init rejection recurses: Dw -> Cw -> Bw -> Aop, so the value threaded to the
-   DEEPLY nested Aop field (which has op=(int)) is caught at depth. */
-//-EXPECT-ERROR: cannot dispatch 'Aop.op='
-//int neg_field_deep() {
-//    Dw dw = 5;
-//    return dw.c_.b_.a_.v_;
-//}
-
-/* the rejected field need not be the FIRST: Multi's op= field a_ is the second, reached by the
-   flat init index. */
-//-EXPECT-ERROR: cannot dispatch 'Aop.op='
-//int neg_field_not_first() {
-//    Multi m = (1, 5, 9);
-//    return m.a_.v_;
-//}
-
-/* the rejection reaches a field inside a BASE subobject: HasBaseWithOp's base Bw carries the
-   Aop field, and value-init flows through the base flat-splice. */
-//-EXPECT-ERROR: cannot dispatch 'Aop.op='
-//int neg_field_through_base() {
-//    HasBaseWithOp h = (5, 9);
-//    return h.own_;
 //}
 
 /* the copy rejection covers a BASE subobject given a WHOLE same-base value (not the flat scalar

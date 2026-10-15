@@ -308,7 +308,11 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     element, return — through op= (else field-list), and the transfer peel builds it in place;
     `Class c(args)` (parser `construction_init`) stays field-list — and a field-list may carry
     EMPTY slots (`Class c(,2,3)`), each defaulting that field (2026-07-15); the `= (tuple)` form
-    may not. See readme-classes.txt.
+    may not. SINCE 2026-10-15 THE TWO SPELLINGS ARE TWO OPERATIONS whether or not an op= matches:
+    `= value` default-constructs, runs the ctor hook, and THEN assigns the rhs elements per
+    field (classify's ValuePeel — a sink on the one construction walk), so the hook reads the
+    DEFAULTS; `(args)` fills the fields first, so the hook reads what was passed. See
+    readme-classes.txt.
   * error  — everything else.
 
   intptr-as-source falls in the integer column, so `pointer <- intptr` is an error
@@ -717,6 +721,9 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     only a copy is deferred), and to the whole value of any class-bearing target. It does NOT
     recurse into a class's FIELD tuple: a construction's args are field initializers and the
     ctor must SEE them, so that copy cannot be hoisted past it (readme-classes.txt / todo).
+    The `= value` spelling reaches the fields by the OTHER peel — ValuePeel, which defaults them
+    at the decl and assigns after the ctor — and the two share `placeAfterDecl`, so both produce
+    the same order.
     A class CHAIN in a SLOT is peeled too (`(A,A) t = p + q`), and the reason is a limit of
     DESUGAR, not of the language: the tuple-literal distribution can hand a slot to a nested
     literal or a construction, but NOT to a chain — a chain's accumulator home is answered per

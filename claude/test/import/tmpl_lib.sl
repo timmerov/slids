@@ -193,3 +193,10 @@ int viaOwn() {
    the layout everywhere). */
 //-EXPECT-ERROR: cannot add fields
 //Vector<T>(T zz_ = 9) { }
+
+/* public and private classes */
+Hybrid(int b = 37) {
+    void print() {
+        println(String + "a=" + a + " b=" + b);
+    }
+}

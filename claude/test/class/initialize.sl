@@ -26,7 +26,7 @@ initialization by tuple may be incomplete.
 ie the class may have more fields than the tuple has slots.
 remaining class fields are initialized to default values or zeros.
 
-like local variables, initialization of a tuple or array field must be either default of complete.
+like local variables, initialization of a tuple or array field must be either default or complete.
 it cannot be partial.
 
 example declaration and initialization by tuple:

@@ -499,10 +499,12 @@ W6: build-in-place w8=99
 W end (locals dtor next)
 X: spills die at the semicolon
 X1: Trkpair xp = mkTrkTup();
+Trk:ctor: 0
+Trk:ctor: 0
 Trk:ctor: 1
 Trk:ctor: 2
-Trk:ctor: 1
-Trk:ctor: 2
+Trk:op=: 1
+Trk:op=: 2
 Trk:dtor: 2
 Trk:dtor: 1
 X1 end (the (Trk,Trk) temp is already dead)

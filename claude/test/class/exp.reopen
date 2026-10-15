@@ -10,7 +10,7 @@ d.deriv = 3
 nst.nm = 7
 nst.nm2 = 8
 nst.nm3 = 107
-tip ctor 40
+tip ctor 0
 tip.tm = 42
 tip dtor 40
 ns.kN = 42
@@ -49,12 +49,12 @@ os.aug = 15
 le.sum = 7
 le.e = 1
 Forward:ctor: 0
-Split:ctor: 3
-Late:ctor: 4
-Ext:ctor: 5
-Nst:ctor: 6
-Veg:ctor: 7
-Sib:ctor: 8
+Split:ctor: 0
+Late:ctor: 0
+Ext:ctor: 0
+Nst:ctor: 0
+Veg:ctor: 0
+Sib:ctor: 0
 Sib:dtor: 8
 Veg:dtor: 7
 Nst:dtor: 6

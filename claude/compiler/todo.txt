@@ -450,31 +450,6 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     (store each slot as it is computed, so `(a,b) = (b,a)` leaves both equal to the old b)
     is what the per-slot lowering would do on its own, and it is cheaper by one temp.
 
-  * revisit the decision to reject initialization of a class object field that requires a user
-    defined move operator. Super s = (a, 1); s.a.op=(a) has to happen after s.a.ctor() and before
-    s.ctor(). but there's no such seam. i'm not willing to inline ctors at the instantiation site.
-    and i'm not willing to silently extract the assignment and perform it after default
-    instantiation. Super s = (0,1); s.a.op=(a); let the user do that.
-    claude speak:
-    A CLASS FIELD TRANSFER IS NOT SUPPORTED. A field that would need a transfer — a same-class
-    COPY (`Holder h( c );`), a same-class MOVE (`Holder h( mk() );`), or a value-init op= dispatch
-    (`Super s = ((1,2,3),4);` where the field class has a matching user op=) — is currently
-    REJECTED as a compile error rather than done (the landed mitigation; see readme-classes.txt
-    "A CLASS FIELD THAT WOULD NEED A TRANSFER"). This item is the missing SUPPORT.
-    WHY IT'S HARD: a construction's arguments are FIELD INITIALIZERS, so the enclosing CONSTRUCTOR
-    MUST SEE THEM — a ctor body that computes `a_ + b_` reads the values passed, not the defaults.
-    So the field's transfer cannot be hoisted past the enclosing ctor the way a tuple slot's can
-    (a tuple has no ctor of its own — why that case was easy). It has to land BETWEEN the field's
-    own ctor and the enclosing class's ctor body — the seam inside emitConstructed's hook recursion
-    (fields' ctors, then this class's own ctor, then the vptr stamp), where the initializer
-    expressions no longer exist. Pinned in the OTHER direction by evaluate.sl Q4 (class Hook):
-    hoisting the field copies past the ctor makes Hook's ctor read 0 instead of 3.
-    FIX = give construction a way to interleave: run the field hooks, then the field transfers,
-    then the class's own ctor. Either codegen carries the field transfers into the construction,
-    or the class's own-ctor call is separable so classify can emit decl(field hooks only) / field
-    transfers / own-ctor as three steps. This is also why buildClassFromValue excludes a class
-    FIELD (it field-lists, never op='s): the peel cannot hoist a field's transfer past the ctor.
-
   * allow empty slots in the `= (tuple)` VALUE-INIT form (`Class c = (,2,3)`). Two obstacles:
     it parses through the SHARED tuple-literal grammar, where an empty slot has no meaning outside
     a class value-init and the parser cannot know the target is a class (no syntactic gate like the

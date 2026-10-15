@@ -23,7 +23,7 @@ CtorDtor:dtor: 3
 CtorDtor:dtor: 2
 CtorDtor:dtor: 1
 expect dtors 3,2,1 above.
-ForwardCtorDtor:ctor: 57
+ForwardCtorDtor:ctor: 0
 ForwardCtorDtor:dtor: 57
 ctors 36,37,38 after.
 CtorDtor:ctor: 36
@@ -135,6 +135,24 @@ Boxed:ctor: 7
 Boxed:dtor: 7
 TupleInit:dtor: (1,2)
 bx dtors before.
+Boxed bx = (7,(1,2)) [value-init]:
+  expect TupleInit + Boxed ctors on DEFAULTS, then op=tuple (1,2).
+TupleInit:ctor: (0,0)
+Boxed:ctor: 0
+TupleInit:op=tuple: (1,2)
+  bx.tag=7 bx.inner=(1,2)
+  Dw dw = 5:             c_.b_.a_.v_=5
+  Multi m = (1,5,9):     x_=1 a_.v_=5 y_=9
+  HasBaseWithOp h=(5,9): base a_.v_=5 own_=9
+  Boxed bc = (8, TupleInit(3,4)) [construction slot elides]:
+TupleInit:ctor: (3,4)
+Boxed:ctor: 0
+  bc.tag=8 bc.inner=(3,4)
+Boxed:dtor: 8
+TupleInit:dtor: (3,4)
+Boxed:dtor: 7
+TupleInit:dtor: (1,2)
+bx value-init dtors before.
 SuperPod (trivial Pod field):
   sa(1,2):                p_=(1,0,0) d_=2
   sb((12,3),4):           p_=(12,3,0) d_=4
