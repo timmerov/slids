@@ -3659,6 +3659,12 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             if (e.kind != parse::EntryKind::kFunction || e.name != s.name)
                 continue;
             if (!e.tmpl_args.empty()) continue;   // never rank an instance
+            // THE VISIBILITY RULE. The leak this closes was an OVERLOAD leak:
+            // a header reached only through some other module's template source
+            // adding a candidate to a name the use site already had. Filtering
+            // plain lookup is not enough — resolve's anchor is the public
+            // declaration, and the set is re-gathered here from scratch.
+            if (!parse::declVisibleAt(tree, e.file_id, s.file_id)) continue;
             if (e.owner_ns_frame != own) continue;
             if (own < 0 && e.parent_frame_id != pf) continue;
             if (e.is_template) {

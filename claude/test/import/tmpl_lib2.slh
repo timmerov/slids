@@ -11,3 +11,12 @@ template source that is itself a consumer (the mixed-role case).
 Wrap2<T>(T w_ = 0) {
     T dub();
 }
+
+/* THE VISIBILITY RULE, the discriminating half. `pick` is library.slh's name
+   (int / int64 there); this adds a THIRD overload to it from a header that
+   tmpl_test.sl reaches only through tmpl_lib.sl's `import tmpl_lib2;`. The
+   symbol is in tmpl_lib2.o, which every one of these binaries links, so nothing
+   at LINK time stops tmpl_test.sl from calling it — only the rule does. That is
+   why the pin is a printed NUMBER on both sides and not a negative: a leak here
+   compiles, links, runs, and silently answers 3 where 1 is correct. */
+int pick(int8 x);

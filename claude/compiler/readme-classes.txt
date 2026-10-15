@@ -211,7 +211,8 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     slots — it goes through buildClassFromValue's op= path, not this loop (todo).
     A SOURCE-PRIVATE field (canon 2026-08-17 — a field an imported template's
     SOURCE supplied; see readme.txt SOURCE-PRIVATE FIELDS for the provenance
-    test) IS NOT A SLOT in this walk: it cannot be supplied positionally or by
+    test, and THE VISIBILITY RULE there for the NAME half of the same
+    sentence) IS NOT A SLOT in this walk: it cannot be supplied positionally or by
     an empty slot — it always takes its author default (else zero /
     default-construct) and consumes NO initializer, exactly like an under-filled
     tail, even MID-LAYOUT (the tuple maps over the fields VISIBLE at the use
@@ -1650,7 +1651,14 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     ship its size as a link-time symbol either. Consequence for the import-leak work: the
     sibling's own `import` lines are load-bearing FOR LAYOUT, so the leak cannot be closed by
     skipping or deferring the load — only by SCOPING the names it brings in, the rule already
-    stated at classify.cpp's fieldVisibleAt and implemented for FIELDS only.
+    stated at classify.cpp's fieldVisibleAt and, at the time, implemented for FIELDS only.
+    SCOPED (landed 2026-10-14). THE VISIBILITY RULE now covers NAMES too: everything a
+    header declares is public, everything its template source supplies — its own `import`
+    lines included — is private to that source's zone. One lex-computed privacy owner per
+    file plus one predicate (parse::declVisibleAt), gated at plain lookup, at TYPE names,
+    and at classify's overload gathering. The field rule above is its sibling and keys on
+    the same use-site file for the same reason: a cloned body carries its source's
+    file_id. Full account in readme.txt, THE VISIBILITY RULE under TEMPLATES.
     Opaque changes three things — its size is a
   LINK-TIME value the completer exports, its construction is SPLIT across the seam, and its
   layout-needing uses either COMPUTE by convention or are REJECTED in an importer.

@@ -521,19 +521,27 @@ struct ImportWrapper {
     std::string root_stem;   // the primary source's module name
     bool fatal = false;
 
-    void processFile(int file_id, std::string const& source_dir);
+    // `owner` is the PRIVACY OWNER in force here (token::File::private_owner):
+    // the side-loaded template source this file was reached through, or -1 on a
+    // header-only chain. It propagates to every file this one imports.
+    void processFile(int file_id, std::string const& source_dir, int owner);
     // Import `module`.slh as if an `import module;` appeared in `from_file` —
     // the driver-injected form (--instantiate provenance headers). Errors
     // attribute bare ({-1,-1}: no source token exists for an injected import).
     void importModule(std::string const& module, std::string const& source_dir,
-                      int from_file);
+                      int from_file, int owner);
+    // STICKY PUBLIC: an already-open file reached again on a PUBLIC chain is
+    // public from now on — and so is everything it pulled in, which is why this
+    // walks the imported_by subtree rather than clearing one flag.
+    void publicize(int file_id);
     // After importing `module`.slh: load the TEMPLATE SOURCE `module`.sl
     // sitting beside it, if any — a LOCAL-type instance of the header's
     // templates needs bodies to clone, and only that file has them. Skipped
     // when the root IS this module's source (the sibling compiling itself —
     // which also keeps the negative harness's relocated variants honest).
     // Marked template_source: resolve strips everything but template content.
-    void loadTemplateSource(std::string const& header_path, int header_file_id);
+    void loadTemplateSource(std::string const& header_path, int header_file_id,
+                            int owner);
 };
 
 void reportAt(diagnostic::Sink& diag, int file_id, int tok_index, std::string const& msg) {
@@ -545,7 +553,16 @@ int addAndIndex(token::List& out, token::Token const& t) {
     return (int)out.tokens.size() - 1;
 }
 
-void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
+void ImportWrapper::publicize(int file_id) {
+    if (out.files[file_id].private_owner < 0) return;   // already public
+    out.files[file_id].private_owner = -1;
+    for (std::size_t i = 0; i < out.files.size(); i++) {
+        if (out.files[i].imported_by == file_id) publicize((int)i);
+    }
+}
+
+void ImportWrapper::processFile(int file_id, std::string const& source_dir,
+                                int owner) {
     Stream s = lex::open(file_id, out.files[file_id].source);
 
     int depth = 0;
@@ -669,7 +686,20 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
                         return false;
                     }
                     if (!imported_once.insert(found_path).second) {
-                        return true;   // already imported elsewhere
+                        // Already imported elsewhere — but THIS import may be
+                        // the public one. Provenance is first-come, so without
+                        // this a header a template source happened to reach
+                        // first would stay private to it even though the root
+                        // asked for it by name.
+                        if (owner < 0) {
+                            for (std::size_t i = 0; i < out.files.size(); i++) {
+                                if (out.files[i].path == found_path) {
+                                    publicize((int)i);
+                                    break;
+                                }
+                            }
+                        }
+                        return true;
                     }
 
                     std::ifstream f(found_path);
@@ -686,11 +716,13 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
 
                     int new_file_id = token::openFile(out, found_path,
                         std::move(imported_source), file_id);
+                    out.files[new_file_id].private_owner = owner;
                     std::string new_source_dir =
                         std::filesystem::path(found_path).parent_path().string();
 
-                    processFile(new_file_id, new_source_dir);
-                    if (!fatal) loadTemplateSource(found_path, new_file_id);
+                    processFile(new_file_id, new_source_dir, owner);
+                    if (!fatal)
+                        loadTemplateSource(found_path, new_file_id, owner);
                     return !fatal;
                 }
                 // pushback
@@ -710,7 +742,8 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir) {
 }
 
 void ImportWrapper::importModule(std::string const& module,
-                                 std::string const& source_dir, int from_file) {
+                                 std::string const& source_dir, int from_file,
+                                 int owner) {
     std::string header = module + ".slh";
     std::vector<std::string> search;
     search.push_back(source_dir.empty() ? std::string(".") : source_dir);
@@ -730,7 +763,14 @@ void ImportWrapper::importModule(std::string const& module,
         fatal = true;
         return;
     }
-    if (!imported_once.insert(found_path).second) return;   // already imported
+    if (!imported_once.insert(found_path).second) {   // already imported
+        if (owner < 0) {
+            for (std::size_t i = 0; i < out.files.size(); i++) {
+                if (out.files[i].path == found_path) { publicize((int)i); break; }
+            }
+        }
+        return;
+    }
     std::ifstream f(found_path);
     if (!f.is_open()) {
         diagnostic::report(diag, {-1, -1, "Cannot open '" + found_path + "'.", {}});
@@ -740,14 +780,15 @@ void ImportWrapper::importModule(std::string const& module,
     std::stringstream buf;
     buf << f.rdbuf();
     int new_file_id = token::openFile(out, found_path, buf.str(), from_file);
+    out.files[new_file_id].private_owner = owner;
     std::string new_source_dir =
         std::filesystem::path(found_path).parent_path().string();
-    processFile(new_file_id, new_source_dir);
-    if (!fatal) loadTemplateSource(found_path, new_file_id);
+    processFile(new_file_id, new_source_dir, owner);
+    if (!fatal) loadTemplateSource(found_path, new_file_id, owner);
 }
 
 void ImportWrapper::loadTemplateSource(std::string const& header_path,
-                                       int header_file_id) {
+                                       int header_file_id, int owner) {
     std::filesystem::path hp(header_path);
     std::string module = hp.stem().string();
     if (module == root_stem) return;   // the root IS this module's source
@@ -762,7 +803,14 @@ void ImportWrapper::loadTemplateSource(std::string const& header_path,
     buf << f.rdbuf();
     int fid = token::openFile(out, spath, buf.str(), header_file_id);
     out.files[fid].template_source = true;
-    processFile(fid, sp.parent_path().string());
+    // THE PRIVACY ZONE OPENS HERE. This source is what makes its own imports
+    // private, so it owns itself — unless it is already inside someone else's
+    // zone (a template source that is itself a consumer), in which case the
+    // outer owner rules and the two share one zone: an inner source's bodies
+    // and an outer source's bodies are both library-side of the same seam.
+    int sub = owner >= 0 ? owner : fid;
+    out.files[fid].private_owner = sub;
+    processFile(fid, sp.parent_path().string(), sub);
 }
 
 }  // namespace
@@ -792,14 +840,14 @@ void run(std::string const& root_path,
     std::set<std::string> imported_once;
     ImportWrapper wrap{out, diag, import_paths, imported_once,
                        std::filesystem::path(root_path).stem().string()};
-    wrap.processFile(root_file_id, source_dir);
+    wrap.processFile(root_file_id, source_dir, /*owner=*/-1);
 
     // Driver-injected imports (the --instantiate demand files' provenance
     // headers), appended after the root's tokens — file-scope declaration
     // order is free, and imported_once dedups any the root already pulled.
     for (auto const& m : extra_imports) {
         if (wrap.fatal) break;
-        wrap.importModule(m, source_dir, root_file_id);
+        wrap.importModule(m, source_dir, root_file_id, /*owner=*/-1);
     }
 
     if (!wrap.fatal) {

@@ -3663,7 +3663,9 @@ CROSS-CUTTING — THE SELF-INSTANTIATE STAGE + IR MERGE
   no templates contributes NOTHING to the TU — and its `import` was still honored. The
   rule is written down (classify.cpp fieldVisibleAt: "everything a header declares is
   public; everything its template source supplies is private to that file") and
-  implemented for FIELDS only.
+  implemented for FIELDS only. [It now covers NAMES too — see THE VISIBILITY RULE below,
+  which is what actually closed this leak. The rest of this entry is the stage, not the
+  leak.]
   THE PLAN WAS: treat every `.slh` template as external, let loadTemplateSource leave the
   main compile, and have a second per-TU stage emit the flavors the libraries cannot.
   PHASE A — the build step (test/import is the spike dir). `<stem>.ll` + `<stem>.ill` ->
@@ -3717,6 +3719,78 @@ CROSS-CUTTING — THE SELF-INSTANTIATE STAGE + IR MERGE
   change to the main compile's output than "declare the flavors".
   Detail: readme.txt THE SELF-INSTANTIATE STAGE; readme-classes.txt OPAQUE CLASSES (SO THE
   MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE SOURCE).
+  THE LEAK ITSELF IS NOW CLOSED, by scoping — see THE VISIBILITY RULE below.
+
+CROSS-CUTTING — THE VISIBILITY RULE (LANDED 2026-10-14)
+  Everything a header (`.slh`) declares is public; everything its template source (`.sl`)
+  SUPPLIES — INCLUDING the declarations its own `import` lines pull in — is private to that
+  source and to the files in its zone. This closes THE IMPORT LEAK described under THE
+  SELF-INSTANTIATE STAGE above: a consumer silently inherited every header its libraries
+  imported, benign until the first leaked header ADDED AN OVERLOAD to a name the consumer
+  already had. The sentence was already written at classify.cpp's fieldVisibleAt and
+  implemented for FIELDS only; this is the NAME half.
+  WHY SCOPING AND NOT DEFERRING. The main compile can never stop loading a template source
+  (measured; see Phase C above) — an incomplete header template's layout lives in the
+  completing re-open, in the `.sl`. The sibling's imports are load-bearing FOR LAYOUT, so
+  the names are the only thing that can move.
+  PROVENANCE IS ONE INT PER FILE. lex computes token::File::private_owner: the side-loaded
+  template source a file was first reached THROUGH, or -1 on a chain of headers alone. The
+  owner threads down every import recursion; loadTemplateSource OPENS a zone (the source
+  owns itself, or inherits an outer owner, so a template source that is itself a consumer
+  shares one zone with the outer one — both are library-side of the same seam, and it is
+  what lets a privately imported module's own `.sl` see its own `.slh`). grammar carries it
+  to Tree::file_private_owner; parse::declVisibleAt(decl_file, access_file) is the whole
+  rule: visible iff no owner, or the owner IS the access file, or both sit in one zone.
+  STICKY PUBLIC IS LOAD-BEARING. imported_once dedups by PATH and imported_by is a single
+  int, so provenance is FIRST-COME: with `import vector; import string;` vector.sl's own
+  `import string;` wins the record and the root's later one is skipped, which would leave
+  String private to vector.sl. Every dedup early-return on a PUBLIC chain therefore calls
+  publicize(), clearing the owner over the whole imported_by subtree. Without it the
+  standard library stops resolving — a naive parent-walk rule would have been wrong, and
+  wrong in a way the first build would have blamed on the predicate.
+  THE USE SITE is Tree::access_file, maintained by an AccessFileScope at every resolve
+  entry point that takes a node or a file_id, at every program-children loop in run(), and
+  SAVED INTO THE TEMPLATE SNAPSHOT — so a library template's body keeps its OWN file's
+  visibility wherever it is instantiated, which is what lets vector.sl's bodies go on using
+  `dump` and `String` inside a consumer that imported neither. A cloned body keeps its
+  source's file_id, so it passes BY POSITION, exactly as the field gate does — no
+  instantiation context to thread, which is why the field rule's comment ("cloned template
+  bodies keep their source file_id") was the load-bearing observation for this whole
+  landing. access_file -1 (no file) sees nothing private: a missed set fails LOUDLY.
+  FOUR GATES, because a name arrives four ways — and this is the part a names-only fix
+  would have got wrong:
+    * plain lookup — findMemberLive, resolveNameDetail's lexical walk.
+    * TYPE names — requireKnownType plus the kTmplUse arm. A private class is a perfectly
+      KNOWN type (tree.classes holds its layout), so neither resolveName nor isKnownType
+      can reject the spelling; the rule has to be asked directly.
+    * OVERLOAD CANDIDATES — classifyCall's plain gathering. The leak WAS an overload leak:
+      resolve's anchor is the PUBLIC declaration and classify re-gathers the whole set
+      from scratch, so filtering lookup alone would have left the headline bug open.
+  REGISTRATION IS NOT GATED. A private declaration still exists, is still checked, still
+  collides; it is only unnameable from outside. reportPrivateImport says PRIVATE ("'X' is
+  private to the template source that imported it", note careting the declaration with the
+  import-it-directly remedy) rather than "unknown name", and bails when ANY declaration of
+  the name is visible so an ordinary scope miss keeps its own message.
+  CANON (test/import). tmpl_lib2.slh declares `pick(int8)` -> 3, a THIRD overload of
+  library.slh's `pick` (int -> 1, int64 -> 2), defined in tmpl_lib2.sl and linked into
+  every binary in the directory — so nothing at LINK time stops the leak, only the rule
+  does. consumer.sl imports tmpl_lib2 BY NAME and prints 3; tmpl_test.sl reaches the same
+  header only through tmpl_lib.sl and prints 1. Same program, same linked symbol, two
+  answers, decided by who did the importing. Measured in the IR: tmpl_test.ll DECLARES
+  @_Z4picku4int8 and still calls @_Z4picku3int. Plus a negative on naming Wrap2. Both
+  verified load-bearing by neutering declVisibleAt — the row flips 1 -> 3 and the negative
+  compiles clean. The pin had to be a NUMBER, not only a negative: a leaked overload
+  compiles, links, runs, and answers silently.
+  OPEN. declaredMemberOverloads is NOT gated — a private header RE-OPENING a public class
+  to add a method would still leak that method; bounded otherwise by class visibility,
+  which the type gate covers. A leaked declaration still emits an unused `declare` in the
+  consumer's IR (harmless, measured). STICKY PUBLIC has no test: every candidate import
+  list in test/import is cross-TU coupled, and REORDERING A TU'S IMPORTS CHANGES def_id
+  NUMBERING so two TUs stop agreeing — measured as `Vegetable.4` plus three undefined
+  references after moving consumer.sl's `import string;` below `import library;`. Pinning
+  it needs a module pair whose imports are not order-coupled to another TU.
+  Detail: readme.txt THE VISIBILITY RULE (under TEMPLATES) + the lex / resolve / classify /
+  parse stage entries; readme-classes.txt SOURCE-PRIVATE field slot rule.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

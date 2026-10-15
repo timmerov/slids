@@ -1501,6 +1501,68 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   cap (an all-private completion rejects "0 field(s)", byte-symmetric with
   a plain opaque class's starvation). Canon test/import Part/PDer/Sack.
 
+  THE VISIBILITY RULE (canon 2026-10-14) — the NAME half of the sentence
+  above, and the close of the IMPORT LEAK. Everything a header declares is
+  public; everything its template source SUPPLIES — INCLUDING the
+  declarations its own `import` lines pull in — is private to that source
+  and to its zone. The leak: importing `<m>.slh` side-loads `<m>.sl`, whose
+  own imports were processed into the same token stream and the same
+  imported_once set, so a consumer silently inherited every header its
+  libraries imported. Old and benign while the leaked headers were ones
+  consumers imported anyway; the first leaked header to ADD AN OVERLOAD to
+  an existing name turned one candidate into seven.
+  It cannot be fixed by NOT loading the source — a header template's layout
+  lives there (see SO THE MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE
+  SOURCE in readme-classes). The names must be SCOPED instead.
+  Provenance is one lex-computed int per file (token::File::private_owner,
+  carried to Tree::file_private_owner by grammar) and one predicate,
+  parse::declVisibleAt(decl_file, access_file): visible iff the declaring
+  file has no owner, or its owner IS the access file, or both files sit in
+  the SAME zone (which also covers decl_file == access_file, and lets a
+  privately imported module's own `.sl` see its own `.slh`).
+  The USE SITE is Tree::access_file, maintained by resolve's AccessFileScope
+  at every entry point that takes a node or a file_id (resolveDeclType,
+  resolveExpr, resolveUserCall, resolveStoreTarget, resolveFunctionBody,
+  resolveScopeBodies/Types, the enum/alias/typeset arms, snapshotTemplate)
+  plus every program-children loop in run(), and SAVED INTO THE TEMPLATE
+  SNAPSHOT — a library template's body keeps its OWN file's visibility
+  wherever it is instantiated, which is what lets vector.sl's bodies go on
+  using `dump` and `String` inside a consumer that imported neither. A
+  CLONED body keeps its source's file_id, so it passes BY POSITION exactly
+  as the field gate does. -1 (no file) sees nothing private: a missed set
+  fails loudly, never silently.
+  FOUR gates, because a name arrives four ways: findMemberLive and
+  resolveNameDetail's lexical walk (plain names); requireKnownType and the
+  kTmplUse arm (TYPE names — a private class is a perfectly KNOWN type, so
+  tree.classes answers yes and the name filter alone cannot reject the
+  spelling); and classifyCall's candidate gathering (the leak WAS an
+  overload leak — resolve's anchor is the public declaration and classify
+  re-gathers the whole set from scratch). REGISTRATION is not gated: a
+  private declaration still exists, is still checked, still collides; it is
+  only unnameable from outside. reportPrivateImport says PRIVATE ("'X' is
+  private to the template source that imported it", note careting the
+  declaration with the import-it-directly remedy) — never "unknown name" —
+  and bails when ANY declaration of the name is visible, so an ordinary
+  scope miss keeps its own message.
+  NOT gated (open): declaredMemberOverloads — a private header RE-OPENING a
+  public class to add a method would still leak that method. Bounded
+  otherwise by class visibility, which the type gate covers.
+  Canon test/import: tmpl_lib2.slh declares `pick(int8)` -> 3, a third
+  overload of library.slh's `pick` (int -> 1, int64 -> 2), defined in
+  tmpl_lib2.sl and LINKED INTO EVERY BINARY HERE — so nothing at link time
+  stops the leak; only the rule does. consumer.sl imports tmpl_lib2 BY NAME
+  and prints 3; tmpl_test.sl reaches the same header only through
+  tmpl_lib.sl and prints 1. Measured: tmpl_test.ll DECLARES
+  @_Z4picku4int8 and still calls @_Z4picku3int. Plus a negative on naming
+  Wrap2. Both verified load-bearing by neutering the predicate (1 -> 3; the
+  negative compiles clean).
+  STICKY PUBLIC has no test. Every candidate import list in test/import is
+  cross-TU coupled, and REORDERING A TU'S IMPORTS CHANGES def_id NUMBERING
+  so two TUs stop agreeing — measured as `Vegetable.4` plus three undefined
+  references after moving consumer.sl's `import string;` below `import
+  library;`. Pinning it needs a module pair whose imports are not order-
+  coupled to another TU.
+
   THE .SLI POOL (human-readable, slids-shaped — the block statements are the
   reference's explicit-instantiation spelling, so the format can graduate
   into the language unchanged). Each consumer compile writes `<out>.sli`
@@ -1799,6 +1861,20 @@ STAGE FILES (.h / .cpp pairs)
             and run() takes driver-injected extra imports (--instantiate's
             provenance headers), appended after the root's tokens — see
             TEMPLATES, cross-TU.
+            Computes THE PRIVACY OWNER per file (File::private_owner), the
+            one piece of provenance THE VISIBILITY RULE runs on: the
+            side-loaded template source a file was first reached THROUGH,
+            or -1 on a chain of headers alone. The owner threads down
+            every recursion; loadTemplateSource OPENS a zone (the source
+            owns itself, or inherits an outer owner, so a template source
+            that is itself a consumer shares one zone with the outer one).
+            STICKY PUBLIC: imported_once dedups by PATH and imported_by is
+            one int, so provenance is FIRST-COME — `import vector; import
+            string;` would otherwise leave String owned by vector.sl. Each
+            dedup early-return on a PUBLIC chain therefore calls
+            publicize(), which clears the owner over the whole imported_by
+            subtree. Load-bearing, not a nicety: without it the stdlib
+            stops resolving. See THE VISIBILITY RULE under TEMPLATES.
             Tracks bracket-kind balance ( { [ only.
             Emits kEndOfFile per file, kEndOfInput once at the outermost
             return. Numeric literals: strips underscores, emits source-form
@@ -2025,7 +2101,15 @@ STAGE FILES (.h / .cpp pairs)
             it (widen::isKnownType) — so downstream stages see only underlying
             types and aliases never reach the ast. requireKnownType also rejects
             `void` with an iterator/array suffix (`void[]`, `void[N]`): void has
-            no stride, so a void pointer must be a reference (`void^`). A
+            no stride, so a void pointer must be a reference (`void^`), and
+            — THE VISIBILITY RULE — a class whose declaring file is private
+            HERE, which neither resolveName nor isKnownType can reject (the
+            layout is in tree.classes either way). Every name lookup runs
+            through entryVisible against Tree::access_file, which an
+            AccessFileScope maintains at each node-taking entry point and
+            which the template snapshot carries, so a cloned library body
+            keeps its own file's visibility inside a consumer's TU;
+            reportPrivateImport then says PRIVATE rather than "unknown". A
             kCastExpr's target type runs through the same resolveDeclType, so a
             cast inherits alias substitution and the void/unknown-type checks; a
             kConvertExpr's target rides the same path (operand resolved as a read,
@@ -2480,7 +2564,12 @@ STAGE FILES (.h / .cpp pairs)
             it, and at compound assign. It is a RETRY, not a rung in argConvertCost:
             it runs only after ranking found nothing viable, so it can never move a
             call that resolves today onto a different overload. See plan.txt
-            "ONE-LEVEL OPERAND COERCION". Reads resolved_entry_id + entry
+            "ONE-LEVEL OPERAND COERCION". classifyCall's plain-candidate
+            gathering also applies THE VISIBILITY RULE (declVisibleAt against
+            the call node's file): resolve's anchor is the PUBLIC declaration,
+            and the set is re-gathered here from scratch, so filtering plain
+            lookup alone would not have closed the overload leak. Reads
+            resolved_entry_id + entry
             data stamped by resolve; never builds entries or pushes frames
             itself, with ONE deliberate symbol-table exception: the inferred-init
             write-back (below). Infers every expression's inferred_type and every
@@ -3146,8 +3235,10 @@ PRODUCT FILES (.h / .cpp pairs)
 
   token     Token { kind, text, file_id, line, col, length }. List owns the
             token vector AND a per-file registry { path, source, line_starts,
-            imported_by }. APIs: add(), openFile(). Deque-backed file table
-            so Stream pointers stay stable across imports.
+            imported_by, template_source, private_owner }. APIs: add(),
+            openFile(). Deque-backed file table so Stream pointers stay
+            stable across imports. private_owner is THE VISIBILITY RULE's
+            whole provenance — see lex, and the rule under TEMPLATES.
   parse     parse-tree node types + tree storage + build/walk/annotate APIs.
             Nodes carry: nominal_type (literals, populated by constfold),
             inferred_type + op_type (expressions, populated by classify),
@@ -3161,7 +3252,10 @@ PRODUCT FILES (.h / .cpp pairs)
             strings driving each arg's emit dest_type). Owns the symbol table:
             Entry vector + frame stack + pushFrame / popFrame / addEntry /
             findInFrame / entryType APIs that resolve
-            calls. Function entries carry param_types alongside their
+            calls. Also owns declVisibleAt — THE VISIBILITY RULE as one
+            predicate over file_private_owner, shared by resolve's name
+            lookups and classify's overload gathering (its FIELD sibling,
+            classify's fieldVisibleAt, keys on the same use-site file). Function entries carry param_types alongside their
             return type, plus num_required (optional-param boundary) and a
             def_tok/def_file_id pair (the first DEFINITION's position,
             distinct from tok = the first DECLARATION) so "first defined

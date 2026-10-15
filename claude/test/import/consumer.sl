@@ -161,6 +161,16 @@ int32 main() {
     int p1 = pick(5);           println(String + "pick.int: " + p1);
     int64 big = 100;
     int p2 = pick(big);         println(String + "pick.i64: " + p2);
+    /* THE VISIBILITY RULE, the public half of tmpl_test.sl's overload pin. This
+       TU imports tmpl_lib2 BY NAME, so its pick(int8) is public here and the
+       exact match wins: 3, where tmpl_test.sl — which reaches the same header
+       only through tmpl_lib.sl — must print 1. Same program, same linked
+       symbol, two answers, decided by who did the importing. */
+    int8 sm8 = 5;
+    int p3 = pick(sm8);         println(String + "pick.i8: " + p3);
+    /* and the name half: Wrap2 is nameable here for the same reason. */
+    Wrap2<int> w2(21);
+    int w2d = w2.dub();         println(String + "wrap2.dub: " + w2d);
     (int, int) pr = (7, 8);
     int ps = pairsum(^pr);      println(String + "pairsum: " + ps);
 

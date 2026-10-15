@@ -36,6 +36,7 @@ pl = true
 pk = 4
 po = 4
 tb = 105
+zpick = 1
 mq = 7
 nn = 3
 pv = 1 2 41 2

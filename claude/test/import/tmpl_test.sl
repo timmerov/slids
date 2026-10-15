@@ -200,6 +200,26 @@ int32 main() {
     int po = tpock(3, 4); println(String + "po = " + po);
     int tb = tbias(5); println(String + "tb = " + tb);
 
+    /* THE VISIBILITY RULE, the overload half. This TU imports `library` (which
+       declares pick(int) -> 1 and pick(int64) -> 2) and `tmpl_lib`, whose
+       SOURCE imports tmpl_lib2 — so tmpl_lib2.slh's pick(int8) -> 3 is in this
+       TU's token stream, registered, and its symbol is in tmpl_lib2.o, which
+       this binary links. Only the rule keeps it out of the candidate set. An
+       int8 argument is the discriminator: with the leak the exact match wins
+       and this prints 3; with the rule only the public pair is ranked and the
+       int8 widens into pick(int). The leak's whole danger is that it is silent,
+       so the pin has to be a NUMBER. */
+    int8 z8 = 5;
+    int zpick = pick(z8); println(String + "zpick = " + zpick);
+
+    /* THE VISIBILITY RULE, the name half. `Wrap2` is tmpl_lib2.slh's class
+       template, reached here only through tmpl_lib.sl's own import — so it is
+       unnameable in this file even though tmpl_lib.sl:182 instantiates it
+       legitimately and consumer.sl (which imports tmpl_lib2 itself) uses it. */
+    //-EXPECT-ERROR: is private to the template source that imported it
+    //Wrap2<int> zw(21);
+    //println(String + "zw = " + zw.dub());
+
     /* a template body that uses the source's PRIVATE helper can only be
        emitted by the source's own TU — a local-type instance gets the full
        cross-TU chain: use site, local class, template, the body's reference,

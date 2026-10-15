@@ -114,6 +114,66 @@ bool constNeedsStorage(widen::TypeRef t) {
 
 int resolveName(parse::Tree const& tree, std::string const& name);
 
+// THE VISIBILITY RULE at a name lookup: may code in the file resolve is
+// currently walking (tree.access_file) name this entry? Everything a header
+// declares is public; everything a template source supplies — its own imports
+// included — is private to that source's zone. One predicate (parse) over one
+// piece of lex-computed provenance (file_private_owner), consulted by every
+// lookup that answers a NAME rather than registers one. Registration is NOT
+// gated: a private declaration still exists, is still checked, and still
+// collides — it is only unnameable from outside.
+bool entryVisible(parse::Tree const& tree, int id) {
+    if (id < 0) return true;
+    return parse::declVisibleAt(tree, tree.entries[id].file_id, tree.access_file);
+}
+
+// THE ACCESS FILE, scoped. Every resolve entry point that takes a node (or a
+// file_id) opens one of these, so the use site tracks whatever is being walked
+// and restores on the way out — a re-opened class's members in another file, a
+// nested function, and above all a CLONED template body, which keeps its
+// source's file_id and so stays library-side inside a consumer's TU. A node with
+// no file (-1, compiler-synthesized) inherits the enclosing scope's answer
+// rather than resetting to "sees nothing".
+struct AccessFileScope {
+    parse::Tree& tree;
+    int saved;
+    AccessFileScope(parse::Tree& t, int file_id)
+        : tree(t), saved(t.access_file) {
+        if (file_id >= 0) tree.access_file = file_id;
+    }
+    ~AccessFileScope() { tree.access_file = saved; }
+    AccessFileScope(AccessFileScope const&) = delete;
+    AccessFileScope& operator=(AccessFileScope const&) = delete;
+};
+
+// THE VISIBILITY RULE, reported. A name that EXISTS but is private — its
+// declaring file was reached only through a template source, so everything it
+// declares is that source's own business — gets said so, instead of letting the
+// generic unknown-name error claim the name does not exist at all. The note
+// carets the declaration, which renders the file the use site should import.
+// Bails when ANY declaration of the name is visible here: then the failure is
+// an ordinary scope/signature miss and the caller's own message is the right
+// one. True = handled; the caller emits nothing.
+bool reportPrivateImport(parse::Tree const& tree, std::string const& name,
+                         int use_file, int use_tok, diagnostic::Sink& diag) {
+    if (name.empty()) return false;
+    for (parse::Entry const& e : tree.entries) {
+        if (e.name != name) continue;
+        if (parse::declVisibleAt(tree, e.file_id, tree.access_file)) return false;
+    }
+    for (parse::Entry const& e : tree.entries) {
+        if (e.name != name || e.file_id < 0) continue;
+        diagnostic::report(diag, {use_file, use_tok,
+            "'" + name + "' is private to the template source that imported it: "
+            "this file reached the declaration only through another module's "
+            "'.sl', which makes it that module's own.",
+            {{e.file_id, e.tok, "'" + name + "' is declared here; import this "
+                                "module directly to make it public"}}});
+        return true;
+    }
+    return false;
+}
+
 // Is `name` a namespace/class member that is a TYPE (a hoisted class, a member
 // alias, or an enum facet) — so qualifying it would actually yield a type? Used to
 // hint "needs a qualifier" ONLY when the qualifier helps (not for a member const /
@@ -192,6 +252,25 @@ void requireKnownType(parse::Tree const& tree, widen::TypeRef t,
                 "cannot be an iterator or array.", {}});
             return;
         }
+    }
+    // THE VISIBILITY RULE for a TYPE name. A class reached only through a
+    // template source is a perfectly KNOWN type — tree.classes has its layout —
+    // so neither isKnownType below nor resolveName above can reject the
+    // spelling. Ask the rule directly, before the type is admitted.
+    {
+        using F = widen::Type::Form;
+        widen::TypeRef leaf = t;
+        for (;;) {
+            widen::Type const& ty = widen::get(leaf);
+            if (ty.form == F::kAlias || ty.form == F::kConst) { leaf = ty.underlying; continue; }
+            if (ty.form == F::kPointer || ty.form == F::kIterator) { leaf = ty.pointee; continue; }
+            if (ty.form == F::kArray) { leaf = ty.elem; continue; }
+            break;
+        }
+        widen::Type const& lt = widen::get(leaf);
+        if (lt.form == F::kSlid && lt.def_id != widen::kTmplParamDefId
+            && reportPrivateImport(tree, lt.name, file_id, tok, diag))
+            return;
     }
     if (widen::isKnownType(t) || leafIsKnownClass(tree, t)) return;
     // If the leaf name resolves to a non-type entry (a namespace, function,
@@ -366,6 +445,10 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
             if (id < 0) {
                 if (!reported) {
                     reported = true;
+                    // THE VISIBILITY RULE: a template reached only through
+                    // someone else's template source is private, not missing.
+                    if (reportPrivateImport(tree, name, file_id, tok, diag))
+                        return t;
                     diagnostic::report(diag, {file_id, tok,
                         "Unknown type '" + name + "'.", {}});
                 }
@@ -641,6 +724,7 @@ widen::TypeRef materializeDeepConst(widen::TypeRef t) {
 void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
                      int file_id, int tok, diagnostic::Sink& diag,
                      std::vector<int> const* seg_toks = nullptr) {
+    AccessFileScope afs(tree, file_id);   // the visibility rule's use site
     std::set<std::string> visiting;
     bool reported = false;
     type_ref = resolveTypeRef(tree, type_ref, visiting, reported,
@@ -880,6 +964,7 @@ void resolveSetTermsInto(parse::Tree& tree, parse::TypeSetDecl const& decl,
 
 void resolveTypeSetTerms(parse::Tree& tree, parse::Node& s,
                          diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, s.file_id);
     int id = s.resolved_entry_id;
     if (id < 0 || !s.type_set) return;
     parse::TypeSet ts;
@@ -1056,6 +1141,7 @@ int resolveNameDetail(parse::Tree const& tree, std::string const& name,
          it != tree.live_entry_ids.rend(); ++it) {
         parse::Entry const& e = tree.entries[*it];
         if (e.name != name || e.owner_ns_frame >= 0) continue;
+        if (!entryVisible(tree, *it)) continue;   // the visibility rule
         if (member_is_class && e.parent_frame_id == kGlobalFrame) continue;
         return *it;
     }
@@ -1122,6 +1208,7 @@ int findMemberLive(parse::Tree const& tree, int ns_frame,
     for (int id : tree.live_entry_ids) {
         parse::Entry const& e = tree.entries[id];
         if (e.name != name) continue;
+        if (!entryVisible(tree, id)) continue;   // the visibility rule
         if (ns_frame == kGlobalFrame) {
             if (e.parent_frame_id == kGlobalFrame && e.owner_ns_frame < 0) return id;
         } else if (e.owner_ns_frame == ns_frame) {
@@ -1866,6 +1953,7 @@ bool isComparisonOp(std::string const& op) {
 // default naming an entity (`= kQuiet`) asserts there.
 void resolveSignatureConstExprs(parse::Tree& tree, parse::Node& fn,
                                 diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, fn.file_id);
     for (auto& p : fn.params) {
         if (p && !p->children.empty() && p->children[0]) {
             EnumContext ectx(tree, enumFrameForType(tree, p->return_type));   // `= kC`
@@ -1896,6 +1984,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
                ? tree.entries[node.resolved_entry_id].ns_frame_id : -1)
         : node.resolved_entry_id;
     if (frame < 0) return;   // a duplicate / unregistered scope — no members to resolve
+    AccessFileScope afs(tree, node.file_id);
     int base_pushed = pushBaseChain(tree, node);
     tree.open_ns_frames.push_back(frame);
     std::string saved_base = tree.current_base_name;
@@ -1987,6 +2076,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
 // self-contained, resolved at NAME.)
 void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
                        diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, node.file_id);
     int frame = isClass
         ? (node.resolved_entry_id >= 0
                ? tree.entries[node.resolved_entry_id].ns_frame_id : -1)
@@ -2070,6 +2160,7 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
 // `alias Ns;` / `alias A:B;` — import a namespace's members into the current
 // scope (push its frame onto the open chain for the rest of this lexical scope).
 void resolveBareAlias(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, s.file_id);
     // The whole path (qualifier + name) names a namespace here.
     std::vector<std::string> segs = s.qualifier;
     segs.push_back(s.name);
@@ -2234,6 +2325,7 @@ void registerEnumMembers(parse::Tree& tree, parse::Node& node, int ns_frame,
 // bare in the enclosing frame.
 void resolveEnumMemberInits(parse::Tree& tree, parse::Node& node,
                             diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, node.file_id);
     bool named = !node.name.empty() && node.resolved_entry_id >= 0;
     if (named) tree.open_ns_frames.push_back(node.resolved_entry_id);
     for (auto& m : node.children) {
@@ -2570,6 +2662,7 @@ bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
 
 void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                  bool unevaluated) {
+    AccessFileScope afs(tree, e.file_id);   // the visibility rule's use site
     // Const-expression array dims in a TYPE operand (`sizeof(int[N])`, `<int[N]^>`,
     // `(int[N]=e)`): resolve each so its const refs / sizeof resolve; constfold
     // folds + bakes the size (provisional `[1]` until then).
@@ -2607,6 +2700,8 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                                                   e.tok, "references", diag)) {
                         return;
                     }
+                    if (reportPrivateImport(tree, e.name, e.file_id, e.tok, diag))
+                        return;
                     if (namespaceMemberExists(tree, e.name)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
                             "'" + e.name + "' needs a namespace qualifier.", {}});
@@ -2840,7 +2935,9 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 ? resolveQualifiedRef(tree, *base, diag)
                 : resolveName(tree, base->name);
             if (id < 0) {
-                if (!isQualified(*base)) {
+                if (!isQualified(*base)
+                    && !reportPrivateImport(tree, base->name, base->file_id,
+                                            base->tok, diag)) {
                     diagnostic::report(diag, {base->file_id, base->tok,
                         "Unresolved identifier '" + base->name + "'.", {}});
                 }
@@ -3175,6 +3272,8 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                                           "calls", diag)) {
                 return false;
             }
+            if (reportPrivateImport(tree, s.name, s.file_id, s.tok, diag))
+                return false;
             if (namespaceMemberExists(tree, s.name)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "'" + s.name + "' needs a namespace qualifier.", {}});
@@ -3242,6 +3341,7 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
 // check arity against the entry's param list, and cache return + param types
 // for downstream stages. Then recurse into the argument expressions.
 void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, s.file_id);
     // A bare `Name;` STATEMENT (parenless, unqualified) that resolves to a VALUE
     // (variable / param / const) is a discarded READ — it "uses" the name (so the
     // unused-local sweep stays quiet) and evaluates to nothing. Rewrite it to a
@@ -4217,6 +4317,7 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
 // to store through it).
 void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
                         diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, lv.file_id);
     if (lv.kind == parse::Kind::kIndexExpr) {
         if (lv.children[1]) resolveExpr(tree, *lv.children[1], diag);
         resolveStoreTarget(tree, *lv.children[0], diag);
@@ -5958,6 +6059,7 @@ void snapshotTemplate(parse::Tree& tree, parse::Node& node,
                       diagnostic::Sink& diag) {
     auto it = tree.templates.find(node.resolved_entry_id);
     if (it == tree.templates.end()) return;   // registration failed (collision)
+    AccessFileScope afs(tree, node.file_id);
     parse::TemplateInfo& ti = it->second;
     resolveSpecConstraint(tree, node, diag);
     ti.frame_id_stack = tree.frame_id_stack;
@@ -5968,6 +6070,9 @@ void snapshotTemplate(parse::Tree& tree, parse::Node& node,
     ti.assigned_arrays = tree.assigned_arrays;
     ti.current_class_name = tree.current_class_name;   // a METHOD template's body
     ti.current_base_name = tree.current_base_name;     //   resolves as a member's
+    ti.access_file = tree.access_file;   // THE VISIBILITY RULE: the template's OWN
+                                         //   file decides what its body may name,
+                                         //   never the instantiator's
     ti.tmpl_self_stack = tree.tmpl_self_stack;   // a pattern inside a class-template
                                                  //   instantiation keeps its flavor's
                                                  //   bare-name redirect
@@ -6255,6 +6360,7 @@ void collectMethodFields(parse::Tree& tree, widen::TypeRef cls,
 
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
                          diagnostic::Sink& diag, bool nested) {
+    AccessFileScope afs(tree, fn.file_id);   // the visibility rule's use site
     if (!nested) tree.nested_call_checks.clear();   // per top-level function body
     // Signature const-exprs (defaults, dims) — before the body frame is pushed
     // (see resolveSignatureConstExprs; constfold then folds them and classify
@@ -9217,6 +9323,7 @@ struct SavedResolveState {
     std::set<int> init, arrays;
     std::vector<parse::Tree::NestedCallCheck> checks;
     std::string cls, base;
+    int access_file = -1;
 };
 static SavedResolveState saveResolveState(parse::Tree& tree) {
     SavedResolveState s;
@@ -9229,6 +9336,7 @@ static SavedResolveState saveResolveState(parse::Tree& tree) {
     s.checks = std::move(tree.nested_call_checks);
     s.cls    = std::move(tree.current_class_name);
     s.base   = std::move(tree.current_base_name);
+    s.access_file = tree.access_file;
     return s;
 }
 static void installSnapshot(parse::Tree& tree, parse::TemplateInfo const& ti) {
@@ -9240,6 +9348,7 @@ static void installSnapshot(parse::Tree& tree, parse::TemplateInfo const& ti) {
     tree.assigned_arrays = ti.assigned_arrays;
     tree.current_class_name = ti.current_class_name;
     tree.current_base_name = ti.current_base_name;
+    tree.access_file = ti.access_file;
     tree.nested_call_checks.clear();
 }
 static void restoreResolveState(parse::Tree& tree, SavedResolveState& s) {
@@ -9252,6 +9361,7 @@ static void restoreResolveState(parse::Tree& tree, SavedResolveState& s) {
     tree.nested_call_checks = std::move(s.checks);
     tree.current_class_name = std::move(s.cls);
     tree.current_base_name = std::move(s.base);
+    tree.access_file = s.access_file;
 }
 
 // The first type argument whose class is declared in THIS TU's own source
@@ -9724,6 +9834,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // `alias Time = Space;`). Bare `alias Ns;` (no target) is a namespace import,
     // handled at use scope. A qualified alias was relocated above.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (!ch || ch->kind != parse::Kind::kAliasDecl) continue;
         if (ch->type_set) {
             // A TYPE SET registers its entry now; its terms may name classes
@@ -9739,6 +9851,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // consts, or bare consts for anonymous) before namespaces / bare aliases so
     // a later `alias EnumName;` import and qualified `Enum:member` both resolve.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch && ch->kind == parse::Kind::kEnumDecl) {
             registerEnum(tree, *ch, kGlobalFrame, diag);
         }
@@ -9755,6 +9869,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // may not add a NEW virtual method) run on them too.
     std::vector<parse::Node*> reopen_classes;
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (!ch) continue;
         if (ch->kind == parse::Kind::kNamespaceDecl) {
             int ns = openNamespace(tree, ch->name, ch->name_tok, ch->file_id,
@@ -9787,6 +9903,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // regardless of pass order (the forward-ref bugs). File-scope function entries
     // resolve in their own pass below (already after classes).
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch && ch->kind == parse::Kind::kClassDef)
             resolveScopeTypes(tree, *ch, /*isClass=*/true, diag);
         else if (ch && ch->kind == parse::Kind::kNamespaceDecl)
@@ -9811,6 +9929,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // TEMPLATE builds (and thereby checks) its PATTERN instead — the node's
     // own target stays pristine.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (!ch || ch->kind != parse::Kind::kAliasDecl) continue;
         if (ch->type_set) {
             // A TYPE SET's terms resolve here — classes exist now. (Membership
@@ -9861,6 +9981,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // expressions. This lets globals reference each other regardless of
     // declaration order (forward-decl semantics).
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (!ch) continue;
         if (ch->kind == parse::Kind::kFunctionDef
          || ch->kind == parse::Kind::kFunctionDecl) {
@@ -10044,6 +10166,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // scope = the whole file), so all const inits and function bodies below see
     // its members unqualified.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch && ch->kind == parse::Kind::kAliasDecl
             && ch->return_type == widen::kNoType && !ch->type_set) {
             resolveBareAlias(tree, *ch, diag);
@@ -10054,6 +10178,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // every program-scope entry is registered, so a member init can reference a
     // file-scope const (registration happened early in Pass 1a-enum).
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch && ch->kind == parse::Kind::kEnumDecl) {
             resolveEnumMemberInits(tree, *ch, diag);
         }
@@ -10093,6 +10219,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // ident references. By now every program-scope entry is in the table,
     // so forward refs between globals resolve cleanly.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (!ch || ch->kind != parse::Kind::kVarDeclStmt
             || !(ch->is_const || ch->is_global)) continue;
         if (isQualified(*ch)) continue;   // inline member init resolved above
@@ -10105,6 +10233,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // alias TARGET (`alias V = int[N]`) now every program-scope const exists.
     // constfold folds + bakes it and refreshes the alias's eager uses.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch && ch->kind == parse::Kind::kAliasDecl) {
             for (auto& d : ch->dim_exprs) {
                 if (d) resolveExpr(tree, *d, diag);
@@ -10120,6 +10250,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // this is where its scope snapshot is taken (every file-scope entry is registered
     // by now, so the snapshot has the same forward-ref visibility a real body would).
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (!ch) continue;
         // A header's BODYLESS template declaration still snapshots (a consumer
         // instantiates a declaration-only instance from it — the signature
@@ -10144,6 +10276,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // scope itself, access before/after it (and a second `global;`) is an error; if it
     // does not, the scope is auto-inserted over all of main, so everything is active.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch && ch->kind == parse::Kind::kFunctionDef && ch->name == "main") {
             // Check main's CHILDREN for an explicit `global;` (main itself is a
             // kFunctionDef, which subtreeOpensGlobalScope treats as a scope boundary).
@@ -10163,6 +10297,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // former 1b member-init / field-default passes: order within the body phase is
     // free.
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch && ch->kind == parse::Kind::kClassDef) {
             if (!ch->type_params.empty()) continue;   // a pattern has no body phase
             resolveScopeBodies(tree, *ch, /*isClass=*/true, diag);
@@ -10263,6 +10399,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // mungeParamTypes — non-primitive params must be pointers or arrays; a tuple /
     // class VALUE param is rejected (param types are now resolved).
     for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
         if (ch) mungeParamTypes(tree, *ch, diag);
     }
 

@@ -760,6 +760,11 @@ struct TemplateInfo {
     // captured with the scope snapshot, installed at instantiation.
     std::string current_class_name;
     std::string current_base_name;
+    // THE ACCESS FILE at the snapshot point — the template's own file. A body
+    // instantiated from a consumer must keep its DECLARING file's visibility, or
+    // a library template that legitimately uses a privately imported name would
+    // stop resolving the moment someone else instantiated it.
+    int access_file = -1;
     // ALIAS templates (`alias Ref<T> = T^;`) ride this same table (keyed by their
     // kAlias entry): only `def` and this flag are used — a type expansion needs no
     // snapshot or instance list. True once the TARGET has been resolved into the
@@ -928,6 +933,21 @@ struct Tree {
     // as library-side (synthesized members carry the class def's header position).
     std::vector<int> file_imported_by;
 
+    // THE VISIBILITY RULE. Indexed by file_id: the PRIVACY OWNER
+    // (token::File::private_owner) — the side-loaded template source this file
+    // was first reached through, or -1 when a chain of headers alone reached it.
+    // Everything a header declares is public; everything a template source
+    // supplies — its own `import` lines included — is private to that source's
+    // zone. Consumed by declVisibleAt.
+    std::vector<int> file_private_owner;
+
+    // THE ACCESS FILE: the file whose code resolve is currently resolving, as
+    // the visibility rule's use site. Set from the node being walked, so a
+    // CLONED template body — which keeps its source's file_id — is judged
+    // library-side wherever it is instantiated. -1 (no file) sees nothing
+    // private, which is the safe direction: a missed set fails loudly.
+    int access_file = -1;
+
     // Class layouts keyed by the class's interned kSlid handle (which is unique
     // per definition via def_id — see ClassInfo). Populated by resolve's class
     // pre-pass; read by classify + desugar.
@@ -1068,6 +1088,17 @@ bool userParamsEqual(std::vector<widen::TypeRef> const& a,
 // (-1 for none); -1 if no match. The overload-aware sibling of findMemberDeclared.
 int  findMethodInFrame(Tree const& t, int ns_frame, std::string const& name,
                        std::vector<widen::TypeRef> const& params, int exclude);
+// THE VISIBILITY RULE, one predicate. Everything a header (`.slh`) declares is
+// public; everything its template source (`.sl`) SUPPLIES — including the
+// declarations its own `import` lines pull in — is private to that source and to
+// the files in its privacy zone (file_private_owner). True if a declaration
+// positioned in `decl_file` may be NAMED by code positioned in `access_file`.
+//
+// This gates NAMES. The sibling rule for a header class's FIELDS — public
+// layout, private field names — is fieldVisibleAt in classify, keyed on the same
+// use-site file for the same reason: a cloned template body keeps its source's
+// file_id, so it passes the test from inside a consumer TU.
+bool declVisibleAt(Tree const& t, int decl_file, int access_file);
 // True if `info` declares a field named `name`. The synthetic base slot `_$base`
 // is included, but a user field name never collides with it (the `_$` prefix is
 // reserved), so callers checking a user name need no special-case.

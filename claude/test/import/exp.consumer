@@ -5,6 +5,8 @@ add1: 10
 add2: 30
 pick.int: 1
 pick.i64: 2
+pick.i8: 3
+wrap2.dub: 42
 pairsum: 15
 probe.ref: 1
 probe.iter: 2

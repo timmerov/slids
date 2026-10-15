@@ -10,6 +10,19 @@ remove landed items from todo.txt. update stale entries.
 one of claude's current favorite fuck-ups is to use default move
 @Class_$move/copy/swap instead of calling the class's operator.
 
+this was after landing the import leak:
+
+  Import order is not free to edit. My first sticky-public pin reordered consumer.sl's imports — that changed class
+  def_id numbering and the two TUs stopped agreeing (Vegetable.4, three undefined references). Reverted. It also
+  means sticky public has no test: every candidate import list in test/import is cross-TU coupled, so pinning it
+  needs a new module pair — your move.
+
+  declaredMemberOverloads is not gated. A private header re-opening a public class to add a method would still leak
+  that method. Otherwise method visibility is bounded by class visibility, which the type gate covers. I left it
+  alone rather than thread an access file through its six call sites on speculation.
+
+  A leaked declaration still emits an unused declare in the consumer's IR. Harmless, but it is there.
+
 these need to move to optimizations.
 operations may be reduced:
 for examples:

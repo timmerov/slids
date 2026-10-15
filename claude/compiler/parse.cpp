@@ -37,6 +37,21 @@ int addEntry(Tree& t, Entry e) {
     return id;
 }
 
+bool declVisibleAt(Tree const& t, int decl_file, int access_file) {
+    int n = (int)t.file_private_owner.size();
+    // A compiler-synthesized declaration carries no file (-1); never gated.
+    if (decl_file < 0 || decl_file >= n) return true;
+    int owner = t.file_private_owner[decl_file];
+    if (owner < 0) return true;              // reached on a public chain
+    if (owner == access_file) return true;   // the owning template source itself
+    // Everything in one zone sees everything else in it — which also covers
+    // `decl_file == access_file`, and lets a privately imported module's own
+    // `.sl` see its own `.slh` (both carry the outer source's owner).
+    if (access_file >= 0 && access_file < n
+        && t.file_private_owner[access_file] == owner) return true;
+    return false;
+}
+
 int findInFrame(Tree const& t, int frame_id, std::string const& name) {
     for (int idx : t.live_entry_ids) {
         Entry const& e = t.entries[idx];

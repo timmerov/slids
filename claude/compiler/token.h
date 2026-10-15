@@ -99,6 +99,20 @@ struct File {
     // bodies a LOCAL-type instance needs. Everything else is stripped by
     // resolve before registration.
     bool template_source = false;
+    // THE PRIVACY OWNER: the file_id of the side-loaded TEMPLATE SOURCE this
+    // file was first reached THROUGH, or -1 when it was reached on a chain of
+    // headers alone (the root's own imports, and their headers' imports).
+    // Everything a header declares is public; everything a template source
+    // SUPPLIES — including the declarations its own `import` lines pull in — is
+    // private to that source and to the files in its zone. A file keeps the
+    // owner of the nearest enclosing template source, so a whole privately
+    // reached subtree shares one owner and stays mutually visible (a library's
+    // `.sl` bodies still see the headers it imported for itself).
+    // STICKY PUBLIC: an `import` that reaches an already-open file on a PUBLIC
+    // chain clears the owner, for that file and its subtree — provenance is
+    // first-come (imported_once dedups), so `import vector; import string;`
+    // must not leave String owned by vector.sl.
+    int private_owner = -1;
 };
 
 struct List {
