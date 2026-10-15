@@ -1522,6 +1522,47 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   tool; a MIXED-ROLE TU (a template source consuming another library) dumps
   its own .sli and chains (tmpl_lib before tmpl_lib2).
 
+  THE SELF-INSTANTIATE STAGE (`--instantiate-self`, LANDED 2026-10-14 —
+  emission only; see plan.txt). An INLINE-LOCAL flavor — one whose type-list
+  names a type PRIVATE to this TU — is the one flavor no library's
+  --instantiate pass can emit, because no other TU can spell its argument.
+  `slidsc <tu>.sl --instantiate-self -o <tu>.ill` reads the TU exactly as the
+  main compile reads it and emits ONLY those flavors; every other definition
+  degrades to a `declare` (or an `external global`), so the module is valid IR
+  alone and llvm-link binds the references to the main module. It writes no
+  .sli — the demand pool is the main compile's output, and an inline-local
+  flavor is excluded from it by construction.
+  THE SET is ast::Node.tu_local_flavor, stamped in desugar from two sources:
+  parse::Entry.tu_local_instance (the function/method side) in copyNode — not
+  only in liftMember, because a FILE-SCOPE free function's instance is a child
+  of the kProgram node and never reaches that lift — and the owner class's
+  widen::Type.tu_local_flavor (the class side), which resolve stamps in
+  instantiateClassTemplate's inline_local arm beside the kInternal linkage.
+  Linkage alone cannot answer: an ordinary `.sl` class is kInternal too.
+  THEY CANNOT BE `internal` IN THAT MODULE. Measured on LLVM 21: an `internal`
+  definition does not satisfy another module's `declare` — llvm-link DROPS it,
+  silently, exit 0, in either link order. So the .ill defines them with
+  EXTERNAL linkage and an `opt -passes=internalize` pass after the merge
+  demotes them, driven by `--api-list <file>`: every symbol the main compile
+  defines externally. internalize is an ALLOW-list — `main` is not preserved
+  automatically and neither are globals — so the list must be complete; an
+  omission is an undefined reference at link, never a silent miscompile. The
+  linkonce_odr `__$global_dtor_head` / `__$global_dtor_all` are on it, or every
+  TU gets its own dtor registry.
+  NO DUPLICATE DIAGNOSTICS, with no code: every slidsc diagnostic is an error
+  and render() runs only on failure, so a clean main compile prints nothing.
+  Order the .ill AFTER the .ll in make and the self stage only ever runs on a
+  TU that already compiled clean — it then reports exactly what it alone can
+  see, a type error inside a flavor body.
+  THE SPIKE is test/import's Makefile: `<stem>.ll` + `<stem>.ill` -> llvm-link
+  -> `<stem>.mll` -> internalize -> `<stem>.oll` -> llc. The .ill is still the
+  EMPTY module, because the main compile also still defines those flavors and
+  wiring the real one would put two definitions of each body in the merge.
+  llvm-link is not transparent, by the way: it drops every UNREFERENCED local
+  and linkonce symbol even with a single input (a bitcode round-trip keeps
+  them), so a merged object has fewer `t`/`W` entries than a direct llc of the
+  same .ll — measured across all 9 TUs, no global definition ever lost.
+
   HARD-WON: tree.entries is a VECTOR — an Entry& held across addEntry DANGLES
   (bindTypeParamMarkers and recursive resolution both addEntry; the pattern write
   went to freed memory: nondeterministic wrong types, then a segfault). Re-index
@@ -2462,8 +2503,19 @@ STAGE FILES (.h / .cpp pairs)
             imported opaque / computed, a link-time / convention value), so it rewrites
             to the `<Name>__$sizeof` CALL SHAPE with the class handle in param_types[0]
             — codegen intercepts it and emits the size as a VALUE (emitSizeValue), not
-            a call (a runtime intptr, NOT foldable — can't init a const). void / an
+            a call (a runtime intptr, NOT foldable — can't init a const). A TUPLE or
+            ARRAY carrying a class routes the SAME way (2026-10-14) under a fixed
+            `$agg__$sizeof` marker — typeByteSize answers -1 for any such aggregate, and
+            while the rewrite accepted only a kSlid, `sizeof` of a class ARRAY was
+            rejected outright even though emitSizeValue could always answer it. The name
+            is only a marker codegen matches on; it never becomes a symbol. void / an
             unregistered slid still reports "Cannot take sizeof of 'X'."
+            SIZEOF IS THE ELEMENT STRIDE (2026-10-14): codegen answers the shape with
+            `emitSizeValue(T, widen::sizeIsDynamic(T))`, so sizeof(T) is the number an
+            array of T strides by and `sizeof(arr) == n * sizeof(arr[0])`. A hand-rolled
+            container allocates `sizeof(T) * n` bytes and indexes through `T[]`, which
+            steps at the stride; the two must be one number or it overruns. Full rule and
+            the Vector<String> bug it fixed: readme-classes.txt OPAQUE CLASSES.
             ##type(x) lowering: a kStringifyType node becomes a kStringLiteral whose
             text is the operand's resolved type — alias_label ?: inferred_type, plus
             the const qualifier (a kIdentExpr operand resolving to a kConst -> "const
@@ -3129,10 +3181,20 @@ PRODUCT FILES (.h / .cpp pairs)
 
 PLUMBING
 
-  main.cpp        Pipeline orchestrator. Parses argv (-o, -I, and the
-                  dependency flags -MF <file> / -M), opens the root via
-                  lex::run, walks the seven stages, prints diagnostics +
-                  exits 1 if any errors, otherwise runs codegen. -M / -MF
+  main.cpp        Pipeline orchestrator. Parses argv (-o, -I, the
+                  dependency flags -MF <file> / -M, --scan-deps <frag.mk>,
+                  --instantiate <dir>, --instantiate-self, --api-list
+                  <file>), opens the root via lex::run, walks the seven
+                  stages, prints diagnostics + exits 1 if any errors,
+                  otherwise runs codegen. The last three carry the
+                  cross-TU template machinery: --instantiate reads the .sli
+                  demand pool addressed to this module, --instantiate-self
+                  emits only this TU's inline-local flavors, and --api-list
+                  writes the internalize allow-list (see THE SELF-
+                  INSTANTIATE STAGE above; both ride codegen::Options).
+                  --scan-deps is lex-only and exits before the pipeline:
+                  dependency generation must not require the program to
+                  compile. -M / -MF
                   emit a make rule for the .ll target and its sources — the
                   root .sl plus every transitively-imported .slh — read
                   straight off tokens.files right after lex (so deps land

@@ -1755,6 +1755,10 @@ Phase 8 — namespaces + cross-TU
       PERSISTENT flag; is_open is cleared by the closing re-open). A `.sl`-local incomplete class
       is never opaque (complete within its TU). Three consequences:
       SIZE: a LINK-TIME VALUE (2026-07-29; originally an external function the importer CALLED).
+      [SUPERSEDED 2026-10-14 — the two symbols below collapsed into ONE pre-rounded
+      `@C__$sizeof`, and kOpaqueAlign is 8, not 16. Reading sizeof off the TRUE size while every
+      index path strode the ROUNDED one was a live buffer overrun; see SIZEOF IS THE ELEMENT
+      STRIDE at the end of this file. The rest of this entry is the state as it landed.]
       The completer exports ABSOLUTE symbols `@C__$sizeof` (true size) + `@C__$size16` (rounded
       up to kOpaqueAlign — a relocation can't round, so it ships pre-rounded), emitted as LLVM
       aliases to folded inttoptr constants (llc still owns the layout). An importer reads each as
@@ -1804,7 +1808,9 @@ Phase 8 — namespaces + cross-TU
       immediate after relaxation), or a short add/mul chain past one symbolic term. THE
       CONVENTION: static fields at natural (numeric — widen::staticByteSize/Align) offsets;
       dynamic fields at kOpaqueAlign with the pre-rounded size16; every term a 16-multiple, so
-      all rounding folds into the constant. The classification is a pure STRUCTURAL QUERY off
+      all rounding folds into the constant. [As of 2026-10-14 the multiple is 8 and the symbol
+      is `@C__$sizeof` — the argument is unchanged, it only ever needed ONE universal alignment
+      >= every type's, which is 8; see SIZEOF IS THE ELEMENT STRIDE.] The classification is a pure STRUCTURAL QUERY off
       universal facts (widen::sizeIsDynamic / slidComputedLayout — the inert computed_layout flag
       was deleted, no fixpoint needed), so every TU lays the type out identically — proven by the
       seam test (header class Crate: consumer's direct field write read back by a
@@ -3570,6 +3576,138 @@ CROSS-CUTTING — A CONSTRUCTION ARGUMENT TO AN OVERLOADED CALL (LANDED 2026-10-
   classifyConstruction, so both broke identically and both are fixed by the one guard.
   Detail: readme-classes.txt A CONSTRUCTION IS LOWERED EXACTLY ONCE; readme.txt classify
   AN OVERLOADED CALL INFERS ITS ARGS TWICE.
+
+CROSS-CUTTING — SIZEOF IS THE ELEMENT STRIDE (LANDED 2026-10-14)
+  `sizeof(T)` now returns the number an array of T strides by, so
+  `sizeof(arr) == n * sizeof(arr[0])` holds with class elements too. It did not, and the
+  gap was a live buffer overrun in the standard library.
+  THE BUG. lib/hdr/vector.sl:125 allocates `sizeof(T) * new_size` bytes
+  (`new int8[byte_size]`) and :81-2 / :260-2 index through `T[]`, which steps through
+  emitElemAddr at the CONVENTION stride. For a statically sized T the two are the same
+  number. For a dynamically sized one they could not be: `sizeof` read the completer's
+  true-size symbol `@C__$sizeof` while every index path strode the rounded `@C__$size16`.
+  `String` is `{ intptr, intptr, char[] }` = 24 and round16(24) = 32, so `Vector<String>`
+  allocated 24 bytes per element and addressed at 32 — at n=3, a 72-byte buffer with
+  element 2 living at 64..96, on a WRITE. Latent only because nothing in the tree
+  instantiated a Vector of an opaque class: every existing `Vector<...>` element is a
+  primitive, a non-opaque class, or a flavor the never-opaque carve-out keeps concrete.
+  WHY SIZEOF AND NOT A NEW SPELLING. The first fix considered was to expose the stride
+  separately (`strideof(T)`) and leave sizeof alone. Rejected: if sizeof is not the
+  stride then every hand-rolled container is a footgun, which is the invariant C picked
+  for the same reason. And vector.sl needed NO edit under the right rule — it was already
+  written to it. The compiler already held the rule, too: codegen's kNewExpr arm picks the
+  stride for `new T[n]` with the comment "so the allocation covers every element the index
+  path can reach". sizeof was the one site that opted out.
+  THREE PARTS, each with the suite green between them.
+    kOpaqueAlign 16 -> 8. The convention needs ONE universal alignment >= the alignment of
+    every type, so a dynamic leaf's size is a multiple of it and the constant part absorbs
+    ALL rounding without a link-time round (a relocation cannot round). It does NOT need
+    the platform maximum. widen's typeByteAlign tops out at 8 — pointer / iterator /
+    anyptr 8, primitive bits/8, no 128-bit or vector form. Costs nothing: a dynamic
+    field's bump to 8 is no bump beside an i64, so a computed layout is BYTE-IDENTICAL to
+    the natural one and String rounds 24 -> 24 — the motivating case became free. Every
+    dependent site now derives from the constant (the `{ [0 x <N x i8>] }` rounding
+    wrapper, both emission sites; the three `alloca i8, ..., align N`). Because 8 is a
+    TIGHT bound it is load-bearing, so widen::typeSelfTest checks kOpaqueAlign against the
+    alignment of every round-trip spelling: adding an int128 / float128 / SIMD primitive
+    without raising it fails loudly instead of mis-placing layouts silently. No golden
+    moved, which is the "stops over-aligning" claim confirmed; `Flat`'s exported size did
+    drop 16 -> 8.
+    sizeof -> the stride. codegen answers the `__$sizeof` call shape with
+    `emitSizeValue(T, widen::sizeIsDynamic(T))` — the same expression the
+    iterator-difference divisor already used. Conditional, not an unconditional round:
+    round16 wraps a type in the vector struct, so forcing it would make a static 1-byte
+    class report 8. classify also now routes TUPLES and ARRAYS to the shape (a fixed
+    `$agg__$sizeof` marker, never a symbol); typeByteSize answers -1 for any aggregate
+    carrying a class, so while the rewrite accepted only a kSlid, `sizeof` of a class
+    ARRAY was REJECTED outright — found while writing the test for the n==1 case. Only
+    `sizeof(void)` was pinned as an error, so no canon was contradicted.
+    ONE size symbol. `@C__$sizeof`, pre-rounded; `__$size16` and sizeSymbolValue's bool
+    are gone. Every reader collapsed onto it. There is exactly one size per class because
+    sizeof IS the stride — two sizes is what the bug WAS.
+  PROOF, in the IR rather than a run: `Vector<String>`'s reserve emits
+  `mul i64 ptrtoint (ptr @String__$sizeof to i64), %n` for the malloc and
+  `mul i64 1, ptrtoint (ptr @String__$sizeof to i64)` for the iterator step — the same
+  symbol, where it used to be two. End to end, `Vector<String>` compiles, appends and
+  reads back.
+  Coverage: test/misc/sizeof.sl — `clsarr= 8 8 24` (a new hook-free `Pod`, so an array of
+  it adds no lifecycle output) and `opqarr= 24 24 72` (String, opaque, completed in
+  another TU). The n==1 rows are the invariant's sharpest form: a one-element array's
+  total size IS one element's stride.
+  STILL OPEN: a class-array TYPE spelling (`sizeof(Point[2])`) and a tuple-type spelling
+  (`sizeof((int, Point))`) fail in the GRAMMAR — an identifier in a sizeof operand parses
+  as an expression — so only declared array variables work. Pre-existing, not this
+  landing.
+  Detail: readme-classes.txt OPAQUE CLASSES (SIZEOF IS THE ELEMENT STRIDE, kOpaqueAlign
+  IS THE LANGUAGE'S MAXIMUM ALIGNMENT); readme.txt classify sizeof lowering.
+
+CROSS-CUTTING — THE SELF-INSTANTIATE STAGE + IR MERGE
+                (PHASES A/B LANDED 2026-10-14; PHASE C BLOCKED — see below)
+  MOTIVE: the IMPORT LEAK. lex's importModule reads `<m>.slh`, processFiles it, then
+  immediately loadTemplateSource reads `<m>.sl` and processFiles THAT — into the same
+  token stream and the same imported_once set, so the sibling's own `import` lines are
+  honored as if the root had written them. `file_imported_by[io.slh]` was `map.sl`, not
+  the root: provenance is recorded and never consulted. Old and benign while the leaked
+  headers (string, dump) were ones consumers imported anyway; io.slh was the first leaked
+  header that ADDED AN OVERLOAD to an existing name. Sharper still: resolve already drops
+  every top-level node from a template_source file except real templates, so a header with
+  no templates contributes NOTHING to the TU — and its `import` was still honored. The
+  rule is written down (classify.cpp fieldVisibleAt: "everything a header declares is
+  public; everything its template source supplies is private to that file") and
+  implemented for FIELDS only.
+  THE PLAN WAS: treat every `.slh` template as external, let loadTemplateSource leave the
+  main compile, and have a second per-TU stage emit the flavors the libraries cannot.
+  PHASE A — the build step (test/import is the spike dir). `<stem>.ll` + `<stem>.ill` ->
+  llvm-link -> `<stem>.mll` -> `opt -passes=internalize` -> `<stem>.oll` -> llc, for every
+  TU in the directory. Three distinct extensions on purpose, so no pattern rule can match
+  another's target. The .ill is an always-emitted EMPTY module: one unconditional rule per
+  TU, no conditional make logic. Verified: clean build green, incremental a no-op, and a
+  symbol-set diff of each merged object against a direct llc of the same .ll shows 74
+  symbols dropped across 9 TUs, every one local or weak and unreferenced, NO global
+  definition lost and nothing added. llvm-link is not transparent — it drops every
+  unreferenced local and linkonce symbol even with a SINGLE input (bird.ll: 14 defines ->
+  7; a bitcode round-trip keeps all 14), so that is its own dead-code strip, not the merge.
+  PHASE B — `--instantiate-self` + `--api-list`, emission only. See readme.txt THE
+  SELF-INSTANTIATE STAGE for the mechanism, the tu_local_flavor stamping, and why the
+  flavors must be EXTERNAL in that module. Validated: all 9 self modules are valid IR
+  (llvm-as) and every definition in one is also an `internal` definition in the main .ll —
+  0 not-in-main, 0 not-internal-in-main — and the main compile's .ll stayed BYTE-IDENTICAL.
+  With the .ill still empty the internalize pass is a measured no-op on all 9 TUs, which is
+  the gate proving the api-list complete before the .ill carries anything.
+  TWO MEASURED FACTS THAT SHAPED IT. (1) An `internal` definition does NOT satisfy another
+  module's `declare`: llvm-link drops it, silently, exit 0, in either link order (LLVM
+  21.1.8). So "internal from birth in a separate module" is impossible, and the
+  internalize allow-list is not a convenience but the mechanism. (2) A local-type flavor's
+  symbol is ALREADY a function of the TU — widen::classSymbol suffixes a function-local
+  class with its def_id (`Loc.53`), and a FILE-SCOPE private class takes no suffix at all,
+  so two TUs with same-named private classes mangle IDENTICALLY. Canon for that:
+  test/import bird.sl + tmpl_test.sl both declare a private file-scope `Twin` with a
+  different layout and both instantiate `Box<Twin>` and `tdiff<Twin^>`; the symbols
+  `@_Z5tdiffIPu4TwinEPu4TwinPu4Twin`, `@_ZN4Twin2tvEPu4Twin` and `@Twin__$copy/$move/$swap`
+  are byte-identical strings in both .ll files and both objects link into one binary. It
+  works for exactly one reason — the local-type carve-out's `define internal`. Promote such
+  a flavor to an external symbol and one TU's call reads the other TU's layout with no
+  diagnostic and no link error. The goldens print 1005 and 1507, one per TU.
+  PHASE C IS BLOCKED, and the premise was wrong, not the implementation. The main compile
+  can NEVER stop loading a template source: an incomplete header template's field list
+  lives in the completing re-open, which is in the `.sl`. Measured by gating
+  loadTemplateSource off — the first failure is the standard library (`Vector<T>(...)` in
+  vector.slh, fields in vector.sl): "Class template 'Vector' is declared incomplete ('...')
+  and never completed". A flavor's LAYOUT is public while its field NAMES are private, and
+  only the source has the layout; there is no third route, because a template instance is
+  never opaque and so cannot ship its size as a link-time symbol either. The claim that
+  "layout needs nothing from the .sl, only bodies are missing" was simply false.
+  CONSEQUENCE — the leak and the stage are INDEPENDENT. The sibling's imports are
+  load-bearing FOR LAYOUT, so the leak cannot be closed by skipping or deferring the load,
+  only by SCOPING the names it brings in (the fieldVisibleAt rule, extended from fields to
+  declarations). The self-instantiate stage no longer closes the leak; it serves "templates
+  are compiled once" and is a prerequisite for any later lazy loading. Also open before C
+  could proceed: a flavor body calls the local class's own methods, which are `internal` in
+  the main module and therefore unreachable from the merged-in module too — so C would have
+  to emit every TU-private symbol as global and let internalize demote them all, a wider
+  change to the main compile's output than "declare the flavors".
+  Detail: readme.txt THE SELF-INSTANTIATE STAGE; readme-classes.txt OPAQUE CLASSES (SO THE
+  MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE SOURCE).
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

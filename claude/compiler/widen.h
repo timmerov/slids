@@ -134,11 +134,23 @@ struct Type {
 };
 
 // The alignment an OPAQUE class is laid out at. Its real alignment belongs to the
-// completer, so a layout that must place one without asking over-aligns to the
-// platform maximum — the same value every opaque `alloca` already uses. Making this
-// a fixed convention is what keeps the offset of the FIRST non-static field a
+// completer, so a layout that must place one without asking over-aligns to a fixed
+// convention — which is what keeps the offset of the FIRST non-static field a
 // compile-time constant (and is why no `__$alignof` export is needed).
-constexpr int kOpaqueAlign = 16;
+//
+// It must be >= the alignment of EVERY type, or a field placed by the convention
+// lands under-aligned. That makes it the language's maximum alignment, and nothing
+// in the language aligns past 8: typeByteAlign gives pointer / iterator / anyptr 8
+// and a primitive bits/8, and there is no 128-bit or vector form. 8 is therefore a
+// TIGHT bound, not slack — which is also why it costs nothing (a dynamic field's
+// bump to it is no bump at all next to an i64 or a pointer, so a computed layout
+// comes out byte-identical to the natural one).
+//
+// Being tight, it is load-bearing: adding an int128 / float128 / SIMD primitive
+// WITHOUT raising this would mis-place every computed layout, silently. kMaxAlign
+// below is checked against the real maximum by typeSelfTest, so such an addition
+// fails loudly instead.
+constexpr int kOpaqueAlign = 8;
 
 // Intern a slids type spelling, returning a stable handle. Round-trips exactly:
 // spell(intern(s)) == s for every well-formed spelling; intern(s) is stable.
@@ -226,9 +238,9 @@ bool sizeIsDynamic(TypeRef ref);
 // but a field's size lives in another module — so no TU can fold the layout, and
 // every TU instead lays it out by ONE CONVENTION: fields at their natural offsets,
 // any dynamically-sized field at kOpaqueAlign with its size ROUNDED UP to
-// kOpaqueAlign (the completer-exported `__$size16`). All the arithmetic besides
+// kOpaqueAlign (the completer-exported `__$sizeof`). All the arithmetic besides
 // the leaf sizes is compile-time, so every offset and the total size reduce to
-// `constant + Σ mult·size16(leaf)` — see layoutSlotOffset / layoutSizeExpr.
+// `constant + Σ mult·size(leaf)` — see layoutSlotOffset / layoutSizeExpr.
 // (An OPAQUE class is not computed — its layout is the completer's private,
 // llc-folded struct; computed is the visible-field complement.)
 bool slidComputedLayout(TypeRef ref);
@@ -243,7 +255,7 @@ long long staticByteSize(TypeRef ref);
 long long staticByteAlign(TypeRef ref);
 
 // A layout value under the computed-layout convention: a compile-time constant
-// plus multiples of opaque leaf classes' rounded sizes (`__$size16` symbols —
+// plus multiples of opaque leaf classes' rounded sizes (`__$sizeof` symbols —
 // codegen materializes each term). Every term's value is a multiple of
 // kOpaqueAlign, which is why the constant part absorbs ALL alignment rounding.
 struct LayoutExpr {

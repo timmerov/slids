@@ -1654,6 +1654,22 @@ bool typeSelfTest(std::ostream& out) {
     };
     bool ok = true;
     int n = 0;
+    // kOpaqueAlign IS the language's maximum alignment — a TIGHT bound, not slack
+    // (see widen.h). The convention places a dynamically-sized field at it without
+    // being able to ask the completer, so a type that aligns PAST it would land
+    // under-aligned in every computed layout, silently. Check it here against every
+    // spelling the round-trip cases already name, so adding a wider primitive fails
+    // loudly in the self-test instead of mis-laying out classes years later.
+    for (char const* c : cases) {
+        TypeRef r = intern(std::string(c));
+        long long a = staticByteAlign(r);
+        if (a > kOpaqueAlign) {
+            ok = false;
+            out << "kOpaqueAlign (" << kOpaqueAlign << ") is below the alignment of '"
+                << c << "' (" << a << ") — the computed-layout convention would "
+                   "under-align every dynamic field; raise kOpaqueAlign\n";
+        }
+    }
     for (char const* c : cases) {
         std::string s = c;
         TypeRef r = intern(s);

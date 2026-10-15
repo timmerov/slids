@@ -30,6 +30,8 @@ const= 4
 const2= 10
 Simple:ctor: -1
 simple_size = 16 16 16
+clsarr= 8 8 24
+opqarr= 24 24 72
 uninit= 4
 uninit2= 4
 Simple:dtor: -1

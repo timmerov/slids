@@ -1638,26 +1638,74 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     ever sees those fields. Consequence: `Grow<int>` / `Vector<int>` lower to real structs in a
     consumer, with constant field offsets and embeddable BY VALUE, while `Rope` keeps the runtime
     path. Canon test/import tmpl_test.sl (Holder) + tmpl_test2.sl (Pair2 — the SECOND consumer,
-    pinning that two independent TUs compute the same layout). Opaque changes three things — its size is a
+    pinning that two independent TUs compute the same layout).
+    SO THE MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE SOURCE (measured 2026-10-14). The
+    `!tmpl_instance` carve-out above is only true BECAUSE the sibling `.sl` is side-loaded — the
+    completing re-open is where an incomplete header template's field list lives. Gate
+    lex's loadTemplateSource off and the first failure is the standard library: `vector.slh`
+    declares `Vector<T>(...)` and `vector.sl` holds `size_`/`capacity_`/`storage_`, so
+    `Vector<float64>` reports "declared incomplete ('...') and never completed". A flavor's
+    LAYOUT is public while its field NAMES are private, and the layout exists only in the
+    source; there is no third route, since a template instance is never opaque and so cannot
+    ship its size as a link-time symbol either. Consequence for the import-leak work: the
+    sibling's own `import` lines are load-bearing FOR LAYOUT, so the leak cannot be closed by
+    skipping or deferring the load — only by SCOPING the names it brings in, the rule already
+    stated at classify.cpp's fieldVisibleAt and implemented for FIELDS only.
+    Opaque changes three things — its size is a
   LINK-TIME value the completer exports, its construction is SPLIT across the seam, and its
   layout-needing uses either COMPUTE by convention or are REJECTED in an importer.
-    SIZE (absolute symbols, 2026-07-29 — previously an external `__$sizeof()` FUNCTION). The
-    completer exports two ABSOLUTE symbols (SHN_ABS — the symbol's "value" IS the number),
-    emitted as LLVM aliases to folded inttoptr constants so llc still owns the layout and the
-    two halves cannot drift:
-      @C__$sizeof = alias i8, inttoptr(ptrtoint(getelementptr(<struct>, null, i32 1)))  — true size
-      @C__$size16 = the same folded over `{ [0 x <16 x i8>], <struct> }` — the size ROUNDED UP to
-                    widen::kOpaqueAlign (16). Round-up is not expressible as a relocation, so the
-                    convention's stride/embedding size ships pre-rounded.
+    SIZE (absolute symbol, 2026-07-29 — previously an external `__$sizeof()` FUNCTION; ONE
+    symbol since 2026-10-14, see SIZEOF IS THE ELEMENT STRIDE below). The completer exports ONE
+    ABSOLUTE symbol (SHN_ABS — the symbol's "value" IS the number), emitted as an LLVM alias to a
+    folded inttoptr constant so llc still owns the layout:
+      @C__$sizeof = alias i8, inttoptr(ptrtoint(getelementptr(
+                        `{ [0 x <kOpaqueAlign x i8>], <struct> }`, null, i32 1)))
+                    — the size ROUNDED UP to widen::kOpaqueAlign (8). The zero-length vector
+                    carries the alignment and no size, so llc does the rounding. Round-up is not
+                    expressible as a relocation, so it ships PRE-rounded.
     An importer emits `@C__$sizeof = external global i8` and reads the value as the CONSTANT
     `ptrtoint (ptr @C__$sizeof to i64)` — one relocation, which the PIE link relaxes
     (R_X86_64_REX_GOTPCRELX against an ABS symbol) to a plain immediate: no call, no load. A
     compile-time addend rides as a getelementptr on the symbol (S+A, still one relocation).
     Verified on LLVM 18 + GNU ld PIE, incl. static resolution in data initializers. An importer
     must never compute the size from its own (placeholder `{ i8 }`) view — every opaque local
-    allocas `i8, i64 <value>, align 16` (codegen's entry-block hoist), and `new C` sizes the
-    malloc the same way. A NON-opaque class exports no size symbols at all — its size is asked
-    per-TU as an inline llc constant (emitSizeValue).
+    allocas `i8, i64 <value>, align kOpaqueAlign` (codegen's entry-block hoist), and `new C`
+    sizes the malloc the same way. A NON-opaque class exports no size symbol at all — its size is
+    asked per-TU as an inline llc constant (emitSizeValue).
+
+    SIZEOF IS THE ELEMENT STRIDE (LANDED 2026-10-14). `sizeof(T)` returns the number an array of
+    T strides by, so `sizeof(arr) == n * sizeof(arr[0])` — class elements included. The reason is
+    the hand-rolled container: lib/hdr/vector.sl allocates `sizeof(T) * n` bytes
+    (`new int8[byte_size]`) and then indexes through `T[]`, which steps through emitElemAddr at
+    the convention stride. The two must be the SAME NUMBER or every such container writes past
+    its buffer. They agreed for a statically sized T and could never agree for a dynamically
+    sized one, so `Vector<String>` allocated 24 bytes per element and indexed at 32 — a live
+    overrun, invisible only because nothing in the tree instantiated a Vector of an opaque class.
+    That is why there is now ONE size per class instead of a true `__$sizeof` plus a rounded
+    `__$size16`: `sizeof` read the true one while every index path strode the rounded one.
+    vector.sl needed NO edit — it was already written to the invariant.
+    Lowering: classify rewrites `sizeof(C)` to the `<Name>__$sizeof` call SHAPE with the handle
+    in param_types[0] (a class's size is not a constant of that stage — llc owns the layout), and
+    codegen answers it with `emitSizeValue(T, sizeIsDynamic(T))` — the same expression the
+    iterator-difference divisor uses. A TUPLE or ARRAY carrying a class routes the same way under
+    a `$agg__$sizeof` marker; before that, `sizeof` of any class array was REJECTED, because
+    typeByteSize answers -1 for such an aggregate and the rewrite only accepted a kSlid. Still
+    open: a class-array TYPE spelling (`sizeof(Point[2])`) and a tuple-type spelling
+    (`sizeof((int, Point))`) fail in the GRAMMAR — an identifier in a sizeof operand parses as an
+    expression — so only declared array variables work. Canon test/misc/sizeof.sl: `clsarr=` (a
+    hook-free `Pod`) and `opqarr=` (String, opaque, completed in another TU).
+
+    kOpaqueAlign IS THE LANGUAGE'S MAXIMUM ALIGNMENT, and it is 8 (was 16 until 2026-10-14). The
+    convention needs ONE universal alignment >= the alignment of every type, so that a dynamic
+    leaf's size is a multiple of it and the constant part can absorb ALL rounding without a
+    link-time round. It does not need to be the platform maximum. widen's typeByteAlign tops out
+    at 8 — pointer / iterator / anyptr are 8, a primitive is bits/8, and there is no 128-bit or
+    vector form — so 8 is a TIGHT bound. Two consequences. It costs nothing: a dynamic field's
+    bump to 8 is no bump at all beside an i64 or a pointer, so a computed layout comes out
+    BYTE-IDENTICAL to the natural one and `String` rounds 24 -> 24. And being tight it is
+    load-bearing: adding an int128 / float128 / SIMD primitive without raising it would
+    mis-place every computed layout SILENTLY, so widen::typeSelfTest now checks kOpaqueAlign
+    against the alignment of every round-trip spelling and fails loudly instead.
     CONSTRUCTION IS DIVIDED BETWEEN TWO SITES, and this is the whole feature: the PUBLIC fields
     (any before the `...`) are filled at the call site as usual; the HIDDEN fields are filled by
     the class's OWN ctor. Two symbols carry the split:
@@ -1755,7 +1803,7 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     class field, an array element (incl. an array FIELD — `Rope rs_[2]`), a tuple slot, a bare
     local array. No TU can fold such a layout (the field list is visible everywhere, the
     embedded size lives in another module), and no TU needs to: every TU lays it out by ONE
-    CONVENTION, and every layout fact reduces to `constant + Σ mult·size16(opaque leaf)` — no
+    CONVENTION, and every layout fact reduces to `constant + Σ mult·size(opaque leaf)` — no
     cache, no lazy filler, no mutable table (the earlier cached-`__$layout()` plan is dead; the
     absolute-symbol exports made it unnecessary).
     THE PREDICATES (widen, pure structural queries — the inert computed_layout FLAG was
@@ -1768,23 +1816,25 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     static field numerically inside a convention layout.
     THE CONVENTION (widen::layoutSlotOffset / layoutSizeExpr → LayoutExpr {cst, (leaf, mult)}).
     Walk the slots in declared order: a static field at its natural offset/size; a DYNAMIC field
-    at widen::kOpaqueAlign (16, the over-alignment every opaque alloca already uses) with size
-    round_up(size, 16) — the completer-exported `@C__$size16`, pre-rounded because a relocation
-    cannot round. Every symbolic term is a 16-multiple, so ALL alignment rounding folds into the
-    constant part; a computed sub-class expands structurally (its fields are visible), so terms
-    only ever name opaque leaves; an array multiplies its element expression. Total size rounds
-    to 16 (a dynamic aggregate is 16-aligned). codegen materializes a LayoutExpr (emitLayoutValue
+    at widen::kOpaqueAlign (8, the alignment every opaque alloca already uses) with size
+    round_up(size, 8) — the completer-exported `@C__$sizeof`, pre-rounded because a relocation
+    cannot round. Every symbolic term is a kOpaqueAlign-multiple, so ALL alignment rounding folds
+    into the constant part; a computed sub-class expands structurally (its fields are visible), so
+    terms only ever name opaque leaves; an array multiplies its element expression. Total size
+    rounds to kOpaqueAlign. codegen materializes a LayoutExpr (emitLayoutValue
     / emitSizeValue): no terms → a literal; ONE term ×1 → a single S+A relocation (`ptrtoint
-    (getelementptr (i8, @Leaf__$size16, cst))`) — a link-time immediate after relaxation; more →
+    (getelementptr (i8, @Leaf__$sizeof, cst))`) — a link-time immediate after relaxation; more →
     a short add/mul instruction sequence over the relocated constants.
     ONE ADDRESS FUNNEL. emitSlotAddr (slots: static struct GEP / runtime-layout `__$off<k>` /
-    convention byte GEP) and emitElemAddr (elements: typed GEP / byte GEP at the size16 stride)
+    convention byte GEP) and emitElemAddr (elements: typed GEP / byte GEP at the rounded-size
+    stride, which since 2026-10-14 is also exactly what `sizeof` reports)
     are the ONLY slot/element address emitters — emitElementAddr, the read-side kIndexExpr, the
     hook walks, the aggregate transfer/swap/null/bump walks, the tuple/array fill bridges, AND
     (2026-08-04) ITERATOR STEPS — emitBinary's `iter ± int`, the read-side `iter[i]` arm, and
     the `++`/`--` leaf bump all step through emitElemAddr, and the `iter - iter` difference
     divides by the matching stride via emitSizeValue (static: the LLVM type's size, which also
-    unbroke class-element differences from the old scalar-only divisor; dynamic: size16) — all
+    unbroke class-element differences from the old scalar-only divisor; dynamic: the rounded
+    `@C__$sizeof`) — all
     route through them, so a read and a write can never land on different bytes and `p + i`
     always agrees with `^arr[i]`. Before the funnel took the iterator steps, each GEP'd the
     element's LLVM type — for an opaque element the `{ i8 }` placeholder, ONE byte — the
@@ -1792,7 +1842,8 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     lowers every convention-laid-out type (computed class ANYWHERE — even the TU that completes
     the leaf — and any dynamic tuple/array) to the `{ i8 }` placeholder; codegen's
     dynamicStorage() mirrors that and switches allocas (locals, sret temps, discarded-call slots)
-    to `alloca i8, i64 <size value>, align 16`. The one non-uniform case stays deliberate: a bare
+    to `alloca i8, i64 <size value>, align kOpaqueAlign`. The one non-uniform case stays
+    deliberate: a bare
     opaque class in its COMPLETER is the real struct (its interior is single-TU by construction).
     ROUTED OBLIGATIONS. An opaque-bearing value is ALWAYS constructed/destroyed through the
     routed chain, hooks or not (the POD-opaque rule extended): fieldContributesNeed counts an

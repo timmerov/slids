@@ -7444,7 +7444,7 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
         }
         // (Embedding an imported OPAQUE class by value is LEGAL now — the enclosing
         // class becomes a COMPUTED LAYOUT: every TU lays it out by the kOpaqueAlign
-        // convention off the completer's exported absolute `__$size16`. The walk
+        // convention off the completer's exported absolute `__$sizeof`. The walk
         // does not descend into an opaque class's fields — an importer can't see
         // them, and the completer separately rejects an EXPORTED layout it cannot
         // fold; see checkOpaqueExportFoldable.)
@@ -7458,7 +7458,7 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
 }
 
 // The COMPLETER of an opaque class exports its layout as ABSOLUTE symbols
-// (`__$sizeof`/`__$size16`, plus `__$off<k>` for a runtime-layout class) — values
+// (`__$sizeof`, plus `__$off<k>` for a runtime-layout class) — values
 // llc folds off the real struct. The fold needs every by-value field (the base
 // included) to have a static layout HERE. A field embedding an IMPORTED
 // incomplete class, or a computed-layout class, would make the export itself a

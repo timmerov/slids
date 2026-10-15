@@ -2148,11 +2148,28 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     widen::TypeRef st = e.return_type != widen::kNoType
                         ? widen::strip(e.return_type)
                         : widen::strip(e.children[0]->inferred_type);
-                    if (widen::form(st) == widen::Type::Form::kSlid
-                        && tree.classes.count(st)) {
+                    // A TUPLE or ARRAY routes here too. typeByteSize answers -1 for
+                    // any aggregate carrying a class, so `sizeof(Point[4])` and
+                    // `sizeof((int, Point))` reached the rejection below — yet
+                    // emitSizeValue has always been able to answer them (a GEP-null
+                    // fold over the real LLVM type when static, the convention
+                    // expression when a leaf is dynamically sized). Routing them is
+                    // what makes `sizeof(arr) == n * sizeof(arr[0])` hold for a class
+                    // element, the invariant every hand-rolled container needs.
+                    widen::Type::Form sf = widen::form(st);
+                    bool routable =
+                        (sf == widen::Type::Form::kSlid && tree.classes.count(st))
+                        || sf == widen::Type::Form::kTuple
+                        || sf == widen::Type::Form::kArray;
+                    if (routable) {
                         widen::TypeRef iptr = widen::intern("intptr");
                         e.kind = parse::Kind::kCallExpr;
-                        e.name = widen::classSymbol(st) + "__$sizeof";
+                        // The name is a MARKER codegen matches on (it returns the
+                        // size value and never emits a call), so only a class has a
+                        // symbol worth spelling; an aggregate takes a fixed stem.
+                        e.name = (sf == widen::Type::Form::kSlid
+                                      ? widen::classSymbol(st)
+                                      : std::string("$agg")) + "__$sizeof";
                         e.return_type = iptr;   // emitCall reads this for the ret llty
                         e.children.clear();
                         e.param_types.clear();
@@ -2219,7 +2236,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // `new C[n]` of an imported OPAQUE class — or of a COMPUTED-layout class
             // (no static LLVM element type in ANY TU) — is legal: the heap array is
             // laid out exactly like the stack `C a[n]` local, at the convention
-            // stride (@C__$size16), and codegen's kNewExpr / kDeleteStmt arms address
+            // stride (@C__$sizeof), and codegen's kNewExpr / kDeleteStmt arms address
             // every element through emitElemAddr and construct / destroy it through
             // the routed chain. Nothing to gate here.
             // (The abstract-class check is not here: `new Class` builds its object through

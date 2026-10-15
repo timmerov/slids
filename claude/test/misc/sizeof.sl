@@ -79,6 +79,14 @@ Space {
     enum Compass ( north, east, south, west );
 }
 
+/* a HOOK-FREE class: an array of Simple would print a ctor/dtor line per element
+   and bury the stride cases below in lifecycle output. sizeof's business is the
+   layout, not the lifecycle. 8 bytes, so it reads apart from Simple's 16. */
+Pod(
+    int32 a_ = 1,
+    int32 b_ = 2
+) { }
+
 Simple(
     int x_ = -1,
     float64 y_ = 3.14
@@ -161,6 +169,32 @@ int32 main() {
     intptr simple_size2 = sizeof(simple);
     intptr simple_size3 = sizeof(simple_ref^);
     println(String + "simple_size = " + simple_size1 + " " + simple_size2 + " " + simple_size3);
+
+    /* SIZEOF IS THE ELEMENT STRIDE: sizeof(arr) == n * sizeof(arr[0]), class
+       elements included. A hand-rolled container (lib/hdr/vector.sl) allocates
+       `sizeof(T) * n` bytes and then indexes through `T[]`, which steps by the
+       stride — the two have to be the SAME NUMBER or every such container writes
+       past its buffer. The `n == 1` row is the sharpest form: a one-element array's
+       total size IS one element's stride.
+       For a STATICALLY sized class both are the LLVM layout size. For a
+       DYNAMICALLY sized one — String, an opaque header class completed in another
+       TU, whose size is a link-time symbol here — both are the kOpaqueAlign-rounded
+       size, so sizeof rounds too. String is 24 and kOpaqueAlign is 8, so the
+       rounding costs nothing; that is the point of 8 being the language's maximum
+       alignment rather than a padded-out convention. */
+    Pod parr1[1];
+    Pod parr3[3];
+    intptr pod_z  = sizeof(Pod);
+    intptr pod_a1 = sizeof(parr1);
+    intptr pod_a3 = sizeof(parr3);
+    println(String + "clsarr= " + pod_z + " " + pod_a1 + " " + pod_a3);  // 8 8 24
+
+    String oarr1[1];
+    String oarr3[3];
+    intptr opq_z  = sizeof(String);
+    intptr opq_a1 = sizeof(oarr1);
+    intptr opq_a3 = sizeof(oarr3);
+    println(String + "opqarr= " + opq_z + " " + opq_a1 + " " + opq_a3); // 24 24 72
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 

@@ -864,27 +864,26 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
 
 // ── Computed-layout materialization ────────────────────────────────────────
 // Every layout fact under the cross-TU convention reduces to
-// `constant + Σ mult·size16(opaque leaf)` (widen::LayoutExpr). These helpers turn
+// `constant + Σ mult·size(opaque leaf)` (widen::LayoutExpr). These helpers turn
 // that into an i64 VALUE: a plain literal, a single-relocation LLVM constant
-// (`ptrtoint` of the leaf's absolute `__$size16` symbol, with the constant riding
+// (`ptrtoint` of the leaf's absolute `__$sizeof` symbol, with the constant riding
 // as a getelementptr addend — the linker patches an immediate), or, past one
 // symbolic term, a short add/mul instruction sequence over those constants.
 
-// The absolute size symbols the COMPLETER of an opaque class exports (aliases to
-// folded inttoptr constants): `__$sizeof` = the true byte size, `__$size16` = it
-// rounded up to widen::kOpaqueAlign (what the convention embeds/strides by —
-// round-up of a link-time value is not expressible as a relocation, so the
-// completer exports it pre-rounded).
-std::string sizeSymbolValue(widen::TypeRef cls, bool round16) {
-    return "ptrtoint (ptr @" + widen::classSymbol(cls)
-        + (round16 ? "__$size16" : "__$sizeof") + " to i64)";
+// The absolute size symbol the COMPLETER of an opaque class exports (an alias to a
+// folded inttoptr constant): `__$sizeof`, the size already rounded up to
+// widen::kOpaqueAlign. One symbol, because sizeof IS the element stride; and
+// pre-rounded, because round-up of a link-time value is not expressible as a
+// relocation.
+std::string sizeSymbolValue(widen::TypeRef cls) {
+    return "ptrtoint (ptr @" + widen::classSymbol(cls) + "__$sizeof to i64)";
 }
 
 std::string emitLayoutValue(widen::LayoutExpr const& e, std::ostream& out) {
     if (e.terms.empty()) return std::to_string(e.cst);
     if (e.terms.size() == 1 && e.terms[0].second == 1) {
         // One leaf, multiplier 1: a single S+A relocation — a link-time constant.
-        std::string sym = "@" + widen::classSymbol(e.terms[0].first) + "__$size16";
+        std::string sym = "@" + widen::classSymbol(e.terms[0].first) + "__$sizeof";
         if (e.cst == 0) return "ptrtoint (ptr " + sym + " to i64)";
         return "ptrtoint (ptr getelementptr (i8, ptr " + sym + ", i64 "
             + std::to_string(e.cst) + ") to i64)";
@@ -893,7 +892,7 @@ std::string emitLayoutValue(widen::LayoutExpr const& e, std::ostream& out) {
     // so sum the link-time constants at run time.
     std::string acc;
     for (auto const& [leaf, mult] : e.terms) {
-        std::string v = sizeSymbolValue(leaf, /*round16=*/true);
+        std::string v = sizeSymbolValue(leaf);
         if (mult != 1) {
             std::string m = newTmp("szmul");
             out << "  " << m << " = mul i64 " << v << ", " << mult << "\n";
@@ -922,14 +921,21 @@ std::string emitSizeValue(widen::TypeRef ty, bool round16, std::ostream& out) {
     widen::TypeRef st = widen::strip(ty);
     widen::Type::Form f = widen::form(st);
     if (widen::sizeIsDynamic(st)) {
+        // An opaque leaf has ONE exported size and it is already kOpaqueAlign-
+        // rounded, so `round16` has nothing left to ask of it.
         if (f == widen::Type::Form::kSlid && widen::slidOpaque(st))
-            return sizeSymbolValue(st, round16);
+            return sizeSymbolValue(st);
         return emitLayoutValue(widen::layoutSizeExpr(st, round16), out);
     }
     if (f == widen::Type::Form::kSlid || f == widen::Type::Form::kTuple
         || f == widen::Type::Form::kArray) {
         std::string llty = llvmForRef(st);
-        if (round16) llty = "{ [0 x <16 x i8>], " + llty + " }";
+        // The zero-length <N x i8> vector makes llc do the rounding: it carries
+        // kOpaqueAlign alignment and no size, so the wrapper's size IS the
+        // operand's rounded up to it.
+        if (round16)
+            llty = "{ [0 x <" + std::to_string(widen::kOpaqueAlign)
+                 + " x i8>], " + llty + " }";
         return "ptrtoint (ptr getelementptr (" + llty
             + ", ptr null, i32 1) to i64)";
     }
@@ -1763,9 +1769,10 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                         bool dyn = widen::sizeIsDynamic(es);
                         bool needs = typeNeedsHook(es, /*ctor=*/false) || dyn;
                         // The element STRIDE: a static class packs at its LLVM size;
-                        // a runtime-sized one at the convention stride (size16) —
-                        // the same value emitElemAddr steps by, so the allocation
-                        // covers every element the index path can reach.
+                        // a runtime-sized one at the convention's kOpaqueAlign-
+                        // rounded size — the same value emitElemAddr steps by and
+                        // the same value sizeof reports, so the allocation covers
+                        // every element the index path can reach.
                         std::string stride = dyn
                             ? emitSizeValue(es, /*round16=*/true, out) : elem_size;
                         std::string db = newTmp("nbytes");
@@ -1953,8 +1960,16 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             if (expr.children.empty() && expr.param_types.size() == 1
                 && expr.name.size() > 9
                 && expr.name.compare(expr.name.size() - 9, 9, "__$sizeof") == 0) {
-                std::string v = emitSizeValue(expr.param_types[0],
-                                              /*round16=*/false, out);
+                // SIZEOF IS THE ELEMENT STRIDE. The two must be the same number or
+                // every hand-rolled container is wrong: vector.sl allocates
+                // `sizeof(T) * n` bytes and then indexes through `T[]`, which steps
+                // by the stride. They agree for a statically-sized type; for a
+                // dynamically-sized one the stride is the kOpaqueAlign-rounded size,
+                // so sizeof must round too. Same expression the iterator-difference
+                // divisor uses, for the same reason.
+                widen::TypeRef sz_ty = widen::strip(expr.param_types[0]);
+                std::string v = emitSizeValue(sz_ty,
+                                              widen::sizeIsDynamic(sz_ty), out);
                 return widen::convert(v, expr.return_type, dest_type,
                                       expr.file_id, expr.tok, out, diag);
             }
@@ -2810,7 +2825,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     std::string sz = emitSizeValue(widen::strip(T),
                                                    /*round16=*/false, out);
                     out << "  " << slot << " = alloca i8, i64 " << sz
-                        << ", align 16\n";
+                        << ", align " << widen::kOpaqueAlign << "\n";
                 } else {
                     out << "  " << slot << " = alloca " << Tll << "\n";
                 }
@@ -3078,7 +3093,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
                     std::string sz = emitSizeValue(widen::strip(T),
                                                    /*round16=*/false, out);
                     out << "  " << slot << " = alloca i8, i64 " << sz
-                        << ", align 16\n";
+                        << ", align " << widen::kOpaqueAlign << "\n";
                 } else {
                     out << "  " << slot << " = alloca " << llvmForRef(T) << "\n";
                 }
@@ -3778,7 +3793,8 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         widen::TypeRef ds = widen::strip(d->return_type);
         if (dynamicStorage(ds)) {
             std::string sz = emitSizeValue(ds, /*round16=*/false, out);
-            out << "  " << regname << " = alloca i8, i64 " << sz << ", align 16\n";
+            out << "  " << regname << " = alloca i8, i64 " << sz
+                << ", align " << widen::kOpaqueAlign << "\n";
         } else {
             out << "  " << regname << " = alloca " << llty << "\n";
         }
@@ -4233,19 +4249,23 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag,
     // MEMBERWISE operator method synthesized in resolve (synthesizeClassTransferOps, run at
     // the resolveScopeBodies choke point), so those symbols are always defined and there is
     // nothing left to fall back to.)
-    // Per-class size SYMBOLS — for OPAQUE classes only. A local (non-opaque)
+    // The per-class size SYMBOL — for OPAQUE classes only. A local (non-opaque)
     // class's size is an inline llc constant everywhere it is asked (emitSizeValue),
     // so it needs no symbol at all. An opaque class's size is known only to the TU
-    // that COMPLETES it, so the completer exports two ABSOLUTE symbols — aliases to
-    // folded inttoptr constants, so LLVM still owns the layout and the two halves
-    // cannot drift:
-    //   @C__$sizeof — the true byte size (SHN_ABS, value = sizeof)
-    //   @C__$size16 — rounded up to widen::kOpaqueAlign (the zero-length 16-aligned
-    //                 vector wrapper makes llc do the rounding), the size the
-    //                 computed-layout convention embeds/strides by — a relocation
-    //                 cannot round, so it ships pre-rounded.
-    // An importer declares them and reads each as `ptrtoint` — a link-time VALUE
-    // the linker patches (GOTPCRELX-relaxed to an immediate), never a call or load.
+    // that COMPLETES it, so the completer exports ONE ABSOLUTE symbol — an alias to
+    // a folded inttoptr constant, so LLVM still owns the layout:
+    //   @C__$sizeof — the size ROUNDED UP to widen::kOpaqueAlign (the zero-length
+    //                 kOpaqueAlign-wide vector wrapper makes llc do the rounding).
+    //                 A relocation cannot round, so it ships pre-rounded.
+    // There is exactly one size per class because SIZEOF IS THE ELEMENT STRIDE: a
+    // container that allocates `sizeof(T) * n` and indexes through `T[]` would write
+    // past its buffer the moment the two differed. (This used to be two symbols — a
+    // true `__$sizeof` and a rounded `__$size16` — and `sizeof` read the true one
+    // while every index path strode the rounded one. That is the bug.) Rounding to
+    // the language's maximum alignment costs nothing: kOpaqueAlign is 8 and every
+    // class carrying a pointer or an i64 is already a multiple of it.
+    // An importer declares it and reads it as `ptrtoint` — a link-time VALUE the
+    // linker patches (GOTPCRELX-relaxed to an immediate), never a call or load.
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
         widen::TypeRef cs = widen::strip(ct);
@@ -4254,17 +4274,14 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag,
         // Self-instantiate: an opaque class's size is the COMPLETER's export, and a
         // flavor module is never the completer — read the symbols, define neither.
         if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare || self) {
-            body << "@" << name << "__$sizeof = external global i8\n";
-            body << "@" << name << "__$size16 = external global i8\n\n";
+            body << "@" << name << "__$sizeof = external global i8\n\n";
             continue;
         }
         std::string llty = llvmForRef(ct);
         apiSym(name + "__$sizeof");
-        apiSym(name + "__$size16");
         body << "@" << name << "__$sizeof = alias i8, inttoptr (i64 ptrtoint (ptr "
-             << "getelementptr (" << llty << ", ptr null, i32 1) to i64) to ptr)\n";
-        body << "@" << name << "__$size16 = alias i8, inttoptr (i64 ptrtoint (ptr "
-             << "getelementptr ({ [0 x <16 x i8>], " << llty
+             << "getelementptr ({ [0 x <" << widen::kOpaqueAlign
+             << " x i8>], " << llty
              << " }, ptr null, i32 1) to i64) to ptr)\n\n";
     }
     // Per-slot FIELD-OFFSET symbols, for a class deriving from an opaque base. The

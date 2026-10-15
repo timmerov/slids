@@ -851,7 +851,10 @@ handles EVERY variable type; verified end-to-end. Three pieces:
      (accepted): `new (Foo)(3)` reads as placement, not `new Foo(3)` — parens around a single
      class name are noise. A tuple ELEMENT needs a static size, so widen::typeByteSize gained
      a kTuple case (LLVM-default struct layout via a new file-local typeByteAlign) — which
-     also makes sizeof(tuple) report a real size + agrees with codegen's malloc size.
+     also makes sizeof(tuple) report a real size + agrees with codegen's malloc size. (A
+     tuple carrying a CLASS still has no static size — typeByteSize answers -1 — and since
+     2026-10-14 such a tuple, and a class array, route to the size-VALUE shape instead of
+     being rejected; plan.txt SIZEOF IS THE ELEMENT STRIDE.)
 
 + THE CONVERSION-TARGET TEMP (LANDED): the 12th site. A value conversion `(Type = src)` IS
   a declarator — an ANONYMOUS one, in expression position — binding a fresh temp of the
