@@ -561,6 +561,11 @@ struct Entry {
                                   // INFERRED variable took from its member-ref init
                                   // (`l = Lang:kC;`); a declared enum type is read
                                   // off slids_type's alias node instead.
+    widen::TypeRef peek_type = widen::kNoType;  // RESOLVE-time peek of an INFERRED
+                                  // variable whose init names its type structurally
+                                  // (`p = new T;` -> T^), so a later `p^.field = kC;`
+                                  // reads in ENUM CONTEXT. classify still stamps
+                                  // slids_type from the rhs; nothing else reads this.
     std::vector<widen::TypeRef> param_types;  // Function only
     // Function only — default parameters. num_required = count of leading params
     // without a default (required); params [num_required..param_types.size()) are

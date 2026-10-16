@@ -2209,9 +2209,13 @@ STAGE FILES (.h / .cpp pairs)
             assignment to an enum-typed variable, a parameter default, a field
             default, `return member;` (tree.ctx_ret_enum, set per
             resolveFunctionBody from the declared return type), a switch's
-            labels off an enum-typed scrutinee variable, and either side of a
+            labels off an enum-typed scrutinee variable, either side of a
             comparison (each operand's enum is PEEKED without resolving, then
-            each side resolves under the other's). The enum is read off the
+            each side resolves under the other's), and a STORE (2026-10-16:
+            storeEnumFrame peeks the target's type through peekIterableType —
+            a field store `obj.f = kC` / `p^.f = kC` reads the field's declared
+            type off the class layout, a bare `f = kC` in a method after its
+            self.f rewrite; also `ref^ = kC` and `arr[i] = kC`). The enum is read off the
             declared TYPE: an enum-typed declaration keeps its type as a
             transparent kAlias node named after the enum over the underlying
             (what ##type(var) reports), so enumFrameForType peels alias layers
@@ -2219,12 +2223,14 @@ STAGE FILES (.h / .cpp pairs)
             to its kNamespace facet's frame. An INFERRED variable initialized
             from a member ref (`l = Lang:kC;`) gets Entry::enum_frame stamped
             (stampInferredEnum) so a later `l = kSlids;` reads in context; one
+            inferred from a single-object `new T` gets Entry::peek_type = T^
+            stamped (stampInferredPeekType; peekIterableType falls back to it
+            while slids_type is empty) so `p^.f = kC;` reads in context; one
             inferred from a CALL does not (its enum is known only in classify)
             and keeps the qualifier — as does a call ARGUMENT on its own (the
             parameter is picked by overload ranking later). Resolve is the
             stage because members are consts constfold substitutes right after
-            (switch labels and folded inits depend on that). Open: a store
-            through a FIELD (`obj.f = kC`) — todo.txt.
+            (switch labels and folded inits depend on that).
             Owns enums: `enum [type] [Name] ( members )` lowers here (not
             desugar — members must be kConst by constfold). Named -> a
             kNamespace whose slids_type carries the underlying (the name
@@ -2423,7 +2429,8 @@ STAGE FILES (.h / .cpp pairs)
             hence lower-at-resolve, not retag-for-desugar]. EVERY SOURCE of an
             iterable routes through ONE expression dispatch (the dispatchIterExpr
             lambda in the kForEnumStmt arm): a non-ident expression peeks its type
-            (peekIterableType — idents [local / global / const / field entries],
+            (peekIterableType — idents [local / global / const / field entries;
+            an inferred local with no type yet peeks Entry::peek_type],
             derefs, indexes, calls, and FIELD CHAINS `base.f` off the class
             layout, reading through one pointer level for `self` / a convention
             param) and routes on the form; a BARE FIELD name lowers first through

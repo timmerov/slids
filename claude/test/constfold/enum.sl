@@ -238,7 +238,9 @@ an assignment to an enum-typed variable (declared, or inferred from a member),
 a parameter default, a field default, a return, a switch's labels off an
 enum-typed scrutinee, and either side of a comparison. A call argument on its
 own is not a site (the parameter is picked later, by overload ranking), nor is
-a variable inferred from a call — negatives in main.
+a variable inferred from a call — negatives in main. A STORE is a site too: a
+field store (bare in a method, or through an object / pointer — including a
+pointer inferred from `new T`), a deref store, and an index store.
 */
 enum Lang ( kC, kCpp, kPascal, kForth, kSlids );
 
@@ -257,6 +259,12 @@ Lang ctx_fn(Lang lang = kC) {
 
 /* a field default. */
 Speaker(Lang tongue_ = kPascal) {
+    int say() { return tongue_; }
+}
+
+/* a field STORE: bare inside a method (lowers to self.tongue_). */
+Talker(Lang tongue_) {
+    void learn() { tongue_ = kSlids; }
     int say() { return tongue_; }
 }
 
@@ -400,6 +408,27 @@ int32 main() {
     Geo:Dir gd = west;
     println(String + "ctx nested = " + gd);                    // 3
 
+    /* a field store: bare in a method, through an object, through a declared
+       pointer, through a pointer inferred from `new`; a deref store; an index store. */
+    Talker tk;
+    tk.learn();
+    println(String + "ctx field store bare = " + tk.say());    // 4
+    tk.tongue_ = kForth;
+    println(String + "ctx field store obj = " + tk.say());     // 3
+    Talker^ tq = ^tk;
+    tq^.tongue_ = kPascal;
+    println(String + "ctx field store ptr = " + tk.say());     // 2
+    tn = new Talker;
+    tn^.tongue_ = kCpp;
+    println(String + "ctx field store new = " + tn^.say());    // 1
+    delete tn;
+    Lang^ lp = ^cl;
+    lp^ = kSlids;
+    println(String + "ctx deref store = " + cl);               // 4
+    Lang la[2];
+    la[1] = kForth;
+    println(String + "ctx index store = " + la[1]);            // 3
+
     /* NOT in context: a plain int target still needs the qualifier... */
     //-EXPECT-ERROR: 'kC' needs a namespace qualifier
     //int nc1 = kC;
@@ -416,6 +445,10 @@ int32 main() {
     //-EXPECT-ERROR: 'kC' needs a namespace qualifier
     //nc4 = ctx_fn();
     //nc4 = kC;
+
+    /* ...and a field store of a member of a DIFFERENT enum than the field's. */
+    //-EXPECT-ERROR: 'kNorth' needs a namespace qualifier
+    //tk.tongue_ = kNorth;
 
     alias Direction;
     println(String + "kNorth = " + kNorth);

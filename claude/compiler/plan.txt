@@ -885,7 +885,11 @@ Phase 4 — types beyond primitives
     the declared type's alias node (or the frame stamped on a member-initialized
     inferred var); resolve is the stage because constfold substitutes the
     members right after. Not a site: a call argument on its own, a variable
-    inferred from a call, a store through a field (todo.txt). Canon: enum.sl
+    inferred from a call. STORES LANDED 2026-10-16: a field store (bare in a
+    method, through an object / pointer), a deref store, an index store — the
+    target's type peeked (storeEnumFrame over peekIterableType); a local
+    inferred from `new T` peeks as T^ (Entry::peek_type) so `p = new C;
+    p^.f = kC;` reads in context (guthrie map.sl). Canon: enum.sl
     "simplified enums in context"; detail: readme.txt RESOLVE. Deferred enum
     item (reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
     arithmetic result stays char when the folded value fits 0..255, else promotes

@@ -28,7 +28,6 @@ int32 main() {
     */
     Format fmt(,Format:Option:kLeftJustify);
 */
-
     //println("Hello, World!");
 
     return 0;

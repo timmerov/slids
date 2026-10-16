@@ -1940,6 +1940,18 @@ void stampInferredEnum(parse::Tree& tree, int var_id, parse::Node const* rhs) {
     }
 }
 
+// An INFERRED variable initialized from a single-object `new T` (heap or
+// placement) is a `T^`: stamp that as its resolve-time peek type so a store
+// through it (`p^.field = kC;`) finds the field's enum. Any other init shape
+// leaves it unstamped (its type is known only in classify).
+void stampInferredPeekType(parse::Tree& tree, int var_id, parse::Node const* rhs) {
+    if (var_id < 0 || !rhs || rhs->kind != parse::Kind::kNewExpr
+        || rhs->children.empty() || rhs->children[0]
+        || rhs->return_type == widen::kNoType)
+        return;
+    tree.entries[var_id].peek_type = widen::internPointer(rhs->return_type);
+}
+
 bool isComparisonOp(std::string const& op) {
     return op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">=";
 }
@@ -3783,6 +3795,8 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
         if (k != parse::EntryKind::kLocalVar && k != parse::EntryKind::kGlobalVar
             && k != parse::EntryKind::kConst && k != parse::EntryKind::kField)
             return widen::kNoType;
+        if (tree.entries[id].slids_type == widen::kNoType)
+            return tree.entries[id].peek_type;   // inferred: `p = new T;`
         return tree.entries[id].slids_type;
     }
     if (e.kind == parse::Kind::kFieldExpr) {
@@ -4309,6 +4323,13 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
     return resolveStmt(tree, s, diag);
 }
 
+// The enum frame a STORE target is typed with (`obj.field`, `p^.field`, `ref^`,
+// `arr[i]`) — the target's type PEEKED structurally (a field reads its declared
+// type off the class layout), or -1. The ENUM CONTEXT for the store's rhs.
+int storeEnumFrame(parse::Tree& tree, parse::Node& lv, diagnostic::Sink& diag) {
+    return enumFrameForType(tree, peekIterableType(tree, lv, diag));
+}
+
 // Resolve a store lvalue (the target of a kStoreStmt). An index store WRITES
 // its base array — mark it initialized (whole-array definite-assignment; a
 // subscript write assigns the array) but don't require it and don't read-mark
@@ -4643,8 +4664,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 s.children.insert(s.children.begin(),
                     buildFieldLvalue(tree, s.name, fid, s.file_id, s.name_tok, diag));
                 s.kind = parse::Kind::kStoreStmt;
-                if (s.children.size() > 1 && s.children[1])
+                if (s.children.size() > 1 && s.children[1]) {
+                    EnumContext ectx(tree, storeEnumFrame(tree, *s.children[0], diag));
                     resolveExpr(tree, *s.children[1], diag);
+                }
                 return Completion::Normal;
             }
             // Inferred-init / reassign: a typeless bare-name assign. The declare-vs-reuse
@@ -4672,6 +4695,8 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     }
                     stampInferredEnum(tree, s.resolved_entry_id,
                                       s.children.empty() ? nullptr : s.children[0].get());
+                    stampInferredPeekType(tree, s.resolved_entry_id,
+                                          s.children.empty() ? nullptr : s.children[0].get());
                     tree.initialized_locals.insert(s.resolved_entry_id);
                     return Completion::Normal;
                 }
@@ -4786,6 +4811,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // children[0] = lvalue (kDerefExpr / kIndexExpr), [1] = rhs.
             resolveStoreTarget(tree, *s.children[0], diag);
             if (s.children.size() > 1 && s.children[1]) {
+                EnumContext ectx(tree, storeEnumFrame(tree, *s.children[0], diag));
                 resolveExpr(tree, *s.children[1], diag);
             }
             return Completion::Normal;
