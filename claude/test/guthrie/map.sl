@@ -41,15 +41,11 @@ Tree(
                 link^ = tree;
                 break;
             }
-            if (where^.left_ == nullptr) {
-                where^.left_ = tree;
-                break;
+            if (key^ < where^.key_) {
+                link = ^where^.left_;
+            } else {
+                link = ^where^.right_;
             }
-            if (where^.right_ == nullptr) {
-                where^.right_ = tree;
-                break;
-            }
-            link = ^where^.left_;
         }
 
         return tree;
@@ -66,15 +62,13 @@ Tree(
     }
 
     void print(int spaces = 0) {
-        print_spaces(spaces);
         if (^self == nullptr) {
-            println("none");
             return;
         }
+        left_^.print(spaces+2);
+        print_spaces(spaces);
         println(key_ + " - " + value_);
-        spaces += 2;
-        left_^.print(spaces);
-        right_^.print(spaces);
+        right_^.print(spaces+2);
     }
 
     void print_spaces(int spaces) {
