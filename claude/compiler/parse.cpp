@@ -225,6 +225,7 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
     c->is_reopen = n.is_reopen;
     c->is_incomplete = n.is_incomplete;
     c->is_construction = n.is_construction;
+    c->fill_from_slot = n.fill_from_slot;
     c->is_temp_init = n.is_temp_init;
     c->ctor_no_args = n.ctor_no_args;
     c->ctor_lowered = n.ctor_lowered;

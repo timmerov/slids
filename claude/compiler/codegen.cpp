@@ -2403,7 +2403,15 @@ void emitArrayFromTuple(std::string const& alloca_name, widen::TypeRef arrType,
 // no site fill may touch it (see emitTupleFromTuple).
 bool slotCtorOwned(widen::TypeRef t) {
     widen::TypeRef s = widen::strip(t);
-    if (widen::form(s) == widen::Type::Form::kSlid) return widen::slidOpaque(s);
+    // An opaque slot with an ANCHORED PREFIX is only PARTLY ctor-owned: the prefix is the
+    // site's to fill (here, by recursing through emitInitFill, which stops at the prefix),
+    // and @Op__$ctor fills the rest. Asked only of a class an importer DECLARES, whose
+    // visible slots ARE that prefix; in the completer every field is visible and the slot
+    // stays wholly ctor-owned, as it has always been.
+    if (widen::form(s) == widen::Type::Form::kSlid)
+        return widen::slidOpaque(s)
+            && !(widen::slidLinkage(s) == widen::Type::Linkage::kDeclare
+                 && !widen::get(s).slots.empty());
     if (widen::form(s) == widen::Type::Form::kArray)
         return slotCtorOwned(widen::get(s).elem);
     return false;
@@ -2429,7 +2437,11 @@ void emitTupleFromTuple(std::string const& addr, widen::TypeRef tupType,
     std::vector<widen::TypeRef> slots = widen::get(ts).slots;   // copy: no dangle
     assert(rhs.children.size() == slots.size()
         && "emitTupleFromTuple: slot count != literal element count (classify validated)");
-    for (std::size_t i = 0; i < slots.size(); i++) {
+    // THE ANCHORED PREFIX belongs to the SITE, so the one fill that runs INSIDE an opaque
+    // class's @C__$ctor starts past it (resolve stamps the bound on that placement-new's
+    // construction). Everywhere else the bound is 0 and every slot is filled.
+    std::size_t first = static_cast<std::size_t>(rhs.fill_from_slot);
+    for (std::size_t i = first; i < slots.size(); i++) {
         widen::TypeRef sty = slots[i];
         // An OPAQUE slot of a COMPUTED-layout class is CTOR-OWNED in every TU:
         // its default-fill happens inside the shared complete ctor (@C__$ctor →
@@ -2470,17 +2482,34 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
                   SymTab const& syms, strings::Pool& pool, std::ostream& out,
                   diagnostic::Sink& diag) {
     widen::Type::Form dform = widen::form(widen::strip(type));
-    // An OPAQUE class an importer only DECLARES gets NO site fill. The construction split
-    // hands the whole default-fill to @C__$ctor (a placement-new in the completer, where
-    // the layout is known), so the tuple classify built here is the completer's business,
-    // not ours — and we could not place it anyway. Harmless-looking for a class with no
-    // visible fields (an empty `store undef`), but a class deriving from an opaque base
-    // HAS visible fields, and filling them meant building a whole-struct value against the
-    // `{ i8 }` placeholder. A whole-VALUE init (a copy from another instance) is not this
-    // case: it is not a tuple literal, and it dispatches through @C__$copy below.
+    // An OPAQUE class an importer only DECLARES is filled HERE up to its ANCHORED PREFIX
+    // and no further: the site owns the fields it can see, @C__$ctor owns the rest, and the
+    // hooks then see every field initialized (readme-classes.txt THE ANCHORED PREFIX). The
+    // importer's own field list IS the prefix — its completion was stripped — so "every
+    // slot of the tuple classify built" is exactly [0, k), and slot-wise is the only way to
+    // place it: the class's LLVM type here is the `{ i8 }` placeholder, so a whole-struct
+    // value would be built against the wrong shape (which is what the old whole-fill did
+    // before this returned early). k == 0 — an all-private class — has no slot to fill, and
+    // classify refuses a list for it besides. A whole-VALUE init (a copy from another
+    // instance) is not this case: it is not a tuple literal, and it dispatches through
+    // @C__$copy below.
     if (dform == widen::Type::Form::kSlid && init.kind == ast::Kind::kTupleExpr
         && widen::slidOpaque(widen::strip(type))
         && widen::slidLinkage(widen::strip(type)) == widen::Type::Linkage::kDeclare) {
+        if (!widen::get(widen::strip(type)).slots.empty())
+            emitTupleFromTuple(addr, type, init, is_move, syms, pool, out, diag);
+        return;
+    }
+    // A PARTIAL fill — the construction inside an opaque class's @C__$ctor, which owns
+    // only the slots past the ANCHORED PREFIX — cannot be a whole-value store by
+    // definition: the prefix already holds what the SITE placed, and one `store` of the
+    // built struct would overwrite it (measured: @Hybrid__$ctor stored `{ 0, 37 }` over
+    // the site's `a = 1`). The completer sees a STATIC layout, so it would otherwise take
+    // the whole-value path at the bottom of this function. Distribute slot-wise instead;
+    // emitTupleFromTuple starts at the bound.
+    if (dform == widen::Type::Form::kSlid && init.kind == ast::Kind::kTupleExpr
+        && init.fill_from_slot > 0) {
+        emitTupleFromTuple(addr, type, init, is_move, syms, pool, out, diag);
         return;
     }
     // A COMPUTED-layout class filled from its construction tuple: its fields are

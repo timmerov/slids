@@ -3837,10 +3837,10 @@ CROSS-CUTTING — AN IMPORTED INCOMPLETE CLASS REFUSES AN INITIALIZER LIST (LAND
   and only one side was right. Nothing had caught it because no opaque class in the tree had a
   public prefix; the only `(field, ..., )` anywhere was Part<T>, a template, which is never
   opaque. test/import's Hyb is the first canon the shape has ever had.
-  STILL OPEN (todo.txt): PLACING the prefix at the site. Not the class-field seam — storing before
-  the call is fine and the hooks then see every field initialized. It needs a parameterized
-  @C__$ictor beside synthesizeOpaqueCtor, taking the visible prefix as parameters so the hidden
-  tail under-fills to defaults; five pieces, all inside the construction funnel.
+  CLOSED THE NEXT DAY by THE ANCHORED PREFIX (below, 2026-10-15) — and NOT by the parameterized
+  @C__$ictor this entry proposed: the site places the prefix and @C__$ctor fills only past it,
+  so no second symbol was needed. What survives from this entry is the measurement and the
+  two-symbol split; the refusal it describes now fires only for an all-private class.
   Detail: readme-classes.txt A CLASS FIELD THAT WOULD NEED A TRANSFER (the bullet after it) and
   OPAQUE CLASSES (THE PUBLIC HALF IS ONLY TRUE IN THE COMPLETER); readme.txt SOURCE-PRIVATE
   FIELDS (THE OPAQUE TWIN OF THAT ARITY CAP).
@@ -3892,6 +3892,62 @@ CROSS-CUTTING — THE TWO INSTANTIATION SHAPES ARE TWO OPERATIONS (LANDED 2026-1
   Detail: readme-classes.txt THE TWO INSTANTIATION SHAPES ARE TWO OPERATIONS, plus the
   CLASS-FROM-A-VALUE and A CLASS FIELD THAT WOULD NEED A TRANSFER bullets on either side of it;
   readme.txt's op= matrix cell and the copy-into bullet.
+
+CROSS-CUTTING — THE ANCHORED PREFIX (LANDED 2026-10-15)
+  An opaque class's construction is divided between two TUs, and this is the number the
+  division rides on: k = the leading fields declared in the HEADER, before the first one the
+  completing re-open supplied. THE SITE FILLS [0, k) AND @C__$ctor FILLS [k, n), hooks last.
+  So `Hybrid hyba(1)` places the 1 BEFORE the hook, which is what the construction form means
+  (construct.sl's canon), and the private tail stays the completer's. Before this the
+  initializer forms were refused outright, because an importer's site emitted no field fill at
+  all and the list was accepted and then DISCARDED.
+  NO NEW SYMBOL, which was the point of the design argument. The user rejected the
+  parameterized @C__$ictor the old todo entry described — "we have a nice paradigm going, let's
+  not sully it" — and gave the lowering instead: the site initializes the anchored fields, the
+  ctor initializes the private ones and chains to the hook. Two of my objections to that did
+  not survive: the ABI/signature argument was C++ thinking (a re-open cannot add fields unless
+  the class is incomplete, and an incomplete class's prefix is fixed by its header), and the
+  ctor-owned-slot objection ("codegen has no ClassInfo") dissolves because the values come from
+  the construction tuple classify already builds recursively, not from a type walk.
+  THE SPLIT IS A PROPERTY OF THE HEADER, NEVER OF THE VIEWER — that is what lets ONE exported
+  symbol carry it. An importer's whole field list IS the prefix (its completion was stripped),
+  and the completer counts the leading run whose kParam sits in the imported header
+  (anchoredPrefixCount). The prefix is placeable in every TU for the same reason it is a
+  PREFIX: nothing hidden precedes it, so its offsets follow from the visible types alone — the
+  fact the field WRITE already relied on. A class with public fields AFTER a private one would
+  need a per-field visible/hidden MAP instead of one number, and the canon says no: the fields
+  before the first private one are ANCHORED, that one and everything after it is STRANDED.
+  SIX PIECES, five of them planned. `fill_from_slot` (one int on parse/ast, stamped by resolve
+  on @C__$ctor's synthesized placement-new, carried onto the construction tuple by classify);
+  the refusal arm narrowed to k == 0, so the ordinary arity check caps the list; the site fill
+  of a kDeclare opaque class distributes slot-wise instead of returning early; slotCtorOwned
+  narrowed, so an EMBEDDED opaque slot is only PARTLY ctor-owned; emitTupleFromTuple's loop
+  starts at the bound.
+  THE SIXTH WAS FOUND BY READING THE IR, and it is the one a golden could not have told apart
+  from the original bug. In the COMPLETER the class has a STATIC layout, so @C__$ctor's
+  construction took the whole-value `insertvalue` + one `store` path and wrote `{ 0, 37 }`
+  straight over the site's `a = 1` — printing `a=0`, exactly what the old silent drop looked
+  like. A partial fill can never be a whole-value store, so emitInitFill now forces slot-wise
+  whenever the bound is nonzero.
+  MEASURED AT ALL SIX CONSTRUCTION SITES, in the IR and not only in the goldens, because this
+  bug's whole history is "emitted IR identical to the default case, no diagnostic": a local
+  with a list (`store i32 1` then the ctor), a local without one, `new Hybrid(7)`, a stack
+  array (`a=0` — initialized, not undefined), an EMBEDDED one (`store 3` at slot 0 and
+  `store 4` at `@Hybrid__$sizeof`, through the computed layout), and a GLOBAL's first-touch
+  thunk. The completer's own @Hybrid__$ctor now stores slot 1 alone and chains to
+  @Hybrid__$pctor.
+  CANON. test/import tmpl_test.sl carries the user's two-form canon plus the other four sites
+  and Hyhold / hyg; tmpl_lib.sl's hybpriv() is the library-side witness (the completer's site
+  reaches `b` by list — 102 — the half of the seam a consumer cannot observe); consumer.sl's
+  two in-arity Hyb negatives became POSITIVES (`hyb init` / `hyb value`, both 1041) and its
+  over-fill negative now reads the arity message.
+  STILL DEFERRED, by the user's call: Format's initialization (it derives from String, so its
+  stranding field is the BASE at slot 0 and its seven public fields are all stranded); an
+  EMPTY SLOT un-stranding a visible-but-unsettable position (`Format fmt(,kLeft)`), which is
+  what would make Format usable; and the general stranded-TAIL diagnostics, which only become
+  observable once that empty-slot hatch exists.
+  Detail: readme-classes.txt OPAQUE CLASSES → THE ANCHORED PREFIX, and the AN IMPORTED
+  INCOMPLETE CLASS REFUSES AN INITIALIZER LIST bullet; readme.txt SOURCE-PRIVATE FIELDS.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

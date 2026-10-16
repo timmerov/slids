@@ -197,3 +197,8 @@ Gauge(int g_ = 0) {
 Hybrid(int a, ...) {
     void print();
 }
+
+/* the library-side witness: the source's own TU sees BOTH of Hybrid's fields, so its
+   site fills the whole list and calls the hook-only entry — the half of the split a
+   consumer cannot observe. */
+int hybpriv();

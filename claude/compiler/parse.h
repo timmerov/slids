@@ -390,6 +390,11 @@ struct Node {
                                  // valid when Name is a class — a parenless default
                                  // construction (`Name` == `Name()`); resolveCallTarget
                                  // rejects a parenless non-class so `f;` is not a call.
+    int fill_from_slot = 0;      // kTupleExpr / kNewExpr: the first slot this
+                                 // construction FILLS. Nonzero only inside an opaque
+                                 // class's synthesized @C__$ctor, where the slots
+                                 // before it are the ANCHORED prefix the SITE owns —
+                                 // see readme-classes.txt THE ANCHORED PREFIX.
     bool class_conversion = false; // kConvertExpr: a `(Class = src)` conversion whose
                                  // TARGET is a class — classify rewrites its children to
                                  // [default-construct `_$cret` decl, `_$cret.op=(src)`

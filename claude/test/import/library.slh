@@ -241,10 +241,11 @@ NoCtor(int a_) { }
    The first one in the tree: every other incomplete class here is all-hidden `(...)`,
    and the only `(field, ..., )` anywhere was Part<T>, a template, which is never opaque.
    So nothing exercised the half-way shape, and the half-way shape was broken: an
-   importer's site emits no field fill (it calls @Hyb__$ctor, which default-fills
-   everything), so a list within the visible arity was accepted and then DISCARDED —
-   `Hyb h(10)` emitted IR identical to `Hyb h;`. It is now refused instead; see
-   consumer.sl's negatives, and todo.txt for the @C__$ictor design that would place it. */
+   importer's site emitted no field fill at all (it just called @Hyb__$ctor, which
+   default-filled everything), so a list within the visible arity was accepted and then
+   DISCARDED — `Hyb h(10)` emitted IR identical to `Hyb h;`. Since 2026-10-15 the site
+   places that prefix and @Hyb__$ctor fills only past it: `pub_` is the ANCHORED PREFIX,
+   `hid_` is the stranded tail. Over-filling is the one remaining rejection. */
 Hyb(int pub_, ...) {
     _(); ~();
     int total();

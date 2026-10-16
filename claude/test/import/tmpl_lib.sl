@@ -200,3 +200,11 @@ Hybrid(int b = 37) {
         println(String + "a=" + a + " b=" + b);
     }
 }
+
+/* the completer owns the private tail, so HERE the list reaches it: `b` is nameable and
+   initializer-mappable in this file alone, and the site fills both fields before the
+   hooks. An importer's same spelling is an arity error (tmpl_test's hybc). */
+int hybpriv() {
+    Hybrid h(1, 2);
+    return h.a * 100 + h.b;
+}

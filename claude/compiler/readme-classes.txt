@@ -498,7 +498,8 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     op='d with NO temp and NO copy. EXCLUDED from op= (they stay their old paths): a same-class
     VALUE (a copy — the whole-value store), and a class FIELD reached WITHOUT a peel sink
     (constructClass field-list — there a field's transfer cannot hoist past the enclosing ctor;
-    todo.txt). WITH a sink the field reaches its op= like any other slot — the bullet above. THE TWO SPELLINGS ARE TOLD
+    todo.txt). WITH a sink the field reaches its op= like any other slot — see the
+    bullet above. THE TWO SPELLINGS ARE TOLD
     APART IN THE PARSER: `Class c(args)` and `Class c = (tuple)` both lower to one tuple child, so
     grammar sets `construction_init` on the `(args)` form — ALWAYS field-list, never a value op=
     (the `= Class(args)` construction->tuple rewrite sets it too, so a `(5)` collapsing to a
@@ -514,7 +515,8 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     (`Super s = ((1,2,3),4)`) whose field class has a matching user op= used to report "cannot
     dispatch 'Class.op='". The `=` spelling peels, so that operator now dispatches after the
     enclosing ctor and the diagnostic is gone (THE TWO INSTANTIATION SHAPES). What is left here
-    is the CONSTRUCTION spelling, where there is no seam to put a transfer in. The copy/move gate is `sub.needs_ctor || sub.needs_dtor ||
+    is the CONSTRUCTION spelling, where there is no seam to put a transfer
+    in. The copy/move gate is `sub.needs_ctor || sub.needs_dtor ||
     userSelfTransferOpId(field, op) >= 0`: the last term (a DIRECT scan of the class + base frames
     for a NON-synthesized self-transfer op `op=(Self^)` / `op<--(Self^)`) catches a TRIVIAL-BUCKET
     field class — a user op= / op<-- but NO ctor/dtor — that needs_ctor/needs_dtor and
@@ -532,13 +534,18 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     MITIGATION until the construction interleave lands (field hooks -> field transfers -> own ctor;
     todo.txt): a clean compile error instead of the old silent wrong-order blit. Canon construct.sl
     neg_field_copy / neg_field_move / neg_field_value_init_op / neg_field_*_oponly / neg_base_copy.
-  * AN IMPORTED INCOMPLETE CLASS REFUSES AN INITIALIZER LIST (2026-10-14), at two depths, because
-    an importer's site places no fields at all (OPAQUE CLASSES below: kDeclare routes to
-    @C__$ctor, which default-fills everything). Both say "has private fields that cannot be set
-    using initializer list syntax" with a note at the incomplete declaration — never a FIELD COUNT,
-    which the arity check used to give and which reads as a claim about the TYPE rather than about
-    this file's view of it.
-    - THE WHOLE OBJECT (`Rope s("x")`, `Hyb h(10)`): an arm beside the derived-from-opaque one at
+  * AN IMPORTED INCOMPLETE CLASS REFUSES AN INITIALIZER LIST (2026-10-14) WHEN IT HAS NOTHING
+    VISIBLE TO PUT ONE IN (narrowed 2026-10-15), at two depths. Both say "has private fields that
+    cannot be set using initializer list syntax" with a note at the incomplete declaration —
+    never a FIELD COUNT, which the arity check used to give and which reads as a claim about the
+    TYPE rather than about this file's view of it.
+    THE GATE IS NOW k == 0 (THE ANCHORED PREFIX, below). A class with public fields before the
+    `...` lets the site place that prefix, so its list is legal up to the prefix width and the
+    ORDINARY arity check caps it — for Hyb, "has 1 field(s) but 2 initializer(s)", which is the
+    right story there: the private tail is not a slot a consumer can see, so it is not one it
+    may supply. Only a class with nothing visible has no slot to put a value in, and that is
+    what this arm now says.
+    - THE WHOLE OBJECT (`Rope s("x")`): an arm beside the derived-from-opaque one at
       the head of classifyClassInit. It admits a TUPLE child (the `(args)` and `= (tuple)` forms)
       and ALSO a non-tuple value whose type is known and is NOT this class — a one-slot list
       COLLAPSES to its scalar, so the tuple test alone let `= (10)` through. The same-class
@@ -551,7 +558,8 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
       DEFAULT-constructs rather than recursing with the value — the recursion would otherwise add
       its own arity miss, two errors for one mistake.
     An EMPTY list is the all-default form (`Rope r()` == `Rope r;`) and stays legal. Canon
-    test/import: Rope + Sack + Hyb negatives in consumer.sl.
+    test/import: Rope + Sack negatives in consumer.sl, plus Hyb's over-fill (its in-arity
+    spellings are POSITIVES there — `hyb init` / `hyb value`, both 1041).
   * CTOR/DTOR are scope HOOKS, not the constructor — fields are initialized first,
     the ctor runs after, the dtor at scope exit. `_(){}` / `~(){}` parse as
     kFunctionDef with an implicit receiver param `_$recv` (`Name^`); a bare field
@@ -1779,23 +1787,39 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     CONSTRUCTION IS DIVIDED BETWEEN TWO SITES, and this is the whole feature: the PUBLIC fields
     (any before the `...`) are filled at the call site as usual; the HIDDEN fields are filled by
     the class's OWN ctor.
-    THE PUBLIC HALF IS ONLY TRUE IN THE COMPLETER (measured 2026-10-14). An IMPORTER's site
-    emits no field fill at all — emitConstructHooks routes kDeclare to @C__$ctor, which
-    default-fills EVERYTHING — so a public prefix supplied at an importer's site was accepted
-    and then DISCARDED: `Hyb h(10)` emitted IR identical to `Hyb h;`. Nothing caught it because
-    until then no opaque class in the tree had a public prefix (the only `(field, ..., )` was
-    Part<T>, a template, which is never opaque). The initializer forms are now REFUSED rather
-    than dropped ("has private fields that cannot be set using initializer list syntax"); the
-    field WRITE works and is the route (`Hyb h; h.pub_ = 10;` — appending hidden fields never
-    moves an earlier one, so the offset is known). Canon test/import Hyb. Making the site place
-    the prefix needs a parameterized @C__$ictor — a second synthesized placement-new taking the
-    visible prefix as parameters, so the hidden tail under-fills to defaults and the hooks still
-    see every field initialized; see todo.txt.
+    THE ANCHORED PREFIX (LANDED 2026-10-15) is the number that division rides on. `k` = the
+    leading fields declared in the HEADER, before the first one the completing re-open supplied.
+    THE SITE FILLS [0, k) AND @C__$ctor FILLS [k, n), and the hooks then see every field
+    initialized — so `Hyb h(10)` places the 10 before the hook runs, in any TU. The split is a
+    property of the HEADER, never of the viewer, which is what lets ONE exported symbol carry
+    it: an importer's whole field list IS the prefix (its completion was stripped), and the
+    completer counts the leading run whose kParam sits in the imported header
+    (resolve::anchoredPrefixCount). The PREFIX is placeable in every TU for the same reason it
+    is a PREFIX — nothing hidden precedes it, so its offsets follow from the visible types
+    alone, which is the fact the field WRITE (`Hyb h; h.pub_ = 10;`) already relied on.
+    WHAT THE SITE OWNS, IT OWNS EVERYWHERE, because the site is the only place that holds
+    VALUES: a local with or without a list, a heap `new`, an array element, an EMBEDDED one
+    (the enclosing site fills through the computed layout — so an opaque slot is only PARTLY
+    ctor-owned now, slotCtorOwned), and a GLOBAL's first-touch thunk. All six are pinned in
+    test/import (tmpl_test's Hybrid rows + Hyhold + hyg; consumer's Hyb rows), and pinned in
+    the IR, not only in the goldens — this bug's whole history is "emitted IR identical to the
+    default case, no diagnostic".
+    THE BOUND IS A NODE FLAG, not a second funnel: parse/ast `fill_from_slot`, stamped by
+    resolve on @C__$ctor's synthesized placement-new and honoured by emitTupleFromTuple's loop
+    start. A PARTIAL fill can never be a whole-value store — in the COMPLETER the class has a
+    static layout, so the construction took the `insertvalue` + one `store` path and wrote
+    `{ 0, 37 }` straight over the site's `a = 1`; emitInitFill now forces slot-wise whenever
+    the bound is nonzero. BEFORE 2026-10-15 the initializer forms were REFUSED instead, because
+    an importer's site emitted no field fill at all and the list was accepted and then
+    DISCARDED (`Hyb h(10)` emitted IR identical to `Hyb h;`); nothing had caught that because
+    no opaque class in the tree had a public prefix until Hyb (the only `(field, ..., )`
+    anywhere was Part<T>, a template, which is never opaque).
     Two symbols carry the split:
-      @C__$ctor  (external) is the COMPLETE ctor an importer calls. It fully default-constructs
-                 the object — every hidden field to its author default, else ZERO, recursing into
-                 class / array / tuple fields exactly as a normal `C c;` site does — then runs the
-                 hooks. It is SYNTHESIZED in resolve (synthesizeOpaqueCtor, at the resolveScopeBodies
+      @C__$ctor  (external) is the COMPLETE ctor an importer calls. It default-constructs
+                 everything PAST THE ANCHORED PREFIX — each such field to its author default,
+                 else ZERO, recursing into class / array / tuple fields exactly as a normal
+                 `C c;` site does — then runs the hooks. For an ALL-private class (k == 0) that
+                 is still the whole object, which is why nothing about String changed. It is SYNTHESIZED in resolve (synthesizeOpaqueCtor, at the resolveScopeBodies
                  choke point, only for kDefine) as a real method whose body is a PLACEMENT NEW into
                  the receiver pointer: `void _(C^ _$recv){ void^ _p = _$recv; _p = new(_p) C; }`.
                  That reuses THE construction funnel wholesale (classifyClassInit fills the defaults

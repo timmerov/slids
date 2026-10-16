@@ -122,6 +122,8 @@ struct Node {
     int op_eq_lhs_eid = -1;      // 1-arg `op=(lhs)`          — the seed of a decomposed head
     int op_eq_rhs_eid = -1;      // 1-arg `op=(rhs)`          — the seed of a COLLAPSED head
     int op_move_eid = -1;        // 1-arg `op<--(Self^)`      — the move INTO a live target
+    int fill_from_slot = 0;      // kTupleExpr: the first slot this construction fills
+                                 // (the anchored prefix before it belongs to the site)
     bool class_conversion = false; // kConvertExpr: a `(Class = src)` conversion to a
                                  // class — children are [default-construct `_$cret`
                                  // decl, `_$cret.op=(src)` call]; resolved_entry_id is

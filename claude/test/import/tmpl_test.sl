@@ -53,6 +53,13 @@ import library;
    (consumer.sl's negatives). */
 /* THIS TU's private `Twin`: ONE field and a different `tv()` — deliberately not
    bird.sl's shape, so a cross-TU mix-up would show in the printed number. */
+/* a hybrid BY VALUE in another class (the container takes a computed layout) and as a
+   global — the two sites whose prefix nothing but the site itself could fill. */
+Hyhold(Hybrid h_, int t_) {
+    void show() { h_.print(); println(String + "hyh.t = " + t_); }
+}
+global Hybrid hyg(8);
+
 Twin(int t_ = 3) {
     int tv() { return t_ + 1; }
 }
@@ -357,7 +364,7 @@ int32 main() {
     //Sack<Loc> sn;
     //sn.hold_ = nullptr;
     //println(String + "sn = " + sn.got());
-/*
+
     /* public and private fields. */
     /*
     this syntax means copy the initializer list to the fields
@@ -376,10 +383,27 @@ int32 main() {
     then the fields are overwritten.
     */
     Hybrid hybb = 2; hybb.print();
-    // error
-    Hybrid hybc(3,4); hybc.print();
-    // error
-    Hybrid hybd = (5,6); hybd.print();
-*/
+
+    /* the private tail is not a slot a consumer can count, so supplying past the
+       anchored prefix is an arity error — in either spelling. */
+    //-EXPECT-ERROR: has 1 field(s) but 2 initializer(s)
+    //Hybrid hybc(3,4); hybc.print();
+
+    //-EXPECT-ERROR: has 1 field(s) but 2 initializer(s)
+    //Hybrid hybd = (5,6); hybd.print();
+
+    /* THE SAME SPLIT AT EVERY OTHER CONSTRUCTION SITE, because the site is the only
+       place that can place the prefix: a HEAP object, a stack ARRAY (no list — the
+       prefix still initializes, it does not go undefined), an EMBEDDED one (the
+       enclosing site fills `h_.a` through the computed layout, and the enclosing ctor's
+       slot walk reaches @Hybrid__$ctor for the private tail), and a GLOBAL (the
+       first-touch thunk). Each prints its own `a` with the one `b` only the completer
+       ever writes. */
+    Hybrid^ hyp = new Hybrid(7); hyp^.print(); delete hyp;
+    Hybrid hyar[2]; hyar[0].print(); hyar[1].print();
+    Hyhold hyh(3, 4); hyh.show();
+    hyg.print();
+    println(String + "hybpriv = " + hybpriv());   // 102: the completer set both
+
     return 0;
 }

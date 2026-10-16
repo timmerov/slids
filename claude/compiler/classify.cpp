@@ -2335,6 +2335,10 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (!is_array && e.children.size() > 2) init = std::move(e.children[2]);
                 auto built = constructClass(tree, info, std::move(init),
                                             e.file_id, e.tok, diag);
+                // A synthesized @C__$ctor's placement-new fills only past the ANCHORED
+                // PREFIX (resolve stamped the bound); carry it onto the tuple codegen
+                // reads. Zero everywhere else, which is "fill every slot".
+                if (built) built->fill_from_slot = e.fill_from_slot;
                 if (e.children.size() <= 2) e.children.resize(3);
                 e.children[2] = std::move(built);
             }
@@ -4549,9 +4553,15 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
             || (s.children[0]->inferred_type != widen::kNoType
                 && widen::deepStrip(s.children[0]->inferred_type)
                      != widen::deepStrip(info.type)));
+    // SINCE 2026-10-15 THIS IS THE k == 0 CASE ONLY. A class with an ANCHORED PREFIX —
+    // public fields before the `...` — lets the site place that prefix and leaves the rest
+    // to @C__$ctor, so its list is legal up to the prefix width and the ordinary arity
+    // check below caps it. Only a class with NOTHING visible has no slot to put a value
+    // in, and that is what this arm now says.
     if (!subobject && init_list
         && widen::slidOpaque(its)
-        && widen::slidLinkage(its) == widen::Type::Linkage::kDeclare) {
+        && widen::slidLinkage(its) == widen::Type::Linkage::kDeclare
+        && flatVisibleFieldWidth(tree, info.type, s.file_id) == 0) {
         // Caret the first supplied slot, where the arity check used to point (an empty
         // slot is a nullptr, so find the first real one). A collapsed one-slot list has
         // no slots to walk — the value itself is the caret.

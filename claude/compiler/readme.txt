@@ -1508,17 +1508,18 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   cap (an all-private completion rejects "0 field(s)", byte-symmetric with
   a plain opaque class's starvation). Canon test/import Part/PDer/Sack.
   THE OPAQUE TWIN OF THAT ARITY CAP IS NO LONGER A COUNT (2026-10-14). An
-  IMPORTED INCOMPLETE class refuses an initializer list outright — "has
-  private fields that cannot be set using initializer list syntax", note at
-  the incomplete declaration — at two depths: the whole object
-  (`Rope s("x")`) and a FIELD of such a class (`Sack k(1, "x")`, which
-  names the field and its owner, since only the field loop still knows
-  them). It replaced a bare "0 field(s) but N initializer(s)", which was
-  true of this TU's VIEW and read as a claim about the type. It also closed
-  a silent drop on the HYBRID shape (public fields before the `...`), where
-  a list within the visible arity passed the count and was then discarded —
-  see readme-classes OPAQUE CLASSES, THE PUBLIC HALF IS ONLY TRUE IN THE
-  COMPLETER. Canon test/import Rope / Sack / Hyb.
+  IMPORTED INCOMPLETE class with NOTHING VISIBLE refuses an initializer list
+  outright — "has private fields that cannot be set using initializer list
+  syntax", note at the incomplete declaration — at two depths: the whole
+  object (`Rope s("x")`) and a FIELD of such a class (`Sack k(1, "x")`,
+  which names the field and its owner, since only the field loop still
+  knows them). It replaced a bare "0 field(s) but N initializer(s)", which
+  was true of this TU's VIEW and read as a claim about the type.
+  THE HYBRID SHAPE IS NOT THAT CASE ANY MORE (2026-10-15). Public fields
+  before the `...` are the ANCHORED PREFIX: the site fills them and
+  @C__$ctor fills the rest, so `Hyb h(10)` places the 10 and only an
+  OVER-fill is rejected, by the ordinary count. See readme-classes OPAQUE
+  CLASSES, THE ANCHORED PREFIX. Canon test/import Rope / Sack / Hyb.
 
   THE VISIBILITY RULE (canon 2026-10-14) — the NAME half of the sentence
   above, and the close of the IMPORT LEAK. Everything a header declares is

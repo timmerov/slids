@@ -236,14 +236,22 @@ int32 main() {
     hello.set("goodbye");
     println(String + hello.get() + " " + hello.tag());
 
-    // THE HYBRID SHAPE: a public field before the `...`. Default construction fills it
-    // (41 = pub_ 0, hid_ 41), and a WRITE places it (1041) — the offset is known here,
-    // since appending hidden fields can never move an earlier one. Only the INITIALIZER
-    // forms are refused (negatives below), which is the open half of the bug.
+    // THE HYBRID SHAPE: a public field before the `...` — the ANCHORED PREFIX. This TU
+    // places that one field and @Hyb__$ctor places the rest, so all four spellings work
+    // and the printed number says which half ran: a dropped pub_ reads 41, a placed one
+    // 1041. The offset is knowable here because appending hidden fields can never move an
+    // earlier one — the same fact that makes the prefix, and only the prefix, placeable.
     Hyb hy;
     println(String + "hyb default: " + hy.total());
     hy.pub_ = 10;
     println(String + "hyb write:   " + hy.total());
+    // The CONSTRUCTION form: the site stores pub_, then the ctor fills hid_, so the hook
+    // sees both (construct.sl's canon, here across the seam).
+    Hyb hi(10);
+    println(String + "hyb init:    " + hi.total());
+    // The ASSIGNMENT form: default-construct, hook, THEN assign — same answer, other order.
+    Hyb hv = (10);
+    println(String + "hyb value:   " + hv.total());
 
     // A second incomplete class: default-construct it and read every FIELD KIND the
     // completer's @Mix__$ctor initialized for us (we can see none of them). Proves the
@@ -591,20 +599,11 @@ be runtime-sized, so the symbol holds a pointer to a heap object built on first 
 //-EXPECT-ERROR: of 'Sack' has type 'Rope', whose private fields cannot be set
 //void neg_field_init_value() { Sack k = (1, "x", 3); k; }
 
-/* THE HYBRID SHAPE (library.slh's Hyb — public pub_ before the `...`). The arity check
-   does NOT catch a list within the visible arity, so `Hyb h(10)` used to compile and
-   DISCARD the 10: an importer's site emits no field fill, it just calls @Hyb__$ctor,
-   which default-fills everything. Both spellings are refused now. The legal route is
-   the field WRITE, which works and is a live row in main (hyb above). */
-//-EXPECT-ERROR: 'Hyb' has private fields that cannot be set using initializer list syntax
-//void neg_hyb_init() { Hyb h(10); h; }
-
-//-EXPECT-ERROR: 'Hyb' has private fields that cannot be set using initializer list syntax
-//void neg_hyb_value() { Hyb h = (10); h; }
-
-/* the OVER-fill now gets the same message rather than counting the one visible field —
-   the extra value is reaching a private one. */
-//-EXPECT-ERROR: 'Hyb' has private fields that cannot be set using initializer list syntax
+/* THE HYBRID SHAPE, over-filled. Both in-arity spellings are POSITIVES now (hyb init /
+   hyb value in main); what is left to reject is a list that reaches PAST the anchored
+   prefix, and the count is the right story there: the private tail is not a slot a
+   consumer can see, so it is not one it may supply. */
+//-EXPECT-ERROR: has 1 field(s) but 2 initializer(s)
 //void neg_hyb_over() { Hyb h(10, 2); h; }
 
 /* BY-VALUE parameters are prohibited — the standing non-primitive rule; an opaque

@@ -8751,6 +8751,23 @@ void synthesizeClassTransferOps(parse::Tree& tree, parse::Node& cnode,
     }
 }
 
+// THE ANCHORED PREFIX of an opaque class: the number of leading fields an IMPORTER can
+// see, i.e. the ones declared in the HEADER, before the first field the completing re-open
+// supplied. It is the one number the two TUs split construction on — the SITE fills
+// [0, k) and @C__$ctor fills [k, n) — so both must compute it identically, and they do,
+// because it is a property of the HEADER and not of the viewer: an importer's whole field
+// list IS the prefix (its completion was stripped), and the completer counts the leading
+// run whose declaring `kParam` sits in the imported header. A class with no `...` has no
+// completion, so every field is anchored.
+int anchoredPrefixCount(parse::Tree const& tree, parse::ClassInfo const& info) {
+    std::size_t k = 0;
+    for (; k < info.field_params.size(); k++) {
+        parse::Node const* p = info.field_params[k];
+        if (!p || !fileIsImported(tree, p->file_id)) break;
+    }
+    return static_cast<int>(k);
+}
+
 // Synthesize @C__$ctor — the COMPLETE constructor of an OPAQUE class (one declared
 // incomplete in a header, completed by its sibling `.sl`). An importer sees the class as
 // opaque: it knows the class exists and can name its methods, but not its fields, size, or
@@ -8814,6 +8831,15 @@ void synthesizeOpaqueCtor(parse::Tree& tree, parse::Node& cnode,
     newx->children.push_back(nullptr);        // [0] array size — single object
     newx->children.push_back(ident("_p"));    // [1] placement address
     newx->children.push_back(nullptr);        // [2] ctor args — none => all defaults
+    // ...except the ANCHORED PREFIX, which the SITE already stored: an importer fills the
+    // fields it can see and then calls this symbol for the rest. Filling them again here
+    // would overwrite the values the site placed — the hooks below must see what was
+    // passed, not the defaults. k == 0 (an all-private class) fills everything, as before.
+    {
+        auto ci = tree.classes.find(cstrip);
+        if (ci != tree.classes.end())
+            newx->fill_from_slot = anchoredPrefixCount(tree, ci->second);
+    }
     auto asn = std::make_unique<parse::Node>();
     asn->kind = parse::Kind::kAssignStmt;
     asn->name = "_p";

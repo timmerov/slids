@@ -21,10 +21,14 @@ import string;
 
 int32 main() {
 /*
-    Class(String s, String t) { }
-    Class cls = ("Hello", "World!");
-    println(String + cls.s + " " + cls.t);
+    /*
+    it would be nice if this worked.
+    not optimistic.
+    there's a todo.
+    */
+    Format fmt(,Format:Option:kLeftJustify);
 */
+
     //println("Hello, World!");
 
     return 0;
