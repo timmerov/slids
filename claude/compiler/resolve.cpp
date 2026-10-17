@@ -1910,17 +1910,18 @@ struct EnumContext {
 };
 
 widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
-                                diagnostic::Sink& diag);
+                                diagnostic::Sink& diag, bool peek_calls = false);
 
 // The enum frame a comparison operand would lend the OTHER side — peeked WITHOUT
 // resolving the node: a bare ident naming an enum-typed variable / const / class
 // FIELD (a method body's kField entry carries the declared type), or a field /
-// deref / index lvalue whose type peeks structurally (`obj.f`, `p^.f`, `ref^`,
-// `arr[i]` — the same peek a store target reads).
+// deref / index lvalue or a call whose type peeks structurally (`obj.f`, `p^.f`,
+// `ref^`, `arr[i]`, `f()`, `p^.m()` — the same peek a store target reads).
 int peekEnumFrame(parse::Tree& tree, parse::Node& n, diagnostic::Sink& diag) {
     if (n.kind == parse::Kind::kFieldExpr || n.kind == parse::Kind::kDerefExpr
-        || n.kind == parse::Kind::kIndexExpr)
-        return enumFrameForType(tree, peekIterableType(tree, n, diag));
+        || n.kind == parse::Kind::kIndexExpr || n.kind == parse::Kind::kCallExpr
+        || n.kind == parse::Kind::kMethodCallStmt)
+        return enumFrameForType(tree, peekIterableType(tree, n, diag, /*peek_calls=*/true));
     if (n.kind != parse::Kind::kIdentExpr || isQualified(n)) return -1;
     int id = resolveName(tree, n.name);
     if (id < 0) return -1;
@@ -1954,9 +1955,9 @@ void stampInferredEnum(parse::Tree& tree, int var_id, parse::Node const* rhs) {
 // An INFERRED variable whose init's type reads off its STRUCTURE gets that type
 // as its resolve-time peek type, so a store / comparison through it
 // (`p^.field = kC;`) finds the field's enum: a single-object `new T` (heap or
-// placement) is a `T^`; an unqualified name / field / deref / index peeks
-// (peekIterableType). Any other init shape — a CALL above all (its overload, and
-// so its type, is picked in classify) — leaves it unstamped.
+// placement) is a `T^`; an unqualified name / field / deref / index / call peeks
+// (peekIterableType — a call only when every overload agrees on its return
+// type). Any other init shape leaves it unstamped.
 void stampInferredPeekType(parse::Tree& tree, int var_id, parse::Node* rhs,
                            diagnostic::Sink& diag) {
     if (var_id < 0 || !rhs) return;
@@ -1969,8 +1970,10 @@ void stampInferredPeekType(parse::Tree& tree, int var_id, parse::Node* rhs,
     }
     if ((rhs->kind == parse::Kind::kIdentExpr && !isQualified(*rhs))
         || rhs->kind == parse::Kind::kFieldExpr || rhs->kind == parse::Kind::kDerefExpr
-        || rhs->kind == parse::Kind::kIndexExpr)
-        tree.entries[var_id].peek_type = peekIterableType(tree, *rhs, diag);
+        || rhs->kind == parse::Kind::kIndexExpr || rhs->kind == parse::Kind::kCallExpr
+        || rhs->kind == parse::Kind::kMethodCallStmt)
+        tree.entries[var_id].peek_type =
+            peekIterableType(tree, *rhs, diag, /*peek_calls=*/true);
 }
 
 bool isComparisonOp(std::string const& op) {
@@ -3795,6 +3798,62 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
     return Completion::Normal;
 }
 
+// The return type every overload in an overload set DECLARES, or kNoType when they
+// disagree (the winner is picked only by classify's ranking) or one is a template
+// (its return may name a template parameter). A function entry's slids_type IS its
+// return type.
+widen::TypeRef unanimousReturn(parse::Tree& tree, std::vector<int> const& ids) {
+    widen::TypeRef ret = widen::kNoType;
+    for (int id : ids) {
+        parse::Entry const& f = tree.entries[id];
+        if (f.is_template || f.slids_type == widen::kNoType) return widen::kNoType;
+        if (ret == widen::kNoType) ret = f.slids_type;
+        else if (f.slids_type != ret) return widen::kNoType;
+    }
+    return ret;
+}
+
+// A CALL's return type at resolve, for ENUM CONTEXT — QUIET (a peek never reports;
+// the call's own resolution does). `f(args)`: the unqualified name's overloads (same
+// frame, same owner); `recv.m(args)`: the receiver's type peeked (through one pointer
+// level), then the method's overloads across the class and its bases. Either way the
+// answer stands only when every overload agrees (unanimousReturn).
+widen::TypeRef peekCallReturn(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
+    std::vector<int> ids;
+    if (e.kind == parse::Kind::kCallExpr) {
+        if (isQualified(e) || !e.tmpl_args.empty()) return widen::kNoType;
+        int id = resolveName(tree, e.name);
+        if (id < 0 || tree.entries[id].kind != parse::EntryKind::kFunction)
+            return widen::kNoType;
+        parse::Entry const& f = tree.entries[id];
+        for (int i = 0; i < static_cast<int>(tree.entries.size()); i++) {
+            parse::Entry const& g = tree.entries[i];
+            if (g.kind == parse::EntryKind::kFunction && g.name == f.name
+                && g.parent_frame_id == f.parent_frame_id
+                && g.owner_ns_frame == f.owner_ns_frame)
+                ids.push_back(i);
+        }
+        return unanimousReturn(tree, ids);
+    }
+    if (e.children.empty() || !e.children[0] || !e.tmpl_args.empty())
+        return widen::kNoType;
+    widen::TypeRef b = widen::strip(
+        peekIterableType(tree, *e.children[0], diag, /*peek_calls=*/true));
+    if (widen::form(b) == widen::Type::Form::kPointer
+        || widen::form(b) == widen::Type::Form::kIterator)
+        b = widen::strip(widen::get(b).pointee);
+    b = widen::strip(widen::removeConst(b));
+    if (widen::form(b) != widen::Type::Form::kSlid) return widen::kNoType;
+    std::vector<int> frames = parse::classAndBaseFrames(tree, b);
+    for (int i = 0; i < static_cast<int>(tree.entries.size()); i++) {
+        parse::Entry const& g = tree.entries[i];
+        if (g.kind == parse::EntryKind::kFunction && g.name == e.name
+            && std::find(frames.begin(), frames.end(), g.owner_ns_frame) != frames.end())
+            ids.push_back(i);
+    }
+    return unanimousReturn(tree, ids);
+}
+
 // Best-effort tuple/array type of a for-iterable, derived at RESOLVE time (before
 // classify) for the forms whose type is structural: a variable, a deref of a
 // typed pointer (`ref^`), an array element / tuple slot index, a function call's
@@ -3803,7 +3862,7 @@ Completion understandForArray(parse::Tree& tree, parse::Node& s, int arr_id,
 // resolveCallTarget), so the iterable's real resolution still happens when the
 // rebuilt kForLongStmt is re-resolved.
 widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
-                                diagnostic::Sink& diag) {
+                                diagnostic::Sink& diag, bool peek_calls) {
     // if/else (not a switch — -Wswitch-enum would demand every parse::Kind).
     if (e.kind == parse::Kind::kIdentExpr) {
         int id = isQualified(e) ? resolveQualifiedRef(tree, e, diag)
@@ -3826,7 +3885,7 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
         // arrives as the receiver's pointee; a convention param as `(const T)^`
         // — classify auto-derefs its uses, so peek reads through one level).
         if (e.children.empty() || !e.children[0]) return widen::kNoType;
-        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag));
+        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag, peek_calls));
         if (widen::form(b) == widen::Type::Form::kPointer
             || widen::form(b) == widen::Type::Form::kIterator) {
             b = widen::strip(widen::get(b).pointee);
@@ -3841,7 +3900,7 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
         return it->second.field_types[fi];
     }
     if (e.kind == parse::Kind::kDerefExpr) {
-        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag));
+        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag, peek_calls));
         if (widen::form(b) == widen::Type::Form::kPointer
             || widen::form(b) == widen::Type::Form::kIterator) {
             return widen::get(b).pointee;
@@ -3849,7 +3908,7 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
         return widen::kNoType;
     }
     if (e.kind == parse::Kind::kIndexExpr) {
-        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag));
+        widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag, peek_calls));
         if (widen::form(b) == widen::Type::Form::kArray) {
             std::vector<int> dims = widen::get(b).dims;
             if (dims.size() <= 1) return widen::get(b).elem;
@@ -3864,6 +3923,9 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
         }
         return widen::kNoType;
     }
+    if (peek_calls && (e.kind == parse::Kind::kCallExpr
+                       || e.kind == parse::Kind::kMethodCallStmt))
+        return peekCallReturn(tree, e, diag);
     if (e.kind == parse::Kind::kCallExpr) {
         // A function entry's slids_type IS its return type (parse::Entry).
         if (!resolveCallTarget(tree, e, diag)) return widen::kNoType;
@@ -4348,7 +4410,7 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
 // `arr[i]`) — the target's type PEEKED structurally (a field reads its declared
 // type off the class layout), or -1. The ENUM CONTEXT for the store's rhs.
 int storeEnumFrame(parse::Tree& tree, parse::Node& lv, diagnostic::Sink& diag) {
-    return enumFrameForType(tree, peekIterableType(tree, lv, diag));
+    return enumFrameForType(tree, peekIterableType(tree, lv, diag, /*peek_calls=*/true));
 }
 
 // Resolve a store lvalue (the target of a kStoreStmt). An index store WRITES

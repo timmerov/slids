@@ -34,7 +34,7 @@ Tree(
     String key_,
     String value_
 ) {
-    enum Color (kHost, kRed, kBlack);
+    enum Color (kHost, kRed, kBlack, kNull);
 
     _() {}
     ~() {
@@ -43,45 +43,83 @@ Tree(
         }
     }
 
+    /* color getter. */
+    Color color() {
+        if (^self == nullptr) {
+            return kNull;
+        }
+        return color_;
+    }
+
+    /* parent getter */
+    Tree^ parent() {
+        if (^self == nullptr) {
+            return nullptr;
+        }
+        if (parent_ == nullptr) {
+            return nullptr;
+        }
+        if (parent_^.color_ == kHost) {
+            return nullptr;
+        }
+        return parent_;
+    }
+
+    /* left getter */
+    Tree^ left() {
+        if (^self == nullptr) {
+            return nullptr;
+        }
+        return left_;
+    }
+
+    /* right getter */
+    Tree^ right() {
+        if (^self == nullptr) {
+            return nullptr;
+        }
+        return right_;
+    }
+
     /* insert key/value pair into the tree. */
     void insert(String^ key, String^ value) {
 
         /* create a new red node. */
-        tree = new Tree;
-        tree^.color_ = kRed;
-        tree^.key_ = key^;
-        tree^.value_ = value^;
+        child = new Tree;
+        child^.color_ = kRed;
+        child^.key_ = key^;
+        child^.value_ = value^;
 
         /* the root node is black. */
         if (parent_ == nullptr) {
-            parent_ = tree;
-            tree^.color_ = kBlack;
-            tree^.parent_ = parent_;
+            parent_ = child;
+            child^.color_ = kBlack;
+            child^.parent_ = parent_;
             return;
         }
 
         /* insert the new node. */
-        parent = parent_;
+        father = parent_;
         while() {
-            if (key^ < parent^.key_) {
-                if (parent^.left_ == nullptr) {
-                    parent^.left_ = tree;
-                    tree^.parent_ = parent;
+            if (key^ < father^.key_) {
+                if (father^.left_ == nullptr) {
+                    father^.left_ = child;
+                    child^.parent_ = father;
                     break;
                 }
-                parent = parent^.left_;
+                father = father^.left_;
             } else {
-                if (parent^.right_ == nullptr) {
-                    parent^.right_ = tree;
-                    tree^.parent_ = parent;
+                if (father^.right_ == nullptr) {
+                    father^.right_ = child;
+                    child^.parent_ = father;
                     break;
                 }
-                parent = parent^.right_;
+                father = father^.right_;
             }
         }
 
         /* we're done if our parent is black. */
-        if (parent^.color_ == kBlack) {
+        if (father^.color_ == kBlack) {
             return;
         }
 
@@ -93,30 +131,23 @@ Tree(
         /*
         if parent's sibling is red then all we need
         to do is recolor some nodes.
+        use getter functions when walking the tree.
         */
         done = false;
         while() {
-            granny = parent^.parent_;
-            //println(String + "parent:" + parent^.color_ + ": " + parent^.key_);
-            //println(String + "granny:" + granny^.color_ + ": " + granny^.key_);
+            granny = father^.parent();
 
-            /* stop if parent or granny is root. */
-            if (parent^.color_ == kHost || granny^.color_ == kHost) {
+            /* stop if child or father is root. */
+            if (father == nullptr || granny == nullptr) {
                 break;
             }
 
-            /* we're done if there is no sibling. */
-            aunt = granny^.left_;
-            uncle = granny^.right_;
-            if (aunt == nullptr || uncle == nullptr) {
+            /* we're done recoloring if either sibling is not red. */
+            aunt = granny^.left();
+            uncle = granny^.right();
+            if (aunt^.color() != kRed || uncle^.color() != kRed) {
                 break;
             }
-            /* we're done if either is black. */
-            if (aunt^.color_ == kBlack || uncle^.color_ == kBlack) {
-                break;
-            }
-            //println(String + "aunt  :" + aunt^.color_ + ": " + aunt^.key_);
-            //println(String + "uncle :" + uncle^.color_ + ": " + uncle^.key_);
 
             /*
             at least one set of siblings were both red.
@@ -133,11 +164,21 @@ Tree(
             we just flipped granny's color to red.
             go up two generations and repeat.
             */
-            parent = granny^.parent_;
+            father = granny^.parent();
+
         }
         if (done) {
             return;
         }
+
+        /*
+        adjust the tree if we are an inner child.
+             granny(b)            granny(b)
+            /        \            /       \
+        parent(r)  uncle(b)    tree(r)  uncle(b)
+            \                   /
+            child(r)         child(r)
+        */
     }
 
     /* recursively delete children then self. */

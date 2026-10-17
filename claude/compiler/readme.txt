@@ -2213,8 +2213,8 @@ STAGE FILES (.h / .cpp pairs)
             comparison (each operand's enum is PEEKED without resolving, then
             each side resolves under the other's — peekEnumFrame: a bare
             local / global / const / FIELD entry, or a field / deref / index
-            lvalue through peekIterableType, the same peek a store reads;
-            never a call), and a STORE (2026-10-16:
+            lvalue or a CALL through peekIterableType, the same peek a store
+            reads), and a STORE (2026-10-16:
             storeEnumFrame peeks the target's type through peekIterableType —
             a field store `obj.f = kC` / `p^.f = kC` reads the field's declared
             type off the class layout, a bare `f = kC` in a method after its
@@ -2228,13 +2228,22 @@ STAGE FILES (.h / .cpp pairs)
             (stampInferredEnum) so a later `l = kSlids;` reads in context; one
             inferred from a STRUCTURAL init gets Entry::peek_type stamped
             (stampInferredPeekType: a single-object `new T` -> T^; an
-            unqualified name / field / deref / index -> its peekIterableType)
-            — peekIterableType falls back to it while slids_type is empty, so
-            `p = parent_; p^.f = kC;` reads in context, and entryEnumFrame
-            falls back to it too, so `l2 = lang; l2 = kC;` does; one
-            inferred from a CALL does not (its enum is known only in classify)
-            and keeps the qualifier — as does a call ARGUMENT on its own (the
-            parameter is picked by overload ranking later). Resolve is the
+            unqualified name / field / deref / index / call -> its
+            peekIterableType) — peekIterableType falls back to it while
+            slids_type is empty, so `p = parent_; p^.f = kC;` reads in
+            context, and entryEnumFrame falls back to it too, so `l2 = lang;
+            l2 = kC;` does. CALLS (2026-10-16): every enum-context peek passes
+            peek_calls=true, routing `f(args)` / `recv.m(args)` (a method-call
+            expression is a kMethodCallStmt node) to peekCallReturn — QUIET;
+            the unqualified free name's overloads (same frame + owner) or the
+            method's overloads across classAndBaseFrames of the PEEKED
+            receiver — and unanimousReturn answers only when every overload
+            DECLARES the same return type (no template). So `a = g^.left();
+            a^.color() != kRed` reads in context; a call to overloads that
+            disagree keeps the qualifier, as does a call ARGUMENT on its own
+            (the parameter is picked by overload ranking later). The
+            for-iterable dispatch peeks WITHOUT peek_calls (its kCallExpr arm
+            is unchanged). Resolve is the
             stage because members are consts constfold substitutes right after
             (switch labels and folded inits depend on that).
             Owns enums: `enum [type] [Name] ( members )` lowers here (not

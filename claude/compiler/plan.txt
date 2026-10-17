@@ -892,8 +892,12 @@ Phase 4 — types beyond primitives
     p^.f = kC;` reads in context (guthrie map.sl). COMPARISONS + INFERRED
     BASES 2026-10-16: a comparison operand peeks a bare FIELD entry and any
     field / deref / index lvalue (peekEnumFrame); peek_type is stamped from
-    any structural init (name / field / deref / index, never a call), and
-    entryEnumFrame falls back to it (`l2 = lang; l2 = kC;`). Canon: enum.sl
+    any structural init (name / field / deref / index), and entryEnumFrame
+    falls back to it (`l2 = lang; l2 = kC;`). CALLS 2026-10-16: a free or
+    method call's return type peeks (peekCallReturn) when every overload
+    declares the same one (unanimousReturn) — as a comparison operand, a
+    store base, and an inferred local's init (`granny^.left()^.color()`,
+    guthrie map.sl); disagreeing overloads keep the qualifier. Canon: enum.sl
     "simplified enums in context"; detail: readme.txt RESOLVE. Deferred enum
     item (reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
     arithmetic result stays char when the folded value fits 0..255, else promotes

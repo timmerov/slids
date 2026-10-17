@@ -238,11 +238,13 @@ an assignment to an enum-typed variable (declared, or inferred from a member),
 a parameter default, a field default, a return, a switch's labels off an
 enum-typed scrutinee, and either side of a comparison. A call argument on its
 own is not a site (the parameter is picked later, by overload ranking), nor is
-a variable inferred from a call — negatives in main. A STORE is a site too: a
-field store (bare in a method, or through an object / pointer — including a
-pointer inferred from `new T` or from a variable / field), a deref store, and
-an index store. A comparison reads its operand's enum through the same shapes.
-A local inferred from an enum-typed variable is typed by that enum too.
+a call to overloads that disagree on their return type — negatives in main. A
+STORE is a site too: a field store (bare in a method, or through an object /
+pointer — including a pointer inferred from `new T`, a variable, a field, or a
+call), a deref store, and an index store. A comparison reads its operand's enum
+through the same shapes, a call's return included. A local inferred from an
+enum-typed variable or call is typed by that enum too. A call's return type
+counts when every overload of the name declares the same one.
 */
 enum Lang ( kC, kCpp, kPascal, kForth, kSlids );
 
@@ -269,6 +271,7 @@ Talker(Lang tongue_) {
     void learn() { tongue_ = kSlids; }
     int say() { return tongue_; }
     bool fluent() { return tongue_ == kSlids; }   // a bare field compared
+    Lang tongue() { return tongue_; }              // a getter
 }
 
 /* a local inferred from a pointer FIELD, then stored / compared through. */
@@ -277,7 +280,20 @@ Roster(Talker^ lead_) {
         p = lead_;
         return p^.tongue_ == kSlids;
     }
+    Talker^ lead() { return lead_; }
+    /* a local inferred from a bare method call, compared through a getter. */
+    bool leadForth() {
+        w = lead();
+        return w^.tongue() == kForth;
+    }
 }
+
+/* a free function: one overload, so its return type is known before classify. */
+Lang pick() { return kPascal; }
+
+/* overloads that DISAGREE on the return type: no context from a call to them. */
+Lang twin(int a) { if (a > 0) { return kC; } return kCpp; }
+float twin(float a) { return a; }
 
 enum Bonk1 ( kOops );
 enum Bonk2 ( kOops );
@@ -465,6 +481,16 @@ int32 main() {
     l2 = kC;
     println(String + "ctx inferred copy = " + l2);             // 0
 
+    /* calls: a free function, a method chain, a local inferred from each. */
+    lf = pick();
+    println(String + "ctx call = " + lf + " " + (pick() == kPascal));   // 2 true
+    lf = kC;
+    println(String + "ctx call inferred = " + lf);             // 0
+    println(String + "ctx method chain = " + (ro.lead()^.tongue() == kSlids));   // true
+    w = ro.lead();
+    w^.tongue_ = kForth;
+    println(String + "ctx method inferred = " + ro.leadForth() + " " + (ro.lead()^.tongue_ != kForth));   // true false
+
     /* NOT in context: a plain int target still needs the qualifier... */
     //-EXPECT-ERROR: 'kC' needs a namespace qualifier
     //int nc1 = kC;
@@ -477,9 +503,10 @@ int32 main() {
     //-EXPECT-ERROR: 'kCpp' needs a namespace qualifier
     //int nc3 = ctx_fn(kCpp);
 
-    /* ...and a variable inferred from a CALL (its enum is known only in classify). */
+    /* ...and a variable inferred from a call to overloads that DISAGREE on the
+       return type (the winner is picked only in classify). */
     //-EXPECT-ERROR: 'kC' needs a namespace qualifier
-    //nc4 = ctx_fn();
+    //nc4 = twin(1);
     //nc4 = kC;
 
     /* ...and a field store of a member of a DIFFERENT enum than the field's. */
