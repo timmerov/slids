@@ -176,7 +176,20 @@ int main(int argc, char** argv) {
     };
 
     lex::run(in_path, import_paths, tokens, diag, extra_imports);
-    if (diagnostic::hasErrors(diag)) return bail();
+    if (diagnostic::hasErrors(diag)) {
+        if (scan_path.empty()) return bail();
+        // The import scan only feeds make: the compile that follows reports the
+        // errors in full, so the scan names each erroring file once and stops
+        // (a closure shared by several TUs would otherwise repeat every error).
+        std::set<std::string> named;
+        for (auto const& r : diag.records) {
+            std::string path = (r.file_id >= 0 && r.file_id < (int)tokens.files.size())
+                ? tokens.files[r.file_id].path : in_path;
+            if (named.insert(path).second)
+                std::cerr << "slidsc: scan-deps: " << path << " has errors.\n";
+        }
+        return 1;
+    }
     for (auto& d : inst_demands)
         parse_tree.inst_demands.push_back({d, false});
 

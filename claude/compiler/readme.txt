@@ -3333,7 +3333,12 @@ PLUMBING
                   addressed to this module.
                   --scan-deps is lex-only and exits before the pipeline:
                   dependency generation must not require the program to
-                  compile. -M / -MF
+                  compile. A LEX ERROR during the scan is NOT rendered: the
+                  scan prints one `slidsc: scan-deps: <file> has errors.` line
+                  per erroring file and exits 1 (no fragment written; the
+                  Makefiles `-include` it, so make goes on to the compile,
+                  which reports the error in full ONCE — a closure shared by
+                  several TUs would otherwise repeat it per scan). -M / -MF
                   emit a make rule for the .ll target and its sources — the
                   root .sl plus every transitively-imported .slh — read
                   straight off tokens.files right after lex (so deps land
