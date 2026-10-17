@@ -240,7 +240,9 @@ enum-typed scrutinee, and either side of a comparison. A call argument on its
 own is not a site (the parameter is picked later, by overload ranking), nor is
 a variable inferred from a call — negatives in main. A STORE is a site too: a
 field store (bare in a method, or through an object / pointer — including a
-pointer inferred from `new T`), a deref store, and an index store.
+pointer inferred from `new T` or from a variable / field), a deref store, and
+an index store. A comparison reads its operand's enum through the same shapes.
+A local inferred from an enum-typed variable is typed by that enum too.
 */
 enum Lang ( kC, kCpp, kPascal, kForth, kSlids );
 
@@ -266,6 +268,15 @@ Speaker(Lang tongue_ = kPascal) {
 Talker(Lang tongue_) {
     void learn() { tongue_ = kSlids; }
     int say() { return tongue_; }
+    bool fluent() { return tongue_ == kSlids; }   // a bare field compared
+}
+
+/* a local inferred from a pointer FIELD, then stored / compared through. */
+Roster(Talker^ lead_) {
+    bool leadSlids() {
+        p = lead_;
+        return p^.tongue_ == kSlids;
+    }
 }
 
 enum Bonk1 ( kOops );
@@ -429,6 +440,31 @@ int32 main() {
     la[1] = kForth;
     println(String + "ctx index store = " + la[1]);            // 3
 
+    /* a comparison against a field (bare in a method, through an object, through
+       a pointer inferred from `new`), a deref, and an index. */
+    tk.learn();
+    println(String + "ctx cmp field bare = " + tk.fluent());   // true
+    println(String + "ctx cmp field obj = " + (tk.tongue_ == kSlids) + " " + (kC == tk.tongue_));   // true false
+    tm = new Talker;
+    tm^.tongue_ = kCpp;
+    println(String + "ctx cmp field new = " + (tm^.tongue_ != kCpp));   // false
+    delete tm;
+    println(String + "ctx cmp deref = " + (lp^ == kSlids));    // true
+    println(String + "ctx cmp index = " + (la[1] == kForth));  // true
+
+    /* a base inferred from a variable / field (not just `new`), and a local
+       inferred from an enum-typed variable. */
+    tr = tq;
+    tr^.tongue_ = kC;
+    println(String + "ctx inferred ptr = " + tk.say() + " " + (tr^.tongue_ == kC));   // 0 true
+    Roster ro;
+    ro.lead_ = ^tk;
+    tk.learn();
+    println(String + "ctx inferred field = " + ro.leadSlids());   // true
+    l2 = cl;
+    l2 = kC;
+    println(String + "ctx inferred copy = " + l2);             // 0
+
     /* NOT in context: a plain int target still needs the qualifier... */
     //-EXPECT-ERROR: 'kC' needs a namespace qualifier
     //int nc1 = kC;
@@ -449,6 +485,10 @@ int32 main() {
     /* ...and a field store of a member of a DIFFERENT enum than the field's. */
     //-EXPECT-ERROR: 'kNorth' needs a namespace qualifier
     //tk.tongue_ = kNorth;
+
+    /* ...as does a comparison of a field against a member of a DIFFERENT enum. */
+    //-EXPECT-ERROR: 'kNorth' needs a namespace qualifier
+    //bool nc6 = tk.tongue_ == kNorth;
 
     alias Direction;
     println(String + "kNorth = " + kNorth);

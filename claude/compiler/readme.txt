@@ -2211,7 +2211,10 @@ STAGE FILES (.h / .cpp pairs)
             resolveFunctionBody from the declared return type), a switch's
             labels off an enum-typed scrutinee variable, either side of a
             comparison (each operand's enum is PEEKED without resolving, then
-            each side resolves under the other's), and a STORE (2026-10-16:
+            each side resolves under the other's — peekEnumFrame: a bare
+            local / global / const / FIELD entry, or a field / deref / index
+            lvalue through peekIterableType, the same peek a store reads;
+            never a call), and a STORE (2026-10-16:
             storeEnumFrame peeks the target's type through peekIterableType —
             a field store `obj.f = kC` / `p^.f = kC` reads the field's declared
             type off the class layout, a bare `f = kC` in a method after its
@@ -2223,9 +2226,12 @@ STAGE FILES (.h / .cpp pairs)
             to its kNamespace facet's frame. An INFERRED variable initialized
             from a member ref (`l = Lang:kC;`) gets Entry::enum_frame stamped
             (stampInferredEnum) so a later `l = kSlids;` reads in context; one
-            inferred from a single-object `new T` gets Entry::peek_type = T^
-            stamped (stampInferredPeekType; peekIterableType falls back to it
-            while slids_type is empty) so `p^.f = kC;` reads in context; one
+            inferred from a STRUCTURAL init gets Entry::peek_type stamped
+            (stampInferredPeekType: a single-object `new T` -> T^; an
+            unqualified name / field / deref / index -> its peekIterableType)
+            — peekIterableType falls back to it while slids_type is empty, so
+            `p = parent_; p^.f = kC;` reads in context, and entryEnumFrame
+            falls back to it too, so `l2 = lang; l2 = kC;` does; one
             inferred from a CALL does not (its enum is known only in classify)
             and keeps the qualifier — as does a call ARGUMENT on its own (the
             parameter is picked by overload ranking later). Resolve is the

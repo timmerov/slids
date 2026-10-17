@@ -1893,6 +1893,8 @@ int entryEnumFrame(parse::Tree& tree, int id) {
     if (e.enum_frame >= 0) return e.enum_frame;
     int f = enumFrameForType(tree, e.slids_type);
     if (f >= 0) return f;
+    f = enumFrameForType(tree, e.peek_type);   // inferred: `l2 = lang;`
+    if (f >= 0) return f;
     return enumFrameForLabel(tree, e.alias_label);
 }
 
@@ -1907,15 +1909,24 @@ struct EnumContext {
     ~EnumContext() { tree.ctx_enum_frame = saved; }
 };
 
-// The enum frame a comparison operand would lend the OTHER side: a bare ident
-// naming an enum-typed variable / const — peeked WITHOUT resolving the node.
-int peekEnumFrame(parse::Tree& tree, parse::Node const& n) {
+widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
+                                diagnostic::Sink& diag);
+
+// The enum frame a comparison operand would lend the OTHER side — peeked WITHOUT
+// resolving the node: a bare ident naming an enum-typed variable / const / class
+// FIELD (a method body's kField entry carries the declared type), or a field /
+// deref / index lvalue whose type peeks structurally (`obj.f`, `p^.f`, `ref^`,
+// `arr[i]` — the same peek a store target reads).
+int peekEnumFrame(parse::Tree& tree, parse::Node& n, diagnostic::Sink& diag) {
+    if (n.kind == parse::Kind::kFieldExpr || n.kind == parse::Kind::kDerefExpr
+        || n.kind == parse::Kind::kIndexExpr)
+        return enumFrameForType(tree, peekIterableType(tree, n, diag));
     if (n.kind != parse::Kind::kIdentExpr || isQualified(n)) return -1;
     int id = resolveName(tree, n.name);
     if (id < 0) return -1;
     parse::EntryKind k = tree.entries[id].kind;
     if (k != parse::EntryKind::kLocalVar && k != parse::EntryKind::kGlobalVar
-        && k != parse::EntryKind::kConst)
+        && k != parse::EntryKind::kConst && k != parse::EntryKind::kField)
         return -1;
     return entryEnumFrame(tree, id);
 }
@@ -1940,16 +1951,26 @@ void stampInferredEnum(parse::Tree& tree, int var_id, parse::Node const* rhs) {
     }
 }
 
-// An INFERRED variable initialized from a single-object `new T` (heap or
-// placement) is a `T^`: stamp that as its resolve-time peek type so a store
-// through it (`p^.field = kC;`) finds the field's enum. Any other init shape
-// leaves it unstamped (its type is known only in classify).
-void stampInferredPeekType(parse::Tree& tree, int var_id, parse::Node const* rhs) {
-    if (var_id < 0 || !rhs || rhs->kind != parse::Kind::kNewExpr
-        || rhs->children.empty() || rhs->children[0]
-        || rhs->return_type == widen::kNoType)
+// An INFERRED variable whose init's type reads off its STRUCTURE gets that type
+// as its resolve-time peek type, so a store / comparison through it
+// (`p^.field = kC;`) finds the field's enum: a single-object `new T` (heap or
+// placement) is a `T^`; an unqualified name / field / deref / index peeks
+// (peekIterableType). Any other init shape — a CALL above all (its overload, and
+// so its type, is picked in classify) — leaves it unstamped.
+void stampInferredPeekType(parse::Tree& tree, int var_id, parse::Node* rhs,
+                           diagnostic::Sink& diag) {
+    if (var_id < 0 || !rhs) return;
+    if (rhs->kind == parse::Kind::kNewExpr) {
+        if (rhs->children.empty() || rhs->children[0]
+            || rhs->return_type == widen::kNoType)
+            return;
+        tree.entries[var_id].peek_type = widen::internPointer(rhs->return_type);
         return;
-    tree.entries[var_id].peek_type = widen::internPointer(rhs->return_type);
+    }
+    if ((rhs->kind == parse::Kind::kIdentExpr && !isQualified(*rhs))
+        || rhs->kind == parse::Kind::kFieldExpr || rhs->kind == parse::Kind::kDerefExpr
+        || rhs->kind == parse::Kind::kIndexExpr)
+        tree.entries[var_id].peek_type = peekIterableType(tree, *rhs, diag);
 }
 
 bool isComparisonOp(std::string const& op) {
@@ -2849,12 +2870,12 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
         case parse::Kind::kUnaryExpr:
         case parse::Kind::kBinaryExpr:
             // ENUM CONTEXT across a comparison — `lang == kC` / `kC != lang`: peek
-            // each side's enum (a bare ident naming an enum-typed variable) WITHOUT
+            // each side's enum (an enum-typed variable / field / lvalue) WITHOUT
             // resolving, then resolve each side under the OTHER's context.
             if (isComparisonOp(e.text) && e.children.size() == 2
                 && e.children[0] && e.children[1]) {
-                int lf = peekEnumFrame(tree, *e.children[0]);
-                int rf = peekEnumFrame(tree, *e.children[1]);
+                int lf = peekEnumFrame(tree, *e.children[0], diag);
+                int rf = peekEnumFrame(tree, *e.children[1], diag);
                 { EnumContext c(tree, rf); resolveExpr(tree, *e.children[0], diag, unevaluated); }
                 { EnumContext c(tree, lf); resolveExpr(tree, *e.children[1], diag, unevaluated); }
                 return;
@@ -4696,7 +4717,8 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     stampInferredEnum(tree, s.resolved_entry_id,
                                       s.children.empty() ? nullptr : s.children[0].get());
                     stampInferredPeekType(tree, s.resolved_entry_id,
-                                          s.children.empty() ? nullptr : s.children[0].get());
+                                          s.children.empty() ? nullptr : s.children[0].get(),
+                                          diag);
                     tree.initialized_locals.insert(s.resolved_entry_id);
                     return Completion::Normal;
                 }
