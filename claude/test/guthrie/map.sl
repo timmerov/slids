@@ -81,13 +81,13 @@ Tree<Key,Value>(
     }
 
     /* insert key/value pair into the tree. */
-    void insert(String^ key, String^ value) {
+    void insert(Key key, Value value) {
 
         /* create a new red node. */
         child = new Tree;
         child^.color_ = kRed;
-        child^.key_ = key^;
-        child^.value_ = value^;
+        child^.key_ = key;
+        child^.value_ = value;
 
         /* the root node is black. */
         if (parent_ == nullptr) {
@@ -100,7 +100,7 @@ Tree<Key,Value>(
         /* insert the new node. */
         Tree^ parent = parent_;
         while() {
-            if (key^ < parent^.key_) {
+            if (key < parent^.key_) {
                 if (parent^.left_ == nullptr) {
                     parent^.left_ = child;
                     child^.parent_ = parent;
