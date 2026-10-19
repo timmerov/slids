@@ -12,10 +12,72 @@ find()
 end()
 insert()
 size()
+
+TreeNode(...) { }
+
+TreeNode : MapIterator<Key, Value>(
+    Key key_,
+    Value value_
+) {
+}
+
+Map<Key, Value>(...) {
+    void insert(Key key, Value value);
+    void print();
+}
+
+TreeNode(
+    Color color_ = kHost,
+    TreeNode^ parent_ = nullptr,
+    TreeNode^ left_ = nullptr,
+    TreeNode^ right_ = nullptr
+) {
+    enum Color (kHost, kRed, kBlack, kNull);
+}
+
+Map<Key, Value>(
+    root_
+) {
+    void insert(Key key, Value value) { }
+    void print() { }
+}
 */
 
 import map;
 import string;
+
+/* tree.slh */
+TreeNode(...) { }
+
+/* map.slh */
+TreeNode : MapIterator<Key, Value>(
+    Key key_,
+    Value value_
+) {
+}
+
+Map<Key, Value>(...) {
+    void insert(Key key, Value value);
+    void print();
+}
+
+/* tree.sl */
+TreeNode(
+    Color color_ = kHost,
+    TreeNode^ parent_ = nullptr,
+    TreeNode^ left_ = nullptr,
+    TreeNode^ right_ = nullptr
+) {
+    enum Color (kHost, kRed, kBlack, kNull);
+}
+
+/* map.sl */
+Map<Key, Value>(
+    root_
+) {
+    void insert(Key key, Value value) { }
+    void print() { }
+}
 
 /*
 red black tree.
