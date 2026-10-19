@@ -25,13 +25,25 @@ red black tree.
 4. inserted nodes (after the first) are red.
 if this breaks rules 2,3 then recolor/rebalance.
 */
-Tree<Key,Value>(
+Tree<Key, Value>(
+    Key key_,
+    Value value_,
+    ...
+) {
+    _(); ~();
+
+    /* insert the key value pair into the tree. */
+    void insert(Key key, Value value);
+
+    /* print the tree. */
+    void print();
+}
+
+Tree<Key, Value>(
     Color color_ = kHost,
     Tree^ parent_ = nullptr,
     Tree^ left_ = nullptr,
-    Tree^ right_ = nullptr,
-    Key key_,
-    Value value_
+    Tree^ right_ = nullptr
 ) {
     enum Color (kHost, kRed, kBlack, kNull);
 
@@ -251,8 +263,13 @@ Tree<Key,Value>(
         delete ^self;
     }
 
+    /* print the tree. */
+    void print() {
+        parent_^.print(0);
+    }
+
     /* recursively pretty print the tree. */
-    void print(int spaces = 0) {
+    void print(int spaces) {
         if (^self == nullptr) {
             return;
         }
@@ -292,11 +309,5 @@ void test_map() {
     tree.insert("Nicaragua", "Managua");
     tree.insert("Costa Rica", "San José");
     tree.insert("Panama", "Panama City");
-    tree.parent_^.print();
-
-    /* enum context at a use site outside the template body. */
-    tree.color_ = kHost;
-    if (tree.color_ == kHost) {
-        println("host");
-    }
+    tree.print();
 }
