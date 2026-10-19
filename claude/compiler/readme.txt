@@ -2223,7 +2223,16 @@ STAGE FILES (.h / .cpp pairs)
             transparent kAlias node named after the enum over the underlying
             (what ##type(var) reports), so enumFrameForType peels alias layers
             and enumFrameForLabel resolves each spelling (`Lang`, `Geo:Dir`)
-            to its kNamespace facet's frame. An INFERRED variable initialized
+            to its kNamespace facet's frame. TEMPLATES (2026-10-18): inside a
+            class-template flavor the label carries the flavor
+            (`Box<int>:Color`), so the label splits on colons OUTSIDE a
+            type-argument list (`Kit<Geo:Dir>:Color`), a leading `<` segment
+            resolves through flavorEntryForSegment (live name, else any
+            flavor entry of that exact name — a use site outside the minting
+            scope; quiet, never mints), and later segments use
+            findMemberLiveOrInstance. A `<` segment past the first gives no
+            context. Same-spelled flavors minted in two scopes: the live one
+            wins, else the first entry found. An INFERRED variable initialized
             from a member ref (`l = Lang:kC;`) gets Entry::enum_frame stamped
             (stampInferredEnum) so a later `l = kSlids;` reads in context; one
             inferred from a STRUCTURAL init gets Entry::peek_type stamped

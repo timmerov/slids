@@ -1839,23 +1839,48 @@ int pushBaseChain(parse::Tree& tree, parse::Node const& node) {
 // `alias Enum;`). Resolve is the stage because members are consts that constfold
 // substitutes right after (switch labels and folded inits depend on that).
 
-// The enum namespace frame a declared spelling names (`Lang`, `Geo:Dir`), or -1
-// for anything else. Quiet: a label that doesn't resolve here is no context.
+// The class-template FLAVOR a segment spells (`Box<int>`): the live entry by
+// that name (its own body sees it), else any flavor entry carrying it — a use
+// site may sit outside the scope that minted it. Quiet, and never mints.
+int flavorEntryForSegment(parse::Tree& tree, std::string const& seg) {
+    int id = resolveName(tree, seg);
+    if (id >= 0) return id;
+    for (std::size_t i = 0; i < tree.entries.size(); i++) {
+        parse::Entry const& e = tree.entries[i];
+        if (e.kind == parse::EntryKind::kClass && !e.tmpl_args.empty() && e.name == seg)
+            return static_cast<int>(i);
+    }
+    return -1;
+}
+
+// The enum namespace frame a declared spelling names (`Lang`, `Geo:Dir`,
+// `Box<int>:Color`), or -1 for anything else. Quiet: a label that doesn't
+// resolve here is no context.
 int enumFrameForLabel(parse::Tree& tree, std::string const& label) {
     if (label.empty() || label.compare(0, 2, "::") == 0) return -1;
+    // Split on the colons OUTSIDE a type-argument list (`Kit<Geo:Dir>:Color`).
     std::vector<std::string> segs;
     std::size_t start = 0;
-    for (;;) {
-        std::size_t colon = label.find(':', start);
-        if (colon == std::string::npos) { segs.push_back(label.substr(start)); break; }
-        segs.push_back(label.substr(start, colon - start));
-        start = colon + 1;
+    int depth = 0;
+    for (std::size_t i = 0; i < label.size(); i++) {
+        char c = label[i];
+        if (c == '<') depth++;
+        else if (c == '>') depth--;
+        else if (c == ':' && depth == 0) {
+            segs.push_back(label.substr(start, i - start));
+            start = i + 1;
+        }
     }
+    segs.push_back(label.substr(start));
     int id = -1;
     int cur = -1;
     for (std::size_t i = 0; i < segs.size(); i++) {
-        if (segs[i].empty() || segs[i].find('<') != std::string::npos) return -1;
-        id = (cur < 0) ? resolveName(tree, segs[i]) : findMemberLive(tree, cur, segs[i]);
+        if (segs[i].empty()) return -1;
+        bool inst = segs[i].find('<') != std::string::npos;
+        if (inst && cur >= 0) return -1;   // a nested flavor qualifier: no context
+        id = inst ? flavorEntryForSegment(tree, segs[i])
+           : (cur < 0) ? resolveName(tree, segs[i])
+           : findMemberLiveOrInstance(tree, cur, segs[i]);
         if (id < 0) return -1;
         if (i + 1 < segs.size()) {
             cur = entryNamespaceFrame(tree, id);

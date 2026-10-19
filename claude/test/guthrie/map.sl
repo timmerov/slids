@@ -21,18 +21,17 @@ import string;
 red black tree.
 1. the root is black.
 2. red nodes have no red children.
-3. every path from a node to its null leaves have
-the same number of black nodes.
+3. siblings are the same color.
 4. inserted nodes (after the first) are red.
-if this breaks rule 3, then move and recolor nodes.
+if this breaks rules 2,3 then recolor/rebalance.
 */
-Tree(
+Tree<Key,Value>(
     Color color_ = kHost,
     Tree^ parent_ = nullptr,
     Tree^ left_ = nullptr,
     Tree^ right_ = nullptr,
-    String key_,
-    String value_
+    Key key_,
+    Value value_
 ) {
     enum Color (kHost, kRed, kBlack, kNull);
 
@@ -118,170 +117,126 @@ Tree(
             }
         }
 
-        /*
-        =tsc=
-        logic wrong.
-        while parent color is red:
-            if case 1
-                fix
-            else
-                if case 2
-                    fix
-                fix case 3
-        */
+        /* recolor and/or rebalance the tree. */
+        while (parent^.color() == kRed) {
 
-        /*
-        case 0:
-        we're done if our parent is black.
-        */
-        if (parent^.color_ == kBlack) {
-            return;
-        }
-
-        /*
-        we just added a red child to a red parent.
-        that's not allowed.
-        */
-
-        /*
-        case 1:
-        if parent's sibling is red then all we need
-        to do is recolor some nodes.
-        use getter functions when walking the tree.
-        */
-        done = false;
-        while() {
-            granny = parent^.parent();
-
-            /* stop if child or parent is root. */
-            if (parent == nullptr || granny == nullptr) {
-                break;
+            granny = parent^.parent_;
+            aunt = granny^.left_;
+            uncle = granny^.right_;
+            if (aunt^.color() == kRed && uncle^.color() == kRed) {
+                /*
+                case 1: recolor
+                parent and parent's sibling are both red.
+                change them to black.
+                change grandparent to red.
+                iterate up the tree with new child is old granny.
+                */
+                granny^.color_ = kRed;
+                if (aunt) {
+                    aunt^.color_ = kBlack;
+                }
+                if (uncle) {
+                    uncle^.color_ = kBlack;
+                }
+                child = granny;
+                parent = child^.parent();
+            } else {
+                /* case 2: move inner child out. */
+                if (child == aunt^.right()) {
+                    child = parent;
+                    child^.rotate_left();
+                    parent = child^.parent();
+                } else if (child == uncle^.left()) {
+                    child = parent;
+                    child^.rotate_right();
+                    parent = child^.parent();
+                }
+                /* case 3: rotate granny. */
+                granny^.color_ = kRed;
+                parent^.color_ = kBlack;
+                if (child == parent^.left_) {
+                    granny^.rotate_right();
+                } else {
+                    granny^.rotate_left();
+                }
             }
-
-            /* we're done recoloring
-             if either sibling is not red. */
-            aunt = granny^.left();
-            uncle = granny^.right();
-            if (aunt^.color() != kRed || uncle^.color() != kRed) {
-                break;
-            }
-
-            /*
-            at least one set of siblings were both red.
-            so we don't have to check for other fix-ups.
-            */
-            done = true;
-
-            /* flip colors. */
-            granny^.color_ = kRed;
-            aunt^.color_ = kBlack;
-            uncle^.color_ = kBlack;
-
-            /*
-            we just flipped granny's color to red.
-            go up two generations and repeat.
-            */
-            parent = granny^.parent();
-
-        }
-        if (done) {
-            return;
         }
 
-        /*
-        case 2:
-        adjust the tree if child is "inner".
+        /* set the root node to black. */
+        parent_^.color_ = kBlack;
+    }
 
-             granny(b)    ->      granny(b)
-            /        \            /       \
-        aunt(r)  uncle(b)    child(r)  uncle(b)
-            \                   /
-            child(r)         aunt(r)
+    /*
+    rotate right:
 
-             granny(b)    ->      granny(b)
-            /        \            /      \
-        aunt(b)  uncle(r)    aunt(b)  child(r)
-                  /                      \
-            child(r)                   uncle(r)
+         great            great
+           |                |
+         self      ->     aunt
+        /    \           /    \
+       aunt  uncle    child  self
+      /    \                /    \
+    child  sibling      sibling  uncle
+    */
+    void rotate_right() {
+        great = parent_;
+        aunt = left_;
+        sibling = aunt^.right();
 
-        and swap child with aunt or uncle.
-        */
-        granny = parent^.parent();
-        aunt = granny^.left();
-        uncle = granny^.right();
-        if (aunt^.right() == child) {
-            granny^.left_ = child;
-            child^.parent_ = granny;
-            child^.left_ = aunt;
-            aunt^.parent_ = child;
-            aunt^.right_ = nullptr;
-            child <--> aunt;
-        } else if (uncle^.left() == child) {
-            granny^.right_ = child;
-            child^.parent_ = granny;
-            child^.right_ = uncle;
-            uncle^.parent_ = child;
-            uncle^.left_ = nullptr;
-            child <--> uncle;
-        }
-
-        /*
-        case 3:
-        rebalance and recolor the tree.
-
-             granny(b)    ->       aunt(b)
-            /        \            /      \
-          aunt(r)  uncle(b)    child(r)  granny(r)
-          /     \                       /      \
-        child(r) sibling             sibling uncle(b)
-
-             granny(b)    ->         uncle(b)
-            /      \                /       \
-        aunt(b)  uncle(r)         granny(r)  child(r)
-                 /   \            /     \
-             sibling child(r)  aunt(b) sibling
-        */
-        great = granny^.parent_;
-        Tree^ new_granny = nullptr;
-        if (aunt^.left() == child) {
-            sibling = aunt^.right_;
-            aunt^.color_ = kBlack;
+        great^.change_child(^self, aunt);
+        parent_ = aunt;
+        left_ = sibling;
+        if (aunt) {
             aunt^.parent_ = great;
-            aunt^.right_ = granny;
-            granny^.color_ = kRed;
-            granny^.parent_ = aunt;
-            granny^.left_ = sibling;
-            if (sibling) {
-                sibling^.parent_ = granny;
-            }
-            new_granny = aunt;
-        } else {
-            sibling = uncle^.left_;
-            uncle^.color_ = kBlack;
-            uncle^.parent_ = great;
-            uncle^.left_ = granny;
-            granny^.color_ = kRed;
-            granny^.parent_ = uncle;
-            granny^.right_ = sibling;
-            if (sibling) {
-                sibling^.parent_ = granny;
-            }
-            new_granny = uncle;
+            aunt^.right_ = ^self;
         }
+        if (sibling) {
+            sibling^.parent_ = ^self;
+        }
+    }
 
-        /*
-        if the great grandparent is the host
-            point the host at the new grandparent.
-        otherwise
-            replace the great grandparent's child
-            with the new grandparent.
-        */
-        if (great^.color_ == kHost) {
-            great^.parent_ = new_granny;
-        } else if (great^.left_ == granny) {
-            great^.left_ = new_granny;
+    /*
+    rotate left:
+
+         great              great
+           |                  |
+         self        ->     uncle
+        /    \              /    \
+      aunt  uncle         self  child
+            /    \       /    \
+        sibling child  aunt  sibling
+    */
+    void rotate_left() {
+        great = parent_;
+        uncle = right_;
+        sibling = uncle^.left();
+
+        great^.change_child(^self, uncle);
+        parent_ = uncle;
+        right_ = sibling;
+        if (uncle) {
+            uncle^.parent_ = great;
+            uncle^.left_ = ^self;
+        }
+        if (sibling) {
+            sibling^.parent_ = ^self;
+        }
+    }
+
+    /*
+    change the parent's child.
+    if this is the host then the child is the new root.
+    otherwise change the left/right child.
+    */
+    void change_child(
+        Tree^ former_child,
+        mutable Tree^ new_child
+    ) {
+        if (color_ == kHost) {
+            parent_ = new_child;
+        } else if (left_ == former_child) {
+            left_ = new_child;
         } else {
-            great^.right_ = new_granny;
+            right_ = new_child;
         }
     }
 
@@ -326,7 +281,7 @@ Tree(
 }
 
 void test_map() {
-    Tree tree;
+    Tree<String, String> tree;
     tree.insert("USA", "Washington DC");
     tree.insert("Canada", "Ottawa");
     tree.insert("Mexico", "Mexico City");
@@ -338,4 +293,10 @@ void test_map() {
     tree.insert("Costa Rica", "San José");
     tree.insert("Panama", "Panama City");
     tree.parent_^.print();
+
+    /* enum context at a use site outside the template body. */
+    tree.color_ = kHost;
+    if (tree.color_ == kHost) {
+        println("host");
+    }
 }

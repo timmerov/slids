@@ -897,7 +897,12 @@ Phase 4 — types beyond primitives
     method call's return type peeks (peekCallReturn) when every overload
     declares the same one (unanimousReturn) — as a comparison operand, a
     store base, and an inferred local's init (`granny^.left()^.color()`,
-    guthrie map.sl); disagreeing overloads keep the qualifier. Canon: enum.sl
+    guthrie map.sl); disagreeing overloads keep the qualifier. TEMPLATES
+    2026-10-18: every site works inside a class-template body and against a
+    flavor from outside — enumFrameForLabel had refused the flavor's label
+    (`Tree<String, String>:Color`); it now splits depth-aware and resolves
+    the flavor segment quietly (flavorEntryForSegment). guthrie map.sl's
+    `Tree<K,V>` with bare kHost / kRed / kBlack / kNull. Canon: enum.sl
     "simplified enums in context"; detail: readme.txt RESOLVE. Deferred enum
     item (reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
     arithmetic result stays char when the folded value fits 0..255, else promotes
