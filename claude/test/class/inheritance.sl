@@ -199,6 +199,15 @@ Fb : Fd(int val_) {
     _(){} ~(){}
 }
 
+/* COVERAGE — ENUM CONTEXT through an INHERITED field: a store / comparison against a
+   base's enum-typed field, reached through a derived (or grand-derived) receiver,
+   reads the bare member in the field's enum. */
+Eb(Shade shade_ = kDim) {
+    enum Shade (kDim, kBright);
+}
+Eb : Ed(int ed_ = 0) { }
+Ed : Ee(int ee_ = 0) { }
+
 int32 main() {
 
     {
@@ -294,6 +303,19 @@ int32 main() {
         B^ hp = new B(8, 9);                          // A:ctor 8 / B:ctor 9
         println(String + "heap.gx = " + hp^.gx());           // 8 (base field through the ptr)
         delete hp;                                    // B:dtor 9 / A:dtor 8
+    }
+
+    // COVERAGE — enum context through an inherited field.
+    {
+        ep = new Ed;
+        ep^.shade_ = kBright;                         // base field via derived ptr
+        println(String + "ed bright = " + (ep^.shade_ == kBright));   // true
+        Ee^ gp = new Ee;
+        gp^.shade_ = kBright;                         // grandbase field
+        gp^.shade_ = kDim;
+        println(String + "ee dim = " + (gp^.shade_ == kDim));         // true
+        delete gp;
+        delete ep;
     }
 
     return 0;

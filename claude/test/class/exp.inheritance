@@ -65,5 +65,7 @@ B:ctor 9
 heap.gx = 8
 B:dtor 9
 A:dtor 8
+ed bright = true
+ee dim = true
 Derived:dtor: 10 11
 Base:dtor: 1

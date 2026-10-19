@@ -12,73 +12,239 @@ find()
 end()
 insert()
 size()
-
-TreeNode(...) { }
-
-TreeNode : MapIterator<Key, Value>(
-    Key key_,
-    Value value_
-) {
-}
-
-Map<Key, Value>(...) {
-    void insert(Key key, Value value);
-    void print();
-}
-
-TreeNode(
-    Color color_ = kHost,
-    TreeNode^ parent_ = nullptr,
-    TreeNode^ left_ = nullptr,
-    TreeNode^ right_ = nullptr
-) {
-    enum Color (kHost, kRed, kBlack, kNull);
-}
-
-Map<Key, Value>(
-    root_
-) {
-    void insert(Key key, Value value) { }
-    void print() { }
-}
 */
 
 import map;
 import string;
 
-/* tree.slh */
-TreeNode(...) { }
+/* tree.slh ================================================= */
+TreeNode(...) {
+    _(); ~();
 
-/* map.slh */
+    /* getters. */
+    Color color();
+    TreeNode^ parent();
+    TreeNode^ left();
+    TreeNode^ right();
+
+    /* setters. */
+    void set_color(Color color);
+    void set_parent(TreeNode^ parent);
+    void set_left(TreeNode^ left);
+    void set_right(TreeNode^ right);
+}
+
+/* map.slh ================================================= */
 TreeNode : MapIterator<Key, Value>(
     Key key_,
     Value value_
 ) {
+    _(); ~();
 }
 
 Map<Key, Value>(...) {
+    _(); ~();
     void insert(Key key, Value value);
     void print();
 }
 
-/* tree.sl */
+/* tree.sl ================================================= */
+/*
+red black tree.
+1. the root is black.
+2. red nodes have no red children.
+3. siblings are the same color.
+4. inserted nodes (after the first) are red.
+if this breaks rules 2,3 then recolor/rebalance.
+*/
 TreeNode(
-    Color color_ = kHost,
+    Color color_ = kRed,
     TreeNode^ parent_ = nullptr,
     TreeNode^ left_ = nullptr,
     TreeNode^ right_ = nullptr
 ) {
-    enum Color (kHost, kRed, kBlack, kNull);
+    enum Color (kRed, kBlack, kNull);
+
+    _() {}
+    ~() {}
+
+    /* color getter. */
+    Color color() {
+        if (^self == nullptr) {
+            return kNull;
+        }
+        return color_;
+    }
+
+    /* parent getter */
+    TreeNode^ parent() {
+        if (^self == nullptr) {
+            return nullptr;
+        }
+        return parent_;
+    }
+
+    /* left getter */
+    TreeNode^ left() {
+        if (^self == nullptr) {
+            return nullptr;
+        }
+        return left_;
+    }
+
+    /* right getter */
+    TreeNode^ right() {
+        if (^self == nullptr) {
+            return nullptr;
+        }
+        return right_;
+    }
+
+    /* color setter. */
+    void set_color(Color color) {
+        if (^self) {
+            color_ = color;
+        }
+    }
+
+    /* parent setter */
+    void set_parent(TreeNode^ parent) {
+        if (^self) {
+            parent_ = parent;
+        }
+    }
+
+    /* left setter */
+    void set_left(TreeNode^ left) {
+        if (^self) {
+            left_ = left;
+        }
+    }
+
+    /* right setter */
+    void set_right(TreeNode^ right) {
+        if (^self) {
+            right_ = right;
+        }
+    }
+
+    /* recursively delete the tree. */
+    void destroy() {
+        if (^self == nullptr) {
+            return;
+        }
+        left_^.destroy();
+        right_^.destroy();
+        delete ^self;
+    }
+
+    /* recolor/rebalance the tree. */
+    void rebalance() {
+    }
 }
 
-/* map.sl */
+/* map.sl ================================================= */
+TreeNode : MapIterator<Key, Value>() {
+    _() {}
+    ~() {}
+
+    /* recursively print the tree. */
+    void print(int spaces) {
+        if (^self == nullptr) {
+            return;
+        }
+        spaces += 2;
+
+        lf = <MapIterator<Key,Value>> left_;
+        lf^.print(spaces);
+
+        String color = "red";
+        if (color_ == kBlack) {
+            color = "black";
+        }
+
+        if (spaces > 2) {
+            ::print("  ");
+            for (i : 0..spaces) {
+                ::print("| ");
+            }
+        }
+        println(key_ + " - " + value_ + " (" + color + ")");
+
+        rt = <MapIterator<Key,Value>> right_;
+        rt^.print(spaces);
+    }
+
+    /* print vertical bars to associate related tree nodes. */
+    void print_spaces(int spaces) {
+        if (spaces == 0) {
+            return;
+        }
+        ::print("  ");
+        for (i : 2..spaces+2) {
+            ::print("| ");
+        }
+    }
+}
+
 Map<Key, Value>(
-    root_
+    MapIterator<Key, Value>^ root_
 ) {
-    void insert(Key key, Value value) { }
-    void print() { }
+    _() { }
+    ~() {
+        root_^.destroy();
+    }
+
+    void insert(Key key, Value value) {
+
+        /* create a new red node. */
+        child = new TreeNode;
+        child^.color_ = kRed;
+        child^.key_ = key;
+        child^.value_ = value;
+
+        /* the root node is black. */
+        if (root_ == nullptr) {
+            root_ = child;
+            child^.color_ = kBlack;
+            child^.parent_ = ^self;
+            return;
+        }
+
+        /* insert the new node into the tree. */
+        TreeNode^ parent = root_;
+        while() {
+            if (key < parent^.key_) {
+                if (parent^.left_ == nullptr) {
+                    parent^.left_ = child;
+                    break;
+                }
+                parent = parent^.left_;
+            } else {
+                if (parent^.right_ == nullptr) {
+                    parent^.right_ = child;
+                    break;
+                }
+                parent = parent^.right_;
+            }
+        }
+        child^.parent_ = parent;
+
+        /* recolor/rebalance the tree. */
+        child^.rebalance();
+
+        /* force the root to black. */
+        root_^.color_ = kBlack;
+    }
+
+    void print() {
+        if (root_) {
+            root_^.print(0);
+        }
+    }
 }
 
+/*
 /*
 red black tree.
 1. the root is black.
@@ -358,18 +524,19 @@ Tree<Key, Value>(
         }
     }
 }
+*/
 
 void test_map() {
-    Tree<String, String> tree;
-    tree.insert("USA", "Washington DC");
-    tree.insert("Canada", "Ottawa");
-    tree.insert("Mexico", "Mexico City");
-    tree.insert("Belize", "Belmopan");
-    tree.insert("Guatemala", "Guatemala City");
-    tree.insert("Honduras", "Tegucigalpa");
-    tree.insert("El Salvador", "San Salvador");
-    tree.insert("Nicaragua", "Managua");
-    tree.insert("Costa Rica", "San José");
-    tree.insert("Panama", "Panama City");
-    tree.print();
+    Map<String, String> map;
+    map.insert("USA", "Washington DC");
+    map.insert("Canada", "Ottawa");
+    map.insert("Mexico", "Mexico City");
+    map.insert("Belize", "Belmopan");
+    map.insert("Guatemala", "Guatemala City");
+    map.insert("Honduras", "Tegucigalpa");
+    map.insert("El Salvador", "San Salvador");
+    map.insert("Nicaragua", "Managua");
+    map.insert("Costa Rica", "San José");
+    map.insert("Panama", "Panama City");
+    map.print();
 }

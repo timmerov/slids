@@ -3916,13 +3916,16 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
             b = widen::strip(widen::get(b).pointee);
         }
         b = widen::strip(widen::removeConst(b));
-        if (widen::form(b) != widen::Type::Form::kSlid) return widen::kNoType;
-        auto it = tree.classes.find(b);
-        if (it == tree.classes.end()) return widen::kNoType;
-        int fi = it->second.fieldIndex(e.name);
-        if (fi < 0 || fi >= static_cast<int>(it->second.field_types.size()))
-            return widen::kNoType;
-        return it->second.field_types[fi];
+        // An inherited field: walk the base chain until a class declares it.
+        while (widen::form(b) == widen::Type::Form::kSlid) {
+            auto it = tree.classes.find(b);
+            if (it == tree.classes.end()) return widen::kNoType;
+            int fi = it->second.fieldIndex(e.name);
+            if (fi >= 0 && fi < static_cast<int>(it->second.field_types.size()))
+                return it->second.field_types[fi];
+            b = parse::baseTypeOf(it->second);
+        }
+        return widen::kNoType;
     }
     if (e.kind == parse::Kind::kDerefExpr) {
         widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag, peek_calls));
