@@ -577,9 +577,6 @@ GuthrieVoting(
 
     void run() {
 
-        /* ==tsc== */
-        test_map();
-        return;
         /* suppress unreachable error. */
         void;
 

@@ -2232,8 +2232,8 @@ STAGE FILES (.h / .cpp pairs)
             comparison (each operand's enum is PEEKED without resolving, then
             each side resolves under the other's — peekEnumFrame: a bare
             local / global / const / FIELD entry, or a field / deref / index
-            lvalue or a CALL through peekIterableType, the same peek a store
-            reads), and a STORE (2026-10-16:
+            lvalue, a CALL, or a CAST / CONVERSION through peekIterableType,
+            the same peek a store reads), and a STORE (2026-10-16:
             storeEnumFrame peeks the target's type through peekIterableType —
             a field store `obj.f = kC` / `p^.f = kC` reads the field's declared
             type off the class layout — walking the BASE CHAIN (baseTypeOf) when
@@ -2258,8 +2258,8 @@ STAGE FILES (.h / .cpp pairs)
             (stampInferredEnum) so a later `l = kSlids;` reads in context; one
             inferred from a STRUCTURAL init gets Entry::peek_type stamped
             (stampInferredPeekType: a single-object `new T` -> T^; an
-            unqualified name / field / deref / index / call -> its
-            peekIterableType) — peekIterableType falls back to it while
+            unqualified name / field / deref / index / call / cast /
+            conversion -> its peekIterableType) — peekIterableType falls back to it while
             slids_type is empty, so `p = parent_; p^.f = kC;` reads in
             context, and entryEnumFrame falls back to it too, so `l2 = lang;
             l2 = kC;` does. CALLS (2026-10-16): every enum-context peek passes
@@ -2273,7 +2273,15 @@ STAGE FILES (.h / .cpp pairs)
             disagree keeps the qualifier, as does a call ARGUMENT on its own
             (the parameter is picked by overload ranking later). The
             for-iterable dispatch peeks WITHOUT peek_calls (its kCallExpr arm
-            is unchanged). Resolve is the
+            is unchanged). CASTS (2026-10-20): under peek_calls a `<T^> p` /
+            `(T = x)` peeks its SPELLED target type (`<const>` / `<mutable>`
+            spell none — they peek the operand), so `lf = <NodeIter> left_;
+            lf^.color_ == kRed` and `(<It> p)^.color_ == kRed` read in context.
+            A comparison peeks BEFORE its operands resolve, so the spelling may
+            still be an unresolved alias: peekSpelledType follows bare alias /
+            class names through pointer / iterator / array / const layers
+            QUIETLY (no diagnostic, never instantiates); a qualified or
+            template spelling stays as written and lends no context. Resolve is the
             stage because members are consts constfold substitutes right after
             (switch labels and folded inits depend on that).
             Owns enums: `enum [type] [Name] ( members )` lowers here (not

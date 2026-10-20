@@ -1,0 +1,27 @@
+/*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
+key/value map.
+built upon red/black tree.
+*/
+
+import tree;
+
+TreeNode : MapNode<Key, Value>(
+    Key key_,
+    Value value_
+) {
+    _();
+    ~();
+}
+
+Map<Key, Value>(...) {
+    alias MapIter = MapNode<Key, Value>^;
+
+    _(); ~();
+
+    void insert(Key key, Value value);
+    void print();
+}

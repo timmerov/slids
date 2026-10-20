@@ -1,0 +1,22 @@
+/*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
+red black tree.
+*/
+
+TreeNode(
+    Color color_ = kRed,
+    TreeNode^ parent_ = nullptr,
+    TreeNode^ left_ = nullptr,
+    TreeNode^ right_ = nullptr
+) {
+    enum Color (kRed, kBlack, kNull);
+
+    _();
+    ~();
+
+    /* recolor/rebalance the tree. */
+    void rebalance();
+}

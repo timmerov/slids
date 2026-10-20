@@ -11,10 +11,10 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
-# Tests for the standard library. The library: string.slh / math.slh /
-# dump.slh / vector.slh / algorithm.slh live in lib/hdr, and a TEMPLATE
+# Tests for the standard library. The library: string.slh / math.slh / tree.slh /
+# dump.slh / vector.slh / algorithm.slh / map.slh live in lib/hdr, and a TEMPLATE
 # library's source sits BESIDE its header there (dump.sl, vector.sl,
-# algorithm.sl — the lexer loads the template source next to an imported
+# algorithm.sl, map.sl — the lexer loads the template source next to an imported
 # header). The merged libslids.o lands in build/lib (lib's Makefile owns it —
 # make.sh builds lib/ before test/). Consumers here compile with -I so
 # `import string;` / `import vector;` resolve.
@@ -26,7 +26,9 @@ IFLAGS    = -I $(LIB_HDR)
 # One test per library, named after it.
 SAMPLES = \
 	algorithm \
+	map \
 	string \
+	tree \
 	vector
 
 .PHONY: all clean negatives positives $(SAMPLES)
@@ -37,7 +39,7 @@ negatives:
 	@../run_negatives.sh algorithm.sl
 
 positives: all
-	@../run_positives.sh $(DIR) algorithm string
+	@../run_positives.sh $(DIR) algorithm string map tree
 
 # A test shares its STEM with the library it exercises, and a template
 # library's instantiation lands in this same build directory under the

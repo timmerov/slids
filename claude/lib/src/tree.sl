@@ -3,76 +3,18 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 */
 
 /*
-std c++ map
+red black tree implementation.
 
-need minimum:
-for (it : map) { }
-clear()
-find()
-end()
-insert()
-size()
-*/
-
-import map;
-import string;
-
-/* tree.slh ================================================= */
-TreeNode(...) {
-    _();
-    ~();
-
-    /* getters. */
-    Color color();
-    TreeNode^ parent();
-    TreeNode^ left();
-    TreeNode^ right();
-
-    /* setters. */
-    void set_color(Color color);
-    void set_parent(mutable TreeNode^ parent);
-    void set_left(mutable TreeNode^ left);
-    void set_right(mutable TreeNode^ right);
-
-    /* recolor/rebalance the tree. */
-    void rebalance();
-}
-
-/* map.slh ================================================= */
-TreeNode : MapNode<Key, Value>(
-    Key key_,
-    Value value_
-) {
-    _();
-    ~();
-}
-
-Map<Key, Value>(...) {
-    alias MapIter = MapNode<Key, Value>^;
-
-    _(); ~();
-
-    void insert(Key key, Value value);
-    void print();
-}
-
-/* tree.sl ================================================= */
-/*
-red black tree.
 1. the root is black.
 2. red nodes have no red children.
 3. every path to leaf nodes must have the same number of black nodes.
 4. inserted nodes (after the first) are red.
 if this breaks rules 2,3 then recolor/rebalance.
 */
-TreeNode(
-    Color color_ = kRed,
-    TreeNode^ parent_ = nullptr,
-    TreeNode^ left_ = nullptr,
-    TreeNode^ right_ = nullptr
-) {
-    enum Color (kRed, kBlack, kNull);
 
+import tree;
+
+TreeNode() {
     _() {}
     ~() {}
 
@@ -249,134 +191,4 @@ TreeNode(
             right_ = new_child;
         }
     }
-}
-
-/* map.sl ================================================= */
-TreeNode : MapNode<Key, Value>() {
-
-    alias MapIter = MapNode<Key, Value>^;
-
-    _() {}
-    ~() {}
-
-    /* recursively delete the tree. */
-    void destroy() {
-        if (^self == nullptr) {
-            return;
-        }
-        lf = <MapIter> left_;
-        rt = <MapIter> right_;
-        lf^.destroy();
-        rt^.destroy();
-        delete ^self;
-    }
-
-    /* recursively print the tree. */
-    void print(int spaces) {
-        if (^self == nullptr) {
-            return;
-        }
-        spaces += 2;
-
-        lf = <MapIter> left_;
-        lf^.print(spaces);
-
-        String color = "red";
-        if (color_ == kBlack) {
-            color = "black";
-        }
-
-        if (spaces > 2) {
-            ::print("  ");
-            for (i : 4..spaces+2) {
-                ::print("| ");
-            }
-        }
-        println(key_ + " - " + value_ + " (" + color + ")");
-
-        rt = <MapIter> right_;
-        rt^.print(spaces);
-    }
-}
-
-Map<Key, Value>(
-    MapNode<Key, Value>^ root_
-) {
-    _() { }
-    ~() {
-        root_^.destroy();
-    }
-
-    void insert(Key key, Value value) {
-
-        /* create a new red node. */
-        child = new MapNode<Key, Value>;
-        child^.color_ = kRed;
-        child^.key_ = key;
-        child^.value_ = value;
-
-        /* the root node is black. */
-        if (root_ == nullptr) {
-            root_ = child;
-            child^.color_ = kBlack;
-            return;
-        }
-
-        /* insert the new node into the tree. */
-        MapIter parent = root_;
-        while() {
-            if (key < parent^.key_) {
-                if (parent^.left_ == nullptr) {
-                    parent^.left_ = child;
-                    break;
-                }
-                parent = <MapIter> parent^.left_;
-            } else {
-                if (parent^.right_ == nullptr) {
-                    parent^.right_ = child;
-                    break;
-                }
-                parent = <MapIter> parent^.right_;
-            }
-        }
-        child^.parent_ = parent;
-
-        /* recolor/rebalance the tree. */
-        child^.rebalance();
-
-        /* update root. */
-        parent = child;
-        while() {
-            ancestor = <MapIter> parent^.parent_;
-            if (ancestor == nullptr) {
-                break;
-            }
-            parent = ancestor;
-        }
-        root_ = parent;
-
-        /* force the root to black. */
-        root_^.color_ = kBlack;
-    }
-
-    void print() {
-        if (root_) {
-            root_^.print(0);
-        }
-    }
-}
-
-void test_map() {
-    Map<String, String> map;
-    map.insert("USA", "Washington DC");
-    map.insert("Canada", "Ottawa");
-    map.insert("Mexico", "Mexico City");
-    map.insert("Belize", "Belmopan");
-    map.insert("Guatemala", "Guatemala City");
-    map.insert("Honduras", "Tegucigalpa");
-    map.insert("El Salvador", "San Salvador");
-    map.insert("Nicaragua", "Managua");
-    map.insert("Costa Rica", "San José");
-    map.insert("Panama", "Panama City");
-    map.print();
 }

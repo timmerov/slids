@@ -906,7 +906,11 @@ Phase 4 — types beyond primitives
     2026-10-19: the field peek walks the base chain, so a store / comparison
     against a base's enum-typed field through a derived (or grand-derived)
     receiver reads in context (guthrie map.sl `root_^.color_ = kBlack;`;
-    pinned in test/class/inheritance.sl Eb/Ed/Ee). Canon: enum.sl
+    pinned in test/class/inheritance.sl Eb/Ed/Ee). CASTS 2026-10-20: a cast /
+    conversion peeks its spelled target type — as a comparison operand and as
+    an inferred local's init (`lf = <NodeIter> left_; lf^.color_ == kRed`,
+    test/lib/tree.sl Node::check); an alias spelling not yet resolved is
+    followed quietly (peekSpelledType). Canon: enum.sl
     "simplified enums in context"; detail: readme.txt RESOLVE. Deferred enum
     item (reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
     arithmetic result stays char when the folded value fits 0..255, else promotes

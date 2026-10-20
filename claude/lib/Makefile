@@ -2,9 +2,9 @@
 #
 # The deliverable is ONE relocatable object, build/lib/libslids.o — every test
 # binary links it. It is `ld -r`-merged from the library's per-TU objects
-# (string.o today; more land in LIB_SRCS as the library grows). string.slh is
-# template-free, so one object serves every consumer. dump, vector, and
-# algorithm are TEMPLATE libraries — their sources sit BESIDE their headers in
+# (string.o, tree.o; more land in LIB_SRCS as the library grows). string.slh and
+# tree.slh are template-free, so one object serves every consumer. dump, vector,
+# algorithm, and map are TEMPLATE libraries — their sources sit BESIDE their headers in
 # hdr/ (the lexer loads the template source sitting next to an imported
 # header), and their objects can only be built against a CONSUMER's demand
 # pool (--instantiate), so each consumer's Makefile builds them (via the
@@ -22,7 +22,7 @@ LLCFLAGS  = --filetype=obj --relocation-model=pic
 
 BUILD_DIR = ../build/lib
 
-LIB_SRCS = string
+LIB_SRCS = string tree
 LIB_OBJS = $(LIB_SRCS:%=$(BUILD_DIR)/%.o)
 
 LIBSLIDS = $(BUILD_DIR)/libslids.o
