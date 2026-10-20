@@ -1,0 +1,9 @@
+/* the public interface: declarations only. */
+
+Shape(int w_, int h_, ...) {                // trailing ... : more fields are private
+    _();
+    ~();
+    int area();
+}
+
+int twice(int x);
