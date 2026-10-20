@@ -98,6 +98,8 @@ Cluster(
     /* position */
     Position position_
 ) {
+    _() {} ~() {}
+
     /* for sorting */
     /*bool operator < (const Cluster& other) const
     {

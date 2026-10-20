@@ -1,4 +1,8 @@
 /*
+Copyright (C) 2026 tim cotter. All rights reserved.
+*/
+
+/*
 import declarations from a header file.
 use the declared fuction.
 link with the compiled implementation.

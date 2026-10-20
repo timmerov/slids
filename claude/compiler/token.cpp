@@ -1,8 +1,22 @@
 #include "token.h"
 
+#include <filesystem>
 #include <utility>
 
 namespace token {
+
+std::string templateSourcePath(std::string const& header_path) {
+    std::filesystem::path hp(header_path);
+    return (hp.parent_path() / (hp.stem().string() + ".sl")).string();
+}
+
+bool samePath(std::string const& a, std::string const& b) {
+    std::error_code ea, eb;
+    std::filesystem::path ca = std::filesystem::weakly_canonical(a, ea);
+    std::filesystem::path cb = std::filesystem::weakly_canonical(b, eb);
+    if (ea || eb) return a == b;
+    return ca == cb;
+}
 
 void add(List& list, Token const& tok) {
     list.tokens.push_back(tok);

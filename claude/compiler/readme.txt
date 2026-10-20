@@ -1446,9 +1446,14 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     emit the flavor, so it clones FULL bodies and emits internal, def_id-
     suffixed, excluded from the .sli. The bodies come from the TEMPLATE
     SOURCE, which lex loads implicitly: importing `<m>.slh` also lexes the
-    `<m>.sl` beside it (skipped when the ROOT's own stem is `<m>` — the
-    sibling compiling itself, and the negative harness's relocated variants),
-    marked template_source; grammar's declarations-only header check exempts
+    `<m>.sl` in the header's OWN directory (token::templateSourcePath) — only
+    when the header DECLARES a template (ImportWrapper::declaresTemplate: a
+    name + balanced `<...>` followed by `(` or `=`; lexical, errs toward
+    loading, a spurious load is stripped anyway), and skipped when that file
+    IS the root, compared by PATH (token::samePath — never by stem: a consumer
+    sharing the stem, test/lib/vector.sl, is not the module's source; the
+    negative harness keeps a variant at the right path with a per-case
+    symlink farm), marked template_source; grammar's declarations-only header check exempts
     it, and resolve STRIPS its non-template content before relocation. A body
     referencing a TU-private name therefore cannot inline — and gets THE
     PRIVATE-NAME CHAIN, not a bare unknown-name error: the strip RECORDS every
@@ -1474,7 +1479,10 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     focused message: the template source missing entirely.
   - SIBLING: the template source's own compile — full bodies, external
     defines (the entry/clone file_ids are the header's, so the existing
-    declared-in-header linkage rules emit them visible).
+    declared-in-header linkage rules emit them visible). "This TU is the
+    sibling" is grammar's file_sibling: the root IS the header's
+    templateSourcePath, by path. It is TEMPLATE-ONLY — a plain header class's
+    owner is decided by content (readme-classes.txt THE OWNING FILE).
 
   An INCOMPLETE header template completes CROSS-TU for free: the header
   declares `Tmpl<T>(...)` (interface only — even fieldless), and the loaded
@@ -3344,7 +3352,13 @@ PLUMBING
                   addressed to this module.
                   --scan-deps is lex-only and exits before the pipeline:
                   dependency generation must not require the program to
-                  compile. A LEX ERROR during the scan is NOT rendered: the
+                  compile. Its libraries are the loaded TEMPLATE SOURCES only
+                  (a header with no templates names no source file, so a
+                  Makefile lists such a module's object by hand), and the
+                  consumer's BUILD name is the fragment's (`<name>.deps.mk` ->
+                  `<name>.ll`, `<name>_TMPL_OBJS`), not the source's stem — a
+                  consumer may share a stem with a library it imports
+                  (test/lib builds vector.sl as t_vector). A LEX ERROR during the scan is NOT rendered: the
                   scan prints one `slidsc: scan-deps: <file> has errors.` line
                   per erroring file and exits 1 (no fragment written; the
                   Makefiles `-include` it, so make goes on to the compile,

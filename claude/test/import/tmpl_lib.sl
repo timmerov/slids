@@ -196,6 +196,7 @@ int viaOwn() {
 
 /* public and private classes */
 Hybrid(int b = 37) {
+    _() {} ~() {}
     void print() {
         println(String + "a=" + a + " b=" + b);
     }

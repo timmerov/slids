@@ -1,11 +1,13 @@
 #include "codegen.h"
 
 #include <cassert>
+#include <cctype>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <ostream>
 #include <set>
 #include <sstream>
@@ -229,6 +231,47 @@ std::string newTmp(char const* tag) {
 // ast::Tree::vtables. A virtual class's ctor stamps its vtable; `delete` of a virtual
 // pointer dispatches the destructor through the vtable (slot 0).
 std::set<std::string> g_vtable_syms;
+
+// ON-DEMAND definitions: the synthesized members of a kPerTU class (a complete header
+// class with no owner), keyed by symbol. run() emits one only if the rest of the module
+// — or another on-demand definition it pulled in — references it, the way C++ defines
+// an implicit member only where it is used. llc keeps an unreferenced function, so an
+// unconditional copy would make every importer depend on whatever it calls.
+std::map<std::string, std::string> g_on_demand;
+
+// True if `text` names `@sym` as a whole symbol (not a prefix of a longer one).
+bool referencesSymbol(std::string const& text, std::string const& sym) {
+    std::string needle = "@" + sym;
+    for (std::size_t pos = text.find(needle); pos != std::string::npos;
+         pos = text.find(needle, pos + 1)) {
+        std::size_t end = pos + needle.size();
+        if (end >= text.size()) return true;
+        char c = text[end];
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$'
+              || c == '.'))
+            return true;
+    }
+    return false;
+}
+
+// Append to `body` every on-demand definition reachable from it: a fixpoint, since an
+// included copy op may call another (a field's) on-demand member.
+void emitOnDemand(std::ostringstream& body) {
+    std::string text = body.str();
+    std::set<std::string> done;
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        for (auto const& [sym, def] : g_on_demand) {
+            if (done.count(sym) || !referencesSymbol(text, sym)) continue;
+            done.insert(sym);
+            body << def;
+            text += def;
+            grew = true;
+        }
+    }
+}
+
 // File-local globals, keyed by resolved_entry_id. Populated in run() from
 // ast::Tree::globals; a kIdentExpr / lvalue whose id is here loads/stores through
 // `@<symbol>` instead of a SymTab alloca. (Global storage, not stack.)
@@ -3923,6 +3966,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // global may reference a function symbol defined later in the module — LLVM resolves
     // the forward reference.)
     g_vtable_syms.clear();
+    g_on_demand.clear();
     for (ast::Vtable const& vt : tree.vtables) {
         g_vtable_syms.insert(vt.class_symbol);
         body << "@" << vt.class_symbol
@@ -4090,6 +4134,10 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                 // dispatch precisely because the second case is a kFunctionDef. A FOREIGN
                 // decl is skipped here — collected + deduped below (it may appear nested).
                 emitDeclare(*fn, body);
+            } else if (fn->kind == ast::Kind::kFunctionDef && fn->on_demand) {
+                std::ostringstream def;
+                emitFunction(*fn, pool, def, diag);
+                g_on_demand[emitSymbol(*fn)] = def.str();
             } else if (fn->kind == ast::Kind::kFunctionDef) {
                 emitFunction(*fn, pool, body, diag);
                 collectNestedFunctions(*fn, nested);
@@ -4131,17 +4179,20 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // some leaf) gets a method; a trivial class emits none and its sites do value-init
     // only. Emitted for virtual AND non-virtual classes (the vtable stamp is gated).
     // WHERE they are emitted follows the class's LINKAGE. A `.sl` class is private to this
-    // TU, so its complete methods stay `internal`. A header class's are emitted ONCE, by
-    // the sibling `.sl`, with external linkage; every other importer only DECLARES them.
-    // A non-sibling must not synthesize its own: it cannot see the user hook bodies the
-    // complete method calls (an undefined `@C__$ctor__impl`), and it would collide with the
-    // sibling's definition even if it could.
+    // TU, so its complete methods stay `internal`. An OWNED header class's are emitted
+    // ONCE, by its owning `.sl` (the one defining its `_`/`~`), with external linkage;
+    // every other importer only DECLARES them — it cannot see the user hook bodies the
+    // complete method calls, and it would collide with the owner's definition. An
+    // unowned (kPerTU) header class has no user hooks: each TU defines them `internal`,
+    // on demand (g_on_demand).
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
         widen::TypeRef cs = widen::strip(ct);
         std::string sym = widen::classSymbol(cs);
         bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare;
-        bool def_internal = widen::slidLinkage(cs) == widen::Type::Linkage::kInternal;
+        bool per_tu = widen::slidLinkage(cs) == widen::Type::Linkage::kPerTU;
+        bool def_internal = widen::slidLinkage(cs) == widen::Type::Linkage::kInternal
+            || per_tu;
         char const* def = def_internal ? "define internal void @" : "define void @";
         // When we emit the complete method we emit a CALL to the user's hook body, so we
         // must also name that body. If it is not ours — a header's `_();` defined in some
@@ -4169,11 +4220,16 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
                 emitClassCtorBody("%o", cs, body);
                 body << "  ret void\n}\n\n";
             } else {
+                // A kPerTU class has no user hooks (its header declares none), so its
+                // complete ctor is self-contained — emitted on demand.
+                std::ostringstream od;
+                std::ostream& to = per_tu ? od : static_cast<std::ostream&>(body);
                 if (widen::get(cs).has_ctor && !widen::slidCtorHere(cs))
-                    body << "declare void @" << sym << "__$ctor__impl(ptr)\n\n";
-                body << def << sym << "__$ctor(ptr %o) {\n";
-                emitClassCtorBody("%o", cs, body);
-                body << "  ret void\n}\n\n";
+                    to << "declare void @" << sym << "__$ctor__impl(ptr)\n\n";
+                to << def << sym << "__$ctor(ptr %o) {\n";
+                emitClassCtorBody("%o", cs, to);
+                to << "  ret void\n}\n\n";
+                if (per_tu) g_on_demand[sym + "__$ctor"] = od.str();
             }
         }
         // An OPAQUE class ALWAYS needs a complete dtor too — the importer routes every
@@ -4184,11 +4240,14 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
             if (declare_only) {
                 body << "declare void @" << sym << "__$dtor(ptr)\n\n";
             } else {
+                std::ostringstream od;
+                std::ostream& to = per_tu ? od : static_cast<std::ostream&>(body);
                 if (widen::get(cs).has_dtor && !widen::slidDtorHere(cs))
-                    body << "declare void @" << sym << "__$dtor__impl(ptr)\n\n";
-                body << def << sym << "__$dtor(ptr %o) {\n";
-                emitClassDtorBody("%o", cs, body);
-                body << "  ret void\n}\n\n";
+                    to << "declare void @" << sym << "__$dtor__impl(ptr)\n\n";
+                to << def << sym << "__$dtor(ptr %o) {\n";
+                emitClassDtorBody("%o", cs, to);
+                to << "  ret void\n}\n\n";
+                if (per_tu) g_on_demand[sym + "__$dtor"] = od.str();
             }
         }
     }
@@ -4269,6 +4328,7 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // leaking a fresh alloca each iteration.
     out << "declare ptr @llvm.stacksave.p0()\n";
     out << "declare void @llvm.stackrestore.p0(ptr)\n\n";
+    emitOnDemand(body);
     out << body.str();
 }
 

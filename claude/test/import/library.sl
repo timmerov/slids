@@ -271,6 +271,7 @@ Mix(int a_ = 11, int b_, Cell s_, int r_[3]) {
 /* complete Flat — a POD (no hooks). a_ has a default, b_ does not, so an importer's default
    construction via @Flat__$ctor must come out {55, 0}. */
 Flat(int a_ = 55, int b_) {
+    _() {} ~() {}
     int a() { return a_; }
     int b() { return b_; }
 }

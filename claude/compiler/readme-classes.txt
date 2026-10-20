@@ -1643,57 +1643,75 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
                codegen entry. So liftMember's owner-linkage stamp here is AUTHORITATIVE
                over that per-function default for a class member; a namespace member is a
                free function and keeps the default.
-    kDefine    the class is declared in a `.slh` AND this TU is its SIBLING (same base name;
-               the directories may differ). The sibling emits the SYNTHESIZED members —
-               complete ctor/dtor, default copy/move/swap — as real external definitions.
-    kDeclare   the class is declared in a `.slh` and this TU is not the sibling. It only
-               `declare`s those symbols and links to the sibling's.
+    kDefine    the class is declared in a `.slh` AND this TU is its OWNING FILE (below). The
+               owner emits the SYNTHESIZED members — complete ctor/dtor, default
+               copy/move/swap, and an opaque class's `__$sizeof` / `__$off<k>` — as real
+               external definitions.
+    kDeclare   the class is declared in a `.slh` and this TU is not the owner. It only
+               `declare`s those symbols and links to the owner's.
+    kPerTU     a COMPLETE `.slh` class whose header declares no `_`/`~`: it has NO owner.
+               Every TU sees its whole layout, so each defines the synthesized members
+               `internal` — ON DEMAND (codegen g_on_demand): only the ones this TU
+               references, because llc keeps an unreferenced function and an unused copy
+               op would make every importer link-depend on whatever it calls (a field's /
+               base's ops in another module). Members the author DECLARED stay external.
 
-  EVERY `.slh` REQUIRES A SIBLING `.sl`. Confirmed intent, even for a POD class, even if the
-  `.sl` is empty: a header-only module is impossible, because SOMEONE must emit the synthesized
-  members exactly once and the sibling is the only TU-independent answer to "who". (Templates
-  will want the same rule, so it is a rule about headers, not about classes.)
+  THE OWNING FILE (2026-10-19) — decided by CONTENT, never by file name (resolve
+  registerClassBody). The old rule — the `.sl` with the header's base name — is gone: a
+  consumer that shares the stem (test/lib/string.sl) was taken for the module's source and
+  emitted String's symbols, and a source that does not (lib/src/str.sl) could not own them.
+    - the file that defines the class's `_` and `~` owns it. The pair is one contract, so both
+      are defined in the SAME file ("The constructor and destructor of class 'X' must be
+      defined in the same source file.").
+    - an INCOMPLETE class's owner is also the file that CLOSES it (ClassInfo.closer): the
+      closer must define both hooks ("The file that closes class 'X' must define its
+      constructor and destructor.", even when the header declares neither), and a file
+      that does not close it may define neither ("...must be defined in the file that
+      closes it."). The closer owns even with the hooks missing, so owner-side checks
+      (checkOpaqueExportFoldable) still run.
+    - a COMPLETE class whose header declares no `_`/`~` has no owner (kPerTU above).
+    - a class DERIVING from an imported incomplete class cannot be kPerTU — only an owner can
+      fold its offsets — so it must declare `_(); ~();` (propagateRuntimeLayout reports it).
+    - a header TEMPLATE instance keeps the template rule: the template source defines.
+  So there is no "every `.slh` requires a sibling `.sl`" any more: a header of POD classes
+  needs no source at all.
 
-  SYNTHESIZED IS THE SIBLING'S; DECLARED IS ANYONE'S. The two halves have different rules and
-  the difference is the whole design. A SYNTHESIZED member is emitted only by the sibling —
-  nobody wrote it, so no source file's location can select an owner. A DECLARED member (a
-  method, an operator, a hook body) may be defined in ANY ONE `.sl` — the use case is a
-  `library.slh` declaring several classes with a source file each. Zero or two definitions is a
-  LINK error, not a compile error: this compiler sees one TU and cannot know what the others
-  define, and that is the same deal `foo()` declared in `foo.slh` already gets.
+  SYNTHESIZED IS THE OWNER'S; DECLARED IS ANYONE'S. A SYNTHESIZED member is emitted only by
+  the owner (or per-TU for an unowned class). A DECLARED member (a method, an operator) may be
+  defined in ANY ONE `.sl` — the use case is a `library.slh` declaring several classes with a
+  source file each. Zero or two definitions is a LINK error, not a compile error: this
+  compiler sees one TU and cannot know what the others define, and that is the same deal
+  `foo()` declared in `foo.slh` already gets.
 
-  A HOOK BODY IS A DECLARED MEMBER, so it too may live in a non-sibling `.sl` (a ctor/dtor is a
-  method with restrictions — the same freedom, for the same reason). That crosses the two halves
-  in the one place they touch: the SIBLING emits the complete `@C__$ctor`, whose body CALLS
-  `@C__$ctor__impl`, and the impl may be somebody else's. So a TU that emits the complete method
-  must `declare` an impl it does not define. Type::ctor_here / dtor_here carries the answer —
-  "is the body written HERE", as opposed to has_ctor's "does the class HAVE one", which every TU
-  agrees on because it comes from the header. It cannot be asked of the symbol table the way a
-  method's decl/def split is: a hook is not a frame ENTRY at all (resolve's member loop skips
-  `_$ctor`/`_$dtor`; its presence lives on the TYPE), so it has no entry id and none of the
-  entry-driven external_decl machinery can speak about it. registerClassBody answers it, where
-  every opening is visible — and a hook DEF node in this tree is proof the body is ours, since
-  a header may not hold a body at all. Missing this declare emitted IR that referenced a value
-  the module never defined: both TUs compiled clean and only llc caught it. Canon
-  test/import/bird.sl.
+  THE HOOK BODIES ARE THE OWNER'S. The owner emits the complete `@C__$ctor`, whose body CALLS
+  `@C__$ctor__impl` — and the impl is in the same file by the rule above. Type::ctor_here /
+  dtor_here still carries "is the body written HERE" (as opposed to has_ctor's "does the
+  class HAVE one"), and a TU emitting a complete method still `declare`s an impl it does not
+  define. A hook is not a frame ENTRY at all (resolve's member loop skips `_$ctor`/`_$dtor`;
+  its presence lives on the TYPE), so registerClassBody answers it, where every opening is
+  visible — a hook DEF node in this tree is proof the body is ours, since a header may not
+  hold a body. Canon test/import/bird.sl (it owns Animal / Bird).
 
   A SOURCE FILE CANNOT ADD AN IMPLICIT MEMBER TO A HEADER CLASS. The five implicitly-invoked
   members — ctor, dtor, copy, move, swap — are called WITHOUT the author naming them, off a
   declaration going out of scope, off a `=`, off a slot-wise transfer. So every importing TU
   emits those calls from the HEADER ALONE. One that exists only in some `.sl` would make that
   TU disagree, silently, with every other about what constructing or copying the class does,
-  and its symbol would collide with the sibling's synthesized default besides. THE BAN IS ON
-  ADDING, NOT ON DEFINING — that word is load-bearing: `Animal:_() { }` in the sibling is legal
+  and its symbol would collide with the owner's synthesized default besides. THE BAN IS ON
+  ADDING, NOT ON DEFINING — that word is load-bearing: `Animal:_() { }` in bird.sl is legal
   because `library.slh` declares `_();`. So the check asks whether the HEADER declared the
-  member, never where the definition lives, and it applies to the sibling exactly as to any
-  other source. Enforced in registerClassBody over every opening (a re-open in a `.sl` is one
-  of the spellings that adds one), against parse::isImplicitMember. Canon test/import.
+  member, never where the definition lives. Enforced in registerClassBody over every opening
+  (a re-open in a `.sl` is one of the spellings that adds one), against
+  parse::isImplicitMember. ONE EXCEPTION: the file that CLOSES an incomplete header class adds
+  its `_`/`~` (it must — THE OWNING FILE); safe, because an importer of an opaque class calls
+  the complete ctor/dtor whatever its header says. Canon test/import.
 
   A HEADER HOLDS DECLARATIONS ONLY — the companion rule, enforced in the PARSER because it is
   about author code; see readme.txt's grammar entry for why no later stage can ask it.
 
   THE VTABLE STAYS PRIVATE. It is stamped by the ctor, so only the ctor's implementation needs
-  to know what it is — and that is the sibling's. No `@C__$vtable` crosses a TU.
+  to know what it is — and that is the owner's (each TU's own, for an unowned kPerTU class).
+  No `@C__$vtable` crosses a TU.
 
   OPAQUE CLASSES (cross-TU incomplete — LANDED). An INCOMPLETE class (trailing `...`, above)
   declared in a `.slh` is OPAQUE to an importer: it can name the class and its methods but not

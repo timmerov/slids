@@ -9,6 +9,7 @@ SUBDIRS = \
 	guthrie \
 	import \
 	lex \
+	lib \
 	misc \
 	pointer \
 	progress \

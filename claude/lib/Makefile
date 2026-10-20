@@ -8,9 +8,8 @@
 # hdr/ (the lexer loads the template source sitting next to an imported
 # header), and their objects can only be built against a CONSUMER's demand
 # pool (--instantiate), so each consumer's Makefile builds them (via the
-# slidsc --scan-deps fragments); they are NOT part of libslids.o.
-# vector_test.sl is a CONSUMER that lives in hdr/ beside the library it
-# exercises; test/progress builds it.
+# slidsc --scan-deps fragments); they are NOT part of libslids.o. The
+# library's tests live in test/lib.
 #
 # A failed recipe (slidsc/llc error) removes its target, so a partial or stale
 # .ll/.o is never left looking up-to-date on the next build.

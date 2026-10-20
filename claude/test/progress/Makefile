@@ -16,18 +16,16 @@ BUILD_DIR = ../../build/test/$(DIR)
 # lexer loads the template source next to an imported header). The merged libslids.o
 # lands in build/lib (lib's Makefile owns it — make.sh builds lib/ before test/).
 # Consumers here compile with -I so `import string;` / `import vector;` resolve.
-# vector_test.sl also lives in lib/hdr, beside the library it exercises.
+# The library's own tests live in test/lib.
 LIB       = ../../lib
 LIB_HDR   = $(LIB)/hdr
 LIB_BUILD = ../../build/lib
 IFLAGS    = -I $(LIB_HDR)
 
-# The runnable programs (a work-in-progress sandbox). `string_test` and
-# `vector_test` exercise their libraries; `galaxy` is the scratch sandbox.
+# The runnable programs (a work-in-progress sandbox). `galaxy` is the scratch
+# sandbox.
 SAMPLES = \
-	galaxy \
-	string_test \
-	vector_test
+	galaxy
 
 .PHONY: all clean negatives positives $(SAMPLES)
 
@@ -35,10 +33,9 @@ all: $(SAMPLES)
 
 negatives:
 
-# Only string_test carries a golden. `galaxy` is work in progress — its output
-# changes freely, so pinning it would just be churn.
+# No golden here. `galaxy` is work in progress — its output changes freely, so
+# pinning it would just be churn.
 positives: all
-	@../run_positives.sh $(DIR) string_test
 
 # THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
 # its template-library instantiation stage — the libraries it pulls in, their
@@ -52,28 +49,24 @@ ifneq ($(MAKECMDGOALS),clean)
 -include $(SAMPLES:%=$(BUILD_DIR)/%.deps.mk)
 endif
 
-# $(2) is the sample's source directory — vector_test.sl lives in lib/hdr
-# beside the library it exercises; the others live here.
+# $(2): extra link flags.
 define SAMPLE_RULES
 $(1): $(BIN_DIR)/$(1)
 
 $(BIN_DIR)/$(1): $(BUILD_DIR)/$(1).o $($(1)_TMPL_OBJS)
-	$(CXX) $$^ $(3) -o $$@
+	$(CXX) $$^ $(2) -o $$@
 
-$(BUILD_DIR)/$(1).ll: $(2)/$(1).sl $(SLIDSC)
+$(BUILD_DIR)/$(1).ll: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $$< -o $$@ -MF $(BUILD_DIR)/$(1).d $(IFLAGS)
 
-$(BUILD_DIR)/$(1).deps.mk: $(2)/$(1).sl $(SLIDSC)
+$(BUILD_DIR)/$(1).deps.mk: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $$< --scan-deps $$@ $(IFLAGS)
 endef
 
 # galaxy's math.slh `import { }` block binds libm — its link takes -lm.
-$(eval $(call SAMPLE_RULES,galaxy,.,-lm))
-$(eval $(call SAMPLE_RULES,gambler,.,))
-$(eval $(call SAMPLE_RULES,string_test,.,))
-$(eval $(call SAMPLE_RULES,vector_test,$(LIB_HDR),))
+$(eval $(call SAMPLE_RULES,galaxy,-lm))
 
 # One .ll -> .o step serves samples and template libraries alike.
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll

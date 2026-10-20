@@ -128,4 +128,12 @@ struct List {
 void add(List& list, Token const& tok);
 int openFile(List& list, std::string path, std::string source, int imported_by = -1);
 
+// A header's TEMPLATE SOURCE is `<stem>.sl` in the header's OWN directory — a path,
+// never a bare name. The one spelling of that rule: the lexer loads that file beside
+// an imported header, and a TU whose root IS that file is the header's template
+// source compiling itself (grammar's file_sibling).
+std::string templateSourcePath(std::string const& header_path);
+// True if `a` and `b` name the same file (canonical paths compared).
+bool samePath(std::string const& a, std::string const& b);
+
 }  // namespace token

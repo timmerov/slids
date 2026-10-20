@@ -573,6 +573,8 @@ GuthrieVoting(
     int independence_ = 0,
     int irv_is_condorcet_ = 0
 ) {
+    _() {} ~() {}
+
     void run() {
 
         /* ==tsc== */

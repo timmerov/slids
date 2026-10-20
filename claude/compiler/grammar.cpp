@@ -5162,31 +5162,22 @@ struct Parser {
 
 }  // namespace
 
-// A path's base name — no directory, no extension (`../lib/library.slh` -> `library`).
-// A module is identified by this alone, so a header and its sibling source may sit in
-// different directories.
-std::string baseNameOf(std::string const& path) {
-    std::size_t slash = path.find_last_of('/');
-    std::string file = (slash == std::string::npos) ? path : path.substr(slash + 1);
-    std::size_t dot = file.find_last_of('.');
-    return (dot == std::string::npos) ? file : file.substr(0, dot);
-}
-
 void run(token::List& in, parse::Tree& out, diagnostic::Sink& diag) {
     // Record which files were imported (`.slh` headers, imported_by != -1) so
     // resolve can tell a header-origin declaration from a primary-source one, and
-    // which of those is THIS TU's sibling (same base name) — the one header whose
-    // classes this TU owns the synthesized symbols for. files[0] is the primary source.
+    // which of those THIS TU is the template source of — the root is that header's
+    // `<stem>.sl` in the header's own directory, compared by PATH (a file that only
+    // shares the stem is a consumer). files[0] is the primary source.
     out.file_imported.resize(in.files.size());
     out.file_sibling.resize(in.files.size());
     out.file_template_source.resize(in.files.size());
     out.file_imported_by.resize(in.files.size());
     out.file_private_owner.resize(in.files.size());
-    std::string self = in.files.empty() ? std::string() : baseNameOf(in.files[0].path);
+    std::string self = in.files.empty() ? std::string() : in.files[0].path;
     for (size_t i = 0; i < in.files.size(); i++) {
         out.file_imported[i] = in.files[i].imported_by != -1;
-        out.file_sibling[i] =
-            out.file_imported[i] && baseNameOf(in.files[i].path) == self;
+        out.file_sibling[i] = out.file_imported[i]
+            && token::samePath(token::templateSourcePath(in.files[i].path), self);
         out.file_template_source[i] = in.files[i].template_source;
         out.file_imported_by[i] = in.files[i].imported_by;
         out.file_private_owner[i] = in.files[i].private_owner;

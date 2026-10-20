@@ -100,11 +100,17 @@ struct Type {
     //               symbol it owns is `internal`. Nothing outside can name the class, so
     //               nothing outside can call them — and two unrelated `.sl` files may
     //               each declare a class of the same name without colliding at link.
-    //   kDefine   — declared in a `.slh` whose SIBLING is this TU: emit the synthesized
-    //               symbols with EXTERNAL linkage. This is the only TU that does.
-    //   kDeclare  — declared in a `.slh`, this TU is not the sibling: emit no synthesized
-    //               definitions at all, only `declare`s to link against the sibling's.
-    enum class Linkage { kInternal, kDefine, kDeclare };
+    //   kDefine   — declared in a `.slh` and this TU is its OWNING file (the one that
+    //               defines its `_`/`~`; for an incomplete class, also the one that
+    //               closes it): emit the synthesized symbols with EXTERNAL linkage. Only
+    //               the owner does. (A header TEMPLATE instance: the template source.)
+    //   kDeclare  — declared in a `.slh`, this TU is not the owner: emit no synthesized
+    //               definitions at all, only `declare`s to link against the owner's.
+    //   kPerTU    — a COMPLETE `.slh` class whose header declares no `_`/`~`: it has no
+    //               owner. Every TU sees the whole layout, so each emits the SYNTHESIZED
+    //               symbols `internal` in its own object — nothing is exported. Members
+    //               the author DECLARED in the header stay external (defined once).
+    enum class Linkage { kInternal, kDefine, kDeclare, kPerTU };
     Linkage linkage = Linkage::kInternal;
     // kSlid: the class is DECLARED incomplete (a trailing `...` in its header) — it has
     // PRIVATE fields hidden from an importer, whose layout/size the importer cannot know.

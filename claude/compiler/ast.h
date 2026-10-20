@@ -177,6 +177,12 @@ struct Node {
                                                  // string. A free function is never this: a
                                                  // `.sl`'s `void do_a()` is external ON
                                                  // PURPOSE — that is how another TU calls it.
+    bool on_demand = false;                      // kFunctionDef: a SYNTHESIZED member of a
+                                                 // kPerTU class (a complete header class with
+                                                 // no owner). Every TU may define it internal,
+                                                 // but codegen emits it only if this TU
+                                                 // references it — an unused copy would drag
+                                                 // in a link dependency on everything it calls.
     bool complete_ctor = false;                  // kFunctionDef: the SYNTHESIZED complete ctor
                                                  // of an opaque class (@C__$ctor). Its name is
                                                  // already the final `<C>__$ctor`, so emitSymbol

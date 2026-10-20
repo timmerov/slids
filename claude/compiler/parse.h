@@ -712,6 +712,9 @@ struct ClassInfo {
     // COMPLETER still knows the class is opaque to importers. With a header declaration this
     // makes the class OPAQUE cross-TU (widen::Type::opaque).
     bool declared_incomplete = false;
+    // The opening whose re-open CLOSED an incomplete class (no trailing `...`), or null.
+    // A header class's closer must be its OWNING file (registerClassBody).
+    Node const* closer = nullptr;
     std::vector<Node*> pending_fields;
     // The IMPLICITLY-INVOKED members contributed by RE-OPENS — ctor, dtor, copy, move,
     // swap (still OWNED by their re-open node, like pending_fields). A class's lifecycle
@@ -921,15 +924,12 @@ struct Tree {
     // whose file is imported as external (its definition is in another TU).
     std::vector<bool> file_imported;
 
-    // Indexed by file_id: true if that file is an imported header whose BASE NAME
-    // matches the primary source's (`library.slh` <-> `library.sl`) — i.e. THIS TU is
-    // that header's SIBLING implementation. A module's identity is its base name, so the
-    // two may live in different directories. The sibling is the ONE TU that emits a
-    // header class's SYNTHESIZED symbols (complete ctor/dtor, default copy/move/swap);
-    // every other importer only declares them. Hence every `.slh` needs a sibling `.sl`,
-    // even for a class with no methods at all — nothing else would ever define them.
-    // (A member the author WROTE is not this: it may be defined in ANY .sl, so one header
-    // can declare several classes that each have their own source file.)
+    // Indexed by file_id: true if that file is an imported header whose TEMPLATE SOURCE
+    // (`<stem>.sl` in the header's own directory, token::templateSourcePath) IS the
+    // primary source — compared by PATH, never by name. Only TEMPLATE machinery asks
+    // (which TU supplies a header template's definitions / instances). A plain header
+    // CLASS's owner is decided by content, not by this: the file that defines its
+    // `_`/`~` (resolve registerClassBody).
     std::vector<bool> file_sibling;
 
     // Indexed by file_id: true if that file is a TEMPLATE SOURCE loaded beside

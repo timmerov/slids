@@ -45,7 +45,7 @@ and a computed-layout class.
 */
 
 //-EXPECT-ERROR: exported layout cannot be a link-time constant
-//BadPack(int a_ = 1, Rope r_) { }
+//BadPack(int a_ = 1, Rope r_) { _() {} ~() {} }
 
 //-EXPECT-ERROR: exported layout cannot be a link-time constant
-//BadPack(int a_ = 1, LPack p_) { }
+//BadPack(int a_ = 1, LPack p_) { _() {} ~() {} }

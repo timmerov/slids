@@ -1740,7 +1740,9 @@ Phase 8 — namespaces + cross-TU
       owns is `define internal` — which also FIXED two unrelated `.sl` files each declaring
       a class of the same name failing to link; note that took the rule at BOTH emitters,
       run()'s per-class loop AND emitFunction via ast internal_def, and applying it at only
-      one was itself the bug). A `.slh` class is kDefine in its SIBLING `.sl`
+      one was itself the bug). [SUPERSEDED 2026-10-19 — the owner is now decided by
+      CONTENT, not by base name; see CROSS-CUTTING — THE OWNING FILE.] A `.slh` class is
+      kDefine in its SIBLING `.sl`
       (same base name, directories may differ), which emits the SYNTHESIZED members, and
       kDeclare everywhere else. Every `.slh` therefore REQUIRES a sibling `.sl` — even
       an empty one for a POD class; a header-only module is impossible, because someone
@@ -3973,6 +3975,39 @@ CROSS-CUTTING — THE ANCHORED PREFIX (LANDED 2026-10-15)
   observable once that empty-slot hatch exists.
   Detail: readme-classes.txt OPAQUE CLASSES → THE ANCHORED PREFIX, and the AN IMPORTED
   INCOMPLETE CLASS REFUSES AN INITIALIZER LIST bullet; readme.txt SOURCE-PRIVATE FIELDS.
+
+CROSS-CUTTING — THE OWNING FILE + NO MODULE BY FILE NAME (LANDED 2026-10-19)
+  THE TRIGGER. The user moved the library tests to test/lib (string.sl, vector.sl) and
+  the build broke: the compiler identified a header's module source by STEM alone, so
+  test/lib/string.sl was taken for string.slh's implementation (it emitted String's
+  synthesized symbols — `multiple definition` against libslids.o) and test/lib/vector.sl
+  suppressed the load of lib/hdr/vector.sl (`Vector` never completed). The user's ruling:
+  "by filename is a bad idea. let's not do that any more."
+  TEMPLATE SOURCE BY PATH. `import m;` loads `m.sl` from the header's OWN directory only
+  when `m.slh` declares a template, and not when that file IS the root — compared by
+  path (token::templateSourcePath / samePath; lex declaresTemplate). grammar's
+  file_sibling means "the root IS this header's template source", template machinery
+  only. --scan-deps lists template sources only, and names the consumer after its
+  fragment (`t_vector.deps.mk` -> t_vector), not its stem.
+  THE OWNING FILE (the user's rule, registerClassBody). A header class's owner — the TU
+  that exports its synthesized members — is the file that defines its `_` and `~` (both,
+  in the same file). An INCOMPLETE class's owner is also its closer: the closer must
+  define both hooks, a non-closer may define neither (the ADD ban is relaxed for the
+  closer's hooks). A COMPLETE class whose header declares no `_`/`~` has NO owner: new
+  linkage kPerTU — every TU defines its synthesized members internal, ON DEMAND (only the
+  referenced ones; llc keeps unreferenced functions, and an unused PDer copy op made
+  bird.o link-depend on tmpl_lib.o — the user picked emit-if-referenced over linking
+  more objects). A class deriving from an incomplete one must declare `_(); ~();`.
+  Every `.slh` no longer needs a `.sl`. lib/src/string.sl already met the rule.
+  KNOCK-ONS. Four closers gained `_() {} ~() {}` (library.sl Flat, tmpl_lib.sl Hybrid,
+  electorate.sl Cluster, guthrie.sl GuthrieVoting) and two BadPack negative bodies;
+  test/import/Makefile hand-lists library.o (a non-template header names no source, so
+  the scan cannot find it); test/lib/Makefile builds t_<name>; test/progress trimmed to
+  galaxy; `lib` joined test/Makefile SUBDIRS. THE NEGATIVE RUNNER builds each case's
+  directory as a SYMLINK FARM of the source directory with the variant written over its
+  own link, so a template-source variant sits at its header's path (and testhdr.sl needs
+  no copy).
+  Detail: readme-classes.txt THE OWNING FILE; readme.txt template source + main.cpp.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

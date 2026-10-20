@@ -518,7 +518,7 @@ struct ImportWrapper {
     diagnostic::Sink& diag;
     std::vector<std::string> const& import_paths;
     std::set<std::string>& imported_once;
-    std::string root_stem;   // the primary source's module name
+    std::string root_path;   // the primary source's path
     bool fatal = false;
 
     // `owner` is the PRIVACY OWNER in force here (token::File::private_owner):
@@ -535,14 +535,46 @@ struct ImportWrapper {
     // walks the imported_by subtree rather than clearing one flag.
     void publicize(int file_id);
     // After importing `module`.slh: load the TEMPLATE SOURCE `module`.sl
-    // sitting beside it, if any — a LOCAL-type instance of the header's
-    // templates needs bodies to clone, and only that file has them. Skipped
-    // when the root IS this module's source (the sibling compiling itself —
-    // which also keeps the negative harness's relocated variants honest).
-    // Marked template_source: resolve strips everything but template content.
+    // sitting beside it in the SAME directory — only when the header declares a
+    // template: a LOCAL-type instance of the header's templates needs bodies to
+    // clone, and only that file has them. Skipped when the root IS that file
+    // (compared by PATH, never by name: a consumer that merely shares the stem
+    // is not the module's source). Marked template_source: resolve strips
+    // everything but template content.
     void loadTemplateSource(std::string const& header_path, int header_file_id,
                             int owner);
+    // True if the header's OWN tokens declare a template: a name followed by a
+    // balanced `<...>` and then `(` (class / function / method template) or `=`
+    // (alias template). A use (`Vector<int> v;`, `alias V = Vector<int>;`) is
+    // followed by neither. Lexical, so it errs toward loading — a spurious load
+    // is harmless (resolve strips everything but template content).
+    bool declaresTemplate(int header_file_id) const;
 };
+
+bool ImportWrapper::declaresTemplate(int header_file_id) const {
+    std::vector<token::Token> const& t = out.tokens;
+    for (std::size_t i = 0; i + 1 < t.size(); i++) {
+        if (t[i].file_id != header_file_id || t[i].kind != token::Kind::kIdentifier
+            || t[i + 1].kind != token::Kind::kLt || t[i + 1].file_id != header_file_id)
+            continue;
+        int depth = 0;
+        std::size_t j = i + 1;
+        for (; j < t.size() && t[j].file_id == header_file_id; j++) {
+            token::Kind k = t[j].kind;
+            if (k == token::Kind::kLt) depth++;
+            else if (k == token::Kind::kGt) depth--;
+            else if (k == token::Kind::kRShift) depth -= 2;
+            else if (k == token::Kind::kSemicolon || k == token::Kind::kLBrace
+                     || k == token::Kind::kRBrace) break;
+            if (depth <= 0) break;
+        }
+        if (j + 1 >= t.size() || depth > 0 || t[j + 1].file_id != header_file_id)
+            continue;
+        token::Kind next = t[j + 1].kind;
+        if (next == token::Kind::kLParen || next == token::Kind::kEquals) return true;
+    }
+    return false;
+}
 
 void reportAt(diagnostic::Sink& diag, int file_id, int tok_index, std::string const& msg) {
     diagnostic::report(diag, {file_id, tok_index, msg, {}});
@@ -789,13 +821,12 @@ void ImportWrapper::importModule(std::string const& module,
 
 void ImportWrapper::loadTemplateSource(std::string const& header_path,
                                        int header_file_id, int owner) {
-    std::filesystem::path hp(header_path);
-    std::string module = hp.stem().string();
-    if (module == root_stem) return;   // the root IS this module's source
-    std::filesystem::path sp = hp.parent_path() / (module + ".sl");
+    if (!declaresTemplate(header_file_id)) return;   // nothing to clone
+    std::filesystem::path sp(token::templateSourcePath(header_path));
     std::error_code ec;
     if (!std::filesystem::exists(sp, ec)) return;   // aggregation-only module
     std::string spath = sp.string();
+    if (token::samePath(spath, root_path)) return;   // the root IS this source
     if (!imported_once.insert(spath).second) return;
     std::ifstream f(spath);
     if (!f.is_open()) return;
@@ -838,8 +869,7 @@ void run(std::string const& root_path,
         std::filesystem::path(root_path).parent_path().string();
 
     std::set<std::string> imported_once;
-    ImportWrapper wrap{out, diag, import_paths, imported_once,
-                       std::filesystem::path(root_path).stem().string()};
+    ImportWrapper wrap{out, diag, import_paths, imported_once, root_path};
     wrap.processFile(root_file_id, source_dir, /*owner=*/-1);
 
     // Driver-injected imports (the --instantiate demand files' provenance

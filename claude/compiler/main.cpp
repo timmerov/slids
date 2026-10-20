@@ -208,12 +208,21 @@ int main(int argc, char** argv) {
     // the .ll/.o/.sli files land. Exits before the pipeline: dependency
     // generation must not require the program to compile.
     if (!scan_path.empty()) {
-        std::string consumer = moduleOf(in_path);
+        // The consumer's BUILD name is the fragment's (`<name>.deps.mk`), not the
+        // source's stem: a consumer may share a stem with a library it imports
+        // (test/lib/vector.sl), so the Makefile names its outputs apart.
+        std::string consumer = std::filesystem::path(scan_path).filename().string();
+        {
+            auto pos = consumer.rfind(".deps.mk");
+            if (pos != std::string::npos) consumer.erase(pos);
+            else consumer = std::filesystem::path(scan_path).stem().string();
+        }
         std::vector<std::string> libs;          // template-library modules
         std::set<std::string> lib_set;
+        // A loaded template source is never the root (the lexer skips that by path).
         for (auto const& f : tokens.files) {
             std::string m = moduleOf(f.path);
-            if (f.template_source && m != consumer && lib_set.insert(m).second)
+            if (f.template_source && lib_set.insert(m).second)
                 libs.push_back(m);
         }
         // module -> modules its files import (header and source both count;

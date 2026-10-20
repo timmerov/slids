@@ -667,10 +667,11 @@ bool fileIsTemplateSource(parse::Tree const& tree, int file_id) {
         && tree.file_template_source[file_id];
 }
 
-// True if `file_id` names THIS TU's sibling header — an imported `.slh` whose base name
-// matches the primary source's (`library.slh` <-> `library.sl`; grammar filled
-// file_sibling). This TU is that header's implementation, so it is the ONE TU that emits
-// its classes' SYNTHESIZED symbols; every other importer declares them.
+// True if `file_id` names a header whose TEMPLATE SOURCE this TU's root IS — the
+// header's `<stem>.sl` in its own directory, compared by path (grammar filled
+// file_sibling). TEMPLATE machinery only: this TU is the one that supplies the header's
+// template definitions and instances. A plain header class's owner is decided by
+// content instead (registerClassBody, THE OWNING FILE).
 bool fileIsSibling(parse::Tree const& tree, int file_id) {
     return file_id >= 0 && file_id < (int)tree.file_sibling.size()
         && tree.file_sibling[file_id];
@@ -7145,6 +7146,7 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
                         if (p && p->name != "_$vptr" && p->name != "_$base")
                             info.pending_fields.push_back(p.get());
                 info.is_open = node.is_incomplete;   // no trailing `...` -> now closed
+                if (!node.is_incomplete) info.closer = &node;
             } else if (has_fields) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
                     "Duplicate definition of class '" + node.name + "'; a re-open "
@@ -7264,16 +7266,12 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // in different openings — the author reads them as one class definition — so both
     // the presence answer and the obligation a declaration creates are per CLASS, and
     // this is the only place that sees the whole class.
-    // WHERE THE CLASS IS DECLARED decides how this TU emits its symbols. A `.sl` class is
-    // private to this TU (kInternal — nothing outside can name it, so two unrelated
-    // sources may each declare a class of the same name). A `.slh` class is shared: its
-    // SIBLING `.sl` emits the synthesized symbols (kDefine) and every other importer only
-    // declares them (kDeclare).
+    // WHERE THE CLASS IS DECLARED, and WHAT THIS TU'S OPENINGS DO, decide how this TU
+    // emits its symbols — set below, after the hook scan (THE OWNING FILE).
     bool header_class = fileIsImported(tree, node.file_id);
-    widen::setSlidLinkage(widen::strip(type),
-        !header_class                            ? widen::Type::Linkage::kInternal
-        : fileIsSibling(tree, node.file_id)      ? widen::Type::Linkage::kDefine
-                                                 : widen::Type::Linkage::kDeclare);
+    // This TU CLOSES an incomplete header class: the closing re-open is in a source here.
+    bool closed_here = header_class && info.declared_incomplete && info.closer
+        && !fileIsImported(tree, info.closer->file_id);
     // OPAQUE cross-TU: a HEADER class declared incomplete (a `...`) has private fields an
     // importer cannot see — its size is a runtime function, not a folded constant. True in
     // the completer too (it must export the size for importers). A `.sl`-local incomplete
@@ -7300,12 +7298,17 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // synthesized default besides.
     //
     // The ban is on ADDING, not on defining. A member the header DECLARES may be defined
-    // in any one source (that is the whole `_();` + `_(){}` pattern, and it holds for the
-    // sibling and non-sibling alike), so the question this asks is whether the HEADER
-    // declared it — never where the definition lives. Asked per CLASS, over every
-    // opening, because a re-open in a `.sl` is one of the spellings that adds one.
+    // in any one source (that is the whole `_();` + `_(){}` pattern), so the question this
+    // asks is whether the HEADER declared it — never where the definition lives. Asked per
+    // CLASS, over every opening, because a re-open in a `.sl` is one of the spellings that
+    // adds one. The one exception: the file that CLOSES an incomplete header class adds
+    // its `_`/`~` — it must (THE OWNING FILE below) — and that is safe, because an importer
+    // of an opaque class calls the complete ctor/dtor whatever its header says.
     if (header_class) {
         for (char const* member : {"_$ctor", "_$dtor", "op=", "op<--", "op<-->"}) {
+            if (closed_here && (std::string(member) == "_$ctor"
+                                || std::string(member) == "_$dtor"))
+                continue;
             parse::Node const* added = nullptr;
             bool in_header = false;
             auto scanAdd = [&](parse::Node const* m) {
@@ -7377,6 +7380,62 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
                     "A forward-declared destructor must be defined.", {}});
         }
     }
+    // THE OWNING FILE. A `.sl` class is private to this TU (kInternal — nothing outside
+    // can name it, so two unrelated sources may each declare a class of the same name).
+    // A `.slh` class is shared, and its owner is decided by CONTENT, never by file name:
+    //   - the file that defines its `_` and `~` owns it (kDefine: it exports the
+    //     synthesized symbols — complete ctor/dtor, copy/move/swap, an opaque class's
+    //     size and offsets); every other importer declares them (kDeclare);
+    //   - an INCOMPLETE class's owner is also the file that CLOSES it, so the closer must
+    //     define both hooks, and a file that does not close it may define neither;
+    //   - a COMPLETE class whose header declares no `_`/`~` has no owner (kPerTU): every
+    //     TU sees its whole layout and emits the synthesized symbols internal.
+    // `_` and `~` are one contract, so they are defined in the same file. Methods the
+    // author declared may be defined in any one file (a link error otherwise).
+    // A header TEMPLATE instance keeps the template rule: the template source defines.
+    bool ctor_in_header = false, dtor_in_header = false;
+    auto scanHeaderHook = [&](parse::Node const* m) {
+        if (!m || !fileIsImported(tree, m->file_id)) return;
+        if (m->name == "_$ctor") ctor_in_header = true;
+        if (m->name == "_$dtor") dtor_in_header = true;
+    };
+    for (auto& m : node.children) scanHeaderHook(m.get());
+    for (parse::Node* m : info.pending_hooks) scanHeaderHook(m);
+    widen::Type::Linkage linkage = widen::Type::Linkage::kInternal;
+    if (header_class && tmpl_instance) {
+        linkage = fileIsSibling(tree, node.file_id) ? widen::Type::Linkage::kDefine
+                                                    : widen::Type::Linkage::kDeclare;
+    } else if (header_class) {
+        if (ctor_defined != dtor_defined && has_ctor == has_dtor) {
+            parse::Node const* one = ctor_defined ? ctor_def : dtor_def;
+            diagnostic::report(diag, {one->file_id, one->name_tok,
+                "The constructor and destructor of class '" + node.name
+                + "' must be defined in the same source file.", {}});
+        }
+        if (info.declared_incomplete) {
+            if (closed_here && !(ctor_defined && dtor_defined)) {
+                diagnostic::report(diag, {info.closer->file_id, info.closer->name_tok,
+                    "The file that closes class '" + node.name
+                    + "' must define its constructor and destructor.",
+                    {{node.file_id, node.name_tok, "class declared here"}}});
+            } else if (!closed_here && (ctor_defined || dtor_defined)) {
+                parse::Node const* one = ctor_defined ? ctor_def : dtor_def;
+                diagnostic::report(diag, {one->file_id, one->name_tok,
+                    "The constructor and destructor of incomplete class '" + node.name
+                    + "' must be defined in the file that closes it.",
+                    {{node.file_id, node.name_tok, "class declared here"}}});
+            }
+        }
+        // The closer owns even when its hooks are missing (reported above), so the
+        // owner-side checks — the exported layout's foldability — still run.
+        if (ctor_defined || dtor_defined || closed_here)
+            linkage = widen::Type::Linkage::kDefine;
+        else if (!info.declared_incomplete && !ctor_in_header && !dtor_in_header)
+            linkage = widen::Type::Linkage::kPerTU;
+        else
+            linkage = widen::Type::Linkage::kDeclare;
+    }
+    widen::setSlidLinkage(widen::strip(type), linkage);
     info.needs_ctor = has_ctor;
     info.needs_dtor = has_dtor;
     widen::internSlid(node.name, info.field_types, def_id);  // attach slots to `type`
@@ -7609,6 +7668,17 @@ void propagateRuntimeLayout(parse::Tree& tree, std::vector<parse::Node*> const& 
                 + "', so its field offsets are only known to the module that completes '"
                 + bname + "'; declare '" + c->name + "' in a header so that module exports "
                 "them.", {}});
+            continue;
+        }
+        // Its layout needs an OWNER to export the offsets — a complete header class with
+        // no `_`/`~` has none (kPerTU), and no importer can fold them itself.
+        if (widen::slidLinkage(self) == widen::Type::Linkage::kPerTU) {
+            widen::setSlidLinkage(self, widen::Type::Linkage::kDeclare);
+            diagnostic::report(diag, {c->file_id, c->name_tok,
+                "Class '" + c->name + "' derives from imported incomplete class '" + bname
+                + "', so its field offsets must be exported by one source file; declare "
+                "its constructor and destructor ('_(); ~();') in the header and define "
+                "them in that file.", {}});
             continue;
         }
         for (auto& m : c->children) {

@@ -1344,7 +1344,7 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
         // the signature here). The case it cannot see is a SYNTHESIZED member of a class
         // whose symbols this TU does not own: resolve mints those as real definitions,
         // stamped with the CLASS's file_id, so an imported file_id on a definition means
-        // "this TU did not write this" — declare it and link to the sibling's.
+        // "this TU did not write this" — declare it and link to the owner's.
         // THE ONE SANCTIONED EXCEPTION to the owner-linkage authority below: a
         // template instance whose type-list names a TU-LOCAL type
         // (Entry.tu_local_instance). The flavor is unspellable anywhere else —
@@ -1372,9 +1372,15 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
         // AUTHORITATIVE over copyNode's free-function default: a member is internal iff
         // its owner is, external otherwise (a header class defined here). owner==kNoType
         // is a namespace member — a free function — which keeps copyNode's decision.
+        // A kPerTU class (no owner) is the split case: its SYNTHESIZED members (a
+        // definition stamped with the header's file_id) are internal in every TU,
+        // while a member the author wrote stays external like any header class's.
         if (owner != widen::kNoType) {
-            fn->internal_def =
-                widen::slidLinkage(owner) == widen::Type::Linkage::kInternal;
+            widen::Type::Linkage lk = widen::slidLinkage(owner);
+            bool synthesized = f.file_id >= 0 && f.file_id < (int)in.file_imported.size()
+                && in.file_imported[f.file_id];
+            fn->on_demand = lk == widen::Type::Linkage::kPerTU && synthesized;
+            fn->internal_def = lk == widen::Type::Linkage::kInternal || fn->on_demand;
         }
         return fn;
     };
