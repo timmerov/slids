@@ -272,7 +272,7 @@ int32 main() {
 
     char letters[3] = ('a', 'b', 'c');
     for (char c : letters) {
-        print(String + "" + c);
+        print(String + c);
     }
     println(String + "");                         // abc
 
@@ -572,7 +572,7 @@ int32 main() {
 //        arr[i] = i;
 //    }
 //    for (int8 x : arr) {
-//        println(String + "" + x);
+//        println(String + x);
 //    }
 //    return 0;
 //}
@@ -583,7 +583,7 @@ int32 main() {
 //void neg_value_uninit() {
 //    int arr[5];
 //    for (int x : arr) {
-//        println(String + "" + x);
+//        println(String + x);
 //    }
 //}
 
@@ -647,7 +647,7 @@ int32 main() {
 //-EXPECT-ERROR: yields values; the for-loop variable cannot be a reference
 //void neg_ref_range() {
 //    for (r^ : 0..5) {
-//        println(String + "" + r^);
+//        println(String + r^);
 //    }
 //}
 
@@ -656,7 +656,7 @@ int32 main() {
 //enum Dir ( kUp, kDown );
 //void neg_ref_enum() {
 //    for (r^ : Dir) {
-//        println(String + "" + r^);
+//        println(String + r^);
 //    }
 //}
 

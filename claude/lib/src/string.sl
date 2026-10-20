@@ -390,6 +390,11 @@ String (
     }
 }
 
+/* print a blank line. */
+void println() {
+    println(String);
+}
+
 /* print the string. */
 void print(String^ s) {
     len = (int32=s^.size_);

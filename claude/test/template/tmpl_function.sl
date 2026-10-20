@@ -320,7 +320,7 @@ void mutshow<T>(mutable T s) { println(String + "szT " + sizeof(T)); s; }
 
 /* the CALLER side: a const class cannot flow into `mutable T^`. */
 //-EXPECT-ERROR: Cannot pass a const value
-//void cv_neg_pass() { const CvP c(1); cvbump(^c); println(String + "" + c.v_); }
+//void cv_neg_pass() { const CvP c(1); cvbump(^c); println(String + c.v_); }
 
 /* duplicate type-parameter names. */
 //-EXPECT-ERROR: Duplicate type-parameter name

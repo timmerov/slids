@@ -134,6 +134,9 @@ String(...)
     String const slice(intptr start, intptr count);
 }
 
+/* print a blank line. */
+void println();
+
 /* print the string. */
 void print(String^ s);
 void println(String^ s);

@@ -1,8 +1,16 @@
 # Slids language reference
 
-Slids is a compiled, systems-level language. Source files (`.sl`) compile to LLVM IR and link with `g++`.
+Slids is a compiled, systems-level language with simplified, consistent syntax and minimal keywords. Source files (`.sl`) compile to LLVM IR and link with `g++`.
 
-The language has one construct: the **slid**. A slid with a return type is a function. A slid with a field list is a class.
+A **slid** is a name followed by clauses: comma-separated data in `( )`, code in `{ }`, types in `< >`. Functions, classes, templates, flow control and enums are all slids.
+
+```
+int add(int a, int b) { return a + b; }     // function
+Point(int x_, int y_) { }                   // class
+Pair<K, V>(K key_, V value_) { }            // template
+while (n < 3) { ++n; }                      // flow control
+enum Color ( kRed, kGreen );                // enum
+```
 
 The full programs behind these examples are in `examples/`. The detailed rules are in the top comment of each file in `test/`.
 

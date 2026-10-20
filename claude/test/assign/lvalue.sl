@@ -257,7 +257,7 @@ int32 main() {
     //    (int^, int^) tr;
     //    tr[0] = ^x; tr[1] = ^y;
     //    tr[0] += 1;
-    //    println(String + "" + tr[0]^);
+    //    println(String + tr[0]^);
     //}
 
     /* bitwise augmented assign on a float leaf is rejected. */
@@ -266,7 +266,7 @@ int32 main() {
     //    float f[1];
     //    f[0] = 1.0;
     //    f[0] &= 2.0;
-    //    println(String + "" + f[0]);
+    //    println(String + f[0]);
     //}
 
     /* a narrowing augmented assign through a complex lvalue is rejected. */
@@ -276,7 +276,7 @@ int32 main() {
     //    int8 a[1];
     //    a[0] = 1;
     //    a[0] += wide;
-    //    println(String + "" + a[0]);
+    //    println(String + a[0]);
     //}
 
     /* self-move / self-swap onto the SAME complex lvalue: a DEREF, a class FIELD,
@@ -311,14 +311,14 @@ int32 main() {
     //{
     //    int a[2]; a[0] = 1; a[1] = 2;
     //    a[0] <--> a[0];
-    //    println(String + "" + a[0]);
+    //    println(String + a[0]);
     //}
 
     //-EXPECT-ERROR: Cannot move a value onto itself
     //{
     //    int a[2]; int i = 0; a[0] = 1; a[1] = 2;
     //    a[i] <-- a[i];
-    //    println(String + "" + a[i]);
+    //    println(String + a[i]);
     //}
 
     /* `a[i++] <--> a[i++]` is the SAME element under PPID (lowers to `a[i] <-->
@@ -328,7 +328,7 @@ int32 main() {
     //{
     //    int a[2]; int i = 0; a[0] = 1; a[1] = 2;
     //    a[i++] <--> a[i++];
-    //    println(String + "" + a[0]);
+    //    println(String + a[0]);
     //}
 
     /* --- the const-lvalue wall: every form, every write family. --- */
@@ -338,7 +338,7 @@ int32 main() {
     //{
     //    const int ca[2] = (1, 2);
     //    ca[0] = 9;
-    //    println(String + "" + ca[0]);
+    //    println(String + ca[0]);
     //}
 
     /* ...the augmented family... */
@@ -346,7 +346,7 @@ int32 main() {
     //{
     //    const int ca[2] = (1, 2);
     //    ca[0] += 9;
-    //    println(String + "" + ca[0]);
+    //    println(String + ca[0]);
     //}
 
     /* ...and the bump. */
@@ -354,7 +354,7 @@ int32 main() {
     //{
     //    const int ca[2] = (1, 2);
     //    ca[0]++;
-    //    println(String + "" + ca[0]);
+    //    println(String + ca[0]);
     //}
 
     /* a const tuple slot. */
@@ -362,7 +362,7 @@ int32 main() {
     //{
     //    const (int, int) ct = (3, 4);
     //    ct[0] = 9;
-    //    println(String + "" + ct[0]);
+    //    println(String + ct[0]);
     //}
 
     /* a PARTIALLY const tuple: the const slot walls... */
@@ -370,7 +370,7 @@ int32 main() {
     //{
     //    (const int, int) pt = (3, 4);
     //    pt[0] = 9;
-    //    println(String + "" + pt[0]);
+    //    println(String + pt[0]);
     //}
 
     /* a const class field. */
@@ -378,7 +378,7 @@ int32 main() {
     //{
     //    const Simple cs(3, 4);
     //    cs.x_ = 9;
-    //    println(String + "" + cs.x_);
+    //    println(String + cs.x_);
     //}
 
     /* a DEEP const pointer: the reseat... */
@@ -387,7 +387,7 @@ int32 main() {
     //    int x = 1; int y = 2;
     //    const int^ dp = ^x;
     //    dp = ^y;
-    //    println(String + "" + dp^);
+    //    println(String + dp^);
     //}
 
     /* ...and the write through it. */
@@ -396,7 +396,7 @@ int32 main() {
     //    int x = 1;
     //    const int^ dp = ^x;
     //    dp^ = 9;
-    //    println(String + "" + dp^);
+    //    println(String + dp^);
     //}
 
     /* a SHALLOW pointer's pointee (the reseat is the positive above). */
@@ -405,7 +405,7 @@ int32 main() {
     //    int x = 1;
     //    (const int)^ sp = ^x;
     //    sp^ = 9;
-    //    println(String + "" + sp^);
+    //    println(String + sp^);
     //}
 
     /* a const iterator element. */
@@ -414,7 +414,7 @@ int32 main() {
     //    const int ca[2] = (1, 2);
     //    (const int)[] ci = ^ca[0];
     //    ci[1] = 9;
-    //    println(String + "" + ci[1]);
+    //    println(String + ci[1]);
     //}
 
     /* the WHOLE const aggregate (its stored value carries const slots)... */
@@ -423,7 +423,7 @@ int32 main() {
     //    const int ca[2] = (1, 2);
     //    int src[2] = (8, 9);
     //    ca = src;
-    //    println(String + "" + ca[0]);
+    //    println(String + ca[0]);
     //}
 
     /* ...and the whole const class (no op= dispatch — the wall is first). */
@@ -432,7 +432,7 @@ int32 main() {
     //    const Simple cs(3, 4);
     //    Simple s2(5, 6);
     //    cs = s2;
-    //    println(String + "" + cs.x_);
+    //    println(String + cs.x_);
     //}
 
     /* a MOVE'S TARGET is an author write (only its SOURCE is exempt). */
@@ -441,7 +441,7 @@ int32 main() {
     //    const int ca[2] = (1, 2);
     //    int y = 5;
     //    ca[0] <-- y;
-    //    println(String + "" + ca[0]);
+    //    println(String + ca[0]);
     //}
 
     return 0;

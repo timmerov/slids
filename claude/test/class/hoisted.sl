@@ -261,7 +261,7 @@ int32 main() {
 //-EXPECT-ERROR: Unresolved identifier 'hx'
 //Holder(int hx) {
 //    Peek(int py) {
-//        _() { println(String + "" + hx); }
+//        _() { println(String + hx); }
 //        ~() { }
 //    }
 //}

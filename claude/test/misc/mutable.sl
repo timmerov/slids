@@ -406,7 +406,7 @@ int32 main() {
     // const routing builds it (slot 0 is a default construction of Box).
     const (Box, int) cbt = (Box(1), 2);
     println(String + ##type(cbt));               // (const Box, const int)
-    println(String + "" + cbt[0].v_ + " " + cbt[1]);  // 1 2
+    println(String + cbt[0].v_ + " " + cbt[1]);  // 1 2
 
     // a const variable of a LOCAL class (defined in this body) — the local-class
     // registration runs before the const pre-pass, so the const decl's type resolves.

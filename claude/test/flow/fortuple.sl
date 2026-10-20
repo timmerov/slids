@@ -371,7 +371,7 @@ negatives — one //-block uncommented per run.
 //-EXPECT-ERROR: requires a homogeneous tuple
 //int neg_heterogeneous() {
 //    for (x : (1, 2.0, 3)) {
-//        println(String + "" + x);
+//        println(String + x);
 //    }
 //    return 0;
 //}
@@ -382,7 +382,7 @@ negatives — one //-block uncommented per run.
 //    alias Pair = (int, int);
 //    t = ((1, 2), (3, 4));
 //    for (Pair sub : t) {
-//        println(String + "" + sub[0]);
+//        println(String + sub[0]);
 //    }
 //    return 0;
 //}
@@ -402,7 +402,7 @@ negatives — one //-block uncommented per run.
 //int neg_not_tuple() {
 //    int v = 5;
 //    for (x : v) {
-//        println(String + "" + x);
+//        println(String + x);
 //    }
 //    return 0;
 //}
@@ -415,7 +415,7 @@ negatives — one //-block uncommented per run.
 //int neg_var_shadows_const() {
 //    const c = 5;
 //    for (c : (1, 2, 3)) {
-//        println(String + "" + c);
+//        println(String + c);
 //    }
 //    return 0;
 //}

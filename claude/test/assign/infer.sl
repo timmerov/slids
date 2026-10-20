@@ -259,7 +259,7 @@ negatives — one //-block uncommented per run.
 //int32 neg_ref_from_value() {
 //    int y = 5;
 //    ref^ = y;
-//    println(String + "" + ref^);
+//    println(String + ref^);
 //    return 0;
 //}
 
@@ -269,7 +269,7 @@ negatives — one //-block uncommented per run.
 //    int y = 5;
 //    const x = y;
 //    x = 6;
-//    println(String + "" + x);
+//    println(String + x);
 //    return 0;
 //}
 
@@ -279,6 +279,6 @@ negatives — one //-block uncommented per run.
 //    int array[3] = (1,2,3);
 //    const cref^ = ^array[0];
 //    cref^ = 9;
-//    println(String + "" + array[0]);
+//    println(String + array[0]);
 //    return 0;
 //}

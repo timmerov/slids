@@ -451,7 +451,7 @@ int32 main() {
 /* an integer LITERAL cannot reach a char-only overload. */
 //-EXPECT-ERROR: only char matches char
 //int32 neg_char_only_lit() {
-//    println(String + "" + chonly(65));
+//    println(String + chonly(65));
 //    return 0;
 //}
 
@@ -459,7 +459,7 @@ int32 main() {
 //-EXPECT-ERROR: Cannot implicitly convert 'uint8' to 'char'
 //int32 neg_char_only_u8() {
 //    uint8 nu = 65;
-//    println(String + "" + chonly(nu));
+//    println(String + chonly(nu));
 //    return 0;
 //}
 

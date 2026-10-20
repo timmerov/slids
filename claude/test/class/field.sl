@@ -50,7 +50,7 @@ Class(
         // rewrite reaches ##type) and as a value.
         println(String + ##type(a) + " " + ##type(b) + " " + ##type(c) + " " + ##type(d)
                   + " " + ##type(e) + " " + ##type(f) + " " + ##type(g));
-        println(String + "" + a + " " + b + " " + c + " " + d + " "
+        println(String + a + " " + b + " " + c + " " + d + " "
                   + e + " " + f + " " + g);
     }
 
@@ -206,7 +206,7 @@ int32 main() {
 /* a typeless field with NO default has nothing to infer from. */
 //-EXPECT-ERROR: Field 'x' needs an explicit type
 //NoType(x) {
-//    void p() { println(String + "" + x); }
+//    void p() { println(String + x); }
 //}
 
 /* a field default that CONSTRUCTS is code, not data — a default must be a

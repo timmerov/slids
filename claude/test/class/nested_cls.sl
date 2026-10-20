@@ -288,6 +288,6 @@ int32 main() {
 //-EXPECT-ERROR: Unresolved identifier 'outer'
 //void capbody() {
 //    int outer = 7;
-//    Cap(int x_) { _(){ println(String + "" + outer); } ~(){} }
+//    Cap(int x_) { _(){ println(String + outer); } ~(){} }
 //    Cap c(1);
 //}

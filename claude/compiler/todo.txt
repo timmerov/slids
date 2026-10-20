@@ -9,6 +9,10 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
+  * a bare 0 or 1 literal in a String chain prints as a bool once the chain is already a String:
+    println(String + 0) prints 0, but println(String + "" + 0) prints false (and 1 prints true).
+    the literal converts through String's op=(bool) instead of the integer one.
+
   * One known unrejected corner, recorded in the docs: a completer-side construction list passing an explicit
     initializer for opaque content nested in a mixed tuple slot of a computed class is silently refilled to defaults
     rather than rejected
@@ -61,6 +65,16 @@ BUGS
     String:Format for example. String has private fields. Format has public fields. want to be
     able to do this:
     Format fmt(/*String*/, kLeft, /*fixed*/, /*pad*/, /*plus*/, 10);
+
+  * definite assignment misfires on a compound assign to a captured local in a nested
+    function: int count = 0; void bump(int by) { count += by; } reports "Use of
+    uninitialized variable 'count'". count = count + by; compiles.
+
+  * a typeless const at file scope fails: const int kSize = 4; const kTwice = 2 * kSize;
+    reports "Unknown type ''". the same line inside a function works.
+
+  * a template diagnostic names the binder instead of the binding: biggest<float64>(1.5, 2)
+    reports "Cannot implicitly convert 'int' to 'T'" — should say 'float64'.
 
 UNBLOCKED FEATURES
 
