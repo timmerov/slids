@@ -881,7 +881,14 @@ struct Tree {
     // THIS TU (it is the demanded template's source). CLASS flavors are
     // consumed by resolve (a type exists at resolve); FUNCTION / METHOD
     // flavors by classify (where those instances mint). A leftover errors.
-    struct InstDemand { std::string spelling; bool consumed = false; };
+    // `args`: a FUNCTION-template demand's type arguments, RESOLVED at resolve (a class
+    // spelling becomes its instance type) — the same TypeRefs a call inside the library
+    // binds, so the instance memo hits instead of minting a duplicate. Empty until then.
+    struct InstDemand {
+        std::string spelling;
+        bool consumed = false;
+        std::vector<widen::TypeRef> args;
+    };
     std::vector<InstDemand> inst_demands;
     // A LISTLESS flavor's DROPPED members, keyed by the flavor's ns_frame_id:
     // {the template's name, the names stripped from the clone (fields, methods,
@@ -889,6 +896,10 @@ struct Tree {
     // failure sites consult this so `TClass<>:HoistT` gets the dependency rule
     // and the real-list remedy, not a generic "no member".
     std::map<int, std::pair<std::string, std::set<std::string>>> listless_stripped;
+    // A CLASS-template instance entry -> the use that first required it {file, tok}.
+    // Its body is checked LATER (resolve's drain, classify's class walk), after the
+    // use site has left the stack, so the instantiation-context note reads it here.
+    std::map<int, std::pair<int, int>> instance_use_site;
     // While a CLASS-template instance's phases run, the template's bare name
     // means THE INSTANCE — the receiver (`Vec^`), a self-typed member, a
     // self-construction. Needed as a stack (an instance body may demand another
@@ -1136,6 +1147,10 @@ std::vector<int> classAndBaseFrames(Tree const& t, widen::TypeRef cls);
 // (ns_frame_id match). The one place a class type <-> its entry is bridged.
 int  classEntryForType(Tree const& t, widen::TypeRef classType);
 int  classEntryForFrame(Tree const& t, int ns_frame);
+// A template instance as the author would spell it — `quicksort<NoLess[2]>` — for the
+// instantiation-context notes (diagnostic::InstantiationScope).
+std::string instanceSpelling(Tree const& t, int tmpl_entry,
+                             std::vector<widen::TypeRef> const& args);
 // A class TYPE -> its own member frame (ns_frame_id); -1 if not a registered class.
 // The class->frame bridge (inverse of classEntryForFrame), built on classEntryForType.
 int  classNsFrame(Tree const& t, widen::TypeRef cls);

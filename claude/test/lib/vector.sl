@@ -3,11 +3,21 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 */
 
 /*
-use a template class declared in a header.
+test the Vector class.
+*/
+
+/*
+claude says:
+covers Vector<int> and Vector<Value>: resize / reserve, copy and move,
+indexing and iteration, insert / append, remove. g_count tracks live Values,
+so every block must end with the count it started with.
+the stem matches the library's (lib/hdr/vector.sl), so the Makefile builds
+this file as t_vector — the instantiated library lands as vector.ll in the
+same build directory — and the lexer still loads the library's template
+source, because it is a different file by path.
 */
 
 import string;
-
 import vector;
 
 global int g_count = 0;

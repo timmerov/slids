@@ -3,9 +3,18 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 */
 
 /*
-import declarations from a header file.
-use the declared fuction.
-link with the compiled implementation.
+test the String and Format classes.
+*/
+
+/*
+claude says:
+covers String construction and concatenation, number formatting at the
+integer limits, comparisons, size/empty/index, iteration, substrings, and
+Format (justify, truncate, each value type, fixed / scientific, factor).
+String and Format are defined by lib/src/string.sl, which closes String and
+defines both classes' _ / ~, so it owns them; this file shares the stem
+`string` but closes nothing and defines no hooks, so it owns nothing and
+links libslids.o. (A module is never identified by file name.)
 */
 
 import string;

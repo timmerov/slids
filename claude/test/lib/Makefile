@@ -23,8 +23,9 @@ LIB_HDR   = $(LIB)/hdr
 LIB_BUILD = ../../build/lib
 IFLAGS    = -I $(LIB_HDR)
 
-# One test per library, named after it. (algorithm.sl joins once it has a main.)
+# One test per library, named after it.
 SAMPLES = \
+	algorithm \
 	string \
 	vector
 
@@ -33,9 +34,10 @@ SAMPLES = \
 all: $(SAMPLES)
 
 negatives:
+	@../run_negatives.sh algorithm.sl
 
 positives: all
-	@../run_positives.sh $(DIR) string
+	@../run_positives.sh $(DIR) algorithm string
 
 # A test shares its STEM with the library it exercises, and a template
 # library's instantiation lands in this same build directory under the

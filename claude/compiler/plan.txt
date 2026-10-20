@@ -3414,9 +3414,9 @@ Default unchanged: no keyword, hard-const convention, canon B stands
   - Const-distinct instances need distinct symbols: mangleTmplArg encodes
     the I..E type-args const-preserving (Itanium `K`) through
     pointer/iterator chains; parameter encodings still strip.
-  - OPEN EDGE: the --instantiate demand-pool binder still strips const
-    from demand spellings — a cross-TU const-pointer flavor demand would
-    not key to the consumer's instance; no canon exercises it.
+  - OPEN EDGE (CLOSED 2026-10-19): the --instantiate demand-pool binder
+    stripped const from demand spellings; it now uses canonicalBinding, the
+    explicit-list rule (see DEMAND PATH below).
   - Coverage: tmpl_function.sl — the `mut` identity across every binding
     kind, mutation-reaches-caller, rvalue discard, all three
     `same<(const int)^>` spellings, the sizeof(T) footgun pin (##type
@@ -4008,6 +4008,32 @@ CROSS-CUTTING — THE OWNING FILE + NO MODULE BY FILE NAME (LANDED 2026-10-19)
   own link, so a template-source variant sits at its header's path (and testhdr.sl needs
   no copy).
   Detail: readme-classes.txt THE OWNING FILE; readme.txt template source + main.cpp.
+
+CROSS-CUTTING — THE DEMAND PATH SELECTS LIKE A CALL + INSTANTIATION CONTEXT (LANDED 2026-10-19)
+  Found by the new test/lib/algorithm.sl — the first test demanding algorithm.slh's
+  templates with header-visible types (galaxy's only use was inline-local). Four fixes:
+  1. SPECIALIZATION AT THE DEMAND. classifyInstantiationDemands minted EVERY same-name
+     arm with a fitting list length, so `countof<int[5]>` minted the ClassSet arm and
+     failed in its body. It now filters by constraintAdmits like a call (catch-all only
+     when no overlapping constrained arm admits; none -> "No specialization ... matches
+     instantiation demand").
+  2. ARRAYS OF A LOCAL CLASS ARE LOCAL. firstLocalArg peeled pointers/iterators but not
+     arrays, so `quicksort<Item[4]>` was demanded from a library that cannot spell Item.
+  3. ONE KEY PER INSTANCE. A demand bound the unresolved `Vector<int>` spelling while the
+     source's own call bound the instance type — two memo keys, `countof<Vector<int>>`
+     defined twice. Resolve now resolves a function demand's args (InstDemand.args).
+  4. BURIED CONST KEPT. The demand binder used removeConst(deepStrip), so
+     `quicksort<(const int)[3]>` built writable and sorted a const array. One helper,
+     canonicalBinding, now serves the explicit list and the demand.
+  THE INSTANTIATION CONTEXT (the user's ask: errors showed the template, not the use).
+  diagnostic::Sink.context + InstantiationScope; every error inside an instance gains
+  "in the instantiation of 'X', required from here." notes, innermost first. Covers
+  function/method instances, class layout, and class bodies (Tree.instance_use_site
+  re-opens the context in resolve's drain and classify's class walk).
+  DEFERRED by the user: multi-dimensional countof (algorithm.slh's `T=[N]` matches one
+  dimension; `int[2][3]` falls into ClassSet). Commented out in algorithm.sl.
+  Canon: test/lib/algorithm.sl + exp.algorithm (negatives: no specialization, no size(),
+  no op<, const container).
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

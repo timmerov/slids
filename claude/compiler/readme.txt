@@ -1064,7 +1064,16 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   resolveCallTarget for free/namespace/block calls; the tcands filter in
   classify's method funnel; the --instantiate demand loop instantiates EVERY
   fitting sibling, since a demand spelling carries no arity — an uncalled
-  arity emits as unused external code, bloat not breakage). Overlapping
+  arity emits as unused external code, bloat not breakage — EXCEPT that a
+  SPECIALIZED family selects like a call (2026-10-19): a constrained arm
+  mints only if constraintAdmits the demanded T, the catch-all only if no
+  arity-overlapping constrained arm admits it, else "No specialization of
+  'X' matches instantiation demand". A demand's type args are RESOLVED at
+  resolve (InstDemand.args — a `Vector<int>` spelling becomes the instance
+  type, the same key a call inside the source binds; the bare spelling
+  minted a DUPLICATE instance) and canonicalized by canonicalBinding, the
+  one rule an explicit call list uses — buried const KEPT, so a demand for
+  `quicksort<(const int)[3]>` is checked against the const wall). Overlapping
   ranges (including via DEFAULTS — [1,2] collides with [1,1]) stay compile
   errors: TEMPLATE siblings overload by ARITY only, never by type ranking.
   A same-name PLAIN function COEXISTS — PLAIN BEATS TEMPLATE: the plain
@@ -1428,8 +1437,10 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   before a consumer's definition is seen).
 
   Instantiation has THREE MODES, keyed on (entry file imported, this TU its
-  sibling, any argument local — anyArgLocal peels pointers/iterators to the
-  class leaf and asks whether its declaring file is imported):
+  sibling, any argument local — anyArgLocal peels pointers/iterators AND
+  ARRAYS (2026-10-19; `Item[4]` was demanded from a library that cannot
+  spell it) to the class leaf and asks whether its declaring file is
+  imported):
   - AGGREGATED (header template, all args header-visible): a declaration-only
     instance — stable file-scope symbols (no def_id suffix; the canonical
     spelling identifies the flavor in every TU), kDeclare linkage riding
@@ -3379,5 +3390,18 @@ PLUMBING
                      ends: length 1 → `^`; length 2 → `^^`; length N → `^---^`
                      (v1-style). Color-gated on isatty + NO_COLOR. Messages
                      are sentence-shaped throughout: capital + period.
+                     THE INSTANTIATION CONTEXT (2026-10-19): Sink.context is
+                     a stack of notes pushed by the RAII InstantiationScope
+                     while a template instance builds — instantiateAndClassify
+                     (function/method), instantiateClassTemplate (layout),
+                     drainClassTemplateBodies and classifyScope (class bodies,
+                     via Tree.instance_use_site, the first use) — spelled by
+                     parse::instanceSpelling. report() appends them innermost
+                     first ("in the instantiation of 'X', required from
+                     here."), skipping a location the record already shows (the
+                     private-name chain keeps its shape). A demanded instance
+                     has no use site: its note renders location-free as
+                     `slidsc: note:` ("demanded by another file's instantiation
+                     demand").
   Makefile        -std=c++17 -Wall -Wextra -Werror -Wswitch-enum.
                   Builds to ../bin/slidsc. Objects in ../build/compiler/.

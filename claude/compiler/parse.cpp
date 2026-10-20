@@ -171,6 +171,18 @@ int classEntryForFrame(Tree const& t, int ns_frame) {
     return -1;
 }
 
+std::string instanceSpelling(Tree const& t, int tmpl_entry,
+                             std::vector<widen::TypeRef> const& args) {
+    std::string s = (tmpl_entry >= 0 && tmpl_entry < (int)t.entries.size())
+        ? t.entries[tmpl_entry].name : std::string("?");
+    s += "<";
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (i) s += ", ";
+        s += widen::spellOrEmpty(args[i]);
+    }
+    return s + ">";
+}
+
 int classNsFrame(Tree const& t, widen::TypeRef cls) {
     int cid = classEntryForType(t, widen::strip(cls));
     return cid < 0 ? -1 : t.entries[cid].ns_frame_id;

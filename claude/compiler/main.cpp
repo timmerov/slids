@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     for (auto& d : inst_demands)
-        parse_tree.inst_demands.push_back({d, false});
+        parse_tree.inst_demands.push_back({d, false, {}});
 
     // --scan-deps: the IMPORT SCAN — lex only, no compile. The lexer chased
     // the whole import closure and loaded each template source sitting beside

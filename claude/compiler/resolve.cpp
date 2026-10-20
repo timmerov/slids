@@ -9592,9 +9592,14 @@ static widen::TypeRef firstLocalArg(parse::Tree& tree,
                                     std::vector<widen::TypeRef> const& args) {
     for (widen::TypeRef a : args) {
         widen::TypeRef s = widen::strip(a);
+        // Peel to the class leaf: through pointers / iterators, and through
+        // ARRAYS — `Item[4]` is as unspellable elsewhere as `Item`.
         while (widen::form(s) == widen::Type::Form::kPointer
-               || widen::form(s) == widen::Type::Form::kIterator)
-            s = widen::strip(widen::get(s).pointee);
+               || widen::form(s) == widen::Type::Form::kIterator
+               || widen::form(s) == widen::Type::Form::kArray) {
+            s = widen::strip(widen::form(s) == widen::Type::Form::kArray
+                             ? widen::get(s).elem : widen::get(s).pointee);
+        }
         if (widen::form(s) != widen::Type::Form::kSlid) continue;
         auto ci = tree.classes.find(s);
         if (ci != tree.classes.end()
@@ -9643,6 +9648,10 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         }
         return -1;
     }
+    // Errors in the flavor's layout (and, for a late instance, its body) say which
+    // use required it.
+    diagnostic::InstantiationScope ictx(diag, file_id, tok,
+                                        parse::instanceSpelling(tree, tmpl_entry_id, args));
     // MODE. A HEADER-declared template's flavor is either AGGREGATED — every
     // argument header-visible: declaration-only here (method bodies stripped
     // from the clones), stable file-scope symbols, kDeclare linkage, defined
@@ -9880,6 +9889,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             {ti.host_list, ti.def, std::move(c), tmpl_entry_id, iid, args,
              keep, /*body_resolved=*/late, file_id, tok});
     }
+    if (iid >= 0) tree.instance_use_site.emplace(iid, std::make_pair(file_id, tok));
     parse::popFrame(tree);
     if (installed) restoreResolveState(tree, saved);
     tree.live_entry_ids.insert(tree.live_entry_ids.end(), keep.begin(), keep.end());
@@ -9913,6 +9923,8 @@ void drainClassTemplateBodies(parse::Tree& tree, diagnostic::Sink& diag) {
         if (inl)
             tree.inline_inst_ctx.push_back(
                 {tid, use_file, use_tok, firstLocalArg(tree, args)});
+        diagnostic::InstantiationScope ictx(diag, use_file, use_tok,
+                                            parse::instanceSpelling(tree, tid, args));
 
         SavedResolveState saved = saveResolveState(tree);
         installSnapshot(tree, ti->second);
@@ -10543,9 +10555,17 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             && tree.entries[id].is_template) {
             resolveDeclType(tree, t, -1, -1, diag);
             d.consumed = true;
+            continue;
         }
         // else: a function / method template spelling — classify's turn — or
-        // an unknown name, reported as a leftover there.
+        // an unknown name, reported as a leftover there. Its type arguments
+        // resolve HERE, like any use: a class-template spelling becomes the
+        // instance type a call inside this source binds, so the two share one
+        // instance (the bare spelling keyed a second, duplicate one).
+        for (widen::TypeRef a : widen::get(t).slots) {
+            resolveDeclType(tree, a, -1, -1, diag);
+            d.args.push_back(a);
+        }
     }
 
     // Pass 2-tmpl-class — the deferred BODY phase for every class-template

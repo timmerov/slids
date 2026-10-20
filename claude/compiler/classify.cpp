@@ -1250,6 +1250,16 @@ void validateOperatorSignatureTypes(parse::Node& fn, diagnostic::Sink& diag) {
 // with no per-context arm. Member bodies MUST be typed here, else desugar lowers an
 // un-typed field access.
 void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag) {
+    // A CLASS-template instance's members are checked here, long after the use that
+    // required the flavor left the stack — reopen its instantiation context.
+    std::unique_ptr<diagnostic::InstantiationScope> ictx;
+    if (node.kind == parse::Kind::kClassDef && node.resolved_entry_id >= 0) {
+        auto us = tree.instance_use_site.find(node.resolved_entry_id);
+        if (us != tree.instance_use_site.end())
+            ictx = std::make_unique<diagnostic::InstantiationScope>(
+                diag, us->second.first, us->second.second,
+                tree.entries[node.resolved_entry_id].name);
+    }
     // A by-value field of an ABSTRACT class is ill-formed — it would be an incomplete
     // abstract subobject (its pure vtable slots are null). The base subobject (`_$base`)
     // is exempt: a concrete derived overrides the pure slots. A pointer/reference field is
@@ -3364,6 +3374,9 @@ int instantiateAndClassify(parse::Tree& tree, int tid,
     }
     bool created = false;
     parse::Node* inst = nullptr;
+    // Every error while this instance resolves + classifies says which use required it.
+    diagnostic::InstantiationScope ictx(diag, s.file_id, s.tok,
+                                        parse::instanceSpelling(tree, tid, bound));
     tree.tmpl_instantiation_depth++;
     int iid = resolve::instantiateTemplate(tree, tid, bound, s.file_id, s.tok,
                                            diag, created, inst);
@@ -3410,6 +3423,22 @@ int instantiateAndClassify(parse::Tree& tree, int tid,
 // land — an operator is a method). `err_tok` attributes the diagnostics. False =
 // reported (explicit-arity mismatches are the caller's to report — a free
 // function's was already checked at resolve).
+// THE CANONICAL BINDING of an explicit type argument: aliases shed, BURIED const
+// kept (canon 2026-08-18 — `same<(const int)^>` is legal). A LEADING const is the
+// recursive promise (`const int^` == `(const int)^` as a binding), and the outer
+// layer itself sheds — a value binding is a mutable copy (`same<const int>` binds
+// T = int). One rule for an explicit call list and an --instantiate demand, so the
+// two key the same instance — and a demand cannot shed a buried const the call kept.
+widen::TypeRef canonicalBinding(widen::TypeRef t) {
+    widen::TypeRef ta = widen::deepAliasStrip(t);
+    if (widen::form(ta) == widen::Type::Form::kConst) {
+        ta = widen::deepConst(ta);
+        while (widen::form(ta) == widen::Type::Form::kConst)
+            ta = widen::get(ta).underlying;
+    }
+    return ta;
+}
+
 bool bindTemplateTypeList(parse::Tree& tree, parse::Node& s, int tid,
                           std::vector<parse::Node*> const& args, int recv_offset,
                           int err_tok, diagnostic::Sink& diag,
@@ -3420,21 +3449,8 @@ bool bindTemplateTypeList(parse::Tree& tree, parse::Node& s, int tid,
     bound.assign(names.size(), widen::kNoType);
     if (!s.tmpl_args.empty()) {
         if (s.tmpl_args.size() != names.size()) return false;   // caller reports
-        for (std::size_t i = 0; i < names.size(); i++) {
-            // Canonicalize like inference does: aliases shed, BURIED const
-            // kept (canon 2026-08-18 — `same<(const int)^>` is legal). A
-            // LEADING const is the recursive promise (`const int^` ==
-            // `(const int)^` as a binding), and the outer layer itself sheds
-            // — a value binding is a mutable copy (`same<const int>` binds
-            // T = int).
-            widen::TypeRef ta = widen::deepAliasStrip(s.tmpl_args[i]);
-            if (widen::form(ta) == widen::Type::Form::kConst) {
-                ta = widen::deepConst(ta);
-                while (widen::form(ta) == widen::Type::Form::kConst)
-                    ta = widen::get(ta).underlying;
-            }
-            bound[i] = ta;
-        }
+        for (std::size_t i = 0; i < names.size(); i++)
+            bound[i] = canonicalBinding(s.tmpl_args[i]);   // like inference does
         return true;
     }
     for (auto* a : args) if (a) inferExpr(tree, *a, widen::kNoType, diag);
@@ -9293,16 +9309,47 @@ void classifyInstantiationDemands(parse::Tree& tree, diagnostic::Sink& diag) {
                 + "'.", {}});
             continue;
         }
-        std::vector<widen::TypeRef> slots = widen::get(t).slots;
-        bool any_fit = false;
-        for (int tid : tids) {
+        // The arguments resolve already resolved (instance types), else the spelling's.
+        std::vector<widen::TypeRef> slots =
+            d.args.empty() ? widen::get(t).slots : d.args;
+        std::vector<widen::TypeRef> bound;
+        for (widen::TypeRef s : slots)
+            bound.push_back(canonicalBinding(s));
+        // A SPECIALIZED family selects like a call does (membership, not just
+        // list length): a constrained arm instantiates only if its constraint
+        // admits the demanded T, and the unconstrained CATCH-ALL only if no
+        // constrained arm whose arity range overlaps its own admits it.
+        // Without this every same-name arm was minted — `countof<int[5]>`
+        // instantiated the ClassSet arm too and failed in its body.
+        auto armOf = [&](int tid) -> parse::Node const* {
             auto ti = tree.templates.find(tid);
-            if (ti == tree.templates.end()) continue;
-            if (slots.size() != ti->second.def->type_params.size()) continue;
+            return ti == tree.templates.end() ? nullptr : ti->second.def;
+        };
+        auto admitted = [&](int tid) {
+            parse::Node const* def = armOf(tid);
+            return def && def->spec && slots.size() == def->type_params.size()
+                && !bound.empty() && constraintAdmits(tree, tid, bound[0]);
+        };
+        auto shadowedCatchAll = [&](int tid) {
+            int lo, hi;
+            resolve::templateArityRange(tree, tid, lo, hi);
+            for (int other : tids) {
+                if (!admitted(other)) continue;
+                int olo, ohi;
+                resolve::templateArityRange(tree, other, olo, ohi);
+                if (olo <= hi && lo <= ohi) return true;
+            }
+            return false;
+        };
+        bool any_fit = false;
+        bool any_minted = false;
+        for (int tid : tids) {
+            parse::Node const* def = armOf(tid);
+            if (!def) continue;
+            if (slots.size() != def->type_params.size()) continue;
             any_fit = true;
-            std::vector<widen::TypeRef> bound;
-            for (widen::TypeRef s : slots)
-                bound.push_back(widen::removeConst(widen::deepStrip(s)));
+            if (def->spec ? !admitted(tid) : shadowedCatchAll(tid)) continue;
+            any_minted = true;
             parse::Node stub;
             stub.kind = parse::Kind::kCallExpr;
             stub.name = d.spelling;
@@ -9313,6 +9360,10 @@ void classifyInstantiationDemands(parse::Tree& tree, diagnostic::Sink& diag) {
         if (!any_fit) {
             diagnostic::report(diag, {-1, -1,
                 "Wrong number of template arguments in instantiation demand '"
+                + d.spelling + "'.", {}});
+        } else if (!any_minted) {
+            diagnostic::report(diag, {-1, -1,
+                "No specialization of '" + name + "' matches instantiation demand '"
                 + d.spelling + "'.", {}});
         }
     }

@@ -22,6 +22,8 @@ alias ClassSet = !<ArraySet|TupleSet|PrimitiveSet>;
 
 /*
 return the number of elements in an array.
+
+note: multi-dimensional arrays not yet supported.
 */
 intptr countof<T=[N]>(T arg);
 

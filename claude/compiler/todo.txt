@@ -35,10 +35,6 @@ BUGS
     explicit T^ param store needs the <T^> <mutable> idiom because the munge consts the pointee (I used vector.sl's next()
     idiom in Sack.put).
 
-  * the --instantiate demand-pool path still binds demand spellings const-stripped, so a
-    cross-TU demand for a const-pointer flavor wouldn't key identically to the consumer's instance. No canon exercises that
-    combination today.
-
   * when we import a header .slh, the associated source .sl file is side-loaded. and compiled.
     always. the fuck? the design is that templates are compiled exactly once per instantiation.
     String is an opaque class. but we can use it. main.sl does not know the sizeof String. but

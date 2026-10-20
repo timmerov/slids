@@ -19,7 +19,29 @@ void report(Sink& sink, Record const& record) {
     // single actionable error. Notes ride on the first record, so they survive.
     if (!sink.records.empty()) return;
     sink.records.push_back(record);
+    // The instantiation context, innermost first. A frame at a location the
+    // record already shows (its caret, or one of its own notes — the private-name
+    // chain carets the use site itself) adds nothing and is skipped.
+    Record& r = sink.records.back();
+    auto shown = [&](Note const& f) {
+        if (f.file_id < 0) return false;
+        if (f.file_id == r.file_id && f.tok == r.tok) return true;
+        for (Note const& n : r.notes)
+            if (n.file_id == f.file_id && n.tok == f.tok) return true;
+        return false;
+    };
+    for (auto it = sink.context.rbegin(); it != sink.context.rend(); ++it)
+        if (!shown(*it)) r.notes.push_back(*it);
 }
+
+InstantiationScope::InstantiationScope(Sink& s, int file_id, int tok,
+                                       std::string const& what) : sink(s) {
+    std::string where = file_id >= 0 ? "', required from here."
+                                     : "', demanded by another file's instantiation demand.";
+    sink.context.push_back({file_id, tok, "in the instantiation of '" + what + where});
+}
+
+InstantiationScope::~InstantiationScope() { sink.context.pop_back(); }
 
 bool hasErrors(Sink const& sink) {
     return !sink.records.empty();
@@ -58,9 +80,10 @@ void printLine(std::ostream& os, int line_num, int digit_w, std::string const& t
 }
 
 void renderBlock(token::List const& tokens, int file_id, int tok,
-                 std::string const& msg, std::ostream& os) {
+                 std::string const& msg, std::ostream& os, bool is_note = false) {
     if (file_id < 0 || file_id >= (int)tokens.files.size()) {
-        os << "slidsc: error: " << cYellow() << msg << cReset() << "\n";
+        os << (is_note ? "slidsc: note: " : "slidsc: error: ")
+           << cYellow() << msg << cReset() << "\n";
         return;
     }
     // walk the imported_by chain root -> leaf
@@ -126,7 +149,7 @@ void render(token::List const& tokens, Sink const& sink, std::ostream& os) {
         renderBlock(tokens, r.file_id, r.tok, r.message, os);
         for (auto const& n : r.notes) {
             os << "\n";
-            renderBlock(tokens, n.file_id, n.tok, n.message, os);
+            renderBlock(tokens, n.file_id, n.tok, n.message, os, /*is_note=*/true);
         }
         first = false;
     }
