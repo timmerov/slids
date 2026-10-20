@@ -1553,7 +1553,12 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   each take their own slot (overload resolution picks the slot at compile time, the vptr picks
   the impl at run time). A PURE slot is `ptr null`. buildVtables stamps g_entry_slot
   (entry -> slot) and fills ast::Tree::vtables; signature match is parse::userParamsEqual,
-  class -> frame is parse::classNsFrame.
+  class -> frame is parse::classNsFrame. A class gets a vtable iff it is VIRTUAL
+  (parse::classIsVirtual: a `_$vptr` somewhere up its chain), NOT iff its method slot list
+  is non-empty — a class whose ONLY virtual member is `virtual ~()` has a vptr and an empty
+  slot list, and gets a one-slot vtable (just the dtor). Gating on the slot list left such a
+  class with a vptr nobody stamped and a `delete` that called the static dtor (2026-10-19,
+  guthrie map.sl TreeNode::destroy; pinned in virtual.sl DtBase/DtDer/DtSyn).
 
   DISPATCH. A `self.` / `obj.` / `ptr^` virtual call loads the vptr at offset 0, GEPs the
   method's slot, loads the fn ptr, and calls indirect: desugar lowerMethodCall sets

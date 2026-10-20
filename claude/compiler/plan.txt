@@ -902,7 +902,11 @@ Phase 4 — types beyond primitives
     flavor from outside — enumFrameForLabel had refused the flavor's label
     (`Tree<String, String>:Color`); it now splits depth-aware and resolves
     the flavor segment quietly (flavorEntryForSegment). guthrie map.sl's
-    `Tree<K,V>` with bare kHost / kRed / kBlack / kNull. Canon: enum.sl
+    `Tree<K,V>` with bare kHost / kRed / kBlack / kNull. INHERITED FIELDS
+    2026-10-19: the field peek walks the base chain, so a store / comparison
+    against a base's enum-typed field through a derived (or grand-derived)
+    receiver reads in context (guthrie map.sl `root_^.color_ = kBlack;`;
+    pinned in test/class/inheritance.sl Eb/Ed/Ee). Canon: enum.sl
     "simplified enums in context"; detail: readme.txt RESOLVE. Deferred enum
     item (reopen) → todo.txt. The char-arith bare-expr case is now LANDED: a char-literal
     arithmetic result stays char when the folded value fits 0..255, else promotes
@@ -1510,7 +1514,11 @@ Phase 7 — class advanced
     (before the user dtor body) so a virtual call in a base ctor/dtor reaches the class
     being built/destroyed,
     never a not-yet-built / torn-down derived override. A virtual class ALWAYS
-    needs-ctor/dtor, so its vptr stamps even with no user ctor/dtor. A PURE virtual
+    needs-ctor/dtor, so its vptr stamps even with no user ctor/dtor. A lone
+    `virtual ~()` makes a class virtual (2026-10-19): buildVtables gates on
+    parse::classIsVirtual, not a non-empty method slot list, so a dtor-only class
+    gets a one-slot vtable and `delete base_ptr` / `delete ^self` dispatch
+    (guthrie map.sl; virtual.sl DtBase/DtDer/DtSyn). A PURE virtual
     (`= delete`) is a bodyless dispatch target that makes its class ABSTRACT;
     instantiating an abstract class is rejected at the single construction funnel
     (classifyClassInit, a `subobject` flag exempts base subobjects; an abstract

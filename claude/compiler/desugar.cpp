@@ -595,13 +595,14 @@ std::vector<VSlot> const& vtableOf(parse::Tree const& tree, widen::TypeRef cls) 
 }
 
 // Build a per-virtual-class vtable global for codegen and populate g_entry_slot for
-// dispatch. A class is virtual iff its slot list is non-empty.
+// dispatch. A class is virtual iff it carries a vptr — a `virtual ~()` alone makes it
+// virtual, so an empty slot list still gets a vtable (the dtor at slot 0).
 void buildVtables(parse::Tree const& tree, ast::Tree& out) {
     g_entry_slot.clear();
     g_vtable_cache.clear();
     for (auto const& kv : tree.classes) {
         std::vector<VSlot> const& slots = vtableOf(tree, kv.first);
-        if (slots.empty()) continue;
+        if (slots.empty() && !parse::classIsVirtual(tree, kv.first)) continue;
         ast::Vtable vt;
         vt.class_symbol = widen::classSymbol(widen::strip(kv.first));
         // Slot 0 is ALWAYS the destructor — the class's COMPLETE dtor (`__$dtor`, which

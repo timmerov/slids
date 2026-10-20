@@ -1125,6 +1125,10 @@ widen::TypeRef classBaseType(Tree const& t, widen::TypeRef cls);
 // True for a ROOT virtual class carrying its own hidden `_$vptr` at slot 0 (the vtable
 // pointer). Derived virtual classes inherit it via `_$base` and have no `_$vptr`.
 bool hasVptr(ClassInfo const& info);
+// True if `cls` (or an ancestor) is a WELL-FORMED virtual class — one that carries a
+// vtable pointer. Walks to the root and checks hasVptr, so it answers the whole chain —
+// including a class whose only virtual member is its destructor (no method slots).
+bool classIsVirtual(Tree const& t, widen::TypeRef cls);
 // A class's own member frame + every transitive base frame (most-derived first), for
 // member lookup / scope-opening that sees inherited members. The shared chain iterator.
 std::vector<int> classAndBaseFrames(Tree const& t, widen::TypeRef cls);

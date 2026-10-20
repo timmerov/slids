@@ -59,23 +59,33 @@ BUGS
     next issue: every class in main.sl gets a unique name when it's compiled to main.o.
     every class must get the exact same unique name when it's compiled to inst_priv.o.
 
-  * revisit class object initialization.
-    Class c(initializer-list); -> blit fields from list. then call ctor. fail if a field can't
-    blit because the field is private or the types don't match or a field class has a user
-    defined non-trivial move/assign operator.
-    Class c = tuple; -> use c.op=(tuple) if it exists. otherwise treat tuple *exactly* like an
-    initializer list.
-    this last part needs improvement because the initializer list method can fail.
-    the user specifically used the assignment syntax instead of the initializer syntax.
-    if the initializer list method fails then try assignment:
-    Class c; c.f0 = tuple[0]; c.f1 = tuple[1]; etc.
-    error if too many tuple elements.
-    in other words, initalizer list is an optimization that avoid double assignment.
-    but wouldn't the ll optimizer clean that up? hrm...
-    currently there's a bug with classes with both public and private fields.
-    public fields may be initialized by list but they are blindly overwritten by the ctor.
+  * revisit class object initialization when a class has a mixture of private and non-blittable
+    fields. currently we can initialize the first n blittables. the rest are stranded.
+    empty tuple fields mean skip the field.
+    String:Format for example. String has private fields. Format has public fields. want to be
+    able to do this:
+    Format fmt(/*String*/, kLeft, /*fixed*/, /*pad*/, /*plus*/, 10);
 
 UNBLOCKED FEATURES
+
+  * enum Color (kRed, kBlack);
+    void set_color(Color color) { }
+    set_color(kRed);  <-- requires Color qualifier.
+    this is more difficult than previous contexts because resolving overloads.
+    example in map.sl.
+    enum Hand (kLeft, kRight); enum Morality (kRight, kWrong);
+    void func(Hand h); void func(Morality m);
+    func(kLeft); func(kWrong);
+    func(kRight); <-- ambiguous.
+
+  * alias TypePtr = Type^;
+    how do we reconstitute Type from TypePtr?
+    ptr = new TypePtr^;
+    no. TypePtr^ is a handle to Type.
+    ptr = new ^TypePtr;
+    which is new grammar that's kinda backwards from variables.
+    x^ means pointer to object. ^x means object to pointer.
+    Type^ means object to pointer. ^TypePtr would mean pointer to object.
 
   * this should work:
     Format fmt(,Format:Option:kLeftJustify);

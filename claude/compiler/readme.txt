@@ -2217,7 +2217,9 @@ STAGE FILES (.h / .cpp pairs)
             reads), and a STORE (2026-10-16:
             storeEnumFrame peeks the target's type through peekIterableType —
             a field store `obj.f = kC` / `p^.f = kC` reads the field's declared
-            type off the class layout, a bare `f = kC` in a method after its
+            type off the class layout — walking the BASE CHAIN (baseTypeOf) when
+            the receiver's class doesn't declare it (2026-10-19), so an INHERITED
+            field reads in context through a derived receiver; a bare `f = kC` in a method after its
             self.f rewrite; also `ref^ = kC` and `arr[i] = kC`). The enum is read off the
             declared TYPE: an enum-typed declaration keeps its type as a
             transparent kAlias node named after the enum over the underlying

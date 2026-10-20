@@ -372,6 +372,21 @@ Widget : Plain() {
     virtual void render() { println(String + "Plain:render"); }   /* implements Widget's pure */
 }
 
+/* COVERAGE — `virtual ~()` ALONE makes a class virtual (no virtual methods): `delete`
+   through a base pointer, and `delete ^self` from a base method (guthrie map.sl's
+   TreeNode::destroy), both run the most-derived dtor chain. */
+DtField(int f_) { _() {} ~() { println(String + "DtField:dtor " + f_); } }
+DtBase(int b_) {
+    _() {}
+    virtual ~() { println(String + "DtBase:dtor " + b_); }
+    void destroy() { delete ^self; }
+}
+DtBase : DtDer(DtField fld_) {
+    _() {}
+    virtual ~() { println(String + "DtDer:dtor"); }
+}
+DtBase : DtSyn(DtField sfld_) { }       /* no dtor declared: synthesized, still dispatches */
+
 int32 main() {
     {
         Vc v(7);
@@ -543,6 +558,17 @@ int32 main() {
         Vt^ b0 = ^td[0];
         b0^.tag();                         // Vd:tag 6
     }                                      // Vd:dtor 8, Vt:dtor 7, Vd:dtor 6, Vt:dtor 5
+
+    /* COVERAGE — a lone `virtual ~()` dispatches. */
+    {
+        println(String + "-- dtor-only virtual --");
+        DtBase^ db = new DtDer(1, 2);
+        delete db;                         // DtDer:dtor, DtField:dtor 2, DtBase:dtor 1
+        dd = new DtDer(3, 4);
+        dd^.destroy();                     // DtDer:dtor, DtField:dtor 4, DtBase:dtor 3
+        DtBase^ ds = new DtSyn(5, 6);
+        delete ds;                         // DtField:dtor 6, DtBase:dtor 5
+    }
 
     return 0;
 }

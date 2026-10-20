@@ -7391,21 +7391,6 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     widen::setSlidHookHere(type, ctor_defined, dtor_defined);
 }
 
-// True if `cls` (or an ancestor) is a WELL-FORMED virtual class — one that carries a
-// vtable pointer. Only a ROOT virtual class holds `_$vptr`; derived classes inherit it,
-// so walking to the root and checking hasVptr answers the whole chain.
-bool classIsVirtual(parse::Tree const& tree, widen::TypeRef cls) {
-    int guard = static_cast<int>(tree.classes.size()) + 2;
-    for (widen::TypeRef c = widen::strip(cls); guard-- > 0; ) {
-        auto it = tree.classes.find(c);
-        if (it == tree.classes.end()) return false;
-        if (parse::hasVptr(it->second)) return true;
-        c = parse::baseTypeOf(it->second);
-        if (c == widen::kNoType) return false;
-    }
-    return false;
-}
-
 // The method entry across `frames` matching (name, user-params), other than `exclude`;
 // -1 if none. `frames` is most-derived first, so the first hit is the closest
 // declaration. Per-frame lookup + signature equality are the shared parse:: primitives.
@@ -7443,7 +7428,7 @@ void validateVirtualClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink
         else if (m->name == "_$ctor") continue;
         else if (m->is_virtual) has_own_virtual = true;
     }
-    bool base_virtual = (base != widen::kNoType) && classIsVirtual(tree, base);
+    bool base_virtual = (base != widen::kNoType) && parse::classIsVirtual(tree, base);
     if (!has_own_virtual && !base_virtual) return;   // not a virtual class
 
     // A virtual class ALWAYS needs construction (to stamp its vtable pointer at offset 0)

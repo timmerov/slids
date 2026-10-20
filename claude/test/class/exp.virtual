@@ -81,3 +81,12 @@ Vd:dtor 8
 Vt:dtor 7
 Vd:dtor 6
 Vt:dtor 5
+-- dtor-only virtual --
+DtDer:dtor
+DtField:dtor 2
+DtBase:dtor 1
+DtDer:dtor
+DtField:dtor 4
+DtBase:dtor 3
+DtField:dtor 6
+DtBase:dtor 5

@@ -19,7 +19,8 @@ import string;
 
 /* tree.slh ================================================= */
 TreeNode(...) {
-    _(); ~();
+    _();
+    ~();
 
     /* getters. */
     Color color();
@@ -29,21 +30,28 @@ TreeNode(...) {
 
     /* setters. */
     void set_color(Color color);
-    void set_parent(TreeNode^ parent);
-    void set_left(TreeNode^ left);
-    void set_right(TreeNode^ right);
+    void set_parent(mutable TreeNode^ parent);
+    void set_left(mutable TreeNode^ left);
+    void set_right(mutable TreeNode^ right);
+
+    /* recolor/rebalance the tree. */
+    void rebalance();
 }
 
 /* map.slh ================================================= */
-TreeNode : MapIterator<Key, Value>(
+TreeNode : MapNode<Key, Value>(
     Key key_,
     Value value_
 ) {
-    _(); ~();
+    _();
+    ~();
 }
 
 Map<Key, Value>(...) {
+    alias MapIter = MapNode<Key, Value>^;
+
     _(); ~();
+
     void insert(Key key, Value value);
     void print();
 }
@@ -53,7 +61,7 @@ Map<Key, Value>(...) {
 red black tree.
 1. the root is black.
 2. red nodes have no red children.
-3. siblings are the same color.
+3. every path to leaf nodes must have the same number of black nodes.
 4. inserted nodes (after the first) are red.
 if this breaks rules 2,3 then recolor/rebalance.
 */
@@ -108,254 +116,31 @@ TreeNode(
     }
 
     /* parent setter */
-    void set_parent(TreeNode^ parent) {
+    void set_parent(mutable TreeNode^ parent) {
         if (^self) {
             parent_ = parent;
         }
     }
 
     /* left setter */
-    void set_left(TreeNode^ left) {
+    void set_left(mutable TreeNode^ left) {
         if (^self) {
             left_ = left;
         }
     }
 
     /* right setter */
-    void set_right(TreeNode^ right) {
+    void set_right(mutable TreeNode^ right) {
         if (^self) {
             right_ = right;
         }
     }
 
-    /* recursively delete the tree. */
-    void destroy() {
-        if (^self == nullptr) {
-            return;
-        }
-        left_^.destroy();
-        right_^.destroy();
-        delete ^self;
-    }
-
     /* recolor/rebalance the tree. */
     void rebalance() {
-    }
-}
 
-/* map.sl ================================================= */
-TreeNode : MapIterator<Key, Value>() {
-    _() {}
-    ~() {}
-
-    /* recursively print the tree. */
-    void print(int spaces) {
-        if (^self == nullptr) {
-            return;
-        }
-        spaces += 2;
-
-        lf = <MapIterator<Key,Value>> left_;
-        lf^.print(spaces);
-
-        String color = "red";
-        if (color_ == kBlack) {
-            color = "black";
-        }
-
-        if (spaces > 2) {
-            ::print("  ");
-            for (i : 0..spaces) {
-                ::print("| ");
-            }
-        }
-        println(key_ + " - " + value_ + " (" + color + ")");
-
-        rt = <MapIterator<Key,Value>> right_;
-        rt^.print(spaces);
-    }
-
-    /* print vertical bars to associate related tree nodes. */
-    void print_spaces(int spaces) {
-        if (spaces == 0) {
-            return;
-        }
-        ::print("  ");
-        for (i : 2..spaces+2) {
-            ::print("| ");
-        }
-    }
-}
-
-Map<Key, Value>(
-    MapIterator<Key, Value>^ root_
-) {
-    _() { }
-    ~() {
-        root_^.destroy();
-    }
-
-    void insert(Key key, Value value) {
-
-        /* create a new red node. */
-        child = new TreeNode;
-        child^.color_ = kRed;
-        child^.key_ = key;
-        child^.value_ = value;
-
-        /* the root node is black. */
-        if (root_ == nullptr) {
-            root_ = child;
-            child^.color_ = kBlack;
-            child^.parent_ = ^self;
-            return;
-        }
-
-        /* insert the new node into the tree. */
-        TreeNode^ parent = root_;
-        while() {
-            if (key < parent^.key_) {
-                if (parent^.left_ == nullptr) {
-                    parent^.left_ = child;
-                    break;
-                }
-                parent = parent^.left_;
-            } else {
-                if (parent^.right_ == nullptr) {
-                    parent^.right_ = child;
-                    break;
-                }
-                parent = parent^.right_;
-            }
-        }
-        child^.parent_ = parent;
-
-        /* recolor/rebalance the tree. */
-        child^.rebalance();
-
-        /* force the root to black. */
-        root_^.color_ = kBlack;
-    }
-
-    void print() {
-        if (root_) {
-            root_^.print(0);
-        }
-    }
-}
-
-/*
-/*
-red black tree.
-1. the root is black.
-2. red nodes have no red children.
-3. siblings are the same color.
-4. inserted nodes (after the first) are red.
-if this breaks rules 2,3 then recolor/rebalance.
-*/
-Tree<Key, Value>(
-    Key key_,
-    Value value_,
-    ...
-) {
-    _(); ~();
-
-    /* insert the key value pair into the tree. */
-    void insert(Key key, Value value);
-
-    /* print the tree. */
-    void print();
-}
-
-Tree<Key, Value>(
-    Color color_ = kHost,
-    Tree^ parent_ = nullptr,
-    Tree^ left_ = nullptr,
-    Tree^ right_ = nullptr
-) {
-    enum Color (kHost, kRed, kBlack, kNull);
-
-    _() {}
-    ~() {
-        if (color_ == kHost) {
-            parent_^.remove();
-        }
-    }
-
-    /* color getter. */
-    Color color() {
-        if (^self == nullptr) {
-            return kNull;
-        }
-        return color_;
-    }
-
-    /* parent getter */
-    Tree^ parent() {
-        if (^self == nullptr) {
-            return nullptr;
-        }
-        if (parent_ == nullptr) {
-            return nullptr;
-        }
-        if (parent_^.color_ == kHost) {
-            return nullptr;
-        }
-        return parent_;
-    }
-
-    /* left getter */
-    Tree^ left() {
-        if (^self == nullptr) {
-            return nullptr;
-        }
-        return left_;
-    }
-
-    /* right getter */
-    Tree^ right() {
-        if (^self == nullptr) {
-            return nullptr;
-        }
-        return right_;
-    }
-
-    /* insert key/value pair into the tree. */
-    void insert(Key key, Value value) {
-
-        /* create a new red node. */
-        child = new Tree;
-        child^.color_ = kRed;
-        child^.key_ = key;
-        child^.value_ = value;
-
-        /* the root node is black. */
-        if (parent_ == nullptr) {
-            parent_ = child;
-            child^.color_ = kBlack;
-            child^.parent_ = ^self;
-            return;
-        }
-
-        /* insert the new node. */
-        Tree^ parent = parent_;
-        while() {
-            if (key < parent^.key_) {
-                if (parent^.left_ == nullptr) {
-                    parent^.left_ = child;
-                    child^.parent_ = parent;
-                    break;
-                }
-                parent = parent^.left_;
-            } else {
-                if (parent^.right_ == nullptr) {
-                    parent^.right_ = child;
-                    child^.parent_ = parent;
-                    break;
-                }
-                parent = parent^.right_;
-            }
-        }
+        child = ^self;
+        TreeNode^ parent = parent_;
 
         /* recolor and/or rebalance the tree. */
         while (parent^.color() == kRed) {
@@ -372,12 +157,8 @@ Tree<Key, Value>(
                 iterate up the tree with new child is old granny.
                 */
                 granny^.color_ = kRed;
-                if (aunt) {
-                    aunt^.color_ = kBlack;
-                }
-                if (uncle) {
-                    uncle^.color_ = kBlack;
-                }
+                aunt^.set_color(Color:kBlack);
+                uncle^.set_color(Color:kBlack);
                 child = granny;
                 parent = child^.parent();
             } else {
@@ -401,37 +182,6 @@ Tree<Key, Value>(
                 }
             }
         }
-
-        /* set the root node to black. */
-        parent_^.color_ = kBlack;
-    }
-
-    /*
-    rotate right:
-
-         great            great
-           |                |
-         self      ->     aunt
-        /    \           /    \
-       aunt  uncle    child  self
-      /    \                /    \
-    child  sibling      sibling  uncle
-    */
-    void rotate_right() {
-        great = parent_;
-        aunt = left_;
-        sibling = aunt^.right();
-
-        great^.change_child(^self, aunt);
-        parent_ = aunt;
-        left_ = sibling;
-        if (aunt) {
-            aunt^.parent_ = great;
-            aunt^.right_ = ^self;
-        }
-        if (sibling) {
-            sibling^.parent_ = ^self;
-        }
     }
 
     /*
@@ -453,78 +203,168 @@ Tree<Key, Value>(
         great^.change_child(^self, uncle);
         parent_ = uncle;
         right_ = sibling;
-        if (uncle) {
-            uncle^.parent_ = great;
-            uncle^.left_ = ^self;
-        }
-        if (sibling) {
-            sibling^.parent_ = ^self;
-        }
+        uncle^.set_parent(great);
+        uncle^.set_left(^self);
+        sibling^.set_parent(^self);
     }
 
     /*
-    change the parent's child.
-    if this is the host then the child is the new root.
-    otherwise change the left/right child.
+    rotate right:
+
+         great            great
+           |                |
+         self      ->     aunt
+        /    \           /    \
+       aunt  uncle    child  self
+      /    \                /    \
+    child  sibling      sibling  uncle
+    */
+    void rotate_right() {
+        great = parent_;
+        aunt = left_;
+        sibling = aunt^.right();
+
+        great^.change_child(^self, aunt);
+        parent_ = aunt;
+        left_ = sibling;
+        aunt^.set_parent(great);
+        aunt^.set_right(^self);
+        sibling^.set_parent(^self);
+    }
+
+    /*
+    change the parent's left or right child
+    from former to new.
     */
     void change_child(
-        Tree^ former_child,
-        mutable Tree^ new_child
+        TreeNode^ former_child,
+        mutable TreeNode^ new_child
     ) {
-        if (color_ == kHost) {
-            parent_ = new_child;
-        } else if (left_ == former_child) {
+        if (^self == nullptr) {
+            return;
+        }
+        if (left_ == former_child) {
             left_ = new_child;
         } else {
             right_ = new_child;
         }
     }
+}
 
-    /* recursively delete children then self. */
-    void remove() {
+/* map.sl ================================================= */
+TreeNode : MapNode<Key, Value>() {
+
+    alias MapIter = MapNode<Key, Value>^;
+
+    _() {}
+    ~() {}
+
+    /* recursively delete the tree. */
+    void destroy() {
         if (^self == nullptr) {
             return;
         }
-        left_^.remove();
-        right_^.remove();
-        /* return immediately. no longer in a safe state. */
+        lf = <MapIter> left_;
+        rt = <MapIter> right_;
+        lf^.destroy();
+        rt^.destroy();
         delete ^self;
     }
 
-    /* print the tree. */
-    void print() {
-        parent_^.print(0);
-    }
-
-    /* recursively pretty print the tree. */
+    /* recursively print the tree. */
     void print(int spaces) {
         if (^self == nullptr) {
             return;
         }
-        left_^.print(spaces+2);
+        spaces += 2;
+
+        lf = <MapIter> left_;
+        lf^.print(spaces);
 
         String color = "red";
         if (color_ == kBlack) {
             color = "black";
         }
-        print_spaces(spaces);
+
+        if (spaces > 2) {
+            ::print("  ");
+            for (i : 4..spaces+2) {
+                ::print("| ");
+            }
+        }
         println(key_ + " - " + value_ + " (" + color + ")");
 
-        right_^.print(spaces+2);
+        rt = <MapIter> right_;
+        rt^.print(spaces);
+    }
+}
+
+Map<Key, Value>(
+    MapNode<Key, Value>^ root_
+) {
+    _() { }
+    ~() {
+        root_^.destroy();
     }
 
-    /* print vertical bars to associate related tree nodes. */
-    void print_spaces(int spaces) {
-        if (spaces == 0) {
+    void insert(Key key, Value value) {
+
+        /* create a new red node. */
+        child = new MapNode<Key, Value>;
+        child^.color_ = kRed;
+        child^.key_ = key;
+        child^.value_ = value;
+
+        /* the root node is black. */
+        if (root_ == nullptr) {
+            root_ = child;
+            child^.color_ = kBlack;
             return;
         }
-        ::print("  ");
-        for (i : 2..spaces+2) {
-            ::print("| ");
+
+        /* insert the new node into the tree. */
+        MapIter parent = root_;
+        while() {
+            if (key < parent^.key_) {
+                if (parent^.left_ == nullptr) {
+                    parent^.left_ = child;
+                    break;
+                }
+                parent = <MapIter> parent^.left_;
+            } else {
+                if (parent^.right_ == nullptr) {
+                    parent^.right_ = child;
+                    break;
+                }
+                parent = <MapIter> parent^.right_;
+            }
+        }
+        child^.parent_ = parent;
+
+        /* recolor/rebalance the tree. */
+        child^.rebalance();
+
+        /* update root. */
+        parent = child;
+        while() {
+            ancestor = <MapIter> parent^.parent_;
+            if (ancestor == nullptr) {
+                break;
+            }
+            parent = ancestor;
+        }
+        root_ = parent;
+
+        /* force the root to black. */
+        root_^.color_ = kBlack;
+    }
+
+    void print() {
+        if (root_) {
+            root_^.print(0);
         }
     }
 }
-*/
 
 void test_map() {
     Map<String, String> map;

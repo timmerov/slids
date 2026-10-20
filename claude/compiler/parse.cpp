@@ -120,6 +120,18 @@ bool hasVptr(ClassInfo const& info) {
     return !info.field_names.empty() && info.field_names[0] == "_$vptr";
 }
 
+bool classIsVirtual(Tree const& t, widen::TypeRef cls) {
+    int guard = static_cast<int>(t.classes.size()) + 2;
+    for (widen::TypeRef c = widen::strip(cls); guard-- > 0; ) {
+        auto it = t.classes.find(c);
+        if (it == t.classes.end()) return false;
+        if (hasVptr(it->second)) return true;
+        c = baseTypeOf(it->second);
+        if (c == widen::kNoType) return false;
+    }
+    return false;
+}
+
 widen::TypeRef classBaseType(Tree const& t, widen::TypeRef cls) {
     auto it = t.classes.find(widen::strip(cls));
     if (it == t.classes.end()) return widen::kNoType;
