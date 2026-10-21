@@ -76,6 +76,10 @@ BUGS
   * a template diagnostic names the binder instead of the binding: biggest<float64>(1.5, 2)
     reports "Cannot implicitly convert 'int' to 'T'" — should say 'float64'.
 
+  * one header reached through two spellings of its path is loaded twice: lex skips a repeat
+    import by the raw path string, not the canonical path (./b.slh vs ../../lib/hdr/b.slh).
+    found by reading the code. not reproduced yet.
+
 UNBLOCKED FEATURES
 
   * enum Color (kRed, kBlack);

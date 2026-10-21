@@ -1,0 +1,176 @@
+SIDE-LOAD ONLY WHAT IS NEEDED
+=============================
+
+status:  OPEN — design discussion only, 2026-10-20. Nothing here is implemented.
+where:   today's behavior is documented in readme.txt (TEMPLATES, cross-TU: the three
+         instantiation modes; THE VISIBILITY RULE) and readme-classes.txt (SO THE MAIN
+         COMPILE CAN NEVER STOP LOADING A TEMPLATE SOURCE).
+evidence: everything below about current code is from READING it, except the
+         Vector<float64> result, which was MEASURED 2026-10-14.
+
+GOAL
+  A consumer loads a template source (t.sl beside t.slh) only when it needs that source's
+  BODIES — i.e. only when it instantiates a flavor with a LOCAL argument (Tmpl<Priv>).
+  Tmpl<int> and Tmpl<Public> never need it: their bodies come from t.sl's own
+  --instantiate compile through the .sli demand pool.
+
+TODAY
+  lex::ImportWrapper::loadTemplateSource (lex.cpp) side-loads <dir>/<stem>.sl right after
+  the header and its imports are processed, when ALL hold:
+    1. the header declares a template (declaresTemplate: identifier + balanced <...> then
+       `(` or `=`; lexical, errs toward loading)
+    2. the .sl exists in the HEADER'S OWN directory (token::templateSourcePath)
+    3. the .sl is not the root (token::samePath, by canonical path, never by stem)
+    4. it was not already loaded (imported_once)
+  It is marked template_source, opens its own privacy zone, and its imports are processed
+  inside that zone.
+
+  What a consumer does with it when every flavor is aggregated: lex, parse, register its
+  template content (resolve strips everything else before relocation). Classify emits
+  declaration-only instances; NO bodies from t.sl are code-generated in the consumer. The
+  cost is the front end over t.sl and its imports.
+
+  Where a local flavor is first KNOWN:
+  - class templates: resolve, instantiateClassTemplate (inline_local = header_tmpl &&
+    !here_sibling && anyArgLocal), reached from resolveTypeRef's template-use arm and the
+    instance-qualified spelling arm. Which resolve pass gets there first depends on where
+    the spelling appears: field/signature (1a-types / 1a), const/global init (1b), body
+    local (2 / 2-scope), or only inside another instance's body (the
+    pending_class_instances drain).
+  - function templates: classify, instantiateTemplate, where the call deduces its args.
+  Lex and grammar cannot know: they lack the symbol table (is Tmpl a template?), cannot see
+  through aliases / nested args / qualification / deduction, and cannot ask the declaring
+  file of the argument's class leaf (anyArgLocal peels pointers, iterators, arrays).
+
+PREREQUISITE — THE LAYOUT OF PUBLIC FLAVORS
+  None of A/B/C works without this. A template instance is NEVER OPAQUE today; that is true
+  only BECAUSE the source is side-loaded: an incomplete header template (Vector<T>(...))
+  gets its field list from the source's completing re-open. Measured 2026-10-14 with
+  loadTemplateSource gated off: Vector<float64> reports "declared incomplete ('...') and
+  never completed".
+  Two routes:
+  - make AGGREGATED flavors OPAQUE: the --instantiate TU exports the flavor's absolute
+    __$sizeof / __$offsets symbols, exactly as a plain opaque class's owner does. Looks
+    reachable — aggregated flavors already have stable, suffix-free symbols, so every TU
+    spells them alike. COST: Vector<int> stops being a constant-layout struct in
+    consumers; sizeof no longer folds; by-value embedding goes through the computed path.
+  - require header templates to be COMPLETE in the header. Breaks "header public, source
+    private" for fields.
+  Recommended: the opaque route, MEASURED first (what it costs Vector<int> users).
+
+A. RESTART WITH A KNOWN LIST  (recommended)
+  - Pass 1 compiles WITHOUT side-loads. An instantiation that needs a source RECORDS which
+    one and continues with a declaration-only stub, so nothing cascades.
+  - End of classify: if the list is non-empty, discard pass 1 INCLUDING its diagnostics
+    and re-run with "load the source beside <header>" for exactly those.
+  - ITERATE: Tmpl<Priv2>'s body may use Helper<Priv2> from a header tmpl.sl imports — that
+    need is only discoverable once that body exists. Re-run until nothing new is needed.
+    Bounded by the number of template sources.
+  - The request is attached to its HEADER, not a generic import, so it opens the privacy
+    zone exactly as today's side-load does. lex::run's extra_imports is the nearest hook.
+  - Deterministic: the final pass is an ordinary compile, so def_id numbering, symbols and
+    the -MF deps all come from it.
+  - Cost: a second front end, only for TUs that actually use a local flavor. No stage has
+    to become incremental.
+  - A local flavor is unspellable in any other TU, so A already compiles each one exactly
+    once — the "once per instantiation" goal holds.
+
+A FOLLOW-UP 1 — CACHE THE LIST
+  - The cached list is a HINT; every compile validates it and restarts INTERNALLY (never a
+    user-visible failed compile), then rewrites the cache.
+  - TOO SHORT: always caught — pass 1 records every need it hits.
+  - TOO LONG: compiles correctly (extra source stripped, names private to its zone), costs
+    only load time — BUT import order changes def_id numbering, so suffixed local symbols
+    shift and the .o differs from an exact-set build.
+    For reproducible builds: loaded set != needed set restarts once with the EXACT set, so
+    the output depends only on what is needed. Costs one extra pass when the set shrinks.
+  - Clean build: two passes for every TU using a local flavor; steady state: one.
+
+A FOLLOW-UP 2 — A CHEAP PRE-SCAN (precision ladder)
+  No exact cheap scan exists. Rungs:
+  1. the root declares NO class of its own (nested and function-local count): no local
+     flavor is possible, load nothing. EXACT. Probably most TUs. Detectable lexically or
+     by a grammar-only parse of the root (unverified whether grammar's decl recognizers
+     need anything from imports).
+  2. classes exist: load a template's source if the root mentions that template's name at
+     all. OVER-APPROXIMATE.
+  3. anything sharper is pass 1. A scan cannot see: deduced calls (foo(priv) has no <...>),
+     aliases (alias P = Priv; Tmpl<P>), needs inside a loaded source (tmpl.sl's
+     Helper<T>).
+  Rungs 1 and 2 would fit in --scan-deps or the front of lex.
+  Combined roles: restart = correctness backstop; cache = steady state; rung 1 =
+  clean-build shortcut. Rung 2 adds little once the cache exists and, under the exact-set
+  rule, would force restarts whenever it over-loads.
+
+A FOLLOW-UP 3 — THE CACHE LIVES IN THE MAKE DEPENDENCY FILE
+  - The compile writes the list into its .d (-MF) as a TARGET-SPECIFIC variable — the
+    pattern --scan-deps already uses for SLIDS_INST (main.cpp):
+      build/main.ll: main.sl lib/hdr/t.slh lib/hdr/t.sl ...
+      build/main.ll: SLIDS_SIDELOAD = --side-load lib/hdr/t.sl
+  - The .ll rule passes it back beside $(SLIDS_INST) (lib/Makefile's .ll rule); the .d is
+    already pulled in by `-include $(wildcard $(BUILD_DIR)/*.d)`.
+  - The compiler stays stateless; make carries the cache. No .d yet: empty list, internal
+    restart. Stale: internal restart. Final pass writes the correct .d.
+  - The .d's FILE LIST stays right as-is (-MF writes tokens.files): if main loaded t.sl an
+    edit to t.sl rebuilds main; if it did not, it never depended on t.sl (given the
+    prerequisite).
+  - CHANGE: today the .d is written right after lex so it survives a later error; under A
+    it is written after the FINAL pass's lex.
+  - The .d, not the .deps.mk: --scan-deps is lex-only and cannot compute the exact list.
+  - --scan-deps must KEEP loading every template source: its library list (SLIDS_INST,
+    <consumer>_TMPL_OBJS) comes from f.template_source, and the library-to-library
+    ordering edges come from t.sl's OWN imports. Only the COMPILE's loads become
+    conditional. Cheap: the scan is lex-only.
+  - A manual compile without -MF has no cache and always pays the restart.
+
+A FOLLOW-UP 4 — HOW OFTEN --scan-deps RUNS (unchanged by this plan)
+  - Once per TU on a clean build.
+  - Again when its rule's prerequisites change: the TU's .sl or the SLIDSC binary
+    (`<bld>/<name>.deps.mk: <name>.sl $(SLIDSC)`).
+  - Again when any file in its scanned closure changes: the fragment names itself as
+    depending on every file lex opened (`<fragment>: <every scanned file>`) — headers,
+    side-loaded sources, their imports.
+  - Mechanism: make's remake-the-makefiles — the -include'd fragment is remade, then make
+    RE-EXECS and re-reads its Makefiles. Skipped for `make clean`.
+  - Users: lib/ (LIB_SRCS) and ten test dirs (expression, pointer, misc, flow, assign,
+    template, function, guthrie, lib, progress).
+  - In practice: editing one test .sl = one cheap scan; rebuilding the compiler = every
+    fragment rescans plus a re-exec per directory; editing a library header or template
+    source = rescans its importers.
+
+B. CATCH UP AFTER CLASSIFY  (not recommended)
+  - At the end of classify, side-load only the needed sources and run lex..classify over
+    just the new content into the already-processed tree.
+  - The stages are whole-program by design: resolve's ~13 ordered sweeps (names before
+    types before signatures before bodies), constfold's fixpoint, classify's signature
+    pre-pass before any body.
+  - There IS precedent for late INSTANCES (the pending_class_instances drain,
+    constfold::runOn, classify's on-demand instantiation) — but not for late SOURCES.
+  - A late source can COMPLETE a template whose flavors are already laid out, and its
+    template functions can JOIN overload sets that earlier calls already resolved — the
+    result would depend on load timing.
+  - The source's own imports are general headers; any not already loaded need EVERY pass.
+  - The payoff over A is only pass 1's front end.
+
+C. SEPARATE INSTANTIATION TU + INTERNALIZE  (the todo.txt design)
+  - At end of file, treat Priv's flavors as public: write the demand to the inst file,
+    compile it with main.sl loaded as if it were a header, merge, and make the now-public
+    Priv symbols private again in main_inst.o.
+  - Loading main.sl as a header needs a NEW STRIP MODE (bodies, globals, main dropped;
+    types kept) — the template-source strip in the other direction.
+  - SYMBOL IDENTITY: file-scope private classes carry no def_id suffix (canon Twin), so
+    they match across the two compiles; nested / function-local classes carry a def_id
+    suffix and def_id depends on import order — they need TU-stable naming first.
+  - Tmpl<Priv>'s bodies call Priv's methods, internal to main today, so main must EXPORT
+    them and they must be hidden again after the merge: llvm-link + `opt
+    -passes=internalize` + api-list. The 2026-10-14 spike failed (llvm-link dropped an
+    internal def a declare needed, exit 0) and was rolled back.
+  - Build: --scan-deps is lex-only, so it cannot tell which TUs need a main_inst.o; the
+    make rules must produce one always or conditionally.
+  - Payoff: main's compile never sees a template body. Small — A already compiles each
+    local flavor exactly once.
+
+RECOMMENDATION
+  1. The prerequisite: opaque aggregated flavors, measured for its cost to Vector<int>.
+  2. A, with the cache in the .d (follow-ups 1 and 3) and rung 1 of the pre-scan.
+  3. C only if main must never contain template bodies. B no.
