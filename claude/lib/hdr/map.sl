@@ -103,15 +103,13 @@ Map<Key, Value>(
         child^.rebalance();
 
         /* update root. */
-        parent = child;
         while() {
-            ancestor = <MapIter> parent^.parent_;
+            ancestor = <MapIter> root_^.parent_;
             if (ancestor == nullptr) {
                 break;
             }
-            parent = ancestor;
+            root_ = ancestor;
         }
-        root_ = parent;
 
         /* force the root to black. */
         root_^.color_ = kBlack;
