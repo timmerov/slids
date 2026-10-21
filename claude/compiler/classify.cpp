@@ -2423,6 +2423,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // Already lowered (a class conversion rewritten to construct + op= on a
             // prior inferExpr pass) — idempotent: its type is the target.
             if (e.class_conversion) { e.inferred_type = e.return_type; return; }
+            // Already lowered to a SPILL ([decl, value] — the slot-wise explode or an
+            // aggregate conversion) — idempotent: its type was stamped then.
+            if (e.agg_conv_spill) return;
             assert(e.children.size() == 1 && "kConvertExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
             // `Type(value)` NAMELESS PRIMITIVE TEMPORARY: bound by the DECL-INIT rules —
@@ -2817,6 +2820,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // stays an array. (Tuple op SCALAR broadcast stays in the block below;
             // array op scalar falls through to the scalar reject.)
             if (isAggregateType(lref) || isAggregateType(rref)) {
+                // A CLASS LHS (`key_ + " - "` — a string literal is an array) dispatched
+                // to no operator above, and dispatch is LHS-only, so broadcasting it
+                // across the aggregate's slots only buries that. Reject it as the class
+                // it is. (A class RHS is a SCALAR BROADCAST operand: `pair + Acc(10)`.)
+                if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Operator '" + op + "' is not defined on class '"
+                        + widen::spellOrEmpty(lref) + "'.", {}});
+                    return;
+                }
                 bool is_cmp = (op == "==" || op == "!=" || op == "<"
                             || op == "<=" || op == ">"  || op == ">=");
                 if (is_cmp) {

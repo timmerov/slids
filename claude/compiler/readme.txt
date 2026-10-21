@@ -703,6 +703,9 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
               liftSretCallList's store/move arm scans for an agg_conv_spill child and hoists it
               (store/move sources are otherwise left in place); the move-into-live path was the
               last position to get this. Canon tuple/combined.sl (the `cmv` case).
+              classify's kConvertExpr arm treats an agg_conv_spill node as ALREADY LOWERED
+              (returns, like class_conversion): a node inferred twice (a decl-init's probe
+              then its route, an overloaded call's args) never re-enters the 1-operand path.
       GROUP — the temp is read by SEVERAL SIBLING STATEMENTS. Put the decl and those
               statements in a BLOCK, and hoist any DECLARING slot OUT of it — a declared name
               has to outlive the block. (`_$dsrc`, `_$delem`: a destructure's per-slot stores.
@@ -802,6 +805,13 @@ ANONYMOUS TUPLES + #x (landed this phase; spans every stage)
     non-integer shift count — is asked of each SLOT by the ordinary arms, because a slot IS
     an ordinary operation. A nested shape mismatch needs no rule of its own: the nested pair
     explodes in its turn and asks the same question there.
+    A CLASS LHS IS NOT BROADCAST (2026-10-20). Class dispatch is LHS-only, so a class LHS that
+    stampClassBinary did not take has no per-slot meaning: `key_ + " - "` (a string literal is
+    a `const char[N]`) is rejected "Operator '+' is not defined on class 'C'." at the head of
+    the aggregate branch, before the explode. A class RHS IS a scalar broadcast operand
+    (`pair + Acc(10)`, evaluate.sl Z4/Z9). Before this the explode rewrote the class operand
+    into a spill and a class decl-init's second inference of it asserted. Pinned
+    class/operator.sl (NoPlus).
     EVALUATED ONCE: an operand is read by every slot, so it goes through THE SPILL FUNNEL
     unless it is safe to re-read — the same trichotomy the destructure's source model uses (a
     tuple LITERAL is taken apart, a re-readable lvalue is indexed, anything else spills; a

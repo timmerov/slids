@@ -16,6 +16,7 @@ puts it in scope.
 
 //import algorithm;
 //import dump;
+//import map;
 import string;
 //import vector;
 

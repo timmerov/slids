@@ -1323,6 +1323,11 @@ Phase 5 — classes
     splitTransferInit now peels a chain in a SLOT like an lvalue, and a spilled source is
     re-placed as a GROUP so the temp outlives the transfers that read it. Canon
     tuple/anon.sl + array.sl + combined.sl (numeric), class/evaluate.sl block Z (classes).
+    2026-10-20 (guthrie `Map<Rankings, Bloc>`, MapNode::print `key_ + " - "`): a CLASS LHS
+    with no matching operator is rejected before the explode instead of broadcast across an
+    aggregate RHS (dispatch is LHS-only; a class RHS still broadcasts — Z4/Z9); and
+    classify's kConvertExpr arm returns early on an agg_conv_spill node, so a twice-inferred
+    spill no longer asserts "kConvertExpr needs 1 operand". Pinned class/operator.sl NoPlus.
     AN ARRAY STAYS AN ARRAY (2026-07-13, the cost bug Z2 filed). The slots ride in a
     kTupleExpr, which infers to a TUPLE type — so exploding an ARRAY retyped it, and the decl
     that received it was a CROSS-FORM copy (array <- tuple), which desugar lowers by spilling

@@ -1238,6 +1238,21 @@ negatives — one //-block uncommented per run.
 //    return c.v_;
 //}
 
+/* the same reject when the RHS is an AGGREGATE — a string literal is a `const char[N]`.
+   A class LHS that dispatched to no operator is never broadcast across the array's slots
+   (dispatch is LHS-only). That broadcast used to rewrite the operand into a spill, and the
+   class decl-init's second inference of it ASSERTED instead of diagnosing. */
+//-EXPECT-ERROR: Operator '+' is not defined on class 'NoPlus'.
+//NoPlus(int v_) {
+//    _() {} ~() {}
+//}
+//int neg_class_plus_array() {
+//    NoPlus a(3);
+//    String s = a + " - ";
+//    println(s);
+//    return a.v_;
+//}
+
 /* a binary operator's FIRST parameter must be the enclosing class (canon 170-182): it IS
    the left operand, and the operator produces self from it. A PRIMITIVE param0 means the
    operator could only ever be selected by the assignment target's type — which inverts
