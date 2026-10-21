@@ -22,6 +22,7 @@ Map<Key, Value>(...) {
 
     _(); ~();
 
+    intptr size();
     void insert(Key key, Value value);
     void print();
 }

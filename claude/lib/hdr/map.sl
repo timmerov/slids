@@ -58,11 +58,16 @@ TreeNode : MapNode<Key, Value>() {
 }
 
 Map<Key, Value>(
-    MapNode<Key, Value>^ root_
+    MapNode<Key, Value>^ root_ = nullptr,
+    intptr size_ = 0
 ) {
     _() { }
     ~() {
         root_^.destroy();
+    }
+
+    intptr size() {
+        return size_;
     }
 
     void insert(Key key, Value value) {
@@ -72,6 +77,7 @@ Map<Key, Value>(
         child^.color_ = kRed;
         child^.key_ = key;
         child^.value_ = value;
+        ++size_;
 
         /* the root node is black. */
         if (root_ == nullptr) {

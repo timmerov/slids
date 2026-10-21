@@ -461,10 +461,8 @@ Bloc(
     Approvals approvals_
 ) { }
 
-/*
-==tsc== skipped
-typedef std::map<Rankings, Bloc> BlocMap;
-*/
+/* ==tsc== this crashes the compiler. */
+//alias BlocMap = Map<Rankings, Bloc>;
 
 /*
 this is a base class for specific electoral methods.
