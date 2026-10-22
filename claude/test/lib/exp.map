@@ -1,53 +1,53 @@
 ---countries---
-  | Belize - Belmopan (black)
-  Canada - Ottawa (red)
-  | | Costa Rica - San José (red)
-  | El Salvador - San Salvador (black)
-Guatemala - Guatemala City (black)
-  | Honduras - Tegucigalpa (black)
-  Mexico - Mexico City (red)
-  | | Nicaragua - Managua (red)
-  | Panama - Panama City (black)
-  | | USA - Washington DC (red)
+Belize - Belmopan
+Canada - Ottawa
+Costa Rica - San José
+El Salvador - San Salvador
+Guatemala - Guatemala City
+Honduras - Tegucigalpa
+Mexico - Mexico City
+Nicaragua - Managua
+Panama - Panama City
+USA - Washington DC
 ---empty---
 ---one insert---
-one - 1 (black)
+one - 1
 ---ascending---
-  | A - alpha (black)
-  B - bravo (black)
-  | C - charlie (black)
-D - delta (black)
-  | E - echo (black)
-  F - foxtrot (black)
-  | | G - golf (black)
-  | H - hotel (red)
-  | | I - india (black)
-  | | | J - juliett (red)
+A - alpha
+B - bravo
+C - charlie
+D - delta
+E - echo
+F - foxtrot
+G - golf
+H - hotel
+I - india
+J - juliett
 ---descending---
-  | | | A - alpha (red)
-  | | B - bravo (black)
-  | C - charlie (red)
-  | | D - delta (black)
-  E - echo (black)
-  | F - foxtrot (black)
-G - golf (black)
-  | H - hotel (black)
-  I - india (black)
-  | J - juliett (black)
+A - alpha
+B - bravo
+C - charlie
+D - delta
+E - echo
+F - foxtrot
+G - golf
+H - hotel
+I - india
+J - juliett
 ---zig-zag---
-  | A - alpha (black)
-  B - bravo (red)
-  | C - charlie (black)
-  | | D - delta (red)
-E - echo (black)
-  | | F - foxtrot (red)
-  | G - golf (black)
-  | | H - hotel (red)
-  I - india (red)
-  | J - juliett (black)
+A - alpha
+B - bravo
+C - charlie
+D - delta
+E - echo
+F - foxtrot
+G - golf
+H - hotel
+I - india
+J - juliett
 ---nested scopes---
-inner - second (black)
-  innermost - third (red)
+inner - second
+innermost - third
 inner gone
-outer - first (black)
+outer - first
 outer gone
