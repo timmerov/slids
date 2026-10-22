@@ -71,6 +71,10 @@ Position() {
 
     /* format the position as a string. */
     String to_string() {
+        if (^self == nullptr) {
+            return "N/A";
+        }
+
         String s;
         int naxes = (int=axis_.size());
         if (naxes == 1) {

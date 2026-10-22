@@ -525,10 +525,7 @@ GuthrieVoting(
     /* the electorate and the candidates. */
     Electorate electorate_,
     Candidates candidates_,
-    /*
-    ==tsc== skipped
     BlocMap bloc_map_,
-    */
     int total_support_ = 0,
 
     /* results from the trial. */
@@ -604,9 +601,9 @@ GuthrieVoting(
                 void; /* disable unreachable code error. */
                 electorate_.show_distribution();
             }
+            find_best_candidate();
 /* ==tsc== */
 /*
-            find_best_candidate();
             init_candidates();
             calculate_utilities(actual_);
             use_median_satisfaction(actual_);
@@ -694,8 +691,7 @@ GuthrieVoting(
             println(String + "  The average utility is 90% best and 10% worst.");
         }
     }
-/* ==tsc== */
-/*
+
     /*
     find the voter that would make the best candidate.
     also find the average utility of all voters.
@@ -703,23 +699,24 @@ GuthrieVoting(
     void find_best_candidate() {
         if (kFindTheoreticalBestCandidate == false) {
             return;
+            void;
         }
 
         int best = 0;
         float64 best_utility = 1e99;
-        Position *best_position = nullptr;
+        Position^ best_position = nullptr;
         float64 total_utility = 0.0;
-        for (int i = 0; i < electorate_.nvoters_; ++i) {
-            auto& ipos = electorate_.voters_[i].position_;
+        for (i : 0..electorate_.nvoters_) {
+            ipos = ^electorate_.voters_[i].position_;
             float64 utility = 0.0;
-            for (int k = 0; k < electorate_.nvoters_; ++k) {
-                auto& kpos = electorate_.voters_[k].position_;
-                utility += ipos.utility(kpos);
+            for (k : 0..electorate_.nvoters_) {
+                kpos = ^electorate_.voters_[k].position_;
+                utility += ipos^.utility(kpos);
             }
             if (utility > best_utility) {
                 best = i;
                 best_utility = utility;
-                best_position = &ipos;
+                best_position = ipos;
             }
             total_utility += utility;
         }
@@ -730,15 +727,17 @@ GuthrieVoting(
         */
         theoretical_.which_ = best;
         theoretical_.best_ = best_utility;
-        theoretical_.average_ = total_utility / float64(electorate_.nvoters_);
+        theoretical_.average_ = total_utility / (float64=electorate_.nvoters_);
 
         /* show results. */
-        LOG("Best candidate chosen from all voters:");
-        LOG(" Position: "<<best_position->to_string());
-        LOG(" Utility : "<<best_utility);
-        LOG(" Average : "<<theoretical_.average_);
+        println(String + "Best candidate chosen from all voters:");
+        println(String + " Position: " + best_position^.to_string());
+        println(String + " Utility : " + best_utility);
+        println(String + " Average : " + theoretical_.average_);
     }
 
+/* ==tsc== */
+/*
     void init_candidates() {
         /*
         pick primary candidates from the voters.
