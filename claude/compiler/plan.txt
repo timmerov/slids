@@ -4044,6 +4044,51 @@ CROSS-CUTTING — THE DEMAND PATH SELECTS LIKE A CALL + INSTANTIATION CONTEXT (L
   Canon: test/lib/algorithm.sl + exp.algorithm (negatives: no specialization, no size(),
   no op<, const container).
 
+CROSS-CUTTING — INCOMPLETE TEMPLATES ARE INCOMPLETE CLASSES + LAYOUT WORDS (LANDED 2026-10-21)
+  The prerequisite of plan-template.txt (side-load only what the author asks for). The
+  user's rule: an incomplete header template is no more special than an incomplete header
+  class; its layout was known to consumers ONLY because the source was always side-loaded,
+  which is contrary to a major design goal. Four landings, one day:
+  1. AGGREGATED FLAVORS ARE OPAQUE. registerClassBody's `!tmpl_instance` exemption became
+     `!tu_local_flavor` (Entry.tu_local_instance, now stamped on class instances): an
+     aggregated flavor is opaque in every TU, its completer the --instantiate TU; an
+     inline-local one is laid out in place. A consumer's aggregated clone STRIPS the
+     source's completing-re-open fields — keeping them made a consumer site fill
+     Vector<Voter>'s private fields (the anchored prefix broken) — and keeps their kParams
+     on ClassInfo.source_private_fields so "is private to its template source" survives.
+     The cls_open guard was NOT changed (it only fires when no loaded opening closes the
+     template; with the load still unconditional, changing it would only turn a
+     missing-source compile error into a link error) — it belongs with the D landing.
+  2. LAYOUT WORDS + THE PREAMBLE. test/guthrie broke: an opaque class whose hidden field
+     embeds another module's size (GuthrieVoting over Electorate over Vector<Voter>) could not
+     export an absolute `__$sizeof` — `constant + another module's symbol` fits no ELF symbol
+     (checkOpaqueExportFoldable). Now every opaque `__$sizeof` is an i64 WORD, every read a
+     load (`!invariant.load` outside main / the inits). A foldable completer emits constant
+     data; an OWNER-COMPUTED one (widen::slidOwnerComputed) lays itself out by the convention,
+     emits the word zero, and fills it in `@__$layout_init`, registered in section
+     `slids_layout`; `main`'s first instruction runs `@__$layout_run`, a fixpoint over
+     __start_/__stop_slids_layout. Sound because slids globals construct lazily inside main
+     (the user's point: "this isn't c++"). checkOpaqueExportFoldable deleted. Ruled out: a
+     function per size (a call per use) and a linker-computed symbol (GNU ld 2.46 PIE makes a
+     script/--defsym symbol image-base-relative — measured in the scratchpad). Also measured:
+     the old `sym + cst` constants were never link-folded — llc kept the addend as an add.
+  3. RUNTIME LAYOUT RETIRED. A class deriving from an opaque base is a plain COMPUTED-layout
+     class (it predated computed layout by eight days). widen::slidSlotsDynamic decides
+     convention addressing for every class kind — positional, so an importer's public prefix
+     matches the completer with nothing exported. Gone: Type.runtime_layout,
+     propagateRuntimeLayout, the `@C__$off<k>` words, the default-construct-only rule, the
+     mandatory owner and the local-class rejection. Kept: virtual over an opaque base
+     (checkOpaqueBaseVirtual — walks the BASE CHAIN, bounded: it runs before the cycle check,
+     and a slot walk hung on `Selfie : Selfie`).
+  4. KNOCK-ONS. test/import: PDer back to `PDer pd = (1, 2)` / `PDer pe(,6)` with no hooks;
+     Tagged's default-construct-only negative became the `tagged init` positive;
+     extra.slh/extra.sl repurposed from the deleted rule's negatives into the golden-checked
+     owner-computed pin (Pack, imported by consumer.sl); Grow's pr5 negative now gets the
+     opaque refusal. test/template tmpl_complete.sl: cross-TU c-rows incl. VDer (a local class
+     over Vector<int>, formerly a negative).
+  Detail: readme-classes.txt OPAQUE CLASSES / DERIVING FROM AN OPAQUE CLASS / COMPUTED
+  LAYOUT; readme.txt SOURCE-PRIVATE FIELDS.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

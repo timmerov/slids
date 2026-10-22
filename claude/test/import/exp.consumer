@@ -73,6 +73,9 @@ tagged swap: 23
 Tagged:ctor: 3
 Tagged:ctor: 3
 tagged assign: 24
+Tagged:ctor: 1
+tagged init: 1 ? 0
+Tagged:dtor: 1
 copy tag: 7
 move tag: 7
 swap tag: 7
@@ -116,6 +119,9 @@ iter computed: 1
 iter bump: 1
 iter static: 1
 sizeof ok: 1
+pack = 119
+packs = 230
+packbox = 124
 Tagged:dtor: 3
 Tagged:dtor: 24
 Tagged:dtor: 24

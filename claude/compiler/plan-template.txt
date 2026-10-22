@@ -1,10 +1,12 @@
 SIDE-LOAD ONLY WHAT IS NEEDED
 =============================
 
-status:  OPEN — design discussion only, 2026-10-20. Nothing here is implemented.
+status:  OPEN — D chosen 2026-10-21. The PREREQUISITE LANDED 2026-10-21 (all but its
+         guard, below; plan.txt INCOMPLETE TEMPLATES ARE INCOMPLETE CLASSES). D itself is
+         not implemented: the load is still unconditional.
 where:   today's behavior is documented in readme.txt (TEMPLATES, cross-TU: the three
-         instantiation modes; THE VISIBILITY RULE) and readme-classes.txt (SO THE MAIN
-         COMPILE CAN NEVER STOP LOADING A TEMPLATE SOURCE).
+         instantiation modes; THE VISIBILITY RULE) and readme-classes.txt (AN INCOMPLETE
+         TEMPLATE IS NO MORE SPECIAL THAN AN INCOMPLETE CLASS, under OPAQUE CLASSES).
 evidence: everything below about current code is from READING it, except the
          Vector<float64> result, which was MEASURED 2026-10-14.
 
@@ -13,6 +15,8 @@ GOAL
   BODIES — i.e. only when it instantiates a flavor with a LOCAL argument (Tmpl<Priv>).
   Tmpl<int> and Tmpl<Public> never need it: their bodies come from t.sl's own
   --instantiate compile through the .sli demand pool.
+  NEVER side-load unless the AUTHOR so indicates (D). The case this whole plan serves is a
+  private class used as an argument to a public template.
 
 TODAY
   lex::ImportWrapper::loadTemplateSource (lex.cpp) side-loads <dir>/<stem>.sl right after
@@ -42,27 +46,120 @@ TODAY
   through aliases / nested args / qualification / deduction, and cannot ask the declaring
   file of the argument's class leaf (anyArgLocal peels pointers, iterators, arrays).
 
-PREREQUISITE — THE LAYOUT OF PUBLIC FLAVORS
-  None of A/B/C works without this. A template instance is NEVER OPAQUE today; that is true
-  only BECAUSE the source is side-loaded: an incomplete header template (Vector<T>(...))
-  gets its field list from the source's completing re-open. Measured 2026-10-14 with
-  loadTemplateSource gated off: Vector<float64> reports "declared incomplete ('...') and
-  never completed".
-  Two routes:
-  - make AGGREGATED flavors OPAQUE: the --instantiate TU exports the flavor's absolute
-    __$sizeof / __$offsets symbols, exactly as a plain opaque class's owner does. Looks
-    reachable — aggregated flavors already have stable, suffix-free symbols, so every TU
-    spells them alike. COST: Vector<int> stops being a constant-layout struct in
-    consumers; sizeof no longer folds; by-value embedding goes through the computed path.
-  - require header templates to be COMPLETE in the header. Breaks "header public, source
-    private" for fields.
-  Recommended: the opaque route, MEASURED first (what it costs Vector<int> users).
+PREREQUISITE — AN INCOMPLETE TEMPLATE IS AN INCOMPLETE CLASS  (LANDED 2026-10-21, but THE
+  GUARD — deferred to D)
+  None of A/B/C/D works without this. An incomplete header template is no more special than
+  an incomplete header class: OPAQUE to every importer, laid out only by its completer.
+  The old "a template instance is NEVER OPAQUE" was an ARTIFACT of always side-loading the
+  source — Vector<T>(...) gets its field list from the source's completing re-open, so
+  every consumer happens to see it. Always side-loading is contrary to a major design
+  goal; the artifact goes. Measured 2026-10-14 with loadTemplateSource gated off:
+  Vector<float64> reports "declared incomplete ('...') and never completed" — that is
+  the artifact surfacing, not a reason to keep the load.
+  What it means, all of it the existing opaque-class machinery applied to flavors:
+  - THE DISCRIMINATOR is the plain-class one: opaque everywhere except the completer. For
+    an AGGREGATED flavor the completer is the --instantiate TU, which exports the flavor's
+    __$sizeof word and __$ctor (anchored prefix) exactly as a plain opaque class's owner
+    does. Aggregated flavors already have stable, suffix-free symbols, so every TU
+    spells them alike. Opaque in EVERY consumer, including one that loads the source for
+    some other (local) flavor — the flag must ride facts every TU computes alike.
+  - An INLINE-LOCAL flavor is the template twin of a .sl-local incomplete class: only this
+    TU can spell it, the source is loaded, it is laid out in place, never opaque.
+  - A header template declared COMPLETE in the header (Box<T>) is untouched.
+  - Consumers get opaque-class behavior: computed by-value embedding, sizeof a loaded
+    word, runtime-sized globals on the heap, `new C[n]` via the heap slot. A consumer's
+    aggregated clone STRIPS the source's fields (kept as source_private_fields for the
+    private-field diagnostic), so `import` and `import+` consumers see one flavor.
+  - Landed with it: LAYOUT WORDS + the main preamble (an owner whose hidden fields embed
+    another module's size), and runtime layout retired (derived-from-opaque is computed).
+  - THE GUARD (NOT landed — lands with D): an open header template in a consumer is not an error, any more than an
+    open header class is. instantiateClassTemplate's cls_open check and the end-of-resolve
+    sweep fire only where the completer should be. The canon negative Ngrow
+    (test/import/tmpl_lib.slh) is then caught where a never-completed opaque class is —
+    the owner's compile or the link — not in the consumer.
 
-A. RESTART WITH A KNOWN LIST  (recommended)
+D. THE AUTHOR SAYS SO: import / import+  (chosen 2026-10-21)
+  Syntax:
+      import vector;       // the header only — never a side-load
+      import+ vector;      // the header AND vector.sl, in its privacy zone as today
+  `+` is an existing token and the next token after `import` is otherwise a path or `{`,
+  so no lexer special case and no new reserved word. No `import-`: plain import already
+  means "no side-load"; a third state needs a meaning first.
+
+  Example:
+      import vector;
+      Priv() {}
+      Vector<Priv> vec;    // ERROR: needs `import+ vector;`
+
+  THE TWO ERRORS (no warnings, so both are errors — at least until warnings exist):
+  - `import` where `import+` is required. Raised where inline_local is decided today:
+    resolve (instantiateClassTemplate) for class templates, classify (deduction) for
+    function templates. Falls out of the prerequisite: without the source a local flavor
+    has no bodies to clone. Diagnostic shape: the private-name chain diagnostic's — primary
+    at the use site, note at the local class, remedy note naming the `import+` line.
+  - `import+` where `import` would do. Judged only after classify, once every
+    instantiation has happened; skipped when an earlier error halted the pipeline (a halted
+    compile never reached the statements that would have used it). NEEDED = some
+    inline-local flavor drew on that source, or on a source it loaded transitively. Needs a
+    per-source USED bit.
+  Together they make the loaded set EXACTLY the needed set: deterministic, reproducible,
+  no restart, no cache.
+
+  TRANSITIVE LOADS — spec 2:
+  - `import+ vector` loads vector.sl; every template header vector.sl imports has its
+    source loaded too, recursively (template sources only). vector.sl's body using
+    Helper<T> with T = Priv mints Helper<Priv> here, and helper.sl is already present.
+  - Only the ROOT's own `import+` statements are judged by the unneeded error. Transitive
+    loads never error.
+  - Inside vector.sl, its own `import helper;` / `import+ helper;` is judged by
+    vector.sl's OWN compile only (its own private classes). When main loads vector.sl,
+    helper.sl comes along under spec 2 whichever spelling vector.sl used.
+  - Cost: a transitive load can bring a source the flavor never uses. Front-end time only;
+    the set is fixed by the import graph, so no effect on correctness or reproducibility.
+  - FALLBACKS, if spec 2 does not hold up:
+    1. no transitive load; main writes `import+ helper;` itself (though helper.slh is not
+       otherwise visible to it) and the two errors cover it; the diagnostic names it.
+    3. a template whose body mints another header template's flavor from T is unusable
+       with a local argument.
+
+  RULES:
+  1. `import+` in a .slh is an error. A header's classes are all public, so it never mints
+     a local flavor, and the load would be pushed onto every importer.
+  2. `import+` on a header with no sibling .sl, or that declares no template, is an error
+     (a case of "unneeded", with a message that says why).
+  3. One file importing the same header both ways is an error.
+  4. A source's own import spellings are judged by its own compile (see spec 2).
+  5. No `import+` needed for: alias templates (type-level, delivered whole by the header);
+     the injected provenance imports of an --instantiate compile (aggregated flavors only).
+  6. A template COMPLETE in its header (Box<T>) still needs `import+` for a local flavor:
+     its bodies are only in the source.
+
+  BUILD:
+  - `import+` is lexical, so the compile's -MF .d lists vector.sl exactly when it is
+    loaded: an edit to vector.sl recompiles main only if main says `import+ vector`
+    (given the prerequisite). The .d is still written right after lex.
+  - --scan-deps keeps loading EVERY template source (A follow-up 3's last-but-one point):
+    the library list and the library-to-library ordering edges come from t.sl's own
+    imports. Its fragment keeps naming every scanned file, so editing t1.slh or t1.sl
+    still re-scans main. A follow-up 4 describes the build unchanged.
+
+  TESTS: every test using a local flavor today relies on the implicit load and gets the
+  first error until it says `import+` — in test/import at least the Twin, Loc, tpock/tick
+  and tbias cases.
+
+A. RESTART WITH A KNOWN LIST  (SUPERSEDED by D, 2026-10-21)
+  Kept as the record. Follow-ups 1-3 exist only to make an AUTOMATIC load cheap; D has no
+  automatic load. Follow-up 4 still describes the build under D.
   - Pass 1 compiles WITHOUT side-loads. An instantiation that needs a source RECORDS which
-    one and continues with a declaration-only stub, so nothing cascades.
+    one and continues with a declaration-only stub, so nothing cascades. The stub is an
+    OPAQUE flavor (the prerequisite's shape): layout queries go symbolic instead of
+    erroring, so pass 1 reaches the end of classify — where function-template needs are
+    found — instead of halting at a stage boundary.
   - End of classify: if the list is non-empty, discard pass 1 INCLUDING its diagnostics
     and re-run with "load the source beside <header>" for exactly those.
+    Variant: class-template needs are known by the end of RESOLVE; restarting there when
+    the list is already non-empty wastes less of pass 1, at the cost of possibly more
+    iterations.
   - ITERATE: Tmpl<Priv2>'s body may use Helper<Priv2> from a header tmpl.sl imports — that
     need is only discoverable once that body exists. Re-run until nothing new is needed.
     Bounded by the number of template sources.
@@ -79,6 +176,8 @@ A FOLLOW-UP 1 — CACHE THE LIST
   - The cached list is a HINT; every compile validates it and restarts INTERNALLY (never a
     user-visible failed compile), then rewrites the cache.
   - TOO SHORT: always caught — pass 1 records every need it hits.
+  - Detecting TOO LONG needs a USED bit per loaded source (did any inline-local flavor
+    draw on it), not only the record of needed-but-unloaded sources.
   - TOO LONG: compiles correctly (extra source stripped, names private to its zone), costs
     only load time — BUT import order changes def_id numbering, so suffixed local symbols
     shift and the .o differs from an exact-set build.
@@ -92,6 +191,10 @@ A FOLLOW-UP 2 — A CHEAP PRE-SCAN (precision ladder)
      flavor is possible, load nothing. EXACT. Probably most TUs. Detectable lexically or
      by a grammar-only parse of the root (unverified whether grammar's decl recognizers
      need anything from imports).
+     Exact only while "local" means what resolve's firstLocalArg says: a root-declared
+     class leaf, peeled through pointers / iterators / arrays. It does NOT peel tuples, so
+     Box<(Loc, int)> would read as aggregated (from reading, unverified — a possible
+     latent bug outside this plan).
   2. classes exist: load a template's source if the root mentions that template's name at
      all. OVER-APPROXIMATE.
   3. anything sharper is pass 1. A scan cannot see: deduced calls (foo(priv) has no <...>),
@@ -171,6 +274,8 @@ C. SEPARATE INSTANTIATION TU + INTERNALIZE  (the todo.txt design)
     local flavor exactly once.
 
 RECOMMENDATION
-  1. The prerequisite: opaque aggregated flavors, measured for its cost to Vector<int>.
-  2. A, with the cache in the .d (follow-ups 1 and 3) and rung 1 of the pre-scan.
-  3. C only if main must never contain template bodies. B no.
+  1. The prerequisite: incomplete header templates become opaque like incomplete header
+     classes; aggregated flavors export their layout from the --instantiate TU.
+  2. D: `import` / `import+`, both errors, spec 2 for transitive loads (fall back to 1,
+     then 3).
+  3. A superseded. C only if main must never contain template bodies. B no.

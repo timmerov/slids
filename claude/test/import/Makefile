@@ -35,9 +35,8 @@ SAMPLES = \
 # the link line. A header with no templates names no source file: whichever .sl
 # defines its members is the author's choice. So library.sl (library.slh's
 # classes and functions) and bird.sl (more of library.slh's members) are
-# hand-listed. And extra.sl/.slh is a header module NOBODY imports — its live
-# build is (deliberately) an almost-empty completer for the completer-unfold
-# negatives, and linking it into consumer keeps that live TU honest.
+# hand-listed. And extra.sl (extra.slh's Pack, an owner-computed layout) is
+# linked into consumer, its one importer.
 LIBRARY = $(BUILD_DIR)/library.o
 BIRD    = $(BUILD_DIR)/bird.o
 EXTRA   = $(BUILD_DIR)/extra.o
@@ -51,7 +50,6 @@ NEGATIVES = \
 	consumer.sl \
 	library.sl \
 	library.slh \
-	extra.sl \
 	tmpl_test.sl \
 	tmpl_test2.sl \
 	tmpl_lib.sl \

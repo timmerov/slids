@@ -68,6 +68,8 @@ import library;
    for flavors this TU no longer names). tmpl_lib2's compile still runs after
    this one, with nothing to instantiate for it. */
 import tmpl_lib2;
+/* Pack: an incomplete class whose completer cannot fold its size (extra.slh). */
+import extra;
 
 /* PRIVATE to this TU — same names as library.sl's, distinct bodies. A free function,
    a namespace member, and a local CLASS METHOD: all three mangle to the same symbol as
@@ -117,15 +119,15 @@ Rope make_string() {
 
 /* ── COMPUTED LAYOUT: local classes EMBEDDING imported incomplete classes BY VALUE.
    Each is laid out by the convention — static fields at natural offsets, an opaque
-   field at the fixed opaque alignment (8) with its size read from the completer's
-   absolute @<C>__$sizeof — so every offset below is a compile-time constant plus a
-   link-time relocation (or, past one symbolic term, a runtime sum of them). */
+   field at the fixed opaque alignment (8) with its size loaded from the completer's
+   exported @<C>__$sizeof word — so every offset below is a compile-time constant plus
+   a sum of those words. */
 
-/* ONE opaque field between statics: post_'s offset is a single S+A relocation. */
+/* ONE opaque field between statics: post_'s offset is one size word plus a constant. */
 Sack(int pre_ = 2, Rope r_, int post_ = 5) { }
 
-/* TWO different opaque classes: end_'s offset sums two exported sizes — the
-   multi-term case, link-time constants added at run time. Flat is the POD leaf:
+/* TWO different opaque classes: end_'s offset sums two exported size words — the
+   multi-term case. Flat is the POD leaf:
    its fields still arrive {55, 0} through the routed @Flat__$ctor. */
 Duo(Rope r_, int mid_ = 3, Flat f_, int end_ = 9) { }
 
@@ -133,8 +135,8 @@ Duo(Rope r_, int mid_ = 3, Flat f_, int end_ = 9) { }
    time, and z_ sits past a 2·size term. */
 Trio(int n_ = 1, Rope rs_[2], int z_ = 4) { }
 
-/* a RUNTIME-LAYOUT class (derives from Rope) as the embedded leaf: w_ rides
-   @Tagged__$sizeof — a size the completer folded over the real derived struct. */
+/* a COMPUTED-layout class over a base (Tagged derives from Rope) as the embedded
+   field: TCase's layout expands Tagged's, so w_ rides @Rope__$sizeof. */
 TCase(Tagged t_, int w_ = 8) { }
 
 /* Mix BY VALUE: its hidden fields (a nested Cell, an array) are built by the
@@ -144,6 +146,9 @@ MCase(Mix m_, int k_ = 6) { }
 /* a COMPLETE local class for the static iterator-difference case: the
    difference's divisor is the class's layout size, not a scalar width. */
 Brick(int a_ = 1, int b_ = 2) { }
+
+/* a computed-layout class over the owner-computed Pack, with a field past it. */
+PackBox(Pack p_, int q_ = 9) { }
 
 int32 main() {
 
@@ -272,7 +277,7 @@ int32 main() {
     // The stride here is MEASURED, not asserted against a literal — the delta between two
     // real element addresses is whatever emitElemAddr actually emits — so these rows stay
     // honest if Mix's fields ever change. Mix (hidden fields, rounds 28->32) and Tagged
-    // (runtime layout past an opaque base, also rounds) are the discriminating cases; Rope
+    // (computed layout past an opaque base, also rounds) are the discriminating cases; Rope
     // is the control, already a multiple of kOpaqueAlign, where the two agreed all along.
     Mix zm[3];
     intptr zm_of = sizeof(zm);
@@ -312,15 +317,15 @@ int32 main() {
     // build, copy, and destroy without crashing. tag_ is the default 7 throughout.
     // A class DERIVING from an opaque base. Its own fields are declared in the header and
     // ARE reachable here — but they sit past a base whose size only the sibling knows, so
-    // each offset is read from that TU's exported @Tagged__$offsets rather than folded.
-    // The instance is sized by @Tagged__$sizeof and filled by @Tagged__$ctor: mark_=3 and
-    // pad_='!' from their defaults, extra_ has NO default so the ctor must zero it.
+    // each offset is the convention over @Rope__$sizeof rather than a folded constant.
+    // The site fills them (the base routes through @Rope__$ctor): mark_=3 and pad_='!'
+    // from their defaults, extra_ has NO default so construction must zero it.
     Tagged tg;
     println(String + "tagged mark=" + tg.mark_ + " pad=" + tg.pad_ + " extra=" + tg.extra_);
 
     // WRITE through those offsets, then read back through a METHOD the sibling compiled
-    // against the real struct. The two halves have to land on the same bytes: if the table
-    // and the struct ever disagreed, the write and the read would pass each other.
+    // by the same convention. The two halves have to land on the same bytes: if they ever
+    // disagreed, the write and the read would pass each other.
     tg.mark_ = 40;
     tg.extra_ = 7;
     println(String + "tagged wrote mark=" + tg.mark() + " extra=" + tg.extra_);
@@ -338,7 +343,7 @@ int32 main() {
     println(String + "tagged upcast tag: " + strtag(^tg));
 
     // A single `new` of a derived-from-opaque class: malloc'd at the runtime size, fields
-    // reached through the table exactly as the stack instance's are.
+    // reached by the convention exactly as the stack instance's are.
     Tagged^ tp = new Tagged;
     tp^.mark_ = 99;
     println(String + "tagged new: " + tp^.mark());
@@ -351,6 +356,14 @@ int32 main() {
     Tagged tm; tm.mark_ = 22; Tagged tm2 <-- tm;       println(String + "tagged move: " + tm2.mark_);
     Tagged ts1; Tagged ts2; ts2.mark_ = 23; ts1 <--> ts2;  println(String + "tagged swap: " + ts1.mark_);
     Tagged ta; ta.mark_ = 24; Tagged tb; tb = ta;      println(String + "tagged assign: " + tb.mark_);
+
+    // An INITIALIZER on a derived-from-opaque class: the site places the derived fields
+    // past the base (Rope's fields are all private — no slot of the list reaches it), the
+    // base routes through @Rope__$ctor.
+    {
+        Tagged ti(1, '?');
+        println(String + "tagged init: " + ti.mark_ + " " + ti.pad_ + " " + ti.extra_);
+    }
 
     Rope cp; Rope cp2 = cp;        println(String + "copy tag: " + cp2.tag());
     Rope mv; Rope mv2 <-- mv;      println(String + "move tag: " + mv2.tag());
@@ -429,7 +442,7 @@ int32 main() {
     println(String + "heap sack: " + hs[0].pre_ + " " + hs[0].post_ + " "
             + hs[1].post_ + " " + hs[1].r_.tag());
     delete hs;
-    // a derived-from-opaque (runtime-layout) element. Tagged prints its hooks, so
+    // a derived-from-opaque (computed-layout) element. Tagged prints its hooks, so
     // the element COUNT and the REVERSE destruction order are visible.
     Tagged[] ht = new Tagged[2];
     ht[0].bump();
@@ -438,7 +451,7 @@ int32 main() {
     delete ht;
 
     // ── RUNTIME-SIZED GLOBALS (declared at file scope above): a bare opaque, an
-    // array of them, a computed-layout class, a runtime-layout class (its hooks
+    // array of them, a computed-layout class, a derived-from-opaque class (its hooks
     // print at first touch and at teardown), a mixed group, address-of, and the
     // HEADER global — written here, read back by the sibling through the one slot.
     g_rope.set("global rope");
@@ -466,7 +479,7 @@ int32 main() {
     println(String + "crate method->direct: " + ho.tail_ + " id=" + ho.id_
             + " rope=" + ho.r_.tag());
 
-    // a runtime-layout leaf (Tagged prints its hooks) and a deep-hidden leaf (Mix).
+    // a derived-from-opaque leaf (Tagged prints its hooks) and a deep-hidden leaf (Mix).
     TCase tc3;
     println(String + "tcase: " + tc3.t_.mark_ + " " + tc3.w_);
     MCase mc;
@@ -525,7 +538,7 @@ int32 main() {
     }
     println(String + "iter static: " + it3);
 
-    // sizeof over the seam: an opaque size is a link-time value, an embedding
+    // sizeof over the seam: an opaque size is an exported word, an embedding
     // class's a convention expression. Relations, not absolutes, so the golden
     // survives library-side field edits.
     int size_ok = 0;
@@ -534,6 +547,16 @@ int32 main() {
         size_ok = 1;
     }
     println(String + "sizeof ok: " + size_ok);
+
+    // OWNER-COMPUTED layout across the seam: Pack's size word is filled by the
+    // layout preamble from @Rope__$sizeof. A local, an array (the stride), and a
+    // computed-layout class embedding Pack with a field past it.
+    Pack pk(5);
+    println(String + "pack = " + pk.total());
+    Pack pks[2];
+    println(String + "packs = " + (pks[0].total() + pks[1].total()));
+    PackBox pbx;
+    println(String + "packbox = " + (pbx.p_.total() + pbx.q_));
 
     return 0;
 }
@@ -610,15 +633,3 @@ be runtime-sized, so the symbol holds a pointer to a heap object built on first 
    class gets no special dispensation. */
 //-EXPECT-ERROR: A non-primitive parameter must be a pointer
 //int neg_param(Rope r) { return 0; }
-
-/*
-Tagged DERIVES from Rope, so it inherits that unknown layout wholesale: this TU can name
-its fields and read and write them, but it cannot PLACE them. Default construction is the
-only form here — an initializer would have to be written at an offset past a base only the
-completer can measure, and dropping it silently would be worse than refusing it. Embedding
-a Tagged by value is LEGAL now (TCase in main — the leaf rides @Tagged__$sizeof), and
-so are a heap array of them and a global (main / g_tag).
-*/
-
-//-EXPECT-ERROR: can only be default-constructed here
-//void neg_derived_init() { Tagged t(1); t; }

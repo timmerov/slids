@@ -48,7 +48,7 @@ the classes here cover the axes that matter, not just the happy path:
               a compile error. that is its only job; it is never instantiated.
   Tagged      DERIVES from the incomplete Rope. its own fields are declared here and
               visible to an importer, but they sit past a base whose size only the
-              sibling knows — so their offsets are a link-time fact, not a constant.
+              sibling knows — a COMPUTED layout, off Rope's exported size word.
 */
 
 alias Integer = int;
@@ -191,11 +191,11 @@ Mix(...) {
 /* a class DERIVING from the incomplete Rope. The base sub-object still sits at slot 0,
    so every upcast stays free — but its SIZE is known only to the completer, so nothing
    past it has a compile-time offset in an importer. Tagged's OWN fields are declared right
-   here and ARE visible to one; reaching them is the whole point. An importer resolves them
-   through the completer's exported offset table, sizes an instance via @Tagged__$sizeof,
-   and default-constructs it via @Tagged__$ctor — the same three things an opaque class
-   already needed, which is why deriving reuses that machinery instead of a second copy.
-   mark_ has a default, extra_ has none (the complete ctor must zero it). */
+   here and ARE visible to one; reaching them is the whole point. Tagged is therefore a
+   COMPUTED-layout class in every TU: its offsets and size are the convention over
+   @Rope__$sizeof, and its construction places its own fields at the site and routes the
+   base through @Rope__$ctor — exactly a class with an opaque FIELD at slot 0.
+   mark_ has a default, extra_ has none (construction must zero it). */
 Rope : Tagged(
     int mark_ = 3,
     char pad_ = '!',
@@ -220,8 +220,8 @@ Flat(...) { int a(); int b(); }
 /* a COMPLETE header class EMBEDDING the incomplete Rope BY VALUE — the COMPUTED-LAYOUT
    seam test. No TU can fold this layout (the field list is here, Rope's size is
    library.sl's), so EVERY TU lays it out by one convention: id_ at 0, r_ at the fixed
-   opaque alignment (8), tail_ right after it — a single relocation off the completer's
-   exported absolute @Rope__$sizeof. A field the consumer writes DIRECTLY must be read
+   opaque alignment (8), tail_ right after it — one load of the completer's exported
+   @Rope__$sizeof word away. A field the consumer writes DIRECTLY must be read
    back by a METHOD compiled in the sibling, and vice versa: if the two TUs' convention
    math ever disagreed, the write and the read would pass each other. No explicit hooks
    on purpose: the Rope field alone makes construction a routed obligation, so the

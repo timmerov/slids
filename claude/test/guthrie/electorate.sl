@@ -106,6 +106,7 @@ Cluster(
         return (position_ < other.position_);
     }*/
 }
+alias Clusters = Vector<Cluster>;
 
 /*
 /* for sorting */

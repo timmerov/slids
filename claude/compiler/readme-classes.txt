@@ -212,7 +212,9 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     A SOURCE-PRIVATE field (canon 2026-08-17 — a field an imported template's
     SOURCE supplied; see readme.txt SOURCE-PRIVATE FIELDS for the provenance
     test, and THE VISIBILITY RULE there for the NAME half of the same
-    sentence) IS NOT A SLOT in this walk: it cannot be supplied positionally or by
+    sentence) IS NOT A SLOT in this walk — and in a consumer of an AGGREGATED flavor,
+    which is opaque since 2026-10-21, not a slot at all (stripped; @C__$ctor places
+    it): it cannot be supplied positionally or by
     an empty slot — it always takes its author default (else zero /
     default-construct) and consumes NO initializer, exactly like an under-filled
     tail, even MID-LAYOUT (the tuple maps over the fields VISIBLE at the use
@@ -843,8 +845,8 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     emits the size via emitSizeValue:
       - LOCAL layout: the inline constant `ptrtoint (getelementptr (<struct>,
         null, i32 1))` — llc folds it, same value the old helper returned;
-      - imported OPAQUE: `ptrtoint (ptr @C__$sizeof)` — the completer's ABSOLUTE
-        symbol, patched by the linker (see OPAQUE CLASSES);
+      - OPAQUE: a load of the completer's exported `@C__$sizeof` word (see OPAQUE
+        CLASSES);
       - COMPUTED layout: the convention expression (see COMPUTED LAYOUT).
     The class kSlid types are threaded parse->ast via `ast::Tree.classes`
     (desugar populates it).
@@ -1315,7 +1317,8 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   class is 1 byte). A COMPLETE class rejects a field-bearing re-open (above) and cannot be
   re-opened as incomplete. Canon test/class/incomplete.sl. Cross-file (LANDED): a `.slh`
   incomplete class is OPAQUE to an importer that never sees the close — size deferred to the
-  link-time absolute `@C__$sizeof`, construction split across the seam. See OPAQUE CLASSES below.
+  completer's exported `@C__$sizeof` word, construction split across the seam. See OPAQUE
+  CLASSES below.
 
   BLOCK RE-OPEN. A same-name class with an EMPTY field list re-opens the existing one.
   registerClassName points the re-open node's resolved_entry_id at the PRIMARY's entry and
@@ -1645,8 +1648,8 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
                free function and keeps the default.
     kDefine    the class is declared in a `.slh` AND this TU is its OWNING FILE (below). The
                owner emits the SYNTHESIZED members — complete ctor/dtor, default
-               copy/move/swap, and an opaque class's `__$sizeof` / `__$off<k>` — as real
-               external definitions.
+               copy/move/swap, and an opaque class's `__$sizeof` word — as real external
+               definitions.
     kDeclare   the class is declared in a `.slh` and this TU is not the owner. It only
                `declare`s those symbols and links to the owner's.
     kPerTU     a COMPLETE `.slh` class whose header declares no `_`/`~`: it has NO owner.
@@ -1667,11 +1670,11 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
       closer must define both hooks ("The file that closes class 'X' must define its
       constructor and destructor.", even when the header declares neither), and a file
       that does not close it may define neither ("...must be defined in the file that
-      closes it."). The closer owns even with the hooks missing, so owner-side checks
-      (checkOpaqueExportFoldable) still run.
-    - a COMPLETE class whose header declares no `_`/`~` has no owner (kPerTU above).
-    - a class DERIVING from an imported incomplete class cannot be kPerTU — only an owner can
-      fold its offsets — so it must declare `_(); ~();` (propagateRuntimeLayout reports it).
+      closes it."). The closer owns even with the hooks missing, so owner-side work (the
+      exported `__$sizeof` word) still happens.
+    - a COMPLETE class whose header declares no `_`/`~` has no owner (kPerTU above) — including
+      one DERIVING from an imported incomplete class: it is a computed-layout class, which no
+      TU exports anything for (DERIVING FROM AN OPAQUE CLASS below).
     - a header TEMPLATE instance keeps the template rule: the template source defines.
   So there is no "every `.slh` requires a sibling `.sl`" any more: a header of POD classes
   needs no source at all.
@@ -1717,62 +1720,70 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   declared in a `.slh` is OPAQUE to an importer: it can name the class and its methods but not
   its fields, size, or offsets, because the completing fields live only in the sibling `.sl`.
   widen::Type.opaque records it, set in registerClassBody as `header_class && declared_incomplete
-  && !tmpl_instance` (ClassInfo.declared_incomplete is the PERSISTENT flag — is_open is cleared by
-  the closing re-open, opaque must not be). A `.sl`-LOCAL incomplete class is never opaque: it is
-  complete within its own TU, so nobody sees it incompletely.
-    A CLASS-TEMPLATE INSTANCE IS NEVER OPAQUE, however incomplete its header spelling (landed
-    2026-07-28). The flag answers "can this TU see the layout", and for an instance the answer is
-    always yes: an instance only EXISTS because a loaded opening completed the template
-    (instantiateClassTemplate refuses an open one), and for a header template that completing
-    re-open is TEMPLATE CONTENT — which survives the strip resolve applies to a loaded template
-    source, so it reaches the completer and every importer identically. That uniformity is the
-    requirement here; the flag may ride only facts every TU computes alike. A plain header class
-    is the exact mirror and stays opaque: `library.sl` IS loaded into an importer (its `.d` proves
-    it) but `Rope`'s completing re-open is a plain class and gets stripped, so only the sibling
-    ever sees those fields. Consequence: `Grow<int>` / `Vector<int>` lower to real structs in a
-    consumer, with constant field offsets and embeddable BY VALUE, while `Rope` keeps the runtime
-    path. Canon test/import tmpl_test.sl (Holder) + tmpl_test2.sl (Pair2 — the SECOND consumer,
-    pinning that two independent TUs compute the same layout).
-    SO THE MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE SOURCE (measured 2026-10-14). The
-    `!tmpl_instance` carve-out above is only true BECAUSE the sibling `.sl` is side-loaded — the
-    completing re-open is where an incomplete header template's field list lives. Gate
-    lex's loadTemplateSource off and the first failure is the standard library: `vector.slh`
-    declares `Vector<T>(...)` and `vector.sl` holds `size_`/`capacity_`/`storage_`, so
-    `Vector<float64>` reports "declared incomplete ('...') and never completed". A flavor's
-    LAYOUT is public while its field NAMES are private, and the layout exists only in the
-    source; there is no third route, since a template instance is never opaque and so cannot
-    ship its size as a link-time symbol either. Consequence for the import-leak work: the
-    sibling's own `import` lines are load-bearing FOR LAYOUT, so the leak cannot be closed by
-    skipping or deferring the load — only by SCOPING the names it brings in, the rule already
-    stated at classify.cpp's fieldVisibleAt and, at the time, implemented for FIELDS only.
-    SCOPED (landed 2026-10-14). THE VISIBILITY RULE now covers NAMES too: everything a
-    header declares is public, everything its template source supplies — its own `import`
-    lines included — is private to that source's zone. One lex-computed privacy owner per
-    file plus one predicate (parse::declVisibleAt), gated at plain lookup, at TYPE names,
-    and at classify's overload gathering. The field rule above is its sibling and keys on
-    the same use-site file for the same reason: a cloned body carries its source's
-    file_id. Full account in readme.txt, THE VISIBILITY RULE under TEMPLATES.
+  && !tu_local_flavor` (ClassInfo.declared_incomplete is the PERSISTENT flag — is_open is cleared
+  by the closing re-open, opaque must not be). A `.sl`-LOCAL incomplete class is never opaque: it
+  is complete within its own TU, so nobody sees it incompletely.
+    AN INCOMPLETE TEMPLATE IS NO MORE SPECIAL THAN AN INCOMPLETE CLASS (landed 2026-10-21). An
+    AGGREGATED flavor of an incomplete header template (`Vector<int>` of `Vector<T>(...)`) is
+    opaque in EVERY TU; its completer is the template source's --instantiate compile (kDefine
+    there), which exports the flavor's `__$sizeof` word exactly as a plain class's owner does.
+    The flag rides only facts every TU computes alike — the header's `...` and the flavor's
+    MODE — never "is the source loaded here": a consumer STRIPS the source's completing re-open
+    FIELDS from an aggregated clone (instantiateClassTemplate, declare_only), the twin of the
+    strip a plain class's completion gets, so its slot list is the header's public prefix and
+    the anchored-prefix split holds. The stripped kParams are kept on
+    ClassInfo.source_private_fields only so classify can still say "is private to its
+    template source" (through the class or any base) instead of "has no field". The one
+    exception is an INLINE-local flavor (`Vector<Pt>`, a TU-local argument —
+    Entry.tu_local_instance, now stamped on the class instance too): nobody else can spell it,
+    so like a `.sl`-local incomplete class it is laid out in place, never opaque.
+    HISTORY: 2026-07-28 to 2026-10-21 every class-template instance was exempt ("never
+    opaque") — true only because the template source was always side-loaded, so every consumer
+    happened to see the completion. That made the side-load MANDATORY (measured 2026-10-14:
+    gate lex's loadTemplateSource off and `Vector<float64>` reports "declared incomplete
+    ('...') and never completed"). With aggregated flavors opaque that is no longer so — the
+    load is still unconditional today, and making it author-directed (`import+`) is the open
+    design in plan-template.txt. The import-leak fix of 2026-10-14 (THE VISIBILITY RULE,
+    readme.txt TEMPLATES) SCOPED the names a loaded source brings in; it stands unchanged.
+    Canon test/template tmpl_complete.sl (the c-rows: locals, a global, sizeof, by-value
+    embedding, new / array / tuple, a flavor of a flavor, the inline-local Vector<Pt>, a local
+    class deriving from an aggregated flavor) and test/import tmpl_test.sl / tmpl_test2.sl.
     Opaque changes three things — its size is a
-  LINK-TIME value the completer exports, its construction is SPLIT across the seam, and its
+  WORD the completer exports, its construction is SPLIT across the seam, and its
   layout-needing uses either COMPUTE by convention or are REJECTED in an importer.
-    SIZE (absolute symbol, 2026-07-29 — previously an external `__$sizeof()` FUNCTION; ONE
-    symbol since 2026-10-14, see SIZEOF IS THE ELEMENT STRIDE below). The completer exports ONE
-    ABSOLUTE symbol (SHN_ABS — the symbol's "value" IS the number), emitted as an LLVM alias to a
-    folded inttoptr constant so llc still owns the layout:
-      @C__$sizeof = alias i8, inttoptr(ptrtoint(getelementptr(
-                        `{ [0 x <kOpaqueAlign x i8>], <struct> }`, null, i32 1)))
-                    — the size ROUNDED UP to widen::kOpaqueAlign (8). The zero-length vector
-                    carries the alignment and no size, so llc does the rounding. Round-up is not
-                    expressible as a relocation, so it ships PRE-rounded.
-    An importer emits `@C__$sizeof = external global i8` and reads the value as the CONSTANT
-    `ptrtoint (ptr @C__$sizeof to i64)` — one relocation, which the PIE link relaxes
-    (R_X86_64_REX_GOTPCRELX against an ABS symbol) to a plain immediate: no call, no load. A
-    compile-time addend rides as a getelementptr on the symbol (S+A, still one relocation).
-    Verified on LLVM 18 + GNU ld PIE, incl. static resolution in data initializers. An importer
-    must never compute the size from its own (placeholder `{ i8 }`) view — every opaque local
-    allocas `i8, i64 <value>, align kOpaqueAlign` (codegen's entry-block hoist), and `new C`
-    sizes the malloc the same way. A NON-opaque class exports no size symbol at all — its size is
-    asked per-TU as an inline llc constant (emitSizeValue).
+    SIZE (a LAYOUT WORD since 2026-10-21; an absolute symbol 2026-07-29..10-21; before that an
+    external `__$sizeof()` FUNCTION; ONE size since 2026-10-14, see SIZEOF IS THE ELEMENT STRIDE
+    below). The completer exports `@C__$sizeof`, an i64 GLOBAL holding the size ROUNDED UP to
+    widen::kOpaqueAlign (8). An importer declares `external global i64` and LOADS it — marked
+    `!invariant.load` everywhere except inside `main` and a layout init, so LLVM may merge and
+    hoist the loads. Two kinds of completer:
+      FOLDABLE — every field static in the completer: the word is constant data,
+        `constant i64 ptrtoint (getelementptr ({ [0 x <8 x i8>], <struct> }, null, 1))` — the
+        zero-length vector carries the alignment and no size, so llc does the rounding.
+      OWNER-COMPUTED (widen::slidOwnerComputed: opaque, not kDeclare, slidSlotsDynamic) — a
+        (hidden) field embeds another module's size (an imported opaque class, a computed-
+        layout class, an opaque base). Not even the completer can fold it: the value is
+        `constant + another module's word`, which no ELF symbol or relocation can hold. So the
+        completer lays the class out by the computed-layout CONVENTION too (its own storage is
+        the `{ i8 }` placeholder) and emits the word ZERO, filled by this module's
+        `@__$layout_init` — an `i1` function that recomputes every such word
+        (widen::layoutOwnSizeExpr) and reports whether any changed — registered as a pointer in
+        the `slids_layout` section.
+    THE LAYOUT PREAMBLE. `main`'s first instruction calls `@__$layout_run` (emitted only in the
+    TU that defines main): it walks `__start_slids_layout .. __stop_slids_layout` (linker-
+    provided, declared extern_weak so a program with no inits links) calling every init, and
+    repeats until a pass changes nothing — a word may be built from another module's computed
+    word and the section order is the linker's, so it is a fixpoint, bounded by the depth of the
+    opaque-in-opaque chain. This is sound because slids GLOBALS CONSTRUCT LAZILY, INSIDE main
+    (readme.txt GLOBALS): no slids code runs before the preamble. KNOWN GAP: a program whose
+    `main` is C/C++ never runs it. Ruled out on the way (2026-10-21): a linker-COMPUTED symbol
+    (`--defsym` / linker-script `"C__$sizeof" = ABSOLUTE(...)`) — GNU ld 2.46 under PIE makes it
+    image-base-relative (the GOT load is relaxed to `lea sym(%rip)`), so the program reads an
+    address; and a function per size (sound, but a call per use).
+    An importer must never compute the size from its own (placeholder `{ i8 }`) view — every
+    opaque local allocas `i8, i64 <value>, align kOpaqueAlign` (codegen's entry-block hoist), and
+    `new C` sizes the malloc the same way. A NON-opaque class exports no size at all — its size
+    is asked per-TU as an inline llc constant (emitSizeValue).
 
     SIZEOF IS THE ELEMENT STRIDE (LANDED 2026-10-14). `sizeof(T)` returns the number an array of
     T strides by, so `sizeof(arr) == n * sizeof(arr[0])` — class elements included. The reason is
@@ -1868,65 +1879,41 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     touch thunk with a heap object — readme.txt GLOBALS, "A RUNTIME-SIZED GLOBAL LIVES ON THE
     HEAP"). WHAT REMAINS REJECTED: a BY-VALUE parameter (the standing
     non-primitive munge rule — no opaque dispensation); reaching a hidden field or passing a
-    construction initializer (the importer sees no such field / zero fields); and, NEW,
-    completer-side: an opaque class whose exported layout cannot FOLD because a (hidden) field
-    embeds another module's incomplete (or a computed-layout) class — an ELF symbol table cannot
-    hold a relocation, so the absolute exports would be unmintable (checkOpaqueExportFoldable;
-    canon test/import extra.slh/extra.sl, the SECOND header module that exists to spell it:
-    BadPack completed with a hidden Rope, and with a hidden computed-layout LPack).
+    construction initializer past the anchored prefix (the importer sees no such field). A
+    hidden field embedding ANOTHER module's size is LEGAL since 2026-10-21 (OWNER-COMPUTED,
+    above; it was rejected by checkOpaqueExportFoldable while the export had to fold).
     Canon test/import Rope (str_ + tag_), Mix (every field kind: default, no-default→0, recursive
-    class field, array, exercised through getters), Flat (POD).
+    class field, array, exercised through getters), Flat (POD), and Pack (extra.slh/extra.sl —
+    the owner-computed pin: hidden Rope + hidden computed-layout LPack + a field past both, read
+    back by consumer.sl through the preamble-filled word; a local, an array, an embedding).
 
-  DERIVING FROM AN OPAQUE CLASS (LANDED). `Base : Derived` where Base is an imported incomplete
-  class. The base sub-object KEEPS SLOT 0 — every upcast stays a no-op, and that is exactly why
-  the base stays first — but its size is known only to the completer, so the derived class's OWN
-  field offsets are not compile-time constants in an importer. They become a LINK-TIME constant
-  instead.
-    THE FLAG. widen::Type.runtime_layout, set by resolve's propagateRuntimeLayout — a fixpoint
-    over the base chains, run just before checkClassByValueAcyclic (which asks the flag to tell a
-    legal base embedding from an illegal field one). It keys ONLY on the base's persistent `...`
-    header fact, never on anything per-TU, so the completer and every importer compute the same
-    answer. A layout rule that could disagree across the seam would be silent memory corruption,
-    not a diagnostic.
-    IT IMPLIES OPAQUE — the point of the design. An opaque class already has a runtime size, a
-    construction split into `@C__$ctor`/`@C__$pctor` across the seam, and the importer-side
-    layout rejections. Those are precisely the three things a derived class needs, so it joins
-    that machinery (propagateRuntimeLayout sets slidOpaque too) instead of a second copy of it.
-    Sizeof, the ctor/dtor routing, and the runtime-sized alloca all come for free.
-    OFFSETS (absolute symbols, 2026-07-29 — previously a `[N x i64]` table an importer LOADED).
-    The COMPLETER exports one ABSOLUTE symbol per slot k ≥ 1, `@C__$off<k>`, an alias to the
-    llc-folded `inttoptr(ptrtoint(getelementptr(<struct>, null, 0, k)))` — LLVM computes every
-    offset off the real struct, so the two halves cannot drift. An importer declares each and
-    GEPs by `ptrtoint (ptr @C__$off<k> to i64)` — a link-time value the linker relaxes to an
-    immediate, no load. Slot 0 (the base sub-object) gets NO symbol: its offset is 0 by
-    construction, and an alias whose aliasee folds to 0 is a plain `null`, which LLVM rejects —
-    emitSlotAddr returns the base address unchanged, so an upcast still costs nothing. The
-    completer's own layout and GEPs are UNTOUCHED: there the offsets ARE constants, and it keeps
-    indexing the struct directly.
-    CODEGEN. llvmForRef lowers a runtime-layout class in a kDeclare TU to the `{ i8 }` placeholder
-    — the same placeholder an opaque class gets — so nothing can structurally index it. BOTH field
-    paths consult the offset symbols through ONE funnel, emitSlotAddr: the write side
-    (emitElementAddr's kSlid arm) and the read side (emitExpr's kIndexExpr). The read side used to
-    shortcut with a whole-object load + extractvalue; there is no whole object to load here, and
-    routing it back through the address funnel is what guarantees a read and a write of one field
-    land on the same bytes. emitInitFill
-    skips the SITE FIELD-FILL for any opaque class in an importer — `@C__$ctor` owns the entire
-    default-fill. That skip was a latent bug before this landing: invisible for a class with no
-    visible fields (an empty `store undef`), fatal for one that has them.
-    REJECTED IN AN IMPORTER: an initializer list (classifyClassInit — the site can NAME the fields
-    but not PLACE them, and silently dropping the list is worse than refusing it). REJECTED
-    OUTRIGHT: a `.sl`-LOCAL class over an opaque base (nothing outside the TU can name it, so no
-    sibling exports its offsets, and it cannot fold them itself); a VIRTUAL one (the base occupies
-    the slot the vptr needs, and the base's own vptr is hidden besides). Everything the base
-    can do the derived class can, for the identical reason — runtime_layout implies opaque, so
-    by-value embedding, `new T[n]` and a global (the heap slot) all ride the base's machinery.
-    checkClassByValueAcyclic lets the
-    `_$base` slot through while still descending into the base for the CYCLE check; a NAMED field
-    of the same opaque type stays rejected.
-    Canon test/import Tagged: own fields read and written through the table then read back through
-    a method the SIBLING compiled against the real struct (if table and struct disagreed the write
-    and the read would pass each other), base methods on a derived receiver, a base field read by
-    a derived method, the upcast, `new`, copy/move/swap/assign, and six negatives.
+  DERIVING FROM AN OPAQUE CLASS (LANDED; a COMPUTED layout since 2026-10-21). `Base : Derived`
+  where Base is an imported incomplete class. The base sub-object KEEPS SLOT 0 — every upcast
+  stays a no-op, and that is exactly why the base stays first — but its size is known only to
+  the completer, so the derived class's OWN field offsets are not compile-time constants. That
+  is precisely a class with an opaque FIELD at slot 0, so a derived class that is complete in its
+  header is simply a COMPUTED-layout class (next section) in every TU — including the base's own
+  completer — laid out by the convention off the base's `__$sizeof` word. Nothing is exported
+  for it; it takes initializer lists (the site places its own fields, the base routes through
+  the base's split ctor like any opaque slot); it may be kPerTU, `.sl`-local, embedded, `new`'d,
+  a global. A derived class that is itself incomplete is opaque by its OWN `...` (and, its base
+  being dynamic, owner-computed in its completer).
+    STILL REJECTED: a VIRTUAL class over an opaque base (checkOpaqueBaseVirtual — the base
+    occupies the slot the vptr needs, and the base's own vptr is hidden besides). The check walks
+    the BASE CHAIN for an opaque class, bounded — never through slots: it runs before the
+    by-value cycle check, so `Selfie : Selfie` is still live there (canon test/class
+    inheritance.sl's cycle negatives).
+    HISTORY: 2026-07-21..10-21 this was a separate RUNTIME LAYOUT — a widen::Type.runtime_layout
+    flag (propagateRuntimeLayout, implying opaque), per-slot `@C__$off<k>` exports, default-
+    construction only in an importer, a mandatory owner (`_(); ~();`), and local classes
+    rejected. It predated computed layout by eight days and was never revisited; all of it is
+    gone.
+    Canon test/import Tagged (own fields read and written by the convention then read back
+    through a method the SIBLING compiled — if the two TUs disagreed the write and the read would
+    pass each other; base methods on a derived receiver, a base field read by a derived method,
+    the upcast, `new`, copy/move/swap/assign, an initializer `Tagged ti(1, '?')`), PDer (tmpl_lib —
+    over an opaque template FLAVOR, `PDer pd = (1, 2)` / `PDer pe(,6)` with the private `sec_`
+    mid-layout), and test/template tmpl_complete.sl VDer (a `.sl`-local class over `Vector<int>`).
 
   COMPUTED LAYOUT — embedding an opaque class BY VALUE (LANDED 2026-07-29).
     A class (or tuple, or array) embedding an imported incomplete class by value is legal: a
@@ -1934,29 +1921,34 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     local array. No TU can fold such a layout (the field list is visible everywhere, the
     embedded size lives in another module), and no TU needs to: every TU lays it out by ONE
     CONVENTION, and every layout fact reduces to `constant + Σ mult·size(opaque leaf)` — no
-    cache, no lazy filler, no mutable table (the earlier cached-`__$layout()` plan is dead; the
-    absolute-symbol exports made it unnecessary).
+    cache, no lazy filler, no per-class table (the earlier cached-`__$layout()` plan is dead).
     THE PREDICATES (widen, pure structural queries — the inert computed_layout FLAG was
     deleted). sizeIsDynamic(T): T's storage embeds an opaque class by value at any depth; the
     opaque flag is universal and the walk never descends into an opaque class's (per-TU) slots,
     so every TU classifies identically — that universality is what lets two TUs agree on a
     layout neither can fold. slidComputedLayout(C) = class, not opaque, sizeIsDynamic.
+    slidSlotsDynamic(C) = C's OWN slots (the ones this TU sees) embed a dynamic size — THE
+    predicate for convention addressing, for every class kind: a computed class, an
+    owner-computed opaque class in its completer, and an importer's opaque class whose PUBLIC
+    prefix is dynamic. The convention is POSITIONAL (slot k's offset depends only on slots
+    [0,k)), so an importer's prefix offsets equal the completer's with nothing exported.
     staticByteSize/staticByteAlign: numeric layout for STATIC types incl. classes (natural
     alignment, padding, empty class = 1) — deterministic x86-64 struct rules, needed to place a
     static field numerically inside a convention layout.
     THE CONVENTION (widen::layoutSlotOffset / layoutSizeExpr → LayoutExpr {cst, (leaf, mult)}).
     Walk the slots in declared order: a static field at its natural offset/size; a DYNAMIC field
     at widen::kOpaqueAlign (8, the alignment every opaque alloca already uses) with size
-    round_up(size, 8) — the completer-exported `@C__$sizeof`, pre-rounded because a relocation
-    cannot round. Every symbolic term is a kOpaqueAlign-multiple, so ALL alignment rounding folds
+    round_up(size, 8) — the completer-exported `@C__$sizeof` word, pre-rounded. Every symbolic term is a kOpaqueAlign-multiple, so ALL alignment rounding folds
     into the constant part; a computed sub-class expands structurally (its fields are visible), so
     terms only ever name opaque leaves; an array multiplies its element expression. Total size
     rounds to kOpaqueAlign. codegen materializes a LayoutExpr (emitLayoutValue
-    / emitSizeValue): no terms → a literal; ONE term ×1 → a single S+A relocation (`ptrtoint
-    (getelementptr (i8, @Leaf__$sizeof, cst))`) — a link-time immediate after relaxation; more →
-    a short add/mul instruction sequence over the relocated constants.
-    ONE ADDRESS FUNNEL. emitSlotAddr (slots: static struct GEP / runtime-layout `__$off<k>` /
-    convention byte GEP) and emitElemAddr (elements: typed GEP / byte GEP at the rounded-size
+    / emitSizeValue): no terms → a literal; otherwise one load per leaf word (emitLayoutWord)
+    and a short add/mul instruction sequence. (Measured 2026-10-21, when the leaves were still
+    absolute symbols: the linker patched the symbol into an immediate but never folded the
+    `+ cst` — llc keeps the addend as its own add/lea — so a leaf was never a single
+    relocation-folded value even then.)
+    ONE ADDRESS FUNNEL. emitSlotAddr (slots: static struct GEP / convention byte GEP when
+    slidSlotsDynamic) and emitElemAddr (elements: typed GEP / byte GEP at the rounded-size
     stride, which since 2026-10-14 is also exactly what `sizeof` reports)
     are the ONLY slot/element address emitters — emitElementAddr, the read-side kIndexExpr, the
     hook walks, the aggregate transfer/swap/null/bump walks, the tuple/array fill bridges, AND
@@ -1973,8 +1965,8 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     the leaf — and any dynamic tuple/array) to the `{ i8 }` placeholder; codegen's
     dynamicStorage() mirrors that and switches allocas (locals, sret temps, discarded-call slots)
     to `alloca i8, i64 <size value>, align kOpaqueAlign`. The one non-uniform case stays
-    deliberate: a bare
-    opaque class in its COMPLETER is the real struct (its interior is single-TU by construction).
+    deliberate: a bare opaque class whose fields are all static is the real struct in its
+    COMPLETER (its interior is single-TU by construction); an owner-computed one is not.
     ROUTED OBLIGATIONS. An opaque-bearing value is ALWAYS constructed/destroyed through the
     routed chain, hooks or not (the POD-opaque rule extended): fieldContributesNeed counts an
     opaque field as contributing BOTH needs, and every gate (emitConstructed, the slot/element
@@ -1989,8 +1981,8 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     importer's can't fill them at all. KNOWN CORNER: a completer-side construction list that
     passes an EXPLICIT initializer for opaque content nested deeper (a tuple slot mixing opaque
     and static, inside a computed class) is refilled to defaults rather than rejected.
-    STILL REJECTED: by-value parameters (the standing rule); the completer-unfoldable exports
-    (checkOpaqueExportFoldable, above). LEGAL since 2026-09-16: `new C[n]` of a runtime-sized
+    STILL REJECTED: by-value parameters (the standing rule). LEGAL since 2026-09-16: `new C[n]`
+    of a runtime-sized
     element (the heap twin of the local array — see NEW T[n] under the class-operator chains
     above) and a GLOBAL of a runtime-sized type (a pointer slot + a heap object built on first
     touch — readme.txt GLOBALS).
@@ -1998,7 +1990,7 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     constant-offset prefix — now purely a micro-optimization (fewer symbolic terms), not a
     correctness lever.
     Canon test/import: Sack/Duo/Trio/TCase/MCase (consumer-local embeddings: single leaf,
-    multi-term, array field, runtime-layout leaf, deep-hidden leaf), Crate (a HEADER class
+    multi-term, array field, derived-from-opaque leaf, deep-hidden leaf), Crate (a HEADER class
     embedding Rope — the seam test: a direct consumer write read back by a sibling-compiled
     method and vice versa, plus the completer-side half in library.sl), the local array + tuple
     slot, transfers, `new`, and the sizeof relations.

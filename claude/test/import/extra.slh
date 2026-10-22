@@ -3,25 +3,27 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 */
 
 /*
-test import and linked files.
-this is a SECOND library header, imported alongside library.slh.
-
-its job is the completer-side export rule: an incomplete class's completer
-exports its layout as link-time absolute symbols, so a completion whose
-hidden fields embed ANOTHER module's incomplete (or computed-layout) class
-cannot fold them and must be rejected. that rejection needs two modules to
-exist at all, which is why this header does.
+no explicit canon.
 */
 
 /*
 claude says:
 
-BadPack declares NO methods and NO hooks on purpose: its completion exists only
-inside extra.sl's negative blocks, so in the live build it stays forever open —
-a declared member would be a symbol no source ever defines. Its only job is to
-be the class those negatives try (and fail) to complete; it is never
-instantiated. (The same never-instantiated pattern as library.slh's NoCtor.)
+test import and linked files.
+this is a SECOND library header, imported alongside library.slh.
+
+its job is the OWNER-COMPUTED layout: an incomplete class whose completion hides
+fields whose sizes live in ANOTHER module. Pack's completer (extra.sl) cannot
+fold Pack's size at compile time — it is `constant + @Rope__$sizeof` — so it
+exports @Pack__$sizeof as a zero word and fills it in its layout init, which the
+preamble at the top of consumer's main runs. Two modules must exist for that,
+which is why this header does. consumer.sl imports it and reads every value
+back through Pack's methods.
 */
 
-/* incomplete class, completed only by the negative cases in extra.sl */
-BadPack(...) { }
+/* incomplete class; its completion in extra.sl hides library.slh's Rope (an
+   imported opaque class) and LPack (a computed-layout class over Rope). */
+Pack(int a_ = 1, ...) {
+    _(); ~();
+    int total();
+}

@@ -145,25 +145,15 @@ std::string llvmForRef(widen::TypeRef ref) {
             if (t.form == widen::Type::Form::kSlid && t.slots.empty()) {
                 return "{ i8 }";
             }
-            // A RUNTIME-LAYOUT class an importer only DECLARES: its slot list is honest
-            // (the base plus its own fields), but the base's size is unknown here, so a
-            // struct over those slots would compute the WRONG size and the WRONG offsets.
-            // Lower it to the same placeholder an opaque class gets — the size comes from
-            // the completer's exported @C__$sizeof and every field offset from its
-            // @C__$off<k> absolute symbols, so nothing here may be structurally indexed.
-            if (t.form == widen::Type::Form::kSlid && t.runtime_layout
-                && t.linkage == widen::Type::Linkage::kDeclare) {
-                return "{ i8 }";
-            }
-            // A COMPUTED-layout class or a dynamic tuple — visible fields, an embedded
-            // size owned elsewhere — lowers to the placeholder in EVERY TU (even one
-            // that completes the embedded class): the layout is the cross-TU CONVENTION
+            // A class whose OWN slots embed a dynamic size (widen::slidSlotsDynamic) —
+            // a computed-layout class, an owner-computed opaque class in its completer,
+            // an importer's opaque class with a dynamic public prefix — or a dynamic
+            // tuple lowers to the placeholder in EVERY TU (even one that completes the
+            // embedded class): the layout is the cross-TU CONVENTION
             // (widen::layoutSlotOffset), so no TU may fold a struct view of its own.
-            // The one exception stays above this line: an OPAQUE class in its
-            // completer (kDefine/kInternal) IS the real struct — its interior is
-            // single-TU by construction, and the exported size symbols fold off it.
-            if (t.form == widen::Type::Form::kSlid && !t.opaque
-                && widen::sizeIsDynamic(ref)) {
+            // An opaque class whose slots are all static stays the real struct — in its
+            // completer the whole layout, in an importer the public prefix.
+            if (widen::slidSlotsDynamic(ref)) {
                 return "{ i8 }";
             }
             if (t.form == widen::Type::Form::kTuple && widen::sizeIsDynamic(ref)) {
@@ -908,34 +898,45 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
 // ── Computed-layout materialization ────────────────────────────────────────
 // Every layout fact under the cross-TU convention reduces to
 // `constant + Σ mult·size(opaque leaf)` (widen::LayoutExpr). These helpers turn
-// that into an i64 VALUE: a plain literal, a single-relocation LLVM constant
-// (`ptrtoint` of the leaf's absolute `__$sizeof` symbol, with the constant riding
-// as a getelementptr addend — the linker patches an immediate), or, past one
-// symbolic term, a short add/mul instruction sequence over those constants.
+// that into an i64 VALUE: a plain literal, or a short add/mul instruction
+// sequence over the leaves' exported LAYOUT WORDS.
+//
+// THE LAYOUT WORDS. The COMPLETER of an opaque class exports `@C__$sizeof` (the
+// size rounded up to widen::kOpaqueAlign — one word, because sizeof IS the element
+// stride), an i64 GLOBAL. No offset is ever exported: an importer addresses only the
+// public prefix, by the positional convention. A
+// completer that can fold the layout emits the word as constant data; one that
+// cannot (owner-computed: its own fields embed another module's size, so the value
+// is `constant + another module's word` — no ELF symbol or relocation can hold
+// that) emits it zero and fills it from the LAYOUT PREAMBLE, which runs at the top
+// of `main` before any code that could read it (globals construct lazily, inside
+// main). An importer cannot tell the two apart, so every read is a load.
 
-// The absolute size symbol the COMPLETER of an opaque class exports (an alias to a
-// folded inttoptr constant): `__$sizeof`, the size already rounded up to
-// widen::kOpaqueAlign. One symbol, because sizeof IS the element stride; and
-// pre-rounded, because round-up of a link-time value is not expressible as a
-// relocation.
-std::string sizeSymbolValue(widen::TypeRef cls) {
-    return "ptrtoint (ptr @" + widen::classSymbol(cls) + "__$sizeof to i64)";
+// Inside `main` (where the preamble's stores live) and inside a layout init (which
+// reads words still being computed), a word is NOT invariant; everywhere else it
+// is, so LLVM may merge and hoist the loads.
+bool g_layout_words_invariant = true;
+
+// This module defines `main`, so it defines the preamble that main calls.
+bool g_has_main = false;
+
+std::string emitLayoutWord(std::string const& sym, std::ostream& out) {
+    std::string v = newTmp("lw");
+    out << "  " << v << " = load i64, ptr " << sym;
+    if (g_layout_words_invariant) out << ", !invariant.load !{}";
+    out << "\n";
+    return v;
+}
+
+std::string sizeSymbolValue(widen::TypeRef cls, std::ostream& out) {
+    return emitLayoutWord("@" + widen::classSymbol(cls) + "__$sizeof", out);
 }
 
 std::string emitLayoutValue(widen::LayoutExpr const& e, std::ostream& out) {
     if (e.terms.empty()) return std::to_string(e.cst);
-    if (e.terms.size() == 1 && e.terms[0].second == 1) {
-        // One leaf, multiplier 1: a single S+A relocation — a link-time constant.
-        std::string sym = "@" + widen::classSymbol(e.terms[0].first) + "__$sizeof";
-        if (e.cst == 0) return "ptrtoint (ptr " + sym + " to i64)";
-        return "ptrtoint (ptr getelementptr (i8, ptr " + sym + ", i64 "
-            + std::to_string(e.cst) + ") to i64)";
-    }
-    // Multiple terms (or a multiplied one): relocations cannot add two symbols,
-    // so sum the link-time constants at run time.
     std::string acc;
     for (auto const& [leaf, mult] : e.terms) {
-        std::string v = sizeSymbolValue(leaf);
+        std::string v = sizeSymbolValue(leaf, out);
         if (mult != 1) {
             std::string m = newTmp("szmul");
             out << "  " << m << " = mul i64 " << v << ", " << mult << "\n";
@@ -967,7 +968,7 @@ std::string emitSizeValue(widen::TypeRef ty, bool round16, std::ostream& out) {
         // An opaque leaf has ONE exported size and it is already kOpaqueAlign-
         // rounded, so `round16` has nothing left to ask of it.
         if (f == widen::Type::Form::kSlid && widen::slidOpaque(st))
-            return sizeSymbolValue(st);
+            return sizeSymbolValue(st, out);
         return emitLayoutValue(widen::layoutSizeExpr(st, round16), out);
     }
     if (f == widen::Type::Form::kSlid || f == widen::Type::Form::kTuple
@@ -999,9 +1000,11 @@ bool dynamicStorage(widen::TypeRef ty) {
     widen::Type::Form f = widen::form(st);
     if (f == widen::Type::Form::kSlid) {
         // Opaque (incl. runtime-layout): dynamic only where imported — the
-        // completer's own storage is the real struct.
+        // completer's own storage is the real struct, unless not even the
+        // completer can fold it (owner-computed).
         if (widen::slidOpaque(st))
-            return widen::slidLinkage(st) == widen::Type::Linkage::kDeclare;
+            return widen::slidLinkage(st) == widen::Type::Linkage::kDeclare
+                || widen::slidOwnerComputed(st);
         return widen::sizeIsDynamic(st);
     }
     if (f == widen::Type::Form::kTuple || f == widen::Type::Form::kArray)
@@ -1010,25 +1013,16 @@ bool dynamicStorage(widen::TypeRef ty) {
 }
 
 // The address of slot `k` of a class/tuple at `base` — THE slot-address funnel.
-// Three regimes: a RUNTIME-LAYOUT class an importer declares reads the
-// completer's absolute `__$off<k>` symbol (slot 0 is the base sub-object at
-// offset 0 — no symbol, no GEP); a COMPUTED layout GEPs by its convention
-// offset expression; everything else is the constant struct GEP.
+// Two regimes: storage whose own slots embed a dynamic size GEPs by its convention
+// offset expression (a class: widen::slidSlotsDynamic — positional, so an
+// importer's public prefix and the completer agree); everything else is the
+// constant struct GEP.
 std::string emitSlotAddr(std::string const& base, widen::TypeRef agg,
                          std::size_t k, std::ostream& out) {
     widen::TypeRef cs = widen::strip(agg);
     widen::Type::Form f = widen::form(cs);
-    if (f == widen::Type::Form::kSlid && widen::slidRuntimeLayout(cs)
-        && widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
-        if (k == 0) return base;   // the base sub-object IS offset 0
-        std::string gep = newTmp("slot");
-        out << "  " << gep << " = getelementptr i8, ptr " << base
-            << ", i64 ptrtoint (ptr @" << widen::classSymbol(cs) << "__$off" << k
-            << " to i64)\n";
-        return gep;
-    }
-    bool computed = widen::sizeIsDynamic(cs)
-        && !(f == widen::Type::Form::kSlid && widen::slidOpaque(cs));
+    bool computed = f == widen::Type::Form::kSlid ? widen::slidSlotsDynamic(cs)
+                                                  : widen::sizeIsDynamic(cs);
     if (computed) {
         std::string off = emitLayoutValue(widen::layoutSlotOffset(cs, k), out);
         if (off == "0") return base;
@@ -2560,7 +2554,7 @@ void emitInitFill(std::string const& addr, widen::TypeRef type,
     // placeholder type) — distribute the literal SLOT BY SLOT through the funnel,
     // exactly the class-bearing-tuple rule below (a class is a named tuple).
     if (dform == widen::Type::Form::kSlid && init.kind == ast::Kind::kTupleExpr
-        && widen::slidComputedLayout(widen::strip(type))) {
+        && widen::slidSlotsDynamic(widen::strip(type))) {
         emitTupleFromTuple(addr, type, init, is_move, syms, pool, out, diag);
         return;
     }
@@ -3759,6 +3753,7 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
     bool sret = isSretReturn(fn.return_type);
     std::string ret_llty = sret ? "void" : llvmForRef(fn.return_type);
     bool internal = fn.internal_def;
+    bool is_main = emitSymbol(fn) == "main";
     out << "define " << (internal ? "internal " : "")
         << ret_llty << " @" << emitSymbol(fn) << "(";
     bool need_comma = false;
@@ -3781,6 +3776,18 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         need_comma = true;
     }
     out << ") {\n";
+    // THE LAYOUT PREAMBLE runs first: every owner-computed layout word is filled
+    // before any code in the program reads one. main's own reads follow the
+    // preamble's stores in this very function, so they are not invariant here.
+    struct InvariantScope {
+        bool saved = g_layout_words_invariant;
+        ~InvariantScope() { g_layout_words_invariant = saved; }
+    } invariant_scope;
+    if (is_main) {
+        g_layout_words_invariant = false;
+        g_has_main = true;
+        out << "  call void @__$layout_run()\n";
+    }
 
     SymTab syms;
     // A capture's SymTab "alloca" IS the incoming ptr arg — reads/writes load /
@@ -4256,14 +4263,12 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // MEMBERWISE operator method synthesized in resolve (synthesizeClassTransferOps, run at
     // the resolveScopeBodies choke point), so those symbols are always defined and there is
     // nothing left to fall back to.)
-    // The per-class size SYMBOL — for OPAQUE classes only. A local (non-opaque)
-    // class's size is an inline llc constant everywhere it is asked (emitSizeValue),
-    // so it needs no symbol at all. An opaque class's size is known only to the TU
-    // that COMPLETES it, so the completer exports ONE ABSOLUTE symbol — an alias to
-    // a folded inttoptr constant, so LLVM still owns the layout:
+    // THE LAYOUT WORDS (see emitLayoutWord) — for OPAQUE classes only. A local
+    // (non-opaque) class's size is an inline llc constant everywhere it is asked
+    // (emitSizeValue), so it needs no word at all. An opaque class's layout is known
+    // only to the TU that COMPLETES it, which exports:
     //   @C__$sizeof — the size ROUNDED UP to widen::kOpaqueAlign (the zero-length
     //                 kOpaqueAlign-wide vector wrapper makes llc do the rounding).
-    //                 A relocation cannot round, so it ships pre-rounded.
     // There is exactly one size per class because SIZEOF IS THE ELEMENT STRIDE: a
     // container that allocates `sizeof(T) * n` and indexes through `T[]` would write
     // past its buffer the moment the two differed. (This used to be two symbols — a
@@ -4271,51 +4276,86 @@ void run(ast::Tree const& tree, std::ostream& out, diagnostic::Sink& diag) {
     // while every index path strode the rounded one. That is the bug.) Rounding to
     // the language's maximum alignment costs nothing: kOpaqueAlign is 8 and every
     // class carrying a pointer or an i64 is already a multiple of it.
-    // An importer declares it and reads it as `ptrtoint` — a link-time VALUE the
-    // linker patches (GOTPCRELX-relaxed to an immediate), never a call or load.
+    // A completer that folds the layout emits each word as constant data. An
+    // OWNER-COMPUTED one (widen::slidOwnerComputed) emits it zero and computes it in
+    // this module's LAYOUT INIT, registered in the `slids_layout` section for main's
+    // preamble. An importer declares every word alike and loads it.
+    std::vector<std::pair<std::string, widen::LayoutExpr>> computed_words;
     for (widen::TypeRef ct : tree.classes) {
         if (diagnostic::hasErrors(diag)) break;
         widen::TypeRef cs = widen::strip(ct);
         if (!widen::slidOpaque(cs)) continue;
         std::string name = widen::classSymbol(ct);
         if (widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare) {
-            body << "@" << name << "__$sizeof = external global i8\n\n";
+            body << "@" << name << "__$sizeof = external global i64\n\n";
+            continue;
+        }
+        if (widen::slidOwnerComputed(cs)) {
+            body << "@" << name << "__$sizeof = global i64 0\n\n";
+            computed_words.push_back({"@" + name + "__$sizeof",
+                                      widen::layoutOwnSizeExpr(cs)});
             continue;
         }
         std::string llty = llvmForRef(ct);
-        body << "@" << name << "__$sizeof = alias i8, inttoptr (i64 ptrtoint (ptr "
+        body << "@" << name << "__$sizeof = constant i64 ptrtoint (ptr "
              << "getelementptr ({ [0 x <" << widen::kOpaqueAlign
-             << " x i8>], " << llty
-             << " }, ptr null, i32 1) to i64) to ptr)\n\n";
+             << " x i8>], " << llty << " }, ptr null, i32 1) to i64)\n\n";
     }
-    // Per-slot FIELD-OFFSET symbols, for a class deriving from an opaque base. The
-    // base sub-object sits at slot 0 with a size only its completer knows, so
-    // nothing past it has a compile-time offset in an importer. The completer
-    // exports each offset as an ABSOLUTE symbol `@C__$off<k>` (an alias to the
-    // llc-folded GEP constant — LLVM owns the layout), and an importer reads it as
-    // a link-time value. Slot 0 (the base) is offset 0 by construction: no symbol
-    // (an alias whose value folds to 0 would be a plain `null` aliasee, which LLVM
-    // rejects), no GEP — emitSlotAddr special-cases it. The completer's own layout
-    // is untouched: it still GEPs the real struct, where offsets ARE constants.
-    for (widen::TypeRef ct : tree.classes) {
-        if (diagnostic::hasErrors(diag)) break;
-        widen::TypeRef cs = widen::strip(ct);
-        if (!widen::slidRuntimeLayout(cs)) continue;
-        std::size_t n = widen::get(cs).slots.size();
-        std::string name = widen::classSymbol(ct);
-        bool declare_only = widen::slidLinkage(cs) == widen::Type::Linkage::kDeclare;
-        std::string llty = llvmForRef(ct);
-        for (std::size_t i = 1; i < n; i++) {
-            if (declare_only) {
-                body << "@" << name << "__$off" << i << " = external global i8\n";
-            } else {
-                body << "@" << name << "__$off" << i
-                     << " = alias i8, inttoptr (i64 ptrtoint (ptr getelementptr ("
-                     << llty << ", ptr null, i32 0, i32 " << i
-                     << ") to i64) to ptr)\n";
-            }
+    // THE LAYOUT INIT: recompute every owner-computed word from the words it is built
+    // from and report whether any changed. A word may be built from ANOTHER module's
+    // computed word, and the section's order is the linker's, so main's preamble
+    // re-runs every init until a whole pass changes nothing (bounded by the depth of
+    // the opaque-in-opaque chain).
+    if (!computed_words.empty() && !diagnostic::hasErrors(diag)) {
+        bool saved = g_layout_words_invariant;
+        g_layout_words_invariant = false;
+        body << "define internal i1 @__$layout_init() {\nentry:\n";
+        std::string acc = "false";
+        for (auto const& [word, expr] : computed_words) {
+            std::string v = emitLayoutValue(expr, body);
+            std::string old = newTmp("lold");
+            std::string ne = newTmp("lne");
+            std::string nacc = newTmp("lacc");
+            body << "  " << old << " = load i64, ptr " << word << "\n"
+                 << "  store i64 " << v << ", ptr " << word << "\n"
+                 << "  " << ne << " = icmp ne i64 " << old << ", " << v << "\n"
+                 << "  " << nacc << " = or i1 " << acc << ", " << ne << "\n";
+            acc = nacc;
         }
-        if (n > 1) body << "\n";
+        body << "  ret i1 " << acc << "\n}\n\n";
+        body << "@__$layout_reg = internal constant ptr @__$layout_init, "
+             << "section \"slids_layout\", align 8\n"
+             << "@llvm.used = appending global [1 x ptr] [ptr @__$layout_reg], "
+             << "section \"llvm.metadata\"\n\n";
+        g_layout_words_invariant = saved;
+    }
+    // THE LAYOUT PREAMBLE main calls first: run every registered init (the linker
+    // gathers them between __start_/__stop_slids_layout; weak, so a program with
+    // none links) until a pass changes nothing.
+    if (g_has_main) {
+        body << "@__start_slids_layout = extern_weak global ptr\n"
+             << "@__stop_slids_layout = extern_weak global ptr\n\n"
+             << "define internal void @__$layout_run() {\n"
+             << "entry:\n"
+             << "  br label %pass\n"
+             << "pass:\n"
+             << "  br label %loop\n"
+             << "loop:\n"
+             << "  %p = phi ptr [ @__start_slids_layout, %pass ], [ %next, %step ]\n"
+             << "  %ch = phi i1 [ false, %pass ], [ %ch2, %step ]\n"
+             << "  %done = icmp eq ptr %p, @__stop_slids_layout\n"
+             << "  br i1 %done, label %end, label %step\n"
+             << "step:\n"
+             << "  %fn = load ptr, ptr %p\n"
+             << "  %c = call i1 %fn()\n"
+             << "  %ch2 = or i1 %ch, %c\n"
+             << "  %next = getelementptr ptr, ptr %p, i64 1\n"
+             << "  br label %loop\n"
+             << "end:\n"
+             << "  br i1 %ch, label %pass, label %exit\n"
+             << "exit:\n"
+             << "  ret void\n"
+             << "}\n\n";
     }
 
     out << "target triple = \"x86_64-pc-linux-gnu\"\n\n";

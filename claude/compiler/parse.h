@@ -621,7 +621,8 @@ struct Entry {
                                   // anywhere else, so it emits HERE, `define internal` —
                                   // the ONE sanctioned exception to the owner-linkage
                                   // rule when its owner class is declare-only (desugar
-                                  // liftMember).
+                                  // liftMember). kClass: the INLINE-local flavor of a
+                                  // header class template — never opaque (laid out here).
     bool listless = false;        // kClass: the LISTLESS flavor (`TClass<>`) — a
                                   // qualifier-only pseudo-flavor exposing the members
                                   // with no dependency on the template list. Never a
@@ -694,6 +695,11 @@ struct ClassInfo {
     // may REPLACE a default node in place (folding `BASE+5`->`15`), so a cached
     // pointer to the default itself would dangle; the kParam node does not move.
     std::vector<Node*> field_params;
+    // An AGGREGATED flavor of a header template, in a consumer: the fields its
+    // template source's completion supplies. Opaque here, so they are NOT slots
+    // (the completer's @C__$ctor places them); kept, as the PATTERN's kParams, only
+    // so a consumer naming one hears "private to its template source".
+    std::vector<Node const*> source_private_fields;
     widen::TypeRef type = widen::kNoType; // the interned kSlid{name, slots}
     int def_file_id = -1;                // the class def's location (for the
     int def_tok = -1;                    // "first defined here" dup note)

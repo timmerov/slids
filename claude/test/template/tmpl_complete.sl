@@ -42,6 +42,7 @@ its synthesized transfer ops twice (invalid IR at llc).
 /* incomplete primary; an appending re-open; a closing re-open that adds a
    method reading fields from BOTH earlier openings. */
 import string;
+import vector;
 
 Grow<T>(T a_ = 1, ...) {
     T ga() { return a_; }
@@ -160,6 +161,30 @@ T mkg<T>(T v) {
 }
 
 alias Integer = int;
+
+/* CROSS-TU: an incomplete HEADER template is no more special than an
+   incomplete header class. lib/hdr/vector.slh declares `Vector<T>(...)`; the
+   fields live in vector.sl. An AGGREGATED flavor (every argument visible to
+   the header) is OPAQUE here — its layout is exported by vector.sl's
+   --instantiate compile — while a flavor of a LOCAL type is laid out in this
+   TU. Every use below must behave the same either way. */
+Vector<int> gvec;
+
+/* two opaque flavors embedded BY VALUE: independent fields. */
+Bag(Vector<int> a_, Vector<int> b_) {
+    intptr both() { return a_.size() * 10 + b_.size(); }
+}
+
+/* a local element type: the INLINE-local flavor. */
+Pt(int x_ = 0) {
+}
+
+/* a local class deriving from an opaque flavor: a COMPUTED-layout class —
+   the base sits at slot 0, `vd_` past it at an offset this TU computes from
+   the base's exported size. */
+Vector<int> : VDer(int vd_ = 0) {
+    intptr both() { return size() * 10 + vd_; }
+}
 
 /* a closed re-open cannot add fields... */
 //-EXPECT-ERROR: cannot add fields
@@ -310,6 +335,52 @@ int32 main() {
     int r16 = gt[0].gsum() + gt[1]; println(String + "r16 = " + r16);
     Vec2<Integer> valias(6);
     int r17 = valias.dbl(); println(String + "r17 = " + r17);
+
+    /* cross-TU: a local of an aggregated flavor, the global, sizeof. */
+    Vector<int> cv;
+    cv.append(4);
+    cv.append(5);
+    int c1 = cv[0] + cv[1]; println(String + "c1 = " + c1);
+    gvec.append(7);
+    intptr c2 = gvec.size(); println(String + "c2 = " + c2);
+    intptr c3 = sizeof(Vector<int>); println(String + "c3 = " + c3);
+
+    /* by-value embedding. */
+    Bag bag;
+    bag.a_.append(1);
+    bag.b_.append(2);
+    bag.b_.append(3);
+    intptr c4 = bag.both(); println(String + "c4 = " + c4);
+
+    /* new, an array, a tuple slot. */
+    Vector<int>^ cp = new Vector<int>;
+    cp^.append(8);
+    intptr c5 = cp^.size(); println(String + "c5 = " + c5);
+    delete cp;
+    Vector<int> carr[2];
+    carr[1].append(9);
+    intptr c6 = carr[0].size() * 10 + carr[1].size(); println(String + "c6 = " + c6);
+    (Vector<int>, int) ct = (cv, 5);
+    intptr c7 = ct[0].size() + ct[1]; println(String + "c7 = " + c7);
+
+    /* a flavor of a flavor: the element stride is the opaque size. */
+    Vector<Vector<int>> cvv;
+    cvv.append(cv);
+    cvv.append(cv);
+    int c8 = cvv[1][0] + cvv[1][1]; println(String + "c8 = " + c8);
+
+    /* the inline-local flavor. */
+    Vector<Pt> cpt;
+    cpt.append(Pt(6));
+    int c9 = cpt[0].x_; println(String + "c9 = " + c9);
+    intptr c10 = sizeof(Vector<Pt>); println(String + "c10 = " + c10);
+
+    /* the local class over the opaque flavor: list-init places `vd_`, the
+       base routes through its own ctor. */
+    VDer vd = (3);
+    vd.append(1);
+    vd.append(2);
+    intptr c11 = vd.both(); println(String + "c11 = " + c11);
 
     /* an appending re-open may not duplicate a field. */
     //-EXPECT-ERROR: Duplicate field

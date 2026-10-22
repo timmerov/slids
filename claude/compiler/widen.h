@@ -114,17 +114,11 @@ struct Type {
     Linkage linkage = Linkage::kInternal;
     // kSlid: the class is DECLARED incomplete (a trailing `...` in its header) — it has
     // PRIVATE fields hidden from an importer, whose layout/size the importer cannot know.
-    // So its `__$sizeof` is an EXTERNAL function (the completer defines it, importers call
+    // So its `__$sizeof` is an exported WORD (the completer defines it, importers load
     // it), an importer sizes an instance at runtime + constructs via `__$ctor`, and never
     // sees the layout. True in EVERY TU that sees the incomplete header (the completer AND
     // importers), even though the completer holds the full layout.
     bool opaque = false;
-    // kSlid: the class DERIVES from an opaque class. Its base sub-object sits at slot 0
-    // with an unknown size, so its OWN field offsets are not compile-time constants in an
-    // importer — they come from the completer's exported `__$offsets` table. Implies
-    // `opaque` (the size is a runtime call too). True in EVERY TU that sees the header,
-    // exactly like `opaque`, so both halves agree on the layout rule.
-    bool runtime_layout = false;
     // (COMPUTED LAYOUT is not a stored flag: whether a class/tuple/array embeds a
     // dynamically-sized value is a pure STRUCTURAL fact of universal per-class facts
     // — the opaque flag and the slot lists — so it is asked, not published. See
@@ -212,11 +206,6 @@ Type::Linkage slidLinkage(TypeRef ref);
 void setSlidOpaque(TypeRef ref, bool opaque);
 bool slidOpaque(TypeRef ref);
 
-// Set/read whether the class derives from an opaque base (see Type::runtime_layout).
-// Resolve propagates it down base chains once every class is registered; codegen reads
-// it to emit / consult the `__$offsets` table instead of a struct GEP.
-void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout);
-bool slidRuntimeLayout(TypeRef ref);
 
 // Does this type's STORAGE embed an opaque class by value — directly, or through
 // any depth of class fields / array elements / tuple slots? Equivalently: is its
@@ -262,6 +251,25 @@ LayoutExpr layoutSlotOffset(TypeRef agg, std::size_t k);
 // to kOpaqueAlign (the embedding stride/size); a computed class/tuple is already
 // 16-rounded by construction. Static types yield a pure constant.
 LayoutExpr layoutSizeExpr(TypeRef ref, bool round16);
+
+// Do a class's OWN slots (the ones this TU sees) embed a dynamic size — an opaque
+// field, a computed-layout field, an opaque BASE? Then no TU may address them as a
+// struct: every slot offset comes from the convention (layoutSlotOffset). That holds
+// for a computed class, for an owner-computed one in its completer, and for an
+// importer's view of an opaque class whose PUBLIC prefix is dynamic — and the
+// convention is positional (slot k's offset depends only on slots [0,k)), so an
+// importer's prefix and the completer's full layout agree with no exported offsets.
+bool slidSlotsDynamic(TypeRef ref);
+
+// An OPAQUE class this TU COMPLETES whose own slots embed a dynamic size. Not even
+// its completer can fold it, so the completer lays it out by the convention too, and
+// exports its `__$sizeof` as a run-time WORD that the layout preamble at the top of
+// `main` fills (codegen).
+bool slidOwnerComputed(TypeRef ref);
+
+// The convention size of a class's OWN slots, kOpaqueAlign-rounded — what an
+// owner-computed class's completer stores in its `__$sizeof` word.
+LayoutExpr layoutOwnSizeExpr(TypeRef ref);
 
 // Set whether each hook's BODY is written in this TU (see Type::ctor_here). Resolve
 // decides it in registerClassBody, where every OPENING of the class is visible — the

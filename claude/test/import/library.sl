@@ -231,11 +231,10 @@ Rope(char[] str_ = nullptr, int tag_ = 7) {
     int tag() { return tag_; }
 }
 
-/* define Tagged, the class deriving from the incomplete Rope (see the header). THIS TU
-   completes Rope, so here the layout is fully known: mark_ / pad_ / extra_ are ordinary
-   struct GEPs, and the base's fields are reachable by name. What this TU owes an importer
-   is the FOLDED offset table (@Tagged__$offsets) and the runtime size — both emitted off
-   the real struct, so the two halves cannot disagree about where a field landed. */
+/* define Tagged, the class deriving from the incomplete Rope (see the header). Even
+   here, where Rope is completed, Tagged is laid out by the computed-layout CONVENTION
+   over @Rope__$sizeof — the same positional rule every importer uses, so the two halves
+   cannot disagree about where a field landed, and nothing has to be exported for it. */
 Rope : Tagged() {
     _() { println(String + "Tagged:ctor: " + mark_); }
     ~() { println(String + "Tagged:dtor: " + mark_); }
@@ -278,7 +277,7 @@ Flat(int a_ = 55, int b_) {
 
 /* Crate's methods (see the header): compiled HERE against the same computed-layout
    convention the consumer computes for its direct field accesses — tail_ sits one
-   S+A relocation past @Rope__$sizeof in BOTH TUs, or the seam test fails. */
+   size word past @Rope__$sizeof's offset in BOTH TUs, or the seam test fails. */
 void Crate:stamp(int v) { tail_ = v; }
 int Crate:tail() { return tail_; }
 

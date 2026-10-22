@@ -7333,19 +7333,20 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // the completer too (it must export the size for importers). A `.sl`-local incomplete
     // class is complete within its own TU (no importer), so it is never opaque.
     //
-    // A class-template INSTANCE is NEVER opaque, however incomplete its header spelling.
-    // The flag must answer "can this TU see the layout", and the answer is yes: an instance
-    // only EXISTS because a loaded opening completed the template (instantiateClassTemplate
-    // refuses an open one), and for a header template that completing re-open is TEMPLATE
-    // CONTENT — which survives the template-source strip, so it reaches the completer and
-    // every importer identically. That uniformity is the whole requirement here: the flag
-    // may ride only facts every TU computes the same way. A plain header class is the
-    // opposite case and stays opaque — its completing re-open is stripped from the loaded
-    // source, so only its own sibling ever sees the fields.
+    // An incomplete header class-template is NO MORE SPECIAL than an incomplete header
+    // class: an AGGREGATED flavor is opaque in every TU, its completer being the template
+    // source's --instantiate compile (kDefine there, exporting the layout). The flag rides
+    // only facts every TU computes alike — the header's `...` and the flavor's mode — never
+    // "is the source loaded here": a consumer strips the source's completing re-open's fields
+    // from an aggregated clone (instantiateClassTemplate), exactly as a plain class's
+    // completion is stripped. The one exception is an INLINE-local flavor (Entry.tu_local_instance): only
+    // this TU can spell it, so, like a `.sl`-local incomplete class, it is laid out here.
     bool tmpl_instance = node.resolved_entry_id >= 0
         && !tree.entries[node.resolved_entry_id].tmpl_args.empty();
+    bool tu_local_flavor = tmpl_instance
+        && tree.entries[node.resolved_entry_id].tu_local_instance;
     widen::setSlidOpaque(widen::strip(type),
-                         header_class && info.declared_incomplete && !tmpl_instance);
+                         header_class && info.declared_incomplete && !tu_local_flavor);
     // A source file cannot ADD an implicitly-invoked member to a class declared in a
     // HEADER. The five are called without the author naming them, so every importing TU
     // emits those calls off the header ALONE: one that exists only in some `.sl` would
@@ -7671,72 +7672,36 @@ bool isImportOpaque(widen::TypeRef s) {
         && widen::slidLinkage(s) == widen::Type::Linkage::kDeclare;
 }
 
-// A class DERIVING from an opaque class inherits its unknown layout. The base sub-object
-// still occupies slot 0 — every upcast stays a no-op — but its SIZE is a runtime fact, so
-// the derived class's OWN field offsets are not compile-time constants in an importer.
-// They come from the completer's exported `__$offsets` table (codegen).
-//
-// runtime_layout IMPLIES opaque, and that is the whole trick: an opaque class's size is
-// already a runtime call, its construction is already split into `__$ctor`/`__$pctor`
-// across the seam, and its by-value embedding is already rejected in an importer. A
-// derived class needs exactly those three things, so it joins that machinery rather than
-// growing a parallel copy.
-//
-// The flag rides only PERSISTENT header facts (the base's `...`), so the completer and
-// every importer compute it identically — the layout rule cannot disagree across the seam.
-// Two forms are REJECTED rather than laid out:
-//   - a `.sl`-LOCAL class over an opaque base: nothing outside the TU can name it, so no
-//     sibling exports its offsets, and it cannot fold them itself.
-//   - a VIRTUAL class over an opaque base: the vptr wants offset 0 and the base holds it.
-void propagateRuntimeLayout(parse::Tree& tree, std::vector<parse::Node*> const& classes,
+// A class DERIVING from an opaque class (directly or down a chain) needs no layout
+// machinery of its own: its base is slot 0 with a dynamic size, so — complete in its
+// header, its own fields visible everywhere — it is simply a COMPUTED-layout class,
+// laid out by the convention in every TU off the base's `__$sizeof` word (an
+// incomplete one is opaque by its own `...`). Construction routes the base through the
+// opaque class's split ctor like any opaque field. One form is still REJECTED: a
+// VIRTUAL class over such a base — the vptr wants offset 0 and the base holds it.
+void checkOpaqueBaseVirtual(parse::Tree& tree, std::vector<parse::Node*> const& classes,
                             diagnostic::Sink& diag) {
-    // Fixpoint, so a chain `Opaque <- A <- B` marks B as well as A regardless of the
-    // order the classes were registered in.
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (parse::Node* c : classes) {
-            if (!c || c->resolved_entry_id < 0) continue;
-            widen::TypeRef self = widen::strip(c->return_type);
-            if (widen::form(self) != widen::Type::Form::kSlid) continue;
-            if (widen::slidRuntimeLayout(self)) continue;
-            auto it = tree.classes.find(self);
-            if (it == tree.classes.end()) continue;
-            widen::TypeRef base = parse::baseTypeOf(it->second);
-            if (base == widen::kNoType || !widen::slidOpaque(widen::strip(base))) continue;
-            widen::setSlidRuntimeLayout(self, true);
-            widen::setSlidOpaque(self, true);
-            changed = true;
-        }
-    }
     for (parse::Node* c : classes) {
         if (!c || c->resolved_entry_id < 0) continue;
         widen::TypeRef self = widen::strip(c->return_type);
         if (widen::form(self) != widen::Type::Form::kSlid) continue;
-        if (!widen::slidRuntimeLayout(self)) continue;
         auto it = tree.classes.find(self);
         if (it == tree.classes.end()) continue;
-        auto bit = tree.classes.find(widen::strip(parse::baseTypeOf(it->second)));
+        // Walk the BASE CHAIN for an opaque class — bounded, never through slots: this
+        // runs before the by-value cycle check, so a self/mutual inheritance cycle is
+        // still live here (a slot walk like sizeIsDynamic would never return).
+        widen::TypeRef base = widen::strip(parse::baseTypeOf(it->second));
+        widen::TypeRef opaque_base = widen::kNoType;
+        int guard = static_cast<int>(tree.classes.size()) + 2;
+        for (widen::TypeRef b = base; b != widen::kNoType && guard-- > 0; ) {
+            if (widen::slidOpaque(b)) { opaque_base = b; break; }
+            auto bi = tree.classes.find(b);
+            if (bi == tree.classes.end()) break;
+            b = widen::strip(parse::baseTypeOf(bi->second));
+        }
+        if (opaque_base == widen::kNoType) continue;
+        auto bit = tree.classes.find(opaque_base);
         std::string bname = bit != tree.classes.end() ? bit->second.name : "?";
-        if (widen::slidLinkage(self) == widen::Type::Linkage::kInternal) {
-            diagnostic::report(diag, {c->file_id, c->name_tok,
-                "Class '" + c->name + "' derives from imported incomplete class '" + bname
-                + "', so its field offsets are only known to the module that completes '"
-                + bname + "'; declare '" + c->name + "' in a header so that module exports "
-                "them.", {}});
-            continue;
-        }
-        // Its layout needs an OWNER to export the offsets — a complete header class with
-        // no `_`/`~` has none (kPerTU), and no importer can fold them itself.
-        if (widen::slidLinkage(self) == widen::Type::Linkage::kPerTU) {
-            widen::setSlidLinkage(self, widen::Type::Linkage::kDeclare);
-            diagnostic::report(diag, {c->file_id, c->name_tok,
-                "Class '" + c->name + "' derives from imported incomplete class '" + bname
-                + "', so its field offsets must be exported by one source file; declare "
-                "its constructor and destructor ('_(); ~();') in the header and define "
-                "them in that file.", {}});
-            continue;
-        }
         for (auto& m : c->children) {
             if (m && m->is_virtual) {
                 diagnostic::report(diag, {m->file_id, m->name_tok,
@@ -7764,29 +7729,7 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
     if (it == tree.classes.end()) return;
     std::set<widen::TypeRef> seen;
     std::vector<widen::TypeRef> stack;
-    // The unnamed `_$base` slot of a RUNTIME-LAYOUT class is the one by-value embedding of
-    // an opaque class the model allows (propagateRuntimeLayout marked it; the offsets past
-    // it come from the completer's table). Skip that slot's own seeding so the rejection
-    // below doesn't fire on it, and descend into the base's fields by hand so the CYCLE
-    // check still covers everything reachable through the base. A named field of the same
-    // opaque type is untouched by this and stays rejected.
-    std::size_t first = 0;
-    if (widen::slidRuntimeLayout(self)) {
-        widen::TypeRef base = widen::strip(parse::baseTypeOf(it->second));
-        if (base == self) {
-            diagnostic::report(diag, {node.file_id, node.name_tok,
-                "Class '" + node.name + "' contains itself by value (infinite "
-                "size); use a reference '^' field.", {}});
-            return;
-        }
-        first = 1;
-        seen.insert(base);
-        auto bit = tree.classes.find(base);
-        if (bit != tree.classes.end())
-            for (widen::TypeRef ft : bit->second.field_types)
-                collectByValueClasses(ft, stack);
-    }
-    for (std::size_t i = first; i < it->second.field_types.size(); i++)
+    for (std::size_t i = 0; i < it->second.field_types.size(); i++)
         collectByValueClasses(it->second.field_types[i], stack);
     while (!stack.empty()) {
         widen::TypeRef cur = stack.back();
@@ -7799,50 +7742,16 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
         }
         // (Embedding an imported OPAQUE class by value is LEGAL now — the enclosing
         // class becomes a COMPUTED LAYOUT: every TU lays it out by the kOpaqueAlign
-        // convention off the completer's exported absolute `__$sizeof`. The walk
+        // convention off the completer's exported `__$sizeof` word. The walk
         // does not descend into an opaque class's fields — an importer can't see
-        // them, and the completer separately rejects an EXPORTED layout it cannot
-        // fold; see checkOpaqueExportFoldable.)
+        // them. A completer that cannot fold its own export is OWNER-COMPUTED and fills
+        // its layout words at run time; see widen::slidOwnerComputed.)
         if (isImportOpaque(cur)) continue;
         if (!seen.insert(cur).second) continue;
         auto cit = tree.classes.find(cur);
         if (cit == tree.classes.end()) continue;
         for (widen::TypeRef ft : cit->second.field_types)
             collectByValueClasses(ft, stack);
-    }
-}
-
-// The COMPLETER of an opaque class exports its layout as ABSOLUTE symbols
-// (`__$sizeof`, plus `__$off<k>` for a runtime-layout class) — values
-// llc folds off the real struct. The fold needs every by-value field (the base
-// included) to have a static layout HERE. A field embedding an IMPORTED
-// incomplete class, or a computed-layout class, would make the export itself a
-// cross-module expression — and an ELF symbol table cannot hold a relocation —
-// so reject it at the completer (an importer cannot even see the hidden field).
-void checkOpaqueExportFoldable(parse::Tree& tree, parse::Node& node,
-                               diagnostic::Sink& diag) {
-    if (node.resolved_entry_id < 0) return;
-    widen::TypeRef self = widen::strip(node.return_type);
-    if (widen::form(self) != widen::Type::Form::kSlid) return;
-    if (!widen::slidOpaque(self)) return;
-    if (widen::slidLinkage(self) != widen::Type::Linkage::kDefine) return;
-    auto it = tree.classes.find(self);
-    if (it == tree.classes.end()) return;
-    for (widen::TypeRef ft : it->second.field_types) {
-        std::vector<widen::TypeRef> leaves;
-        collectByValueClasses(ft, leaves);
-        for (widen::TypeRef l : leaves) {
-            if (l == self) continue;   // the cycle check reports that one
-            if (!isImportOpaque(l) && !widen::slidComputedLayout(l)) continue;
-            auto lit = tree.classes.find(l);
-            std::string lname = lit != tree.classes.end() ? lit->second.name : "?";
-            diagnostic::report(diag, {node.file_id, node.name_tok,
-                "Class '" + node.name + "' is incomplete in its header, but its "
-                "exported layout cannot be a link-time constant: it embeds '" + lname
-                + "', whose size lives in another module — use a reference '"
-                + lname + "^'.", {}});
-            return;
-        }
     }
 }
 
@@ -9793,7 +9702,13 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             // (the loaded template source's bodies) sheds its function
             // members entirely — a stripped twin would sit beside the
             // header's declaration as an ambiguous duplicate, and the bodies
-            // are defined once, externally, by the --instantiate pass.
+            // are defined once, externally, by the --instantiate pass. It
+            // sheds its FIELDS too: the flavor is OPAQUE here, so the source's
+            // fields are the completer's to place (@C__$ctor) and must not be
+            // slots — the consumer's slot list is the header's public prefix,
+            // exactly as for a plain incomplete class. (Their names are kept
+            // for the private-field diagnostic: source_private_fields.)
+            if (declare_only && o != def) c->params.clear();
             if (declare_only) {
                 if (o == def) {
                     for (auto& m : c->children) {
@@ -9862,6 +9777,15 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // Memo BEFORE the member phases, so a recursive `Vec<T>^` field lands here.
     tree.templates.at(tmpl_entry_id).instances[args] = iid;
     tree.entries[iid].tmpl_args = args;
+    // Read by registerClassBody's opaque rule: an inline-local flavor is laid out here.
+    tree.entries[iid].tu_local_instance = inline_local;
+    if (declare_only) {
+        parse::ClassInfo& cinfo =
+            tree.classes.at(widen::strip(tree.entries[iid].slids_type));
+        for (parse::Node* r : tree.templates.at(tmpl_entry_id).reopens)
+            for (auto& p : r->params)
+                if (p) cinfo.source_private_fields.push_back(p.get());
+    }
     if (listless) {
         tree.entries[iid].listless = true;
         tree.listless_stripped[tree.entries[iid].ns_frame_id] =
@@ -10194,18 +10118,13 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             resolveScopeTypes(tree, *ch, /*isClass=*/false, diag);
     }
 
-    // Pass 1a-layout — mark the classes deriving from an opaque base BEFORE the by-value
-    // walk below, which asks the flag to tell that legal embedding from an illegal one.
-    propagateRuntimeLayout(tree, all_classes, diag);
+    // Pass 1a-layout — a class deriving from an opaque base is computed-layout; only a
+    // VIRTUAL one is rejected.
+    checkOpaqueBaseVirtual(tree, all_classes, diag);
 
     // Pass 1a-cycle — reject infinite-size by-value cycles now that every field type
     // is resolved + slotted (the transitive needs-fixpoint runs below over tree.classes).
     for (parse::Node* c : all_classes) checkClassByValueAcyclic(tree, *c, diag);
-
-    // Pass 1a-export — a completer whose opaque class embeds another module's
-    // incomplete (or computed-layout) class cannot fold the absolute symbols it
-    // must export; reject with the completer's attribution.
-    for (parse::Node* c : all_classes) checkOpaqueExportFoldable(tree, *c, diag);
 
     // Pass 1a-alias-validate — now that enums, namespaces, and classes exist,
     // validate each alias target (an alias may name any of them). An alias

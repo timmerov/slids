@@ -2156,6 +2156,26 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         return;
                     }
                 }
+                // A source-private field of an OPAQUE flavor is no slot here, but it
+                // exists: say private, through the class or any base.
+                {
+                    int pguard = static_cast<int>(tree.classes.size()) + 2;
+                    for (widen::TypeRef c = bt; c != widen::kNoType && pguard-- > 0; ) {
+                        auto ci = tree.classes.find(c);
+                        if (ci == tree.classes.end()) break;
+                        for (parse::Node const* p : ci->second.source_private_fields) {
+                            if (p->name != e.name) continue;
+                            diagnostic::report(diag, {e.file_id, e.name_tok,
+                                "Field '" + e.name + "' of class '" + ci->second.name
+                                + "' is private to its template source.",
+                                {{p->file_id, p->tok, "'" + e.name + "' is supplied "
+                                  "by the template source, private to that file; "
+                                  "declare it in the header to publish it."}}});
+                            return;
+                        }
+                        c = widen::strip(parse::baseTypeOf(ci->second));
+                    }
+                }
                 diagnostic::report(diag, {e.file_id, e.name_tok,
                     "Class '" + it->second.name + "' has no field '" + e.name
                     + "'.", {}});
@@ -4538,21 +4558,9 @@ void classifyClassInit(parse::Tree& tree, parse::Node& s,
     // so skipping the check there avoids a duplicate report.
     if (!subobject) rejectAbstractInstantiation(tree, info.type, s.file_id, s.tok, diag);
     // An OPAQUE class an importer only DECLARES is default-constructed by @C__$ctor in the
-    // completer — the site places nothing, so it has nowhere to put an initializer. One
-    // deriving from an opaque base has visible fields and would otherwise accept the list
-    // and silently drop it, since codegen skips the site fill; one with no visible fields
-    // is the arm below.
+    // completer past its anchored prefix — the site places only what it can see.
     widen::TypeRef its = widen::strip(info.type);
-    if (!subobject && !s.children.empty() && s.children[0]
-        && widen::slidRuntimeLayout(its)
-        && widen::slidLinkage(its) == widen::Type::Linkage::kDeclare) {
-        diagnostic::report(diag, {s.children[0]->file_id, s.children[0]->tok,
-            "Class '" + info.name + "' derives from an imported incomplete class, so it "
-            "can only be default-constructed here; its fields are placed by the module "
-            "that completes the base.", {}});
-        return;
-    }
-    // THE SAME RULE, ONE STEP CLOSER IN: the class IS the imported incomplete one, so an
+    // THE RULE: the class IS the imported incomplete one, so an
     // initializer list cannot place anything. The arity check below catches the
     // all-hidden shape (0 fields, N given), but only as a count — which reads as a claim
     // about the TYPE ("String has no fields") when it is a fact about THIS FILE's view of

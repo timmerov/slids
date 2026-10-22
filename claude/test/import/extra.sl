@@ -3,28 +3,22 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 */
 
 /*
-test import and linked files.
-this is the second library's source file — extra.slh's sibling.
-
-the negative cases below are the reason this module exists: the completer of
-an incomplete class must be able to FOLD the layout it exports.
+no explicit canon.
 */
 
 /*
 claude says:
 
-this TU is the completer of extra.slh's BadPack, and it imports library.slh —
-so it can spell the one thing a completer must not: a hidden field whose size
-lives in ANOTHER module. The exported @BadPack__$sizeof are absolute
-symbols (values folded at compile time by llc); an ELF symbol table cannot hold
-a relocation, so a hidden `Rope` field (imported incomplete) or a hidden `LPack`
-field (a computed-layout class — its own layout rides @Rope__$sizeof) would make
-those exports unmintable. checkOpaqueExportFoldable rejects both at the
-completer — an importer could never even see the offending field.
+test import and linked files.
+this is the second library's source file — extra.slh's sibling, and Pack's
+completer (it defines `_`/`~`).
 
-LPack is live (not inside a block) because the second case needs it to exist:
-a `.sl`-local class embedding Rope by value, i.e. a COMPUTED layout. It is
-otherwise unused.
+Pack's hidden fields embed library.slh's Rope two ways — directly (an imported
+opaque class) and through LPack (a `.sl`-local computed-layout class over Rope)
+— and `z_` sits PAST both, at an offset that is only known once Rope's size is.
+So nothing about Pack's layout folds here: its own storage is laid out by the
+convention, and its exported @Pack__$sizeof is a word this TU's layout init
+computes from @Rope__$sizeof at run time (before any code reads it).
 */
 
 import string;
@@ -33,19 +27,13 @@ import library;
 
 import extra;
 
-/* a local COMPUTED-layout class (embeds the imported Rope by value) — the
-   second negative's hidden-field type. Legal here; illegal to HIDE inside an
-   incomplete class's completion. */
-LPack(int n_ = 1, Rope r_) { }
+/* a local COMPUTED-layout class (embeds the imported Rope by value). */
+LPack(int n_ = 7, Rope r_) { }
 
-/*
-the completer-unfold rule: completing BadPack with a hidden field this TU
-cannot fold. one case per unfoldable flavor — an imported incomplete class,
-and a computed-layout class.
-*/
-
-//-EXPECT-ERROR: exported layout cannot be a link-time constant
-//BadPack(int a_ = 1, Rope r_) { _() {} ~() {} }
-
-//-EXPECT-ERROR: exported layout cannot be a link-time constant
-//BadPack(int a_ = 1, LPack p_) { _() {} ~() {} }
+/* Pack's completion: total() reads every hidden field, so a wrong offset or a
+   wrong size shows in the consumer's golden. */
+Pack(Rope r_, LPack p_, int z_ = 100) {
+    _() {}
+    ~() {}
+    int total() { return a_ + r_.tag() + p_.n_ + z_; }
+}

@@ -274,10 +274,11 @@ int32 main() {
     println(String + "nn = " + nn.lv());
 
     /* SOURCE-PRIVATE FIELDS: the header's field list is the public interface;
-       the completion's `sec_` exists in every TU's layout but is NOT a slot
-       here. The initializer tuple maps over the VISIBLE fields flat — `pub_`
-       (base, public) takes 1, `sec_` (private, mid-layout) silently takes its
-       author default, `zed_` takes 2. */
+       the completion's `sec_` is NOT a slot here — `Part<int>` is opaque, so
+       PDer is a computed-layout class over it. The initializer tuple maps over
+       the VISIBLE fields flat — `pub_` (base, public) takes 1, `sec_` (private,
+       mid-layout) takes its author default from @Part<int>__$ctor, `zed_`
+       takes 2. */
     PDer pd = (1, 2);
     println(String + "pv = " + pd.pub_ + " " + pd.zed_ + " " + pd.tally()
         + " " + pd.zz());
@@ -346,8 +347,9 @@ int32 main() {
     //println(String + "pr4 = " + pr4.tally());
 
     /* an all-private completion (`Grow`) leaves NO visible slots — the same
-       rejection an opaque class's hidden fields produce. */
-    //-EXPECT-ERROR: 0 field(s) but 1 initializer(s)
+       rejection an opaque class's hidden fields produce (Grow<int> IS opaque
+       here). */
+    //-EXPECT-ERROR: has private fields that cannot be set using initializer list syntax
     //Grow<int> pr5 = (5);
     //println(String + "pr5 = " + pr5.total());
 

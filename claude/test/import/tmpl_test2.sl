@@ -3,6 +3,12 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 */
 
 /*
+no explicit canon.
+*/
+
+/*
+claude says:
+
 test imported templates defined in another source file.
 this is the SECOND consumer: the once-per-flavor union across consumers,
 transfers and lifecycle across the seam, and the remaining instantiation

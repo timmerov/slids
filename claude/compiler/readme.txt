@@ -1008,7 +1008,7 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
       has no static size in this TU — an imported opaque class, a computed-layout class,
       a tuple/array embedding one (widen::sizeIsDynamic) — cannot be static storage:
       an LLVM global needs a concrete type and a `.bss` reservation a literal size, and
-      the size is a link-time absolute symbol. So its `@`-symbol is a POINTER SLOT
+      the size is a run-time value (the completer's exported word). So its `@`-symbol is a POINTER SLOT
       (`global ptr null`; `external global ptr` in an importer), and the lazy machinery
       above does the rest: the group's synthesized ctor thunk MALLOCS the size value
       (emitSizeValue — what a single `new` allocates), stores the pointer in the slot,
@@ -1519,9 +1519,12 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   importer-relative (the library's own TU, where the source is the PRIMARY
   file, sees everything; test/import partpriv is the witness that the same
   construction spelling maps MORE slots there, accepted deliberately).
-  Methods already had this via the aggregated fn-member drop above; FIELDS
-  must survive into the consumer (layout), so they ride in and get GATED
-  instead. Provenance needs no new class state: a field's stable kParam
+  Methods already had this via the aggregated fn-member drop above. FIELDS
+  of an AGGREGATED flavor are stripped too since 2026-10-21 — the flavor is
+  opaque in a consumer, so they are the completer's to place — and survive
+  only as ClassInfo.source_private_fields, consulted by the kFieldExpr arm
+  so naming one still says PRIVATE. In an INLINE-local flavor (laid out
+  here) they ride in as slots and get GATED. Provenance needs no new class state: a field's stable kParam
   carries its declaring file, file_template_source marks the loaded source,
   and the PAIRED HEADER (Tree::file_imported_by — the file that loaded it)
   counts as library-side too, because the synthesized memberwise operators
@@ -1560,9 +1563,12 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   libraries imported. Old and benign while the leaked headers were ones
   consumers imported anyway; the first leaked header to ADD AN OVERLOAD to
   an existing name turned one candidate into seven.
-  It cannot be fixed by NOT loading the source — a header template's layout
-  lives there (see SO THE MAIN COMPILE CAN NEVER STOP LOADING A TEMPLATE
-  SOURCE in readme-classes). The names must be SCOPED instead.
+  It was not fixed by NOT loading the source — at the time a header
+  template's layout lived there for every consumer (since 2026-10-21 an
+  aggregated flavor is opaque and needs no source; see AN INCOMPLETE
+  TEMPLATE IS NO MORE SPECIAL THAN AN INCOMPLETE CLASS in readme-classes, and
+  plan-template.txt for making the load author-directed). The names were
+  SCOPED instead.
   Provenance is one lex-computed int per file (token::File::private_owner,
   carried to Tree::file_private_owner by grammar) and one predicate,
   parse::declVisibleAt(decl_file, access_file): visible iff the declaring
@@ -2574,11 +2580,10 @@ STAGE FILES (.h / .cpp pairs)
             enforces the header-class ADD ban — both in registerClassBody, the
             only place that sees every opening of a class; see readme-classes.txt
             "WHERE A CLASS IS DECLARED DECIDES ITS LINKAGE". Once every class is
-            registered, propagateRuntimeLayout marks (by fixpoint down the base
-            chains) each class DERIVING from an opaque base: its own field offsets
-            are a link-time fact, not a constant. It runs BEFORE the by-value
-            acyclic walk, which asks the flag to tell that one legal embedding —
-            the `_$base` slot — from an illegal field one. See readme-classes.txt
+            registered, checkOpaqueBaseVirtual rejects a VIRTUAL class whose base
+            chain reaches an opaque class (a non-virtual one is simply computed-
+            layout). It runs BEFORE the by-value acyclic walk, so it walks base
+            chains only, bounded — never slots. See readme-classes.txt
             "DERIVING FROM AN OPAQUE CLASS". Owns
             the "what does this name refer to" decision; types are not
             resolve's job.
@@ -3215,13 +3220,12 @@ STAGE FILES (.h / .cpp pairs)
             ast-side endsInReturn / endsInReturnNode (return only) that recurses
             into a trailing block and a both-arms-return if, mirroring classify.
             Mangled names are baked in by desugar (functionSymbol); field offsets
-            are the index-GEP here in codegen (LLVM owns the byte offset). TWO
-            exceptions: a class DERIVING from an imported opaque base has no
-            compile-time offsets in an importer, so the COMPLETER exports each as an
-            ABSOLUTE symbol `@C__$off<k>` (an alias to the llc-folded null-GEP
-            ptrtoint, off its real struct — still LLVM's numbers) and the importer
-            GEPs by the relocated value; and a COMPUTED-layout class/tuple GEPs by
-            the convention expression (widen::layoutSlotOffset). Both the write path
+            are the index-GEP here in codegen (LLVM owns the byte offset). ONE
+            exception: storage whose own slots embed a dynamic size (a class:
+            widen::slidSlotsDynamic — a computed-layout class, a class deriving from
+            an opaque base, an owner-computed opaque class, an importer's opaque
+            class with a dynamic public prefix; or a dynamic tuple) GEPs by the
+            convention expression (widen::layoutSlotOffset). Both the write path
             (emitElementAddr's kSlid arm) and the read path (emitExpr kIndexExpr) go
             through ONE funnel (emitSlotAddr) — the read side must NOT take its
             whole-object-load + extractvalue shortcut there, since the object

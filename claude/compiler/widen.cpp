@@ -1260,25 +1260,8 @@ LayoutExpr layoutSizeExpr(TypeRef ref, bool round16) {
         addTerm(e, s, 1);
         return e;
     }
-    if (t.form == Type::Form::kSlid || t.form == Type::Form::kTuple) {
-        // A computed class lays out its slots exactly like a tuple.
-        std::vector<TypeRef> slots = t.slots;   // copy: recursion is arena-safe
-        for (TypeRef f : slots) {
-            LayoutExpr fe;
-            if (sizeIsDynamic(f)) {
-                roundCst(e, kOpaqueAlign);
-                fe = layoutSizeExpr(f, /*round16=*/true);
-            } else {
-                roundCst(e, staticByteAlign(f));
-                fe = layoutSizeExpr(f, /*round16=*/false);
-            }
-            addExpr(e, fe, 1);
-        }
-        // A dynamic aggregate is kOpaqueAlign-aligned, so its size rounds to it
-        // — which also makes round16 a no-op for it.
-        roundCst(e, kOpaqueAlign);
-        return e;
-    }
+    if (t.form == Type::Form::kSlid || t.form == Type::Form::kTuple)
+        return layoutOwnSizeExpr(s);
     if (t.form == Type::Form::kArray) {
         std::vector<int> dims = t.dims;
         TypeRef elem_t = t.elem;
@@ -1290,6 +1273,41 @@ LayoutExpr layoutSizeExpr(TypeRef ref, bool round16) {
     }
     assert(false && "layoutSizeExpr: dynamic non-aggregate");
     return e;
+}
+
+LayoutExpr layoutOwnSizeExpr(TypeRef ref) {
+    TypeRef s = strip(ref);
+    LayoutExpr e;
+    // A computed class lays out its slots exactly like a tuple.
+    std::vector<TypeRef> slots = get(s).slots;   // copy: recursion is arena-safe
+    for (TypeRef f : slots) {
+        LayoutExpr fe;
+        if (sizeIsDynamic(f)) {
+            roundCst(e, kOpaqueAlign);
+            fe = layoutSizeExpr(f, /*round16=*/true);
+        } else {
+            roundCst(e, staticByteAlign(f));
+            fe = layoutSizeExpr(f, /*round16=*/false);
+        }
+        addExpr(e, fe, 1);
+    }
+    // A dynamic aggregate is kOpaqueAlign-aligned, so its size rounds to it
+    // — which also makes round16 a no-op for it.
+    roundCst(e, kOpaqueAlign);
+    return e;
+}
+
+bool slidSlotsDynamic(TypeRef ref) {
+    Type const& t = get(strip(ref));
+    if (t.form != Type::Form::kSlid) return false;
+    for (TypeRef slot : t.slots) if (sizeIsDynamic(slot)) return true;
+    return false;
+}
+
+bool slidOwnerComputed(TypeRef ref) {
+    Type const& t = get(strip(ref));
+    return t.form == Type::Form::kSlid && t.opaque
+        && t.linkage != Type::Linkage::kDeclare && slidSlotsDynamic(ref);
 }
 
 LayoutExpr layoutSlotOffset(TypeRef agg, std::size_t k) {
@@ -1312,14 +1330,6 @@ LayoutExpr layoutSlotOffset(TypeRef agg, std::size_t k) {
             addExpr(e, layoutSizeExpr(f, /*round16=*/false), 1);
         }
     }
-}
-
-void setSlidRuntimeLayout(TypeRef ref, bool runtime_layout) {
-    arena().types[ref].runtime_layout = runtime_layout;
-}
-
-bool slidRuntimeLayout(TypeRef ref) {
-    return get(ref).runtime_layout;
 }
 
 void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here) {

@@ -36,9 +36,6 @@ Voter(
 }
 alias Voters = Vector<Voter>;
 
-Cluster(...) { }
-alias Clusters = Vector<Cluster>;
-
 Electorate(
     /* configuration. */
     int nvoters_ = 100,
