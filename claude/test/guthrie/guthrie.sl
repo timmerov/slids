@@ -255,9 +255,11 @@ star - range plus automatic runoff of the top two.
 cumulative voting - split 1.0 votes among candidates.
 */
 
+import algorithm;
 import dump;
 import electorate;
 import guthrie;
+import math;
 import+ map;
 import random;
 import string;
@@ -371,8 +373,8 @@ const bool kUseApprovalVotes = false;
 option to find the theoretical best candidate from the voters.
 this feature is expensive and not used by the art.
 */
-//const bool kFindTheoreticalBestCandidate = true;
-const bool kFindTheoreticalBestCandidate = false;
+const bool kFindTheoreticalBestCandidate = true;
+//const bool kFindTheoreticalBestCandidate = false;
 
 /*
 option to use the median voter and a constructed average voter
@@ -393,8 +395,8 @@ const bool kShowElectorateDistribution = false;
 option to show the voter blocs.
 this is a bit spammy.
 */
-//const bool kShowVoterBlocs = true;
-const bool kShowVoterBlocs = false;
+const bool kShowVoterBlocs = true;
+//const bool kShowVoterBlocs = false;
 
 /*
 option to show details of all coombs rounds.
@@ -602,9 +604,9 @@ GuthrieVoting(
                 electorate_.show_distribution();
             }
             find_best_candidate();
+            init_candidates();
 /* ==tsc== */
 /*
-            init_candidates();
             calculate_utilities(actual_);
             use_median_satisfaction(actual_);
             accumulated_.best_ += actual_.best_;
@@ -736,8 +738,6 @@ GuthrieVoting(
         println(String + " Average : " + theoretical_.average_);
     }
 
-/* ==tsc== */
-/*
     void init_candidates() {
         /*
         pick primary candidates from the voters.
@@ -747,11 +747,13 @@ GuthrieVoting(
         figure out how candidates rank each other.
         calculate voter satisfactions.
         */
-        LOG("Selecting candidates from the electorate.");
+        println(String + "Selecting candidates from the electorate.");
         pick_candidates_from_electorate();
+/* ==tsc== */
+/*
         disperse_candidates();
         /* sort them. */
-        std::sort(candidates_.begin(), candidates_.end());
+        quicksort(candidates_);
         single_transferable_vote_primary();
         name_candidates();
         if (kShowVoterBlocs) {
@@ -759,6 +761,7 @@ GuthrieVoting(
         }
         show_candidate_positions();
         rank_candidates();
+*/
     }
 
     void pick_candidates_from_electorate() {
@@ -766,15 +769,16 @@ GuthrieVoting(
         int n = ncandidates_;
         if (canddiate_method_ == kCandidatesSingleTransferableVote) {
             /* use the cube root of the numbe of voters. */
-            float64 cube_root = std::pow(float64(electorate_.nvoters_), kPrimaryPower);
-            n = (int) std::round(cube_root);
+            float64 cube_root = math:pow((float64=electorate_.nvoters_), kPrimaryPower);
+            n = (int=math:round(cube_root));
 
             /* maybe increase it. */
-            n = std::max(n, ncandidates_);
+            n = math:max(n, ncandidates_);
         }
 
         if (n > ncandidates_) {
-            LOG("Reducing the number of candidates from "<<n<<" to "<<ncandidates_<<".");
+            println(String + "Reducing the number of candidates from "
+                + n + " to " + ncandidates_ + ".");
         }
 
         /* allocate space */
@@ -784,26 +788,28 @@ GuthrieVoting(
         choose random voters as candidates.
         do not allow duplicates.
         */
-        std::vector<bool> duplicates;
+        Vector<bool> duplicates;
         duplicates.resize(electorate_.nvoters_);
-        for (int i = 0; i < electorate_.nvoters_; ++i) {
+        for (i : 0..electorate_.nvoters_) {
             duplicates[i] = false;
         }
         char name = 'a';
-        for (auto&& candidate : candidates_) {
+        for (candidate : candidates_) {
             int i = 0;
-            for(;;) {
-                i = Rng::generate(electorate_.nvoters_);
+            while() {
+                i = rng:generate_int(electorate_.nvoters_);
                 if (duplicates[i] == false) {
                     break;
                 }
             }
             duplicates[i] = true;
-            candidate.name_ = name++;
-            candidate.position_ = electorate_.voters_[i].position_;
+            candidate^.name_ = name++;
+            candidate^.position_ = electorate_.voters_[i].position_;
         }
     }
 
+/* ==tsc== */
+/*
     /*
     move candidates closer to the political center.
     */

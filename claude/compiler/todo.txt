@@ -84,6 +84,7 @@ UNBLOCKED FEATURES
 
   * should alias A = Template<B> instantiate the template?
     or should it be deferred until an actual template object is created?
+    claude says 30-50 lines in resolve.cpp.
 
   * enum Color (kRed, kBlack);
     void set_color(Color color) { }

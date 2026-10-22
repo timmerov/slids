@@ -77,3 +77,19 @@ void quicksort<T>(mutable T container) {
         subsort(scan+1, last);
     }
 }
+
+/* min template */
+T math:min<T>(T a, T b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+/* max template */
+T math:max<T>(T a, T b) {
+    if (b < a) {
+        return a;
+    }
+    return b;
+}
