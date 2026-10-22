@@ -24,7 +24,7 @@ Position(
     String to_string();
 
     /* for sorting */
-    /*bool operator < (const Position& other) const;*/
+    bool const op<(Position^ other);
 }
 
 Voter(
@@ -32,7 +32,7 @@ Voter(
     Position position_
 ) {
     /* for sorting */
-    //bool operator < (const Voter& other) const;
+    bool const op<(Voter^ other);
 }
 alias Voters = Vector<Voter>;
 

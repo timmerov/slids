@@ -102,26 +102,21 @@ Cluster(
     _() {} ~() {}
 
     /* for sorting */
-    /*bool operator < (const Cluster& other) const
-    {
-        return (position_ < other.position_);
-    }*/
+    bool const op<(Cluster^ other) {
+        return (position_ < other^.position_);
+    }
 }
 alias Clusters = Vector<Cluster>;
 
-/*
 /* for sorting */
-bool Position::operator < (const Position& other) const
-{
-    return (axis_[0] < other.axis_[0]);
+bool const Position:op<(Position^ other) {
+    return (axis_[0] < other^.axis_[0]);
 }
 
 /* for sorting */
-bool Voter::operator < (const Voter& other) const
-{
-    return (position_ < other.position_);
+bool const Voter:op<(Voter^ other) {
+    return (position_ < other^.position_);
 }
-*/
 
 Electorate() {
     void init() {

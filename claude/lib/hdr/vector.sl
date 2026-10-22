@@ -72,6 +72,42 @@ Vector<T>(
         v^.storage_ = nullptr;
     }
 
+    /* binary equals */
+    bool const op==(Vector<T>^ vec) {
+        cmp = compare(vec);
+        return (cmp == 0);
+    }
+
+    /* binary not equals */
+    bool const op!=(Vector<T>^ vec) {
+        cmp = compare(vec);
+        return (cmp != 0);
+    }
+
+    /* binary less than or equals */
+    bool const op<=(Vector<T>^ vec) {
+        cmp = compare(vec);
+        return (cmp <= 0);
+    }
+
+    /* binary greater than or equals. */
+    bool const op>=(Vector<T>^ vec) {
+        cmp = compare(vec);
+        return (cmp >= 0);
+    }
+
+    /* binary less than. */
+    bool const op<(Vector<T>^ vec) {
+        cmp = compare(vec);
+        return (cmp < 0);
+    }
+
+    /* binary greater than */
+    bool const op>(Vector<T>^ vec) {
+        cmp = compare(vec);
+        return (cmp > 0);
+    }
+
     /*
     overload index operation to fetch/set the indexed element.
     T elem = vec[3];
@@ -279,6 +315,46 @@ Vector<T>(
         } {
             //println(String + "Vector<T>: inline dtor.");
             ptr^.~();
+        }
+    }
+
+    /*
+    compare this vector to another. results:
+        -1: self <  other
+         0: self == other
+        +1: self >  other
+    use only the less-than operator.
+    */
+    int const compare(Vector<T>^ other) {
+        if (other == ^self) {
+            return 0;
+        }
+        for (
+            sizea = size_,
+            sizeb = other^.size_,
+            T[] ptra = <T[]> storage_,
+            T[] ptrb = <T[]> other^.storage_
+        ) () {
+            --sizea;
+            --sizeb;
+            ++ptra;
+            ++ptrb;
+        } {
+            if (sizea == 0 && sizeb == 0) {
+                return 0;
+            }
+            if (sizea == 0) {
+                return -1;
+            }
+            if (sizeb == 0) {
+                return +1;
+            }
+            if (ptra^ < ptrb^) {
+                return -1;
+            }
+            if (ptrb^ < ptra^) {
+                return +1;
+            }
         }
     }
 }

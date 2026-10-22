@@ -258,8 +258,7 @@ cumulative voting - split 1.0 votes among candidates.
 import dump;
 import electorate;
 import guthrie;
-// ==tsc==
-//import+ map;
+import+ map;
 import random;
 import string;
 import+ vector;
@@ -439,12 +438,10 @@ Candidate(
     /* utility */
     float64 utility_ = 0.0
 ) {
-    /* ==tsc== */
     /* for sorting */
-    /*bool operator < (const Candidate& other) const
-    {
-        return (position_ < other.position_);
-    }*/
+    bool const op<(Candidate^ other) {
+        return (position_ < other^.position_);
+    }
 }
 alias Candidates = Vector<Candidate>;
 
@@ -462,8 +459,7 @@ Bloc(
     Approvals approvals_
 ) { }
 
-/* ==tsc== map not ready for this yet. */
-//alias BlocMap = Map<Rankings, Bloc>;
+alias BlocMap = Map<Rankings, Bloc>;
 
 /*
 this is a base class for specific electoral methods.

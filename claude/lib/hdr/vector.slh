@@ -24,6 +24,17 @@ Vector<T>(...) {
     op<--(mutable Vector<T>^ v);
 
     /*
+    binary comparisons.
+    requires T.op<() to be defined.
+    */
+    bool const op==(Vector<T>^ s);
+    bool const op!=(Vector<T>^ s);
+    bool const op<=(Vector<T>^ s);
+    bool const op>=(Vector<T>^ s);
+    bool const op<(Vector<T>^ s);
+    bool const op>(Vector<T>^ s);
+
+    /*
     overload index operation to fetch/set the indexed element.
     T elem = vec[3];
     vec[3] = elem;
