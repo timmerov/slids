@@ -164,6 +164,11 @@ Ucp<T>(T^ u_ = nullptr) {
 //    void nadd(T v);
 //}
 
+/* `import+` belongs in a source file: nothing a header declares is a locally
+   defined private class, so a header never needs a template's source. */
+//-EXPECT-ERROR: 'import+' may not appear in a header file
+//import+ tmpl_lib2;
+
 /* a nested class inside a header class template has no body channel. */
 //-EXPECT-ERROR: may not contain a nested class
 //NBad<T>(T n_ = 0) {

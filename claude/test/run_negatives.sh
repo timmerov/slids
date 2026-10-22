@@ -82,6 +82,22 @@ if [ "${1:-}" = "--worker" ]; then
     err=$("$SLIDSC" "$compile_file" -o "$case_dir/out.ll" -I . \
           -I "$(dirname "$SLIDSC")/../lib/hdr" 2>&1)
     rc=$?
+    # A TEMPLATE header's own completion (or lack of one) is judged by its template
+    # SOURCE's compile, not by an importer's — an importer that did not `import+` it
+    # never sees the source. So a `.slh` case whose header has a sibling `.sl` (in the
+    # farm, beside the variant) also compiles that file, as the --instantiate stage
+    # would; the case passes if EITHER compile errors with the substring.
+    if [ "${src##*.}" = "slh" ] && [ -e "${case_file%.slh}.sl" ]; then
+        sib_file="${case_file%.slh}.sl"
+        sib_err=$("$SLIDSC" "$sib_file" -o "$case_dir/sib.ll" -I . \
+              -I "$(dirname "$SLIDSC")/../lib/hdr" 2>&1)
+        sib_rc=$?
+        sib_diag=$(printf '%s' "$sib_err" | grep -Ev '^[[:space:]]*[0-9]+:|^[[:space:]]*\^')
+        if [ $sib_rc -ne 0 ] && printf '%s' "$sib_diag" | grep -qF -- "$substring"; then
+            rc=$sib_rc
+            err=$sib_err
+        fi
+    fi
     # Strip rendered source-context lines so the marker substring can't match
     # its own appearance in the listing slidsc prints with each diagnostic.
     diag=$(printf '%s' "$err" | grep -Ev '^[[:space:]]*[0-9]+:|^[[:space:]]*\^')

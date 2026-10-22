@@ -1535,7 +1535,35 @@ int32 main() {
 ```
 import std.io;
 import vec2;           // imports vec2.slh from same directory
+import+ vector;        // imports vector.slh AND its template source vector.sl
 ```
+
+`import+` is needed exactly when this file instantiates a template declared in
+that header with a **locally defined private class** — a class declared in this
+`.sl` file, not in any header:
+
+```
+import string;
+import+ vector;
+
+Priv(int p_ = 0) { }
+Vector<Priv> privs;    // needs vector.sl's bodies: import+
+Vector<int> ints;      // would need only `import vector;`
+```
+
+Both mistakes are compile errors (there are no warnings):
+
+- a plain `import` where `import+` is required — the error points at the
+  `import` statement, with notes at the instantiation, the template, and the
+  private class;
+- an `import+` that is not needed — no template declared in that header is used
+  with a locally defined private class.
+
+`import+` names the header that DECLARES the template being instantiated, even
+when that header arrives through another one: a file importing `a.slh` that
+instantiates `Vector<Priv>` writes `import+ vector;`. `import+` also loads, in
+turn, the template sources that source needs. It may not appear in a `.slh`
+header, and one file may not import the same header both ways.
 
 ---
 

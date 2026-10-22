@@ -9030,6 +9030,10 @@ static widen::TypeRef firstLocalArg(parse::Tree& tree,
                                     std::vector<widen::TypeRef> const& args);
 static bool anyArgLocal(parse::Tree& tree,
                         std::vector<widen::TypeRef> const& args);
+static bool requirePrivateInstanceSource(parse::Tree& tree, int tmpl_entry_id,
+                                         std::vector<widen::TypeRef> const& args,
+                                         int use_file, int use_tok,
+                                         diagnostic::Sink& diag);
 
 // THE CONVENTION OF CONVENIENCE (canon tmpl_function.sl): a parameter whose
 // PATTERN type is a BARE template type parameter (`T v`) passes by value when
@@ -9111,6 +9115,9 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
         fileIsSibling(tree, tree.entries[tmpl_entry_id].file_id);
     bool inline_local = header_tmpl && !here_sibling && anyArgLocal(tree, args);
     bool declare_only = header_tmpl && !here_sibling && !inline_local;
+    if (inline_local
+        && !requirePrivateInstanceSource(tree, tmpl_entry_id, args, file_id, tok, diag))
+        return -1;
     if (inline_local && ti.def->kind != parse::Kind::kFunctionDef) {
         diagnostic::report(diag, {file_id, tok,
             "Instantiating '" + tree.entries[tmpl_entry_id].name
@@ -9588,6 +9595,54 @@ static bool anyArgLocal(parse::Tree& tree,
     return firstLocalArg(tree, args) != widen::kNoType;
 }
 
+// THE SOURCE IS THE AUTHOR'S CALL. An instance of a HEADER template over a locally
+// defined private class clones its bodies from the template source, which loads only
+// for `import+` (lex makeFull). Loaded: mark it USED — the root's `import+` is needed —
+// and go on. Not loaded: the error points at the IMPORT STATEMENT in the file that
+// instantiates (that is where the fix goes; with none there — the header reached
+// through another — at the instantiation), with notes at the instantiation, the
+// template, and the private class. One error per statement.
+static bool requirePrivateInstanceSource(parse::Tree& tree, int tmpl_entry_id,
+                                         std::vector<widen::TypeRef> const& args,
+                                         int use_file, int use_tok,
+                                         diagnostic::Sink& diag) {
+    int h = tree.entries[tmpl_entry_id].file_id;
+    if (h >= 0 && h < static_cast<int>(tree.header_source_loaded.size())
+        && tree.header_source_loaded[h]) {
+        tree.header_source_used[h] = true;
+        return true;
+    }
+    std::string module;
+    int stmt = -1;
+    for (std::size_t i = 0; i < tree.import_stmts.size(); i++) {
+        token::ImportStmt const& st = tree.import_stmts[i];
+        if (st.header_file_id != h) continue;
+        if (module.empty()) module = st.module;
+        if (st.file_id == use_file) { stmt = static_cast<int>(i); module = st.module; break; }
+    }
+    if (module.empty()) module = "?";
+    int key = stmt >= 0 ? stmt : -1 - h;
+    if (!tree.import_plus_reported.insert(key).second) return false;
+    std::vector<diagnostic::Note> notes;
+    if (stmt >= 0)
+        notes.push_back({use_file, use_tok, "'" + parse::instanceSpelling(tree,
+            tmpl_entry_id, args) + "' is instantiated here"});
+    notes.push_back({tree.entries[tmpl_entry_id].file_id, tree.entries[tmpl_entry_id].tok,
+        "template '" + tree.entries[tmpl_entry_id].name + "' is declared here"});
+    widen::TypeRef loc = firstLocalArg(tree, args);
+    auto ci = tree.classes.find(loc);
+    if (ci != tree.classes.end())
+        notes.push_back({ci->second.def_file_id, ci->second.def_tok,
+            "private class '" + ci->second.name + "' is defined here"});
+    int pfile = stmt >= 0 ? tree.import_stmts[stmt].file_id : use_file;
+    int ptok = stmt >= 0 ? tree.import_stmts[stmt].tok : use_tok;
+    diagnostic::report(diag, {pfile, ptok,
+        "A template declared in '" + module + ".slh' is used with a locally defined "
+        "private class; write 'import+ " + module + ";' so its source is loaded.",
+        notes});
+    return false;
+}
+
 int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                              std::vector<widen::TypeRef> const& args,
                              int file_id, int tok, diagnostic::Sink& diag) {
@@ -9597,13 +9652,25 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         auto memo = it->second.instances.find(args);
         if (memo != it->second.instances.end()) return memo->second;
     }
-    // A never-completed INCOMPLETE template has no layout to instantiate.
-    // Cross-TU completion WORKS (a header's `Tmpl<T>(...)` closes via the
-    // loaded template source's completing re-open — canon test/import
-    // Grow): this fires only when NO loaded opening closed it, in any
-    // configuration. (The end-of-resolve sweep catches the never-USED case;
-    // open_reported keeps the two sites to one diagnostic.)
-    if (it->second.cls_open) {
+    // MODE (spelled out below, where the clones are made).
+    bool header_tmpl = fileIsImported(tree, tree.entries[tmpl_entry_id].file_id);
+    bool here_sibling = fileIsSibling(tree, tree.entries[tmpl_entry_id].file_id);
+    bool inline_local = header_tmpl && !here_sibling && anyArgLocal(tree, args);
+    bool declare_only = header_tmpl && !here_sibling && !inline_local;
+    if (inline_local
+        && !requirePrivateInstanceSource(tree, tmpl_entry_id, args, file_id, tok, diag))
+        return -1;
+    // A never-completed INCOMPLETE template has no layout to instantiate — where
+    // its completion should be visible. Cross-TU completion WORKS (a header's
+    // `Tmpl<T>(...)` closes via the template source's completing re-open —
+    // canon test/import Grow). THE GUARD: an AGGREGATED flavor in a TU that did
+    // not load the source is OPAQUE here, its completion the --instantiate
+    // TU's business — exactly an incomplete header class an importer never sees
+    // closed, so it is no error. (The end-of-resolve sweep catches the
+    // never-USED case; open_reported keeps the two sites to one diagnostic.)
+    bool source_unseen = header_tmpl && !here_sibling
+        && !tree.header_source_loaded[tree.entries[tmpl_entry_id].file_id];
+    if (it->second.cls_open && !(declare_only && source_unseen)) {
         if (!it->second.open_reported) {
             it->second.open_reported = true;
             diagnostic::report(diag, {file_id, tok,
@@ -9624,10 +9691,6 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // LOCAL to this TU, so nobody else can emit the flavor; the bodies clone
     // from the loaded template source and the instance is internal, def_id-
     // suffixed. The header's SIBLING defines externally, as before.
-    bool header_tmpl = fileIsImported(tree, tree.entries[tmpl_entry_id].file_id);
-    bool here_sibling = fileIsSibling(tree, tree.entries[tmpl_entry_id].file_id);
-    bool inline_local = header_tmpl && !here_sibling && anyArgLocal(tree, args);
-    bool declare_only = header_tmpl && !here_sibling && !inline_local;
     if (inline_local) {
         // The bodies must exist HERE — the template source beside the header.
         bool has_bodies = false, has_decls = false;
@@ -10559,6 +10622,12 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // reported at its use; open_reported keeps this to one diagnostic.)
     for (auto& [tid, ti] : tree.templates) {
         if (!ti.def || ti.def->kind != parse::Kind::kClassDef) continue;
+        // THE GUARD: a header template whose source this TU did not load is
+        // completed elsewhere (its --instantiate TU), like any incomplete
+        // header class.
+        int hf = ti.def->file_id;
+        if (fileIsImported(tree, hf) && !fileIsSibling(tree, hf)
+            && !tree.header_source_loaded[hf]) continue;
         if (ti.cls_open && !ti.open_reported) {
             ti.open_reported = true;
             diagnostic::report(diag, {ti.def->file_id, ti.def->name_tok,

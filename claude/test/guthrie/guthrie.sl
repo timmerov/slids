@@ -261,7 +261,7 @@ import guthrie;
 import map;
 import random;
 import string;
-import vector;
+import+ vector;
 
 stdc import {
     void exit(int status);

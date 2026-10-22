@@ -134,7 +134,8 @@ struct Parser {
     // `>` and insert the second `>` right after (same source spot, col+1, so
     // a caret still lands on the closer). Parse is a single forward pass —
     // every tok index recorded so far is behind pos — so the insertion
-    // invalidates nothing.
+    // invalidates nothing, except the import statements' keywords the lexer
+    // PARKED past kEndOfInput: they shift with it.
     void splitRShift() {
         token::Token& t = tokens.tokens[pos];
         t.kind = token::Kind::kGt;
@@ -143,6 +144,8 @@ struct Parser {
         token::Token second = t;
         second.col += 1;
         tokens.tokens.insert(tokens.tokens.begin() + pos + 1, second);
+        for (auto& st : tokens.import_stmts) if (st.tok > pos) st.tok++;
+        for (auto& st : out.import_stmts) if (st.tok > pos) st.tok++;
     }
 
     void error(std::string const& msg) {
@@ -5181,6 +5184,13 @@ void run(token::List& in, parse::Tree& out, diagnostic::Sink& diag) {
         out.file_template_source[i] = in.files[i].template_source;
         out.file_imported_by[i] = in.files[i].imported_by;
         out.file_private_owner[i] = in.files[i].private_owner;
+    }
+    out.import_stmts = in.import_stmts;
+    out.header_source_loaded.assign(in.files.size(), false);
+    out.header_source_used.assign(in.files.size(), false);
+    for (size_t i = 0; i < in.files.size(); i++) {
+        int h = in.files[i].imported_by;
+        if (in.files[i].template_source && h >= 0) out.header_source_loaded[h] = true;
     }
     Parser p{in, out, diag};
     p.parseProgram();

@@ -1741,9 +1741,10 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     opaque") — true only because the template source was always side-loaded, so every consumer
     happened to see the completion. That made the side-load MANDATORY (measured 2026-10-14:
     gate lex's loadTemplateSource off and `Vector<float64>` reports "declared incomplete
-    ('...') and never completed"). With aggregated flavors opaque that is no longer so — the
-    load is still unconditional today, and making it author-directed (`import+`) is the open
-    design in plan-template.txt. The import-leak fix of 2026-10-14 (THE VISIBILITY RULE,
+    ('...') and never completed"). With aggregated flavors opaque that is no longer so, and
+    the load is AUTHOR-DIRECTED since the same day: `import+` loads the source (for an
+    instance over a locally defined private class), plain `import` never does — readme.txt
+    TEMPLATES, THE SOURCE IS THE AUTHOR'S CALL; design record plan-template.txt. The import-leak fix of 2026-10-14 (THE VISIBILITY RULE,
     readme.txt TEMPLATES) SCOPED the names a loaded source brings in; it stands unchanged.
     Canon test/template tmpl_complete.sl (the c-rows: locals, a global, sizeof, by-value
     embedding, new / array / tuple, a flavor of a flavor, the inline-local Vector<Pt>, a local

@@ -1,14 +1,17 @@
 SIDE-LOAD ONLY WHAT IS NEEDED
 =============================
 
-status:  OPEN — D chosen 2026-10-21. The PREREQUISITE LANDED 2026-10-21 (all but its
-         guard, below; plan.txt INCOMPLETE TEMPLATES ARE INCOMPLETE CLASSES). D itself is
-         not implemented: the load is still unconditional.
+status:  LANDED 2026-10-21 — the PREREQUISITE and D, guard included (plan.txt INCOMPLETE
+         TEMPLATES ARE INCOMPLETE CLASSES + THE SOURCE IS THE AUTHOR'S CALL). KEPT OPEN as a
+         design record: the topic will be revisited — see AS LANDED and OPEN at the end.
+         The sections in between are the design as DISCUSSED (2026-10-20/21); where they
+         differ from what shipped, AS LANDED wins.
 where:   today's behavior is documented in readme.txt (TEMPLATES, cross-TU: the three
-         instantiation modes; THE VISIBILITY RULE) and readme-classes.txt (AN INCOMPLETE
-         TEMPLATE IS NO MORE SPECIAL THAN AN INCOMPLETE CLASS, under OPAQUE CLASSES).
-evidence: everything below about current code is from READING it, except the
-         Vector<float64> result, which was MEASURED 2026-10-14.
+         instantiation modes; THE SOURCE IS THE AUTHOR'S CALL; THE VISIBILITY RULE),
+         readme-classes.txt (AN INCOMPLETE TEMPLATE IS NO MORE SPECIAL THAN AN INCOMPLETE
+         CLASS, under OPAQUE CLASSES) and slids_reference.md (Imports).
+evidence: everything below about current code was from READING it at the time, except
+         the Vector<float64> result, MEASURED 2026-10-14; AS LANDED is from the landing.
 
 GOAL
   A consumer loads a template source (t.sl beside t.slh) only when it needs that source's
@@ -18,7 +21,7 @@ GOAL
   NEVER side-load unless the AUTHOR so indicates (D). The case this whole plan serves is a
   private class used as an argument to a public template.
 
-TODAY
+BEFORE D (the state this plan started from; superseded 2026-10-21)
   lex::ImportWrapper::loadTemplateSource (lex.cpp) side-loads <dir>/<stem>.sl right after
   the header and its imports are processed, when ALL hold:
     1. the header declares a template (declaresTemplate: identifier + balanced <...> then
@@ -46,8 +49,8 @@ TODAY
   through aliases / nested args / qualification / deduction, and cannot ask the declaring
   file of the argument's class leaf (anyArgLocal peels pointers, iterators, arrays).
 
-PREREQUISITE — AN INCOMPLETE TEMPLATE IS AN INCOMPLETE CLASS  (LANDED 2026-10-21, but THE
-  GUARD — deferred to D)
+PREREQUISITE — AN INCOMPLETE TEMPLATE IS AN INCOMPLETE CLASS  (LANDED 2026-10-21; THE
+  GUARD landed with D the same day)
   None of A/B/C/D works without this. An incomplete header template is no more special than
   an incomplete header class: OPAQUE to every importer, laid out only by its completer.
   The old "a template instance is NEVER OPAQUE" was an ARTIFACT of always side-loading the
@@ -72,13 +75,13 @@ PREREQUISITE — AN INCOMPLETE TEMPLATE IS AN INCOMPLETE CLASS  (LANDED 2026-10-
     private-field diagnostic), so `import` and `import+` consumers see one flavor.
   - Landed with it: LAYOUT WORDS + the main preamble (an owner whose hidden fields embed
     another module's size), and runtime layout retired (derived-from-opaque is computed).
-  - THE GUARD (NOT landed — lands with D): an open header template in a consumer is not an error, any more than an
+  - THE GUARD (landed with D): an open header template in a consumer is not an error, any more than an
     open header class is. instantiateClassTemplate's cls_open check and the end-of-resolve
     sweep fire only where the completer should be. The canon negative Ngrow
     (test/import/tmpl_lib.slh) is then caught where a never-completed opaque class is —
     the owner's compile or the link — not in the consumer.
 
-D. THE AUTHOR SAYS SO: import / import+  (chosen 2026-10-21)
+D. THE AUTHOR SAYS SO: import / import+  (chosen and LANDED 2026-10-21 — see AS LANDED)
   Syntax:
       import vector;       // the header only — never a side-load
       import+ vector;      // the header AND vector.sl, in its privacy zone as today
@@ -279,3 +282,55 @@ RECOMMENDATION
   2. D: `import` / `import+`, both errors, spec 2 for transitive loads (fall back to 1,
      then 3).
   3. A superseded. C only if main must never contain template bodies. B no.
+
+AS LANDED (2026-10-21)
+  What shipped, and where it departs from D above.
+  - THE ERROR TEXTS were set by the user, who ruled out the term "local flavor" ("authors
+    don't know what local flavor means"):
+      missing:  primary at the IMPORT STATEMENT — "A template declared in 'vector.slh' is
+                used with a locally defined private class; write 'import+ vector;' so its
+                source is loaded." — notes: "'Vector<Priv>' is instantiated here",
+                "template 'Vector' is declared here", "private class 'Priv' is defined
+                here". One error per statement. (D above said primary at the use site;
+                the user moved it to the statement, where the fix goes.)
+      unneeded: at the `import+` statement — "import+ vector is not needed: no template
+                declared in vector.slh uses a locally defined private class." Also covers
+                RULE 2 (no template / no source) — same message, no separate one.
+      header:   "'import+' may not appear in a header file: ..."
+      both:     "'vector' is imported both with 'import' and 'import+' in this file; ..."
+  - THE CHAINING RULE (user, at the go): the header DECLARING the instantiated template is
+    the one to `import+`. main importing a.slh and instantiating Vector<Priv> writes
+    `import+ vector;`; instantiating A<Priv>, `import+ a;`. When the instantiating file has
+    no statement for that header, the missing error's primary is the instantiation itself.
+  - SPEC 2 held: makeFull loads the header's source, then recurses over the import
+    statements of the header AND of its source (each in its own privacy zone). It also
+    recurses into the header's plain header imports — slightly wider than "template headers
+    vector.sl imports", still fixed by the import graph.
+  - WHERE: missing — resolve requirePrivateInstanceSource, from instantiateClassTemplate and
+    instantiateTemplate (functions AND template methods share it; classify reaches it
+    through instantiateTemplate). USED bit — Tree.header_source_used, set there. Unneeded —
+    main.cpp right after classify. Lexical rules — lex, reported after parking.
+  - NEW MACHINERY D did not foresee: the lexer CONSUMES import statements, so a diagnostic
+    had nothing to point at. Each statement is a token::ImportStmt and its `import` token is
+    PARKED past kEndOfInput; grammar's `>>` split had to shift parked indices.
+  - THE NEGATIVE RUNNER: a `.slh` case now also compiles the header's sibling `.sl` (where a
+    template header's own completion is judged); Ngrow passes there.
+  - SWEEP: test/template tmpl_complete.sl; test/import tmpl_test, tmpl_test2, bird;
+    test/guthrie guthrie.sl and electorate.sl (chaining — `import+ vector` added beside
+    `import electorate`); test/lib algorithm.sl, vector.sl. lib/ needed nothing.
+    test/progress galaxy.sl needs `import+ vector; import+ algorithm;` (the user's dir).
+  - All other suites pass unchanged.
+
+OPEN (for the revisit)
+  - FALLBACKS 1 / 3 of spec 2 were not needed; nothing in the tree exercises a TRANSITIVE
+    load yet (no template body minting another header template's flavor from T with a
+    private class). A pin would need a module pair in test/import.
+  - THE NO-STATEMENT CASE of the missing error (chaining, header arrives via another) has
+    no negative pin; electorate.sl exercises the positive side only.
+  - A C/C++ `main` never runs the layout preamble (readme-classes, SIZE) — unrelated to the
+    load, but the same landing day.
+  - todo.txt's "side-loaded ... always" item is now done in substance; it is the user's
+    list to curate.
+  - Unchanged and still deferred: the source's own `import`/`import+` spellings are judged
+    only by its own compile (RULE 4); a transitively loaded source is never judged.
+

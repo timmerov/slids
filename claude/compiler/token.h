@@ -115,6 +115,21 @@ struct File {
     int private_owner = -1;
 };
 
+// One `import module;` / `import+ module;` statement, kept after the lexer consumes it
+// (the statement never reaches the parser). Its `import` keyword token is PARKED after
+// kEndOfInput (`tok`), so a later stage can point a diagnostic at the statement.
+struct ImportStmt {
+    int file_id = -1;          // the importing file
+    int tok = -1;              // the parked `import` token (token::List::tokens index)
+    std::string module;        // `vector`
+    bool plus = false;         // `import+`: load the header's template source too
+    int header_file_id = -1;   // the header it reached (an earlier one when deduped)
+    // `import+` only: every header whose template source this statement caused to load —
+    // its own header and, transitively, the template headers that source imports
+    // (spec 2). The statement is NEEDED iff a private-class instance drew on any of them.
+    std::vector<int> full_headers;
+};
+
 struct List {
     std::vector<Token> tokens;
     std::deque<File> files;     // deque for stable references — Stream holds a pointer to source
@@ -123,6 +138,7 @@ struct List {
     // survives the statements' removal from the stream. Serves --scan-deps'
     // library-ordering edges.
     std::vector<std::pair<int, std::string>> import_edges;
+    std::vector<ImportStmt> import_stmts;
 };
 
 void add(List& list, Token const& tok);

@@ -1459,14 +1459,18 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     ENTIRELY (a stripped twin beside the header's declaration is an ambiguous
     duplicate — found as "Ambiguous call to 'push'"); the header is the
     interface, so a source-only member (`priv2`) exists in the sibling's
-    flavors and is "no method" in a consumer's. Source-only FIELDS cannot
-    drop (layout) — they ride the clone and are GATED instead (see
-    SOURCE-PRIVATE FIELDS below). The flavor is recorded in the
-    .sli demand pool.
+    flavors and is "no method" in a consumer's. Source-only FIELDS drop too
+    since 2026-10-21: an aggregated flavor of an incomplete header template is
+    OPAQUE in a consumer (readme-classes AN INCOMPLETE TEMPLATE IS NO MORE
+    SPECIAL THAN AN INCOMPLETE CLASS), so its layout comes from the
+    --instantiate TU's `__$sizeof` word (see SOURCE-PRIVATE FIELDS below for
+    the diagnostic that survives). An aggregated flavor needs NO template
+    source. The flavor is recorded in the .sli demand pool.
   - INLINE-LOCAL (an argument class is local to this TU): nobody else can
     emit the flavor, so it clones FULL bodies and emits internal, def_id-
     suffixed, excluded from the .sli. The bodies come from the TEMPLATE
-    SOURCE, which lex loads implicitly: importing `<m>.slh` also lexes the
+    SOURCE, which lex loads only when the AUTHOR asks (`import+ <m>;` — THE
+    SOURCE IS THE AUTHOR'S CALL, below): it lexes the
     `<m>.sl` in the header's OWN directory (token::templateSourcePath) — only
     when the header DECLARES a template (ImportWrapper::declaresTemplate: a
     name + balanced `<...>` followed by `(` or `=`; lexical, errs toward
@@ -1496,8 +1500,8 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     Entry.tu_local_instance — stamped on the inline path — makes liftMember
     emit it `define internal` under the kDeclare owner. The exception keys
     on the FLAG plus the owner's LINKAGE, not "a plain header class", so a
-    future kDeclare class-template owner inherits the rule. Rejected with a
-    focused message: the template source missing entirely.
+    future kDeclare class-template owner inherits the rule. A source that is
+    NOT loaded (plain `import`) is the missing-`import+` error below.
   - SIBLING: the template source's own compile — full bodies, external
     defines (the entry/clone file_ids are the header's, so the existing
     declared-in-header linkage rules emit them visible). "This TU is the
@@ -1505,14 +1509,68 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     templateSourcePath, by path. It is TEMPLATE-ONLY — a plain header class's
     owner is decided by content (readme-classes.txt THE OWNING FILE).
 
-  An INCOMPLETE header template completes CROSS-TU for free: the header
-  declares `Tmpl<T>(...)` (interface only — even fieldless), and the loaded
-  template source's completing re-open (no trailing `...`) closes it and
-  supplies the field list + bodies through the ordinary incomplete-class
-  machinery (pending_fields) — every consumer sees the FULL layout (sizeof
-  folds) because the source is always loaded beside its header. Canon
-  test/import Grow (tmpl_lib.slh/.sl, both consumers). The "never
-  completed" error fires only when NO loaded opening closes the template.
+  An INCOMPLETE header template completes CROSS-TU: the header declares
+  `Tmpl<T>(...)` (interface only — even fieldless), and the template source's
+  completing re-open (no trailing `...`) closes it and supplies the field list
+  + bodies through the ordinary incomplete-class machinery (pending_fields) —
+  in the SIBLING (which exports the layout) and in a TU that `import+`ed it
+  (an inline-local flavor is laid out there). Everywhere else an aggregated
+  flavor is OPAQUE — like an incomplete header class an importer never sees
+  closed. THE GUARD: instantiateClassTemplate's "never completed" refusal and
+  the end-of-resolve sweep skip a header template whose source this TU did not
+  load; they fire where the completion should be visible. Canon test/import
+  Grow (tmpl_lib.slh/.sl, both consumers); the `Ngrow` negative fires in
+  tmpl_lib.sl's own compile (run_negatives.sh compiles a template header's
+  sibling `.sl` for a `.slh` case).
+
+  THE SOURCE IS THE AUTHOR'S CALL — `import` / `import+` (landed 2026-10-21;
+  design record plan-template.txt D). `import vector;` brings the header
+  alone, never the source. `import+ vector;` brings the header AND vector.sl
+  (in its own privacy zone, as before) — needed exactly when this file
+  instantiates a template declared in vector.slh with a LOCALLY DEFINED
+  PRIVATE CLASS (an inline-local flavor). There is no `import-`.
+  - TRANSITIVE (spec 2). `import+ vector` also loads the template source of
+    every template header vector.slh or vector.sl imports, recursively
+    (lex ImportWrapper::makeFull) — vector.sl's body over T = Priv may mint
+    Helper<Priv>. A transitive load is never judged.
+  - CHAINING (the user's rule): the header DECLARING the instantiated template
+    is the one to `import+`. main importing a.slh and instantiating
+    Vector<Priv> needs `import+ vector;` even though vector.slh arrives
+    through a.slh; instantiating A<Priv> needs `import+ a;`.
+  - MISSING `import+` (resolve requirePrivateInstanceSource, called by
+    instantiateClassTemplate and instantiateTemplate — functions and
+    methods): primary at the IMPORT STATEMENT for that header in the file
+    that instantiates ("A template declared in 'vector.slh' is used with a
+    locally defined private class; write 'import+ vector;' so its source is
+    loaded."), notes at the instantiation, the template declaration and the
+    private class; one error per statement (Tree.import_plus_reported). No
+    statement in that file (the chaining case): the primary is the
+    instantiation. A loaded source is marked USED (Tree.header_source_used).
+  - UNNEEDED `import+` (main.cpp, after classify — every instance is minted;
+    skipped when an earlier stage halted): a ROOT `import+` none of whose
+    full_headers was used — "import+ vector is not needed: no template
+    declared in vector.slh uses a locally defined private class." There are
+    no warnings, so it is an error. Covers a header with no template or no
+    source too.
+  - LEXICAL RULES (lex, reported once the statement's token is parked):
+    `import+` in a `.slh` ("'import+' may not appear in a header file") — a
+    header's classes are all public; and one file importing the same header
+    both ways.
+  - WHERE A STATEMENT LIVES. The lexer consumes import statements, so each is
+    kept as a token::ImportStmt (file, module, plus, header_file_id,
+    full_headers) and its `import` keyword is PARKED after kEndOfInput — the
+    parser never reaches it, a diagnostic can still point at it. grammar's
+    `>>` closer split, the one post-lex insertion, shifts the parked indices.
+  - --scan-deps still loads EVERY template source (lex::run load_all_sources):
+    the library list and the library-to-library ordering edges come from the
+    sources. The compile's `.d` lists a source only when it was loaded.
+  - --instantiate's injected provenance imports are plain: an aggregated
+    demand never needs another module's source.
+  Canon: test/template tmpl_complete.sl (`import+ vector` for Vector<Pt>;
+  negatives: missing `import+ map`, unneeded `import+ map`, both ways);
+  test/import (`import+ tmpl_lib` in tmpl_test/tmpl_test2/bird; the `.slh`
+  negative in tmpl_lib.slh); test/guthrie electorate.sl (the chaining case:
+  `import+ vector;` beside `import electorate;`).
 
   SOURCE-PRIVATE FIELDS (canon 2026-08-17): everything a header declares is
   PUBLIC; everything its template source supplies is PRIVATE to that file —
@@ -1557,7 +1615,8 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   above, and the close of the IMPORT LEAK. Everything a header declares is
   public; everything its template source SUPPLIES — INCLUDING the
   declarations its own `import` lines pull in — is private to that source
-  and to its zone. The leak: importing `<m>.slh` side-loads `<m>.sl`, whose
+  and to its zone. The leak: importing `<m>.slh` side-loaded `<m>.sl` (then
+  always; since 2026-10-21 only for `import+`), whose
   own imports were processed into the same token stream and the same
   imported_once set, so a consumer silently inherited every header its
   libraries imported. Old and benign while the leaked headers were ones
@@ -1647,8 +1706,9 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   eventually stop defining those flavors. It worked and it was inert: the main
   compile's `.ll` stayed byte-identical and internalize was a measured no-op on
   all 9 TUs. The follow-on phase — the main compile dropping the template-source
-  load — is BLOCKED at its premise (readme-classes, SO THE MAIN COMPILE CAN NEVER
-  STOP LOADING A TEMPLATE SOURCE), and the IMPORT LEAK the stage was also meant to
+  load — was BLOCKED at its premise at the time (flavors were never opaque; that
+  premise fell 2026-10-21, and the load became author-directed instead — THE
+  SOURCE IS THE AUTHOR'S CALL above), and the IMPORT LEAK the stage was also meant to
   close was closed instead by scoping (THE VISIBILITY RULE above). With no
   reachable payoff the spike was REMOVED rather than left as dead branches in
   codegen; test/import goes `.ll` -> `.o` like every other test dir again.
@@ -1918,11 +1978,16 @@ STAGE FILES (.h / .cpp pairs)
             and a tool that wants a substitute header (test/run_negatives.sh)
             must place the importing source beside it. Each path is imported
             ONCE per compile (imported_once, keyed by resolved path).
-            Importing `X.slh` ALSO lexes a TEMPLATE SOURCE `X.sl` beside it
-            (marked template_source; skipped when the root's own stem is X),
-            and run() takes driver-injected extra imports (--instantiate's
-            provenance headers), appended after the root's tokens — see
-            TEMPLATES, cross-TU.
+            `import+ X;` ALSO lexes the TEMPLATE SOURCE `X.sl` beside it, and
+            — spec 2 — the sources of the template headers X.slh / X.sl import
+            (makeFull; marked template_source; skipped when the root IS that
+            file, by path); plain `import` never does, except under
+            --scan-deps (load_all_sources). Every consumed statement is a
+            token::ImportStmt whose `import` token is PARKED after
+            kEndOfInput. run() takes driver-injected extra imports
+            (--instantiate's provenance headers, plain), appended after the
+            root's tokens — see TEMPLATES, cross-TU, THE SOURCE IS THE
+            AUTHOR'S CALL.
             Computes THE PRIVACY OWNER per file (File::private_owner), the
             one piece of provenance THE VISIBILITY RULE runs on: the
             side-loaded template source a file was first reached THROUGH,

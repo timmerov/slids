@@ -42,7 +42,9 @@ its synthesized transfer ops twice (invalid IR at llc).
 /* incomplete primary; an appending re-open; a closing re-open that adds a
    method reading fields from BOTH earlier openings. */
 import string;
-import vector;
+/* `import+`: Vector<Pt> below is an instance over a locally defined private
+   class, so this TU needs vector.sl's bodies. */
+import+ vector;
 
 Grow<T>(T a_ = 1, ...) {
     T ga() { return a_; }
@@ -185,6 +187,20 @@ Pt(int x_ = 0) {
 Vector<int> : VDer(int vd_ = 0) {
     intptr both() { return size() * 10 + vd_; }
 }
+
+/* THE SOURCE IS THE AUTHOR'S CALL. A template declared in map.slh used with
+   the locally defined private class Pt, but map is imported plainly. */
+//-EXPECT-ERROR: is used with a locally defined private class; write 'import+ map;'
+//import map;
+//Map<Pt, int> mpt;
+
+/* ...and the converse: `import+` when nothing here needs map.sl. */
+//-EXPECT-ERROR: import+ map is not needed: no template declared in map.slh uses a locally defined private class.
+//import+ map;
+
+/* one file may not import the same header both ways. */
+//-EXPECT-ERROR: is imported both with 'import' and 'import+'
+//import vector;
 
 /* a closed re-open cannot add fields... */
 //-EXPECT-ERROR: cannot add fields

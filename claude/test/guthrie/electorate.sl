@@ -24,6 +24,7 @@ import dump;
 import electorate;
 import math;
 import random;
+import+ vector;
 
 Position() {
     /*

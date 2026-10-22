@@ -36,11 +36,11 @@ it has some radius that's larger than the characteristic distance.
 the innermost ring is at this radius.
 */
 
-import algorithm;
+import+ algorithm;
 import dump;
 import math;
 import string;
-import vector;
+import+ vector;
 
 /* meters per light year. */
 const float64 kMetersPerLightyear = 9.461e15;

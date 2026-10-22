@@ -35,7 +35,7 @@ error.
 
 import string;
 
-import tmpl_lib;
+import+ tmpl_lib;
 import library;
 
 /* a bodyless template declaration belongs in a header. */

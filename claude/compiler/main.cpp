@@ -175,7 +175,8 @@ int main(int argc, char** argv) {
         return 1;
     };
 
-    lex::run(in_path, import_paths, tokens, diag, extra_imports);
+    lex::run(in_path, import_paths, tokens, diag, extra_imports,
+             /*load_all_sources=*/!scan_path.empty());
     if (diagnostic::hasErrors(diag)) {
         if (scan_path.empty()) return bail();
         // The import scan only feeds make: the compile that follows reports the
@@ -321,6 +322,22 @@ int main(int argc, char** argv) {
     constfold::run(parse_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();
     classify::run(parse_tree, diag);
+    if (diagnostic::hasErrors(diag)) return bail();
+    // AN UNNEEDED `import+` is an error (there are no warnings): every instance is
+    // minted by now, so a root `import+` none of whose loaded sources an instance over
+    // a locally defined private class drew on asks for a source nobody uses. Only the
+    // ROOT's own statements are judged — a transitive load is not the author's line.
+    for (auto const& st : parse_tree.import_stmts) {
+        if (!st.plus || st.file_id != 0) continue;
+        bool needed = false;
+        for (int h : st.full_headers)
+            if (h >= 0 && h < (int)parse_tree.header_source_used.size()
+                && parse_tree.header_source_used[h]) needed = true;
+        if (!needed)
+            diagnostic::report(diag, {st.file_id, st.tok,
+                "import+ " + st.module + " is not needed: no template declared in "
+                + st.module + ".slh uses a locally defined private class.", {}});
+    }
     if (diagnostic::hasErrors(diag)) return bail();
 
     // .sli dump — the demands THIS TU makes on other libraries' templates: for

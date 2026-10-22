@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "token.h"   // token::ImportStmt — the consumed import statements
 #include "widen.h"   // widen::TypeRef — the structured type handle
 
 namespace parse {
@@ -961,6 +962,20 @@ struct Tree {
     // HEADER — the same module's public half — which the field-privacy gate treats
     // as library-side (synthesized members carry the class def's header position).
     std::vector<int> file_imported_by;
+
+    // `import` / `import+` (token::List::import_stmts, copied by grammar): every import
+    // statement the lexer consumed, its keyword token parked past kEndOfInput.
+    std::vector<token::ImportStmt> import_stmts;
+    // Indexed by file_id: a HEADER whose template source is loaded in this TU (it was
+    // `import+`ed, or reached transitively from one that was).
+    std::vector<bool> header_source_loaded;
+    // Indexed by file_id: a header whose loaded source an instance over a locally
+    // defined private class DREW on (resolve / classify set it). A root `import+` none
+    // of whose full_headers is marked is not needed.
+    std::vector<bool> header_source_used;
+    // The import statements (and, keyed -1 - header, the headers with no statement in
+    // the use file) already given the missing-`import+` error — one per statement.
+    std::set<int> import_plus_reported;
 
     // THE VISIBILITY RULE. Indexed by file_id: the PRIVACY OWNER
     // (token::File::private_owner) — the side-loaded template source this file

@@ -519,7 +519,15 @@ struct ImportWrapper {
     std::vector<std::string> const& import_paths;
     std::set<std::string>& imported_once;
     std::string root_path;   // the primary source's path
+    bool load_all = false;   // --scan-deps: load every template source
     bool fatal = false;
+    // Headers whose template source has been requested (loaded, or found absent).
+    std::set<int> full_set;
+    // The `import` keyword of each out.import_stmts entry, parked after kEndOfInput by
+    // run() so a diagnostic can point at the statement.
+    std::vector<token::Token> parked;
+    // Errors about an import statement, raised once its token is parked: (stmt, msg).
+    std::vector<std::pair<int, std::string>> deferred;
 
     // `owner` is the PRIVACY OWNER in force here (token::File::private_owner):
     // the side-loaded template source this file was reached through, or -1 on a
@@ -534,15 +542,30 @@ struct ImportWrapper {
     // public from now on — and so is everything it pulled in, which is why this
     // walks the imported_by subtree rather than clearing one flag.
     void publicize(int file_id);
-    // After importing `module`.slh: load the TEMPLATE SOURCE `module`.sl
-    // sitting beside it in the SAME directory — only when the header declares a
-    // template: a LOCAL-type instance of the header's templates needs bodies to
-    // clone, and only that file has them. Skipped when the root IS that file
+    // Load the TEMPLATE SOURCE `module`.sl sitting beside header `module`.slh in
+    // the SAME directory (makeFull — i.e. only for `import+`, or --scan-deps) —
+    // only when the header declares a template: an instance of the header's
+    // templates over a locally defined private class needs bodies to clone, and
+    // only that file has them. Skipped when the root IS that file
     // (compared by PATH, never by name: a consumer that merely shares the stem
     // is not the module's source). Marked template_source: resolve strips
     // everything but template content.
     void loadTemplateSource(std::string const& header_path, int header_file_id,
                             int owner);
+    // THE SOURCE IS THE AUTHOR'S CALL (`import+`). Load `h`'s template source, then —
+    // spec 2 — the sources of every template header that header or its source
+    // imports, recursively: a private-class instance of h's template may mint one of
+    // theirs inside its body. Collects every header reached into `col` (the
+    // statement's full_headers). `owner` is the privacy zone in force at `h`.
+    void makeFull(int h, int owner, std::vector<int>& col, std::set<int>& seen);
+    // Record one consumed import statement; returns its index in out.import_stmts.
+    int recordStmt(int file_id, token::Token const& kw, std::string const& module,
+                   bool plus);
+    // After `import[+] module` reached header `h` (new or deduped): the per-statement
+    // rules, then the source load when asked for.
+    void finishImport(int stmt, int h, int owner);
+    int sourceOf(int h) const;
+    int fileByPath(std::string const& path) const;
     // True if the header's OWN tokens declare a template: a name followed by a
     // balanced `<...>` and then `(` (class / function / method template) or `=`
     // (alias template). A use (`Vector<int> v;`, `alias V = Vector<int>;`) is
@@ -576,6 +599,77 @@ bool ImportWrapper::declaresTemplate(int header_file_id) const {
     return false;
 }
 
+int ImportWrapper::sourceOf(int h) const {
+    for (std::size_t i = 0; i < out.files.size(); i++)
+        if (out.files[i].template_source && out.files[i].imported_by == h) return (int)i;
+    return -1;
+}
+
+int ImportWrapper::fileByPath(std::string const& path) const {
+    for (std::size_t i = 0; i < out.files.size(); i++)
+        if (out.files[i].path == path) return (int)i;
+    return -1;
+}
+
+int ImportWrapper::recordStmt(int file_id, token::Token const& kw,
+                              std::string const& module, bool plus) {
+    token::ImportStmt st;
+    st.file_id = file_id;
+    st.module = module;
+    st.plus = plus;
+    out.import_stmts.push_back(st);
+    parked.push_back(kw);
+    int idx = (int)out.import_stmts.size() - 1;
+    // A header's classes are all public, so nothing it declares can need a template's
+    // source — and the load would land on every importer.
+    std::string const& fp = out.files[file_id].path;
+    if (plus && fp.size() >= 4 && fp.compare(fp.size() - 4, 4, ".slh") == 0)
+        deferred.push_back({idx, "'import+' may not appear in a header file: nothing "
+            "a header declares is a locally defined private class; write 'import "
+            + module + ";'."});
+    for (int i = 0; i < idx; i++) {
+        token::ImportStmt const& o = out.import_stmts[i];
+        if (o.file_id == file_id && o.module == module && o.plus != plus) {
+            deferred.push_back({idx, "'" + module + "' is imported both with 'import' "
+                "and 'import+' in this file; keep one."});
+            break;
+        }
+    }
+    return idx;
+}
+
+void ImportWrapper::makeFull(int h, int owner, std::vector<int>& col,
+                             std::set<int>& seen) {
+    if (fatal || !seen.insert(h).second) return;
+    col.push_back(h);
+    if (full_set.insert(h).second)
+        loadTemplateSource(out.files[h].path, h, owner);
+    if (fatal) return;
+    // The header's own imports, then its source's (the source opens its own zone).
+    std::vector<std::pair<int, int>> next;   // (header, owner) — copied: the vector grows
+    for (auto const& st : out.import_stmts)
+        if (st.file_id == h && st.header_file_id >= 0)
+            next.push_back({st.header_file_id, owner});
+    int src = sourceOf(h);
+    if (src >= 0) {
+        int sub = out.files[src].private_owner;
+        for (auto const& st : out.import_stmts)
+            if (st.file_id == src && st.header_file_id >= 0)
+                next.push_back({st.header_file_id, sub});
+    }
+    for (auto const& [nh, no] : next) makeFull(nh, no, col, seen);
+}
+
+void ImportWrapper::finishImport(int stmt, int h, int owner) {
+    out.import_stmts[stmt].header_file_id = h;
+    bool plus = out.import_stmts[stmt].plus;
+    if (!plus && !load_all) return;
+    std::vector<int> col;
+    std::set<int> seen;
+    makeFull(h, owner, col, seen);
+    if (plus) out.import_stmts[stmt].full_headers = col;
+}
+
 void reportAt(diagnostic::Sink& diag, int file_id, int tok_index, std::string const& msg) {
     diagnostic::report(diag, {file_id, tok_index, msg, {}});
 }
@@ -600,10 +694,12 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
     int depth = 0;
     std::vector<std::pair<char, int>> brackets;   // (expected close char, tok index of the open)
 
-    enum class State { Normal, SawImport, SawImportIdent };
+    enum class State { Normal, SawImport, SawImportPlus, SawImportIdent };
     State state = State::Normal;
     token::Token saved_import{};
+    token::Token saved_plus{};
     token::Token saved_ident{};
+    bool saw_plus = false;
 
     // handle() returns false when this file's processing must stop.
     std::function<bool(token::Token const&)> handle = [&](token::Token const& t) -> bool {
@@ -612,8 +708,12 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
         if (t.kind == token::Kind::kEndOfFile) {
             if (state == State::SawImport) {
                 token::add(out, saved_import);
+            } else if (state == State::SawImportPlus) {
+                token::add(out, saved_import);
+                token::add(out, saved_plus);
             } else if (state == State::SawImportIdent) {
                 token::add(out, saved_import);
+                if (saw_plus) token::add(out, saved_plus);
                 token::add(out, saved_ident);
             }
             state = State::Normal;
@@ -671,6 +771,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
                 // Import detection at file scope.
                 if (depth == 0 && t.kind == token::Kind::kImport) {
                     saved_import = t;
+                    saw_plus = false;
                     state = State::SawImport;
                     return true;
                 }
@@ -683,9 +784,28 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
                     state = State::SawImportIdent;
                     return true;
                 }
+                // `import+ module;` — the author asks for the template source.
+                if (t.kind == token::Kind::kPlus) {
+                    saved_plus = t;
+                    saw_plus = true;
+                    state = State::SawImportPlus;
+                    return true;
+                }
                 // pushback
                 state = State::Normal;
                 token::add(out, saved_import);
+                return handle(t);
+            }
+            case State::SawImportPlus: {
+                if (t.kind == token::Kind::kIdentifier) {
+                    saved_ident = t;
+                    state = State::SawImportIdent;
+                    return true;
+                }
+                // pushback
+                state = State::Normal;
+                token::add(out, saved_import);
+                token::add(out, saved_plus);
                 return handle(t);
             }
             case State::SawImportIdent: {
@@ -717,21 +837,19 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
                         fatal = true;
                         return false;
                     }
+                    int stmt = recordStmt(file_id, saved_import, module, saw_plus);
                     if (!imported_once.insert(found_path).second) {
                         // Already imported elsewhere — but THIS import may be
                         // the public one. Provenance is first-come, so without
                         // this a header a template source happened to reach
                         // first would stay private to it even though the root
                         // asked for it by name.
-                        if (owner < 0) {
-                            for (std::size_t i = 0; i < out.files.size(); i++) {
-                                if (out.files[i].path == found_path) {
-                                    publicize((int)i);
-                                    break;
-                                }
-                            }
+                        int h = fileByPath(found_path);
+                        if (h >= 0) {
+                            if (owner < 0) publicize(h);
+                            finishImport(stmt, h, owner);
                         }
-                        return true;
+                        return !fatal;
                     }
 
                     std::ifstream f(found_path);
@@ -753,13 +871,13 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
                         std::filesystem::path(found_path).parent_path().string();
 
                     processFile(new_file_id, new_source_dir, owner);
-                    if (!fatal)
-                        loadTemplateSource(found_path, new_file_id, owner);
+                    if (!fatal) finishImport(stmt, new_file_id, owner);
                     return !fatal;
                 }
                 // pushback
                 state = State::Normal;
                 token::add(out, saved_import);
+                if (saw_plus) token::add(out, saved_plus);
                 token::add(out, saved_ident);
                 return handle(t);
             }
@@ -796,10 +914,12 @@ void ImportWrapper::importModule(std::string const& module,
         return;
     }
     if (!imported_once.insert(found_path).second) {   // already imported
-        if (owner < 0) {
-            for (std::size_t i = 0; i < out.files.size(); i++) {
-                if (out.files[i].path == found_path) { publicize((int)i); break; }
-            }
+        int h = fileByPath(found_path);
+        if (h >= 0 && owner < 0) publicize(h);
+        if (h >= 0 && load_all) {
+            std::vector<int> col;
+            std::set<int> seen;
+            makeFull(h, owner, col, seen);
         }
         return;
     }
@@ -816,7 +936,13 @@ void ImportWrapper::importModule(std::string const& module,
     std::string new_source_dir =
         std::filesystem::path(found_path).parent_path().string();
     processFile(new_file_id, new_source_dir, owner);
-    if (!fatal) loadTemplateSource(found_path, new_file_id, owner);
+    // An injected (provenance) import is a plain one: an --instantiate compile
+    // demands AGGREGATED flavors only, which never need another module's source.
+    if (!fatal && load_all) {
+        std::vector<int> col;
+        std::set<int> seen;
+        makeFull(new_file_id, owner, col, seen);
+    }
 }
 
 void ImportWrapper::loadTemplateSource(std::string const& header_path,
@@ -851,7 +977,7 @@ void ImportWrapper::loadTemplateSource(std::string const& header_path,
 void run(std::string const& root_path,
          std::vector<std::string> const& import_paths,
          token::List& out, diagnostic::Sink& diag,
-         std::vector<std::string> const& extra_imports) {
+         std::vector<std::string> const& extra_imports, bool load_all_sources) {
     std::ifstream f(root_path);
     if (!f.is_open()) {
         // {-1, -1} attribution: fires before any source is read, so no token
@@ -869,7 +995,8 @@ void run(std::string const& root_path,
         std::filesystem::path(root_path).parent_path().string();
 
     std::set<std::string> imported_once;
-    ImportWrapper wrap{out, diag, import_paths, imported_once, root_path};
+    ImportWrapper wrap{out, diag, import_paths, imported_once, root_path,
+                       load_all_sources, false, {}, {}, {}};
     wrap.processFile(root_file_id, source_dir, /*owner=*/-1);
 
     // Driver-injected imports (the --instantiate demand files' provenance
@@ -883,6 +1010,16 @@ void run(std::string const& root_path,
     if (!wrap.fatal) {
         token::Token eoi{token::Kind::kEndOfInput, "", -1, 0, 0, 0};
         token::add(out, eoi);
+        // PARK each import statement's keyword past the end of input: the parser
+        // never reaches it, and a diagnostic can still point at the statement.
+        for (std::size_t i = 0; i < wrap.parked.size(); i++) {
+            out.import_stmts[i].tok = (int)out.tokens.size();
+            out.tokens.push_back(wrap.parked[i]);
+        }
+        for (auto const& [stmt, msg] : wrap.deferred) {
+            token::ImportStmt const& st = out.import_stmts[stmt];
+            diagnostic::report(diag, {st.file_id, st.tok, msg, {}});
+        }
     }
 }
 

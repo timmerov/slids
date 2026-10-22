@@ -4089,6 +4089,35 @@ CROSS-CUTTING — INCOMPLETE TEMPLATES ARE INCOMPLETE CLASSES + LAYOUT WORDS (LA
   Detail: readme-classes.txt OPAQUE CLASSES / DERIVING FROM AN OPAQUE CLASS / COMPUTED
   LAYOUT; readme.txt SOURCE-PRIVATE FIELDS.
 
+CROSS-TU — THE SOURCE IS THE AUTHOR'S CALL: `import` / `import+` (LANDED 2026-10-21)
+  plan-template.txt's D, on top of the prerequisite landed the same day. The user's rule:
+  NEVER side-load unless the author so indicates; the case served is a private class used as
+  an argument to a public template. `import vector;` = header only; `import+ vector;` =
+  header + vector.sl (+ spec 2: the sources of every template header it reaches).
+  - LEX. `import+` parses as `import` `+` ident; every consumed statement is a
+    token::ImportStmt (copied to parse::Tree) whose `import` keyword is PARKED past
+    kEndOfInput, so a later stage can caret it. The grammar's `>>` closer split — the one
+    post-lex token insertion — shifts the parked indices (found as a caret one statement
+    early). makeFull loads a header's source and recurses over the header's and the
+    source's import statements. --scan-deps loads every source (load_all_sources); the
+    --instantiate provenance imports are plain.
+  - THE ERRORS, worded by the user ("authors don't know what local flavor means"):
+    missing `import+` at the import statement (notes: instantiation, template, private
+    class), from resolve requirePrivateInstanceSource in class AND function/method
+    instantiation; unneeded `import+` (root statements only, after classify, from a USED
+    bit per loaded header); `import+` in a `.slh`; one file importing a header both ways.
+  - THE GUARD (deferred from the prerequisite): an aggregated flavor of an open header
+    template is opaque where the source is not loaded; the end-of-resolve "never completed"
+    sweep skips such templates. run_negatives.sh now compiles a template header's sibling
+    `.sl` for a `.slh` case, where `Ngrow` fires.
+  - THE CHAINING RULE (user): the header DECLARING the instantiated template is the one to
+    `import+`, however it arrives.
+  - SWEEP. import -> import+: test/template tmpl_complete.sl; test/import tmpl_test.sl,
+    tmpl_test2.sl, bird.sl; test/guthrie guthrie.sl; test/lib algorithm.sl, vector.sl;
+    added `import+ vector;` to test/guthrie electorate.sl (chaining). lib/ needed none.
+    test/progress galaxy.sl needs `import+ vector; import+ algorithm;` (the user's dir).
+  Detail: readme.txt TEMPLATES, THE SOURCE IS THE AUTHOR'S CALL; slids_reference.md Imports.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

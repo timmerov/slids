@@ -17,7 +17,7 @@ forms.
 
 import string;
 
-import tmpl_lib;
+import+ tmpl_lib;
 import library;
 
 alias Integer2 = int;
