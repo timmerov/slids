@@ -5,8 +5,8 @@
 # (string.o, tree.o; more land in LIB_SRCS as the library grows). string.slh and
 # tree.slh are template-free, so one object serves every consumer. dump, vector,
 # algorithm, and map are TEMPLATE libraries — their sources sit BESIDE their headers in
-# hdr/ (the lexer loads the template source sitting next to an imported
-# header), and their objects can only be built against a CONSUMER's demand
+# hdr/ (`import+` loads the template source sitting next to the header;
+# --scan-deps loads every one), and their objects can only be built against a CONSUMER's demand
 # pool (--instantiate), so each consumer's Makefile builds them (via the
 # slidsc --scan-deps fragments); they are NOT part of libslids.o. The
 # library's tests live in test/lib.

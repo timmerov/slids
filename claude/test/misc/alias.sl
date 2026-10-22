@@ -118,6 +118,12 @@ int32 main() {
     IntPtr ip = ^val;
     println(String + ##type(ip) + " " + ##name(ip) + " = " + ip^);       // IntPtr ip = 100
 
+    /* a pointer-target alias as a condition tests the pointer against null. */
+    IntPtr np = nullptr;
+    if (ip) { println("ip truthy"); }                                   // ip truthy
+    if (np) { println("np truthy"); } else { println("np falsy"); }     // np falsy
+    println(String + "!np= " + !np);                                    // !np= true
+
     /* an alias-reference param. */
     println(String + "bump= " + bump(^val));                            // 101
 

@@ -352,7 +352,7 @@ std::string emitToBool(std::string const& val, widen::TypeRef slids_type,
             << val << ", 0.0\n";
         return tmp;
     }
-    widen::Type::Form bf = widen::form(slids_type);
+    widen::Type::Form bf = widen::form(widen::strip(slids_type));
     if (bf == widen::Type::Form::kPointer || bf == widen::Type::Form::kIterator
      || bf == widen::Type::Form::kAnyptr) {
         std::string tmp = newTmp("tob");

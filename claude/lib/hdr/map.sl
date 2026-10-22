@@ -28,38 +28,13 @@ TreeNode : MapNode<Key, Value>() {
         rt^.destroy();
         delete ^self;
     }
-
-    /* recursively print the tree. */
-    void print(int spaces) {
-        if (^self == nullptr) {
-            return;
-        }
-        spaces += 2;
-
-        lf = <MapIter> left_;
-        lf^.print(spaces);
-
-        String color = "red";
-        if (color_ == kBlack) {
-            color = "black";
-        }
-
-        if (spaces > 2) {
-            ::print("  ");
-            for (i : 4..spaces+2) {
-                ::print("| ");
-            }
-        }
-        println(key_ + " - " + value_ + " (" + color + ")");
-
-        rt = <MapIter> right_;
-        rt^.print(spaces);
-    }
 }
 
 Map<Key, Value>(
-    MapNode<Key, Value>^ root_ = nullptr,
-    intptr size_ = 0
+    intptr size_ = 0,
+    MapIter root_ = nullptr,
+    MapIter first_ = nullptr,
+    MapIter last_ = nullptr
 ) {
     _() { }
     ~() {
@@ -68,6 +43,18 @@ Map<Key, Value>(
 
     intptr size() {
         return size_;
+    }
+
+    MapIter begin() {
+        return first_;
+    }
+
+    MapIter end() {
+        return nullptr;
+    }
+
+    MapIter next(MapIter it) {
+        return <MapIter> it^.next();
     }
 
     void insert(Key key, Value value) {
@@ -82,6 +69,8 @@ Map<Key, Value>(
         /* the root node is black. */
         if (root_ == nullptr) {
             root_ = child;
+            first_ = child;
+            last_ = child;
             child^.color_ = kBlack;
             return;
         }
@@ -117,13 +106,17 @@ Map<Key, Value>(
             root_ = ancestor;
         }
 
+        /* update first and last */
+        lf = first_^.left_;
+        rt = last_^.right_;
+        if (lf) {
+            first_ = <MapIter> lf;
+        }
+        if (rt) {
+            last_ = <MapIter> rt;
+        }
+
         /* force the root to black. */
         root_^.color_ = kBlack;
-    }
-
-    void print() {
-        if (root_) {
-            root_^.print(0);
-        }
     }
 }

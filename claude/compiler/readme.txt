@@ -3247,7 +3247,8 @@ STAGE FILES (.h / .cpp pairs)
             route through dedicated known-label blocks so the phi predecessors are
             always valid. A kBlockStmt is transparent (emit children in order). A
             kIfStmt emits emitToBool on the condition (a numeric is `!= 0`, a
-            pointer-like — `^`/`[]`/anyptr — is `!= null`, a float is `une 0.0`; the
+            pointer-like — `^`/`[]`/anyptr, seen through any alias (`alias P =
+            int^; if (p)`) — is `!= null`, a float is `une 0.0`; the
             unary `!` MIRRORS it, comparing a pointer-like to `null` not `0`) + a
             conditional br to then/else/merge labels (no phi — definite-assignment rides the hoisted
             allocas); an arm ending in a control transfer (return / break /

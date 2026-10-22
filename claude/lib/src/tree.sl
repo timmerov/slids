@@ -78,6 +78,40 @@ TreeNode() {
         }
     }
 
+    /* return the tree node after this one. */
+    TreeNode^ next() {
+        if (^self == nullptr) {
+            return nullptr;
+        }
+        if (right_ == nullptr) {
+            /*
+            there is nothing after this node.
+            go up the tree until hit root.
+            or we find the parent of a left child.
+            */
+            it = ^self;
+            while() {
+                TreeNode^ parent = it^.parent_;
+                if (parent == nullptr) {
+                    return nullptr;
+                }
+                if (parent^.right_ != it) {
+                    return parent;
+                }
+                it = parent;
+            }
+        }
+        /*
+        drop down the left side of the tree
+        until we reach a node with no left.
+        */
+        it = right_;
+        while (it^.left_) {
+            it = it^.left_;
+        }
+        return it;
+    }
+
     /* recolor/rebalance the tree. */
     void rebalance() {
 

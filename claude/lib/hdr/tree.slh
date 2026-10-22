@@ -17,6 +17,9 @@ TreeNode(
     _();
     ~();
 
+    /* return the tree node after this one. */
+    TreeNode^ next();
+
     /* recolor/rebalance the tree. */
     void rebalance();
 }

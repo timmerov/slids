@@ -89,11 +89,14 @@ $(BUILD_DIR)/%.ll: $(LIB_HDR)/%.sl $(SLIDSC)
 # compile automatically — no hand-maintained header list.
 -include $(wildcard $(BUILD_DIR)/*.d)
 
-# The library's libslids.o is built by lib's own Makefile (make.sh order). This
-# rule self-heals a standalone `make -C test/lib` from scratch; it does NOT
-# track staleness — lib/ owns rebuilds of its own sources.
-$(LIB_BUILD)/libslids.o:
+# libslids.o is owned by lib's own Makefile. FORCE asks lib/ to bring itself up
+# to date on every build (its .d files track lib/src and lib/hdr); make re-reads
+# the file's time afterward, so this directory relinks only when lib/ rebuilt it.
+$(LIB_BUILD)/libslids.o: FORCE
 	$(MAKE) -C $(LIB)
+
+.PHONY: FORCE
+FORCE:
 
 clean:
 	rm -rf $(BUILD_DIR)

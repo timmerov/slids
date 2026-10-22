@@ -15,4 +15,7 @@ for-ref sum= 66
 Dir^ dp = 0
 Space:Compass^ cp = 1
 IntPtr ip = 100
+ip truthy
+np falsy
+!np= true
 bump= 101

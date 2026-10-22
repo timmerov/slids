@@ -17,19 +17,24 @@ SUBDIRS = \
 	template \
 	tuple
 
-.PHONY: all clean test negatives positives $(SUBDIRS)
+.PHONY: all clean test negatives positives $(SUBDIRS) libslids
 
 all: $(SUBDIRS)
 
 test: all
 
-$(SUBDIRS):
+# The library is brought up to date ONCE before the subdirectories run, so a
+# parallel build never has several sub-makes rebuilding lib/ at the same time.
+libslids:
+	$(MAKE) -C ../lib
+
+$(SUBDIRS): libslids
 	$(MAKE) -C $@
 
-negatives:
+negatives: libslids
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d negatives; done
 
-positives:
+positives: libslids
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d positives; done
 
 clean:

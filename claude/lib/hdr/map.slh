@@ -23,6 +23,9 @@ Map<Key, Value>(...) {
     _(); ~();
 
     intptr size();
+    MapIter begin();
+    MapIter end();
+    MapIter next(MapIter it);
+
     void insert(Key key, Value value);
-    void print();
 }

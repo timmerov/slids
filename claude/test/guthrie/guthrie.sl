@@ -258,7 +258,8 @@ cumulative voting - split 1.0 votes among candidates.
 import dump;
 import electorate;
 import guthrie;
-import map;
+// ==tsc==
+//import+ map;
 import random;
 import string;
 import+ vector;
@@ -461,7 +462,7 @@ Bloc(
     Approvals approvals_
 ) { }
 
-/* ==tsc== */
+/* ==tsc== map not ready for this yet. */
 //alias BlocMap = Map<Rankings, Bloc>;
 
 /*

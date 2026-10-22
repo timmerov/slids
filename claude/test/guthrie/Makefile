@@ -83,9 +83,14 @@ $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
-# Built by lib's own Makefile (make.sh order); self-heals a standalone build.
-$(LIB_BUILD)/libslids.o:
+# libslids.o is owned by lib's own Makefile. FORCE asks lib/ to bring itself up
+# to date on every build (its .d files track lib/src and lib/hdr); make re-reads
+# the file's time afterward, so this directory relinks only when lib/ rebuilt it.
+$(LIB_BUILD)/libslids.o: FORCE
 	$(MAKE) -C $(LIB)
+
+.PHONY: FORCE
+FORCE:
 
 clean:
 	rm -rf $(BUILD_DIR)

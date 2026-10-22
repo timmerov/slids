@@ -18,10 +18,51 @@ maps' destructors at different scope exits.
 import map;
 import string;
 
+Map<String, String> : CapitalMap() {
+
+/*
+    this is the old code that assumed Map Key and Value
+    could be converted to String.
+
+    /* recursively print the tree. */
+    void print(int spaces) {
+        if (^self == nullptr) {
+            return;
+        }
+        spaces += 2;
+
+        lf = <MapIter> left_;
+        lf^.print(spaces);
+
+        String color = "red";
+        if (color_ == kBlack) {
+            color = "black";
+        }
+
+        if (spaces > 2) {
+            ::print("  ");
+            for (i : 4..spaces+2) {
+                ::print("| ");
+            }
+        }
+        println(key_ + " - " + value_ + " (" + color + ")");
+
+        rt = <MapIter> right_;
+        rt^.print(spaces);
+    }
+*/
+
+    void print() {
+        for (it : self) {
+            println(it^.key_ + " - " + it^.value_);
+        }
+    }
+}
+
 int32 main() {
     println(String + "---countries---");
     {
-        Map<String, String> map;
+        CapitalMap map;
         map.insert("USA", "Washington DC");
         map.insert("Canada", "Ottawa");
         map.insert("Mexico", "Mexico City");
@@ -37,20 +78,20 @@ int32 main() {
 
     println(String + "---empty---");
     {
-        Map<String, String> map;
+        CapitalMap map;
         map.print();
     }
 
     println(String + "---one insert---");
     {
-        Map<String, String> map;
+        CapitalMap map;
         map.insert("one", "1");
         map.print();
     }
 
     println(String + "---ascending---");
     {
-        Map<String, String> map;
+        CapitalMap map;
         map.insert("A", "alpha");
         map.insert("B", "bravo");
         map.insert("C", "charlie");
@@ -66,7 +107,7 @@ int32 main() {
 
     println(String + "---descending---");
     {
-        Map<String, String> map;
+        CapitalMap map;
         map.insert("J", "juliett");
         map.insert("I", "india");
         map.insert("H", "hotel");
@@ -82,7 +123,7 @@ int32 main() {
 
     println(String + "---zig-zag---");
     {
-        Map<String, String> map;
+        CapitalMap map;
         map.insert("E", "echo");
         map.insert("A", "alpha");
         map.insert("J", "juliett");
@@ -98,10 +139,10 @@ int32 main() {
 
     println(String + "---nested scopes---");
     {
-        Map<String, String> outer;
+        CapitalMap outer;
         outer.insert("outer", "first");
         {
-            Map<String, String> inner;
+            CapitalMap inner;
             inner.insert("inner", "second");
             inner.insert("innermost", "third");
             inner.print();
