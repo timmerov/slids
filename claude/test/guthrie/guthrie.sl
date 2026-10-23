@@ -606,9 +606,9 @@ GuthrieVoting(
             }
             find_best_candidate();
             init_candidates();
+            actual_ = calculate_utilities();
 /* ==tsc== */
 /*
-            calculate_utilities(actual_);
             use_median_satisfaction(actual_);
             accumulated_.best_ += actual_.best_;
             accumulated_.average_ += actual_.average_;
@@ -954,42 +954,41 @@ GuthrieVoting(
             candidate.utilities_.insert(candidate.utilities_.begin() + k, utility);
         }
     }
+*/
 
     /*
     calculate the total utilities of all of the candidates.
     */
-    void calculate_utilities(
-        SatisfactionMetrics& result
-    ) {
+    SatisfactionMetrics calculate_utilities() {
 
         /* reset the candidate utilities. */
-        for (auto& candidate : candidates_) {
-            candidate.utility_ = 0.0;
+        for (candidate : candidates_) {
+            candidate^.utility_ = 0.0;
         }
 
         /* use the voter blocks. */
-        for (auto&& it : bloc_map_) {
-            auto& rankings = it.first;
-            auto& bloc = it.second;
-            int n = rankings.size();
-            for (int i = 0; i < n; ++i) {
-                int which = rankings[i];
-                candidates_[which].utility_ += bloc.utilities_[i];
+        for (it : bloc_map_) {
+            rankings = ^it^.key_;
+            bloc = ^it^.value_;
+            n = rankings^.size();
+            for (i : 0..n) {
+                which = rankings^[i];
+                candidates_[which].utility_ += bloc^.utilities_[i];
             }
         }
 
         /* this might be the primary with extra candidates. */
-        int n = candidates_.size();
+        n = candidates_.size();
 
         /*
         find the best candidate.
         their utility.
         and the total utility.
         */
-        int best_candidate = 0;
+        intptr best_candidate = 0;
         float64 best_utility = -1.0;
         float64 total_utility = 0.0;
-        for (int i = 0; i < n; ++i) {
+        for (i : 0..n) {
             /* update best and sum */
             float64 utility = candidates_[i].utility_;
             if (utility > best_utility) {
@@ -1000,14 +999,20 @@ GuthrieVoting(
         }
 
         /* compute utility or random candidate. */
-        float64 average_utility = total_utility / float64(n);
+        float64 average_utility = total_utility / (float64=n);
 
         /* return results. */
-        result.which_ = best_candidate;
-        result.best_ = best_utility;
-        result.average_ = average_utility;
+        SatisfactionMetrics result(
+            (int=best_candidate),
+            best_utility,
+            average_utility
+        );
+
+        return result;
     }
 
+/* ==tsc== */
+/*
     /*
     experimental option for alternative method for calculating voter satisfaction.
     the idea is to use a definition of best and average candidate that tracks

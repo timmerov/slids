@@ -188,7 +188,12 @@ struct Parser {
 
     bool expect(token::Kind kind, char const* name) {
         if (peek().kind != kind) {
-            error(std::string("Expected '") + name + "'.");
+            // The missing token belongs right after the previous one: caret
+            // that, unless there is none in this file.
+            if (pos > 0 && tokens.tokens[pos - 1].file_id == peek().file_id)
+                errorAt(pos - 1, std::string("Expected '") + name + "' after here.");
+            else
+                error(std::string("Expected '") + name + "'.");
             return false;
         }
         advance();
