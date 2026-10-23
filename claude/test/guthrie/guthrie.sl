@@ -587,6 +587,7 @@ GuthrieVoting(
 
         /* some sanity checks. */
         sanity_checks();
+
         /* hello, world. */
         println(String + "Guthrie voting analysis:");
         show_header();
@@ -608,11 +609,11 @@ GuthrieVoting(
             init_candidates();
             actual_ = calculate_utilities();
             use_median_satisfaction(actual_);
-/* ==tsc== */
-/*
             accumulated_.best_ += actual_.best_;
             accumulated_.average_ += actual_.average_;
             vote();
+/* ==tsc== */
+/*
             guthrie_.find_winner();
             show_satisfaction();
             check_criteria();
@@ -1251,38 +1252,41 @@ GuthrieVoting(
             LOG(ss.str());
         }
     }
+*/
 
     void vote() {
         /*
         clear support.
         we may vote multiple times.
         */
-        for (auto&& candidate : candidates_) {
-            candidate.support_ = 0;
+        for (candidate : candidates_) {
+            candidate^.support_ = 0;
         }
 
         /*
         for each voter bloc...
         give the support to that candidate.
         */
-        for (auto&& it : bloc_map_) {
-            auto& rankings = it.first;
-            auto& bloc = it.second;
+        for (it : bloc_map_) {
+            rankings = ^it^.key_;
+            bloc = ^it^.value_;
 
-            if (kUseApprovalVotes == false) {
+            if (kUseApprovalVotes == false) { void;
                 /* voters vote for a single candidate. */
-                int which = rankings[0];
-                candidates_[which].support_ += bloc.size_;
-            } else {
+                which = rankings^[0];
+                candidates_[which].support_ += bloc^.size_;
+            } else { void;
                 /* voters may approve multiple candidates. */
-                for (int i = 0; i < ncandidates_; ++i) {
-                    int which = rankings[i];
-                    candidates_[which].support_ += bloc.approvals_[i];
+                for (i : 0..ncandidates_) {
+                    which = rankings^[i];
+                    candidates_[which].support_ += bloc^.approvals_[i];
                 }
             }
         }
     }
 
+/* ==tsc== */
+/*
     /*
     voter satisfaction is a function of the utility of a candidate.
     the best candidate has satisfaction 1.0.
