@@ -607,9 +607,9 @@ GuthrieVoting(
             find_best_candidate();
             init_candidates();
             actual_ = calculate_utilities();
+            use_median_satisfaction(actual_);
 /* ==tsc== */
 /*
-            use_median_satisfaction(actual_);
             accumulated_.best_ += actual_.best_;
             accumulated_.average_ += actual_.average_;
             vote();
@@ -1011,8 +1011,6 @@ GuthrieVoting(
         return result;
     }
 
-/* ==tsc== */
-/*
     /*
     experimental option for alternative method for calculating voter satisfaction.
     the idea is to use a definition of best and average candidate that tracks
@@ -1023,37 +1021,40 @@ GuthrieVoting(
     approximate the average candidate as the average of the best and worst.
     */
     void use_median_satisfaction(
-        SatisfactionMetrics& result
+        mutable SatisfactionMetrics^ result
     ) {
         if (kUseMedianForSatisfaction == false) {
             return;
         }
 
         /* calculate the utility for the first median last voters. */
-        int n = electorate_.nvoters_;
-        int left = 0;
-        int mid = n / 2;
-        int right = n - 1;
-        auto& first = electorate_.voters_[left].position_;
-        auto& median = electorate_.voters_[mid].position_;
-        auto& last = electorate_.voters_[right].position_;
+        n = electorate_.nvoters_;
+        left = 0;
+        mid = n / 2;
+        right = n - 1;
+        first^ = ^electorate_.voters_[left].position_;
+        median^ = ^electorate_.voters_[mid].position_;
+        last^ = ^electorate_.voters_[right].position_;
         float64 first_utility = 0.0;
         float64 median_utility = 0.0;
         float64 last_utility = 0.0;
-        for (auto&& voter : electorate_.voters_) {
-            first_utility += voter.position_.utility(first);
-            median_utility += voter.position_.utility(median);
-            last_utility += voter.position_.utility(last);
+        for (voter : electorate_.voters_) {
+            first_utility += voter^.position_.utility(first);
+            median_utility += voter^.position_.utility(median);
+            last_utility += voter^.position_.utility(last);
         }
 
         /* return the results. */
-        float64 worst_utility = std::min(first_utility, last_utility);
+        float64 worst_utility = math:min(first_utility, last_utility);
         float64 average_utility = 0.90 * median_utility + 0.10 * worst_utility;
-        result.best_ = median_utility;
-        result.average_ = average_utility;
-        LOG("=tsc= median sats: "<<first_utility<<" "<<median_utility<<" "<<last_utility<<" "<<average_utility<<" "<<(median_utility-worst_utility));
+        result^.best_ = median_utility;
+        result^.average_ = average_utility;
+        println(String + "=tsc= median sats: " + first_utility + " " + median_utility + " "
+            + last_utility + " " + average_utility + " " + (median_utility-worst_utility));
     }
 
+/* ==tsc== */
+/*
     /*
     divide the electorate up into blocks.
     computing the distance between voters and candidates is expensive.
