@@ -152,6 +152,43 @@ UNBLOCKED FEATURES
     to the phrase edge and the residual lvalue is what's written — so the fix is to give
     both swap operands that same target lowering. Small, parallels the landed store path.
 
+  * EXPRESSION ALIAS — an author-driven optimization. guthrie.sl vote() holds three
+    pointers (it, rankings, bloc) where the last two are fixed offsets from the first.
+    readable, but silly. best of both worlds:
+        alias rankings = it^.key_;
+        which = rankings[0];
+    desugars to:
+        which = it^.key_[0];
+    - re-evaluated at every use. no storage, no pointer.
+    - no function calls in the definition: names (incl. other expression aliases), `.field`,
+      `^` deref/address, `[]` on primitive arrays/pointers, primitive arithmetic in an index.
+      class operators (`v[0]` on Vector = op[]), constructions, conversions, `new` are calls.
+      error at the alias: "An expression alias cannot call a function."
+      syntactic calls caught in resolve; class operators caught in classify, once, on the
+      definition — a call-free definition can only expand to a call-free tree.
+    - names bind at the declaration (rhs resolved once, the resolved tree cloned per use),
+      so a later inner `it` can't hijack it.
+    - writes/addresses go through: `rankings = x` -> `it^.key_ = x`; `^rankings` -> `^it^.key_`.
+    - ##type(rankings) = the underlying type. open: ##name(rankings) prints `rankings` or
+      `it^.key_` (claude: `rankings`).
+    - block scope; file + namespace scope under namespace parity.
+    - mechanics: grammar parseAliasDecl gets an expression rhs branch (`^ . [] call literal`
+      = expression; a bare name is decided at resolve); resolve adds a block-scoped entry
+      kind holding the rhs and replaces each use with cloneNode. nothing after resolve changes.
+    - same mechanism as the TODO tuple field aliases (`alias x_ = v_[0]`): clone + `self.`.
+
+  * FIELD ALIASES — as spec'd in slids_reference.md "Field aliases (named tuples only)":
+        Vec3(int v_[3], alias x_ = v_[0], alias y_ = v_[1], alias z_ = v_[2])
+        Color(int r_, int g_, int b_, alias y_ = r_, alias u_ = g_, alias v_ = b_)
+    read/write, write through to the original. not fields, no storage.
+    an alias points only to a field or array element of the same tuple.
+    note: we can reopen templates and incomplete classes to add field aliases. e.g.
+        alias BlocMap = Map<Rankings, Bloc>;
+        MapNode<Rankings, Bloc>(alias rankings_ = key_, alias bloc_ = value_);
+        which = it^.rankings_[0];    // guthrie.sl vote(): no `rankings = ^it^.key_;`
+    an alias adds no storage, symbol, or method, so layout/ABI and the owning file's flavor
+    are untouched — a consumer may add them to a flavor it doesn't own.
+
 
 BLOCKED FEATURES
 

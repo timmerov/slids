@@ -1268,6 +1268,13 @@ GuthrieVoting(
         give the support to that candidate.
         */
         for (it : bloc_map_) {
+            /* todo:
+            this is a good place to use field alias.
+            alias MapBloc:MapNode<Rankings, Bloc>(
+                alias rankings_ = key_,
+                alias bloc_ = value_
+            );
+            */
             rankings = ^it^.key_;
             bloc = ^it^.value_;
 
