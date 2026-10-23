@@ -49,6 +49,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 Point(int x = 1, int y = 2) { }
 Nest(Point p, int tag = 9) { }

@@ -11,6 +11,9 @@ claude says:
 covers Vector<int> and Vector<Value>: resize / reserve, copy and move,
 indexing and iteration, insert / append, remove. g_count tracks live Values,
 so every block must end with the count it started with.
+Value has no op<, and Vector's comparisons need T's op< — a template METHOD is
+built only when used, so Vector<Value> is fine until something compares two of
+them (the negative at the end). Ranked has op<; its vectors compare.
 the stem matches the library's (lib/hdr/vector.sl), so the Makefile builds
 this file as t_vector — the instantiated library lands as vector.ll in the
 same build directory — and the lexer still loads the library's template
@@ -19,6 +22,7 @@ source, because it is a different file by path.
 
 import string;
 import+ vector;
+alias slids;
 
 global int g_count = 0;
 
@@ -36,6 +40,15 @@ Value(
     op<--(mutable Value^ rhs) {
         println(String + "Value::move");
         x_ = rhs^.x_;
+    }
+}
+
+/* an element class WITH op< — Vector<Ranked> may compare. */
+Ranked(
+    int r_ = 0
+) {
+    bool const op<(Ranked^ other) {
+        return r_ < other^.r_;
     }
 }
 
@@ -128,7 +141,38 @@ int32 main() {
         //println(String + "---dtors---");
     }
     println(String + "ctor/dtor count = " + g_count);
+    println(String + "---compare---");
+    {
+        /* primitive elements compare. */
+        Vector<int> ia;
+        ia.resize(2);
+        ia[0] = 1;
+        ia[1] = 2;
+        Vector<int> ib;
+        ib.resize(2);
+        ib[0] = 1;
+        ib[1] = 3;
+        println(String + "int: == " + (ia == ib) + " < " + (ia < ib)
+            + " > " + (ia > ib));
+        /* class elements with op< compare. */
+        Vector<Ranked> ra;
+        ra.resize(1);
+        ra[0].r_ = 5;
+        Vector<Ranked> rb;
+        rb.resize(1);
+        rb[0].r_ = 4;
+        println(String + "Ranked: == " + (ra == rb) + " < " + (ra < rb)
+            + " > " + (ra > rb));
+    }
     println(String + "----------");
+
+    /* compile error: comparing vectors whose element class has no op< builds
+       Vector<Value>'s comparison methods, which need it. */
+    //-EXPECT-ERROR: Operator '<' is not defined on class 'Value'.
+    //Vector<Value> na;
+    //Vector<Value> nb;
+    //bool nlt = na < nb;
+    //println(String + "nlt = " + nlt);
 
     return 0;
 }

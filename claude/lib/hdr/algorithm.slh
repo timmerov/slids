@@ -6,6 +6,9 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 algorithm library.
 */
 
+/* slids namespace */
+slids {
+
 /*
 useful type sets for template specialization.
 */
@@ -41,6 +44,8 @@ the contained type must be comparable by less-than.
 ie a contained class must implement op<.
 */
 void quicksort<T>(mutable T container);
+
+} /* slids */
 
 /*
 min and max templates.

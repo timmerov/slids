@@ -15,13 +15,13 @@ const int kElectorateRandom = 1;
 const int kElectorateClusters = 2;
 
 Position(
-    Vector<float64> axis_
+    slids:Vector<float64> axis_
 ) {
     /* return the utility to another position. */
     float64 utility(Position^ other);
 
     /* format the position as a string. */
-    String to_string();
+    slids:String to_string();
 
     /* for sorting */
     bool const op<(Position^ other);
@@ -34,7 +34,7 @@ Voter(
     /* for sorting */
     bool const op<(Voter^ other);
 }
-alias Voters = Vector<Voter>;
+alias Voters = slids:Vector<Voter>;
 
 Electorate(
     /* configuration. */

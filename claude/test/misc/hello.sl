@@ -7,6 +7,7 @@ hello, world canonical code example.
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

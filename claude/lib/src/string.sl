@@ -14,6 +14,9 @@ copying null terminated strings limited by length.
 
 import string;
 
+/* slids namespace */
+slids {
+
 /* import c libaries. */
 stdc import {
     /* converts float to c string. */
@@ -605,3 +608,5 @@ String : Format() {
         precision_    = fmt^.precision_;
     }
 }
+
+} /* slids */

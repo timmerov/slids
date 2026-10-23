@@ -225,6 +225,7 @@ notes / corrections still pending:
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

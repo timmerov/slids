@@ -33,6 +33,7 @@ overrides the lead and defaults the rest (part below).
 */
 
 import string;
+alias slids;
 
 const int K = 5;
 

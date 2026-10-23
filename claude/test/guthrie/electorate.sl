@@ -25,6 +25,7 @@ import electorate;
 import math;
 import random;
 import+ vector;
+alias slids;
 
 Position() {
     /*

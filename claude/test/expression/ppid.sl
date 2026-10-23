@@ -133,6 +133,7 @@ lvalue check rejects a bumped operand (would need the target lowering on both op
 */
 
 import string;
+alias slids;
 
 int32 show2(int32 a, int32 b) {
     println(String + "show " + a + " " + b);

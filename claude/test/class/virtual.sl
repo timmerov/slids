@@ -154,6 +154,7 @@ brand-new virtual method — all virtual methods must be in the original declara
 
 /* STAGE 1 — a virtual class parses, compiles, and runs. */
 import string;
+alias slids;
 
 Vc(int x_) {
     _() {}

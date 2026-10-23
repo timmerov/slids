@@ -1347,8 +1347,12 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         }
         return;
     }
-    for (auto& c : slot->children) {
-        walk(c, tree, changed, diag, refreshes, no_substitute);
+    // A LAZY template method's body is unresolved until its first use builds it
+    // (runOn folds it then) — fold only its signature (params, dims) now.
+    if (!slot->lazy_body) {
+        for (auto& c : slot->children) {
+            walk(c, tree, changed, diag, refreshes, no_substitute);
+        }
     }
     // Fold inside parameter defaults too (params live in a separate vector, not
     // children) so a constant-expression default reaches a literal.
@@ -1565,7 +1569,8 @@ void bakeNodeDims(parse::Node& n, parse::Tree& tree, bool final,
 void finalizeArrayDims(parse::Node& n, parse::Tree& tree, diagnostic::Sink& diag,
                        std::vector<AliasRefresh>& refreshes) {
     if (!n.type_params.empty()) return;   // a template subtree stays pristine
-    for (auto& c : n.children) if (c) finalizeArrayDims(*c, tree, diag, refreshes);
+    if (!n.lazy_body)                       // a LAZY method body: unresolved yet
+        for (auto& c : n.children) if (c) finalizeArrayDims(*c, tree, diag, refreshes);
     for (auto& p : n.params)   if (p) finalizeArrayDims(*p, tree, diag, refreshes);
     bool dummy = false;
     bakeNodeDims(n, tree, /*final=*/true, dummy, diag, refreshes);

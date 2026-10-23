@@ -49,6 +49,7 @@ lean no.
 */
 
 import string;
+alias slids;
 
 enum Color ( red, green, blue );
 enum Level ( low = 10, mid, high );

@@ -49,6 +49,7 @@ because the model requires it.
 import string;
 
 import library;
+alias slids;
 
 /* PRIVATE to this TU — same names as consumer.sl's, distinct bodies: a free function, a
    namespace member, and a local class Widget with a method. Each is called from a header

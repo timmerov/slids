@@ -199,6 +199,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 int32 main() {
     int32 a = 99;

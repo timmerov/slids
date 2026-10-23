@@ -41,6 +41,7 @@ import dump;
 import math;
 import string;
 import+ vector;
+alias slids;
 
 /* meters per light year. */
 const float64 kMetersPerLightyear = 9.461e15;

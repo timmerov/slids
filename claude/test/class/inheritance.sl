@@ -86,6 +86,7 @@ with no new code.
 /* STAGE 1 — base = unnamed first field: construction spreads base-then-derived, the
    base ctor runs first and the derived dtor first. */
 import string;
+alias slids;
 
 A(int x_) {
     int gx() { return x_; }

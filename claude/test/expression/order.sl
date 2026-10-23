@@ -48,6 +48,7 @@ nothing open.
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

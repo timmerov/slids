@@ -35,6 +35,7 @@ deferred:
 */
 
 import string;
+alias slids;
 
 void dump( (char[], char[], char[], char[], int^)^ tuple ) {
     println(String + tuple^[0] + ":" + tuple^[1] + ": " + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^);

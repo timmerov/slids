@@ -45,6 +45,7 @@ IR but not locked by output. Add a negative / high-bit case per width to pin it.
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

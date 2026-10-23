@@ -70,6 +70,7 @@ import library;
 import tmpl_lib2;
 /* Pack: an incomplete class whose completer cannot fold its size (extra.slh). */
 import extra;
+alias slids;
 
 /* PRIVATE to this TU — same names as library.sl's, distinct bodies. A free function,
    a namespace member, and a local CLASS METHOD: all three mangle to the same symbol as

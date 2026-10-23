@@ -50,6 +50,16 @@ Box<T>(T^ p_ = nullptr) {
     int has();
 }
 
+/* LAZY TEMPLATE METHODS across the seam: `lt` needs T's op<, `has` needs
+   nothing. A method of a flavor is built only when called, so a flavor over a
+   class with NO op< is fine until something calls `lt` — and the .sli demands
+   only the methods a consumer calls, so the source's --instantiate pass never
+   builds the unused ones either. */
+Rank<T>(T^ p_ = nullptr) {
+    int has();
+    bool lt(Rank^ o);
+}
+
 /* a function template, declared; its definition merges in tmpl_lib.sl. */
 T tsum<T>(T a, T b);
 

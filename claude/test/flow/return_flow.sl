@@ -7,6 +7,7 @@ every non-void function must return from every code path.
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

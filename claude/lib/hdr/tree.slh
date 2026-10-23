@@ -6,6 +6,9 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 red black tree.
 */
 
+/* slids namespace */
+slids {
+
 TreeNode(
     Color color_ = kRed,
     TreeNode^ parent_ = nullptr,
@@ -23,3 +26,5 @@ TreeNode(
     /* recolor/rebalance the tree. */
     void rebalance();
 }
+
+} /* slids */

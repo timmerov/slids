@@ -51,6 +51,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 int32 main() {
     /* an int iterator seeded from an array element. */

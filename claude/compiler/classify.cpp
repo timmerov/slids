@@ -1,5 +1,6 @@
 #include "classify.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <climits>
@@ -1096,6 +1097,44 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
 bool coerceOperandToClass(parse::Tree& tree, widen::TypeRef cls,
                           parse::Node& operand, diagnostic::Sink& diag);
 
+// The CLASS a diagnostic names: the real class, aliases and const peeled. Inside a
+// template flavor an operand's type is labeled by the TYPE PARAMETER (`T`), which
+// tells the author nothing; the bound class (`Value`) is what lacks the operator.
+std::string diagClassName(widen::TypeRef t) {
+    return widen::spellOrEmpty(widen::deepStrip(t));
+}
+
+// A type with every ALIAS layer peeled — at any depth — and its structure and
+// const kept: what a diagnostic spells, so a template flavor's `T` reads as the
+// bound type (`int^`), not the parameter's name.
+widen::TypeRef peelAliases(widen::TypeRef t) {
+    using F = widen::Type::Form;
+    if (t == widen::kNoType) return t;
+    switch (widen::form(t)) {
+        case F::kAlias:    return peelAliases(widen::get(t).underlying);
+        case F::kConst:    return widen::internConst(peelAliases(widen::get(t).underlying));
+        case F::kPointer:  return widen::internPointer(peelAliases(widen::get(t).pointee));
+        case F::kIterator: return widen::internIterator(peelAliases(widen::get(t).pointee));
+        case F::kArray: {
+            std::vector<int> dims = widen::get(t).dims;
+            return widen::internArray(peelAliases(widen::get(t).elem), dims);
+        }
+        case F::kTuple: {
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            for (auto& sl : slots) sl = peelAliases(sl);
+            return widen::internTuple(slots);
+        }
+        case F::kSlid:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+        case F::kNone:
+        case F::kTmplUse:
+            return t;
+    }
+    return t;
+}
+
 // The CLASS a parameter wants, seeing through a reference / iterator param (`Class^` — the
 // form a non-primitive parameter is munged into), or kNoType when the param is not
 // class-typed. The one decode of "does this position want a class?", shared by the call,
@@ -1306,6 +1345,9 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
                         "An operator can only be defined as a method of a class.", {}});
                 }
             }
+            // A LAZY template method's body waits for its first use (the lazy
+            // sweep at the end of run builds and types it then).
+            if (m->lazy_body) continue;
             classifyFunctionBody(tree, *m, diag);
         } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_const) {
             for (auto& init : m->children) {
@@ -2847,7 +2889,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Operator '" + op + "' is not defined on class '"
-                        + widen::spellOrEmpty(lref) + "'.", {}});
+                        + diagClassName(lref) + "'.", {}});
                     return;
                 }
                 bool is_cmp = (op == "==" || op == "!=" || op == "<"
@@ -2980,7 +3022,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         ? lref : rref;
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Operator '" + op + "' is not defined on class '"
-                    + widen::spellOrEmpty(cls) + "'.", {}});
+                    + diagClassName(cls) + "'.", {}});
                 return;
             }
 
@@ -3770,6 +3812,17 @@ void classifyCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
             // plain lookup is not enough — resolve's anchor is the public
             // declaration, and the set is re-gathered here from scratch.
             if (!parse::declVisibleAt(tree, e.file_id, s.file_id)) continue;
+            if (!s.overload_frames.empty()) {
+                // The UNION of every scope bare-visible at the call (resolve's
+                // overload_frames; -1 = file scope).
+                int key = e.owner_ns_frame >= 0 ? e.owner_ns_frame
+                        : e.parent_frame_id == 0 ? -1 : -2;
+                if (std::find(s.overload_frames.begin(), s.overload_frames.end(),
+                              key) == s.overload_frames.end()) continue;
+                if (e.is_template) tcands.push_back((int)id);
+                else cands.push_back((int)id);
+                continue;
+            }
             if (e.owner_ns_frame != own) continue;
             if (own < 0 && e.parent_frame_id != pf) continue;
             if (e.is_template) {
@@ -4025,8 +4078,8 @@ void checkPtrAssign(parse::Tree& tree, widen::TypeRef lvalue_type,
     if (ptrImplicitOk(rhs.inferred_type, lvalue_type)) return;
     if (ptrBaseUpcastOk(tree, rhs.inferred_type, lvalue_type)) return;  // derived^ -> base^
     diagnostic::report(diag, {rhs.file_id, rhs.tok,
-        "Cannot implicitly cast '" + widen::spellOrEmpty(rhs.inferred_type)
-        + "' to '" + widen::spellOrEmpty(lvalue_type)
+        "Cannot implicitly cast '" + widen::spellOrEmpty(peelAliases(rhs.inferred_type))
+        + "' to '" + widen::spellOrEmpty(peelAliases(lvalue_type))
         + "'; an explicit cast is required.", {}});
 }
 
@@ -7815,7 +7868,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // the operator tests exercise.
                 diagnostic::report(diag, {s.file_id, s.tok,
                     "Operator '" + op + "=' is not defined on class '"
-                    + widen::spellOrEmpty(s.return_type) + "'.", {}});
+                    + diagClassName(s.return_type) + "'.", {}});
                 return;
             }
 
@@ -9221,6 +9274,29 @@ void checkOverloadDefaultCollisions(parse::Tree& tree, diagnostic::Sink& diag) {
     }
 }
 
+// The BLOCK-SCOPE scopes of a function body — a class or namespace opened inside it,
+// at any statement depth, nested functions included — get the same signature pre-pass
+// as their file-scope twins, so their member overload sets are final (num_required,
+// inferred param types) before checkOverloadDefaultCollisions and any body is typed.
+void classifyBodyScopeSignatures(parse::Tree& tree, parse::Node& n,
+                                 diagnostic::Sink& diag) {
+    for (auto& c : n.children) {
+        if (!c) continue;
+        if (c->kind == parse::Kind::kNamespaceDecl
+         || c->kind == parse::Kind::kClassDef) {
+            if (c->kind == parse::Kind::kClassDef && !c->type_params.empty())
+                continue;   // a block-scope CLASS TEMPLATE is a pristine pattern
+            if (c->kind == parse::Kind::kClassDef)
+                classifyClassSignature(tree, c->return_type, diag);
+            classifyScopeSignatures(tree, *c, diag);
+            continue;
+        }
+        if (c->kind == parse::Kind::kFunctionDef && !c->type_params.empty())
+            continue;   // a template body is pristine
+        classifyBodyScopeSignatures(tree, *c, diag);
+    }
+}
+
 void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
                              diagnostic::Sink& diag) {
     for (auto& m : node.children) {
@@ -9231,6 +9307,8 @@ void classifyScopeSignatures(parse::Tree& tree, parse::Node& node,
             // instances run this per-instance at instantiation.
             if (!m->type_params.empty()) continue;
             classifyFunctionSignature(tree, *m, diag);
+            if (m->kind == parse::Kind::kFunctionDef && !m->lazy_body)
+                classifyBodyScopeSignatures(tree, *m, diag);
         } else if (m->kind == parse::Kind::kNamespaceDecl
                 || m->kind == parse::Kind::kClassDef) {
             // A CLASS TEMPLATE is a pristine pattern — no signature to classify;
@@ -9390,6 +9468,135 @@ void classifyInstantiationDemands(parse::Tree& tree, diagnostic::Sink& diag) {
     }
 }
 
+// LAZY TEMPLATE METHODS — the classify half of building one deferred flavor
+// method: resolve its body (resolve::resolveLazyMethod), fold it, complete the
+// signatures of any scope its body opens, and type it, with the USE that required
+// it as the instantiation context ("in the instantiation of 'Vector<Value>',
+// required from here" carets the call, not the flavor's first mention).
+// Where each built lazy method was first required: {file, tok} of the use, and
+// the lazy method whose body holds that use (-1: ordinary code). Followed outward,
+// it is the whole requirement chain — `na < nb` -> op< -> compare.
+struct LazyOrigin { int file; int tok; int encl; };
+std::map<int, LazyOrigin> g_lazy_origin;
+
+void buildLazyMethod(parse::Tree& tree, int entry_id, int use_file, int use_tok,
+                     int encl, diagnostic::Sink& diag) {
+    auto it = tree.lazy_methods.find(entry_id);
+    if (it == tree.lazy_methods.end() || !it->second.fn || !it->second.fn->lazy_body)
+        return;
+    parse::Node* fn = it->second.fn;
+    auto spellingOf = [&](int id) {
+        parse::Tree::LazyMethod const& m = tree.lazy_methods.at(id);
+        return parse::instanceSpelling(tree, m.tmpl_entry_id, m.args);
+    };
+    std::string what = spellingOf(entry_id);
+    g_lazy_origin[entry_id] = {use_file, use_tok, encl};
+    // The OUTER requirement chain, outermost first, as instantiation context: the
+    // use that required the lazy method holding this use, and so on outward.
+    std::vector<std::pair<int, LazyOrigin>> chain;
+    for (int e = encl, guard = 64; e >= 0 && guard-- > 0; ) {
+        auto o = g_lazy_origin.find(e);
+        if (o == g_lazy_origin.end()) break;
+        chain.push_back({e, o->second});
+        e = o->second.encl;
+    }
+    std::vector<std::unique_ptr<diagnostic::InstantiationScope>> outer;
+    for (auto c = chain.rbegin(); c != chain.rend(); ++c)
+        outer.push_back(std::make_unique<diagnostic::InstantiationScope>(
+            diag, c->second.file, c->second.tok, spellingOf(c->first)));
+    if (!resolve::resolveLazyMethod(tree, entry_id, use_file, use_tok, diag)) return;
+    if (diagnostic::hasErrors(diag)) return;
+    constfold::runOn(tree, *fn, diag);
+    if (diagnostic::hasErrors(diag)) return;
+    diagnostic::InstantiationScope ictx(diag, use_file, use_tok, what);
+    classifyBodyScopeSignatures(tree, *fn, diag);
+    classifyFunctionBody(tree, *fn, diag);
+    classifyFreshClassInstances(tree, diag);
+}
+
+// Every entry id a classified subtree USES — a call / reference target and the
+// class-operator chain slots — with the node that uses it. A function's or
+// parameter's OWN id is a declaration, not a use. A template pattern and an unbuilt
+// LAZY body are not code yet.
+struct EntryUse { int id; parse::Node const* at; int encl; };
+void collectEntryUses(parse::Tree const& tree, parse::Node const& n, int encl,
+                      std::vector<EntryUse>& out) {
+    if (!n.type_params.empty()) return;
+    bool decl = n.kind == parse::Kind::kFunctionDef
+             || n.kind == parse::Kind::kFunctionDecl
+             || n.kind == parse::Kind::kParam;
+    for (int id : {decl ? -1 : n.resolved_entry_id, n.op_bin_eid, n.op_un_eid,
+                   n.op_aug_eid, n.op_eq_lhs_eid, n.op_eq_rhs_eid, n.op_move_eid})
+        if (id >= 0) out.push_back({id, &n, encl});
+    // Uses inside a built LAZY method's body are required BY that method.
+    if (n.kind == parse::Kind::kFunctionDef
+        && tree.lazy_methods.count(n.resolved_entry_id))
+        encl = n.resolved_entry_id;
+    if (!n.lazy_body)
+        for (auto const& c : n.children) if (c) collectEntryUses(tree, *c, encl, out);
+    for (auto const& p : n.params) if (p) collectEntryUses(tree, *p, encl, out);
+    for (auto const& d : n.dim_exprs) if (d) collectEntryUses(tree, *d, encl, out);
+}
+
+// The LAZY SWEEP: scan all classified code for uses of a pending lazy method and
+// build each (a built body is scanned on the next round), plus every --instantiate
+// METHOD demand. Each use of a method of an AGGREGATED flavor (declare-only here,
+// defined by its template source) is recorded in Tree::demanded_methods for the
+// .sli, so the source builds exactly the methods its consumers call.
+void buildLazyMethods(parse::Tree& tree, diagnostic::Sink& diag) {
+    struct Todo { int id; int file; int tok; int encl; };
+    std::vector<Todo> todo;
+    // --instantiate METHOD demands: every overload of the name in the flavor.
+    for (auto& [ft, mname] : tree.method_demands) {
+        int cid = parse::classEntryForType(tree, widen::deepStrip(ft));
+        if (cid < 0) continue;
+        int frame = tree.entries[cid].ns_frame_id;
+        bool found = false;
+        for (std::size_t i = 0; i < tree.entries.size(); i++) {
+            parse::Entry const& e = tree.entries[i];
+            if (e.kind != parse::EntryKind::kFunction || e.owner_ns_frame != frame
+                || e.name != mname) continue;
+            found = true;
+            todo.push_back({static_cast<int>(i), -1, -1, -1});
+        }
+        if (!found)
+            diagnostic::report(diag, {-1, -1,
+                "Unknown method '" + mname + "' in instantiation demand '"
+                + tree.entries[cid].name + "'.", {}});
+    }
+    tree.method_demands.clear();
+    for (int round = 0; round < 4096; round++) {
+        std::vector<EntryUse> uses;
+        for (auto const& n : tree.nodes) if (n) collectEntryUses(tree, *n, -1, uses);
+        for (auto const& pt : tree.pending_tmpl_instances)
+            if (pt.node) collectEntryUses(tree, *pt.node, -1, uses);
+        for (auto const& [id, at, encl] : uses) {
+            if (id >= static_cast<int>(tree.entries.size())) continue;
+            auto lm = tree.lazy_methods.find(id);
+            if (lm != tree.lazy_methods.end() && lm->second.fn
+                && lm->second.fn->lazy_body) {
+                todo.push_back({id, at->file_id, at->tok, encl});
+                continue;
+            }
+            parse::Entry const& e = tree.entries[id];
+            if (e.kind != parse::EntryKind::kFunction || e.owner_ns_frame < 0) continue;
+            int cid = parse::classEntryForFrame(tree, e.owner_ns_frame);
+            if (cid < 0 || tree.entries[cid].name.find('<') == std::string::npos)
+                continue;
+            if (widen::slidLinkage(widen::strip(tree.entries[cid].slids_type))
+                == widen::Type::Linkage::kDeclare)
+                tree.demanded_methods[cid].insert(e.name);
+        }
+        if (todo.empty()) return;
+        std::vector<Todo> now;
+        now.swap(todo);
+        for (Todo const& t : now) {
+            buildLazyMethod(tree, t.id, t.file, t.tok, t.encl, diag);
+            if (diagnostic::hasErrors(diag)) return;
+        }
+    }
+}
+
 void run(parse::Tree& tree, diagnostic::Sink& diag) {
     parse::Node* program = nullptr;
     for (auto& n : tree.nodes) {
@@ -9421,6 +9628,11 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // Any straggler class-template instances (a resolution re-entry outside the
     // instantiateAndClassify path) get their late stages before the splice.
     classifyFreshClassInstances(tree, diag);
+
+    // LAZY TEMPLATE METHODS: build every deferred flavor method the classified
+    // code uses (to a fixpoint — a built body may use more), and record the
+    // methods called on aggregated flavors for the .sli.
+    buildLazyMethods(tree, diag);
 
     // Splice the template instances minted during the walk into their host lists,
     // each right AFTER its template's definition node. Deferred to here because a

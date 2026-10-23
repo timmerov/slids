@@ -42,6 +42,7 @@ malformed exponent cases follow the //-EXPECT-ERROR pattern.
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

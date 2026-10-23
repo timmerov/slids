@@ -63,6 +63,7 @@ params arrive initialized; reading them is fine. an unread param (unused) is
 NOT flagged — only body-declared locals are swept, params are exempt.
 */
 import string;
+alias slids;
 
 int32 add(int a, int b, int unused_param) {
     int s = a + b;

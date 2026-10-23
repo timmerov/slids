@@ -37,6 +37,7 @@ before the alias name joins the cycle set (composition, not a cycle; Nest<T>).
 */
 
 import string;
+alias slids;
 
 alias Plain = int;
 

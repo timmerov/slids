@@ -60,6 +60,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 alias Big = int64;
 

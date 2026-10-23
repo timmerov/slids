@@ -33,6 +33,7 @@ to module-level functions exactly like a file-scope class's.
 
 /* a file-scope class, shadowed by a same-named LOCAL class in main. */
 import string;
+alias slids;
 
 Shadowed(int x_) {
     _() { println(String + "FILE:Shadowed: " + x_); }

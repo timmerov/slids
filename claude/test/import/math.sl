@@ -27,6 +27,7 @@ tbd
 
 /* math namespace. */
 import string;
+alias slids;
 
 math {
     const float64 kPi64 = 3.14;

@@ -1479,7 +1479,10 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     sharing the stem, test/lib/vector.sl, is not the module's source; the
     negative harness keeps a variant at the right path with a per-case
     symlink farm), marked template_source; grammar's declarations-only header check exempts
-    it, and resolve STRIPS its non-template content before relocation. A body
+    it, and resolve STRIPS its non-template content before relocation (a NAMESPACE
+    in the source — the library's `slids { }` — is a scope, not content: it is kept
+    with its own members filtered by the same rule, recursively; one left empty
+    drops). A body
     referencing a TU-private name therefore cannot inline — and gets THE
     PRIVATE-NAME CHAIN, not a bare unknown-name error: the strip RECORDS every
     name it drops (kind + file + token — tokens outlive the freed nodes), an
@@ -1685,7 +1688,14 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   what lets a cross-header argument like `Box<Bird>` aggregate), then
   `import <target> { Vector<int>; Gauge:scaled<int>; tsum<int8>; }` in
   canonical spellings (aliases erased, so `Vector<Integer>` and `Vector<int>`
-  are one line and one flavor). `slidsc <m>.sl --instantiate <dir> -o ...`
+  are one line and one flavor), FULLY QUALIFIED (2026-10-22): the template's
+  owner chain and every class argument's scope path (`slids:Map<slids:String,
+  int>`) — the source's TU has none of the consumer's `alias Ns;` imports in
+  force. The writer installs widen::setSlidSpeller around itself (a class-
+  template-instance argument spells as its qualified template over its own
+  arguments, recursively). A METHOD demand `Flavor<args>:name` (2026-10-22)
+  names a lazy method the consumer called on an aggregated flavor (see LAZY
+  TEMPLATE METHODS); the reader splits it at the flavor's bracket-matched `>`. `slidsc <m>.sl --instantiate <dir> -o ...`
   is an ordinary compile plus: a driver-side parser reads every .sli, keeps
   blocks addressed to `<m>`, injects the provenance imports at lex
   (imported_once dedups), and feeds each demand through the SAME memoized
@@ -1697,6 +1707,36 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   consumers with --instantiate, then link — a make dependency, not a new
   tool; a MIXED-ROLE TU (a template source consuming another library) dumps
   its own .sli and chains (tmpl_lib before tmpl_lib2).
+
+  LAZY TEMPLATE METHODS (landed 2026-10-22). A class-template flavor's method is
+  BUILT — body resolved, folded, typed, emitted — only when USED, so a method may
+  require of T what not every T has (Vector's comparisons need T's op<; a
+  Vector<Value> without one is fine until compared). ALWAYS built: hooks, op= /
+  op<-- / op<--> (the declarator funnel and the transfer invariant call them),
+  virtuals (the vtable names them), synthesized defaults — lazyEligible.
+  - DEFER (resolve). The drain and the late path set Tree::lazy_flavor around
+    resolveScopeBodies for each opening; a direct eligible method resolves only
+    its signature const-exprs, gets Node::lazy_body, and is recorded in
+    Tree::lazy_methods (entry id -> fn, opening, template, args, inline-local).
+    constfold, classifyScope, desugar's flattenScope / collectGlobals skip a
+    lazy body; classifyScopeSignatures still completes its signature.
+  - BUILD (classify, buildLazyMethods, after classifyFreshClassInstances). Scan
+    every classified node's uses (resolved_entry_id — never a decl's own — and
+    the op_*_eid chain slots), build each pending lazy method used, repeat to a
+    fixpoint (a built body may use more). One build: resolve::resolveLazyMethod
+    re-enters the flavor's scope exactly as the drain (snapshot, members, T
+    aliases, tmpl_self_stack, class frame + base chain), resolveFunctionBody with
+    signature_resolved, then resyncMungedTree (the munge ran on the params long
+    before — resyncMungedParams is the factored re-sync); constfold::runOn,
+    classifyBodyScopeSignatures, classifyFunctionBody.
+  - CONTEXT. Each build records its requiring use and the lazy method whose body
+    holds it; the instantiation context replays the chain outermost first
+    (`a < b` -> op< -> compare), so the note reaches the author's code.
+  - ACROSS THE SEAM. The sweep records each method a consumer calls on a kDeclare
+    flavor (Tree::demanded_methods); the .sli demands it; the source's resolve
+    demand loop feeds Tree::method_demands and the sweep builds every overload of
+    the name. A flavor nobody calls a method on emits only its eager set.
+  - COST. An error in a method body nothing calls is not reported.
 
   THE SELF-INSTANTIATE STAGE — SPIKED, MEASURED, ROLLED BACK (2026-10-14).
   An INLINE-LOCAL flavor is the one flavor no library's --instantiate pass can
@@ -2292,7 +2332,18 @@ STAGE FILES (.h / .cpp pairs)
             lifetime, tagged by owning namespace. Bare lookup walks the open-
             namespace chain (siblings + enclosing namespaces + `alias Ns;`
             imports) then the lexical scope — qualifiers always optional, `::`
-            names the global root and only defeats a shadow. Qualified names
+            names the global root and only defeats a shadow. A BODY LOCAL
+            (local, param, field, nested fn — lexical, not file scope) is
+            checked FIRST and shadows every member (2026-10-22). A file-scope
+            `alias Ns;` is pushed right after the NAME phase, before any type
+            resolves, so field / signature types see it. An UNQUALIFIED call to
+            a file-scope or namespace function ranks ONE overload set across
+            every scope holding the name bare-visible (open namespace frames +
+            file scope): resolve stamps Node::overload_frames (-1 = file scope)
+            when 2+ contribute; classifyCall gathers their union. A namespace
+            is a full scope: overloads (merged by resolved signature in the
+            TYPES phase), in-scope global types, member type sets (kTypeSet;
+            qualified `T=Space:Set` via lookupAliasTemplateEntry). Qualified names
             (`A:B:C`, leading `::`) resolve through one shared chain walker
             (refs, inline member decls, bare aliases word identically), each
             diagnostic careting the offending segment. A bare name matching

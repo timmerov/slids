@@ -66,6 +66,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 int32 foo() {
     return 0;

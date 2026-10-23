@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -80,6 +81,12 @@ struct Type {
                                            // classes are distinct handles. The NAME
                                            // stays bare; the unique LLVM symbol is
                                            // minted from this at codegen, never stored.
+    std::string symbol_path;               // kSlid: a class that is a MEMBER of a
+                                           // file-scope namespace / class chain is
+                                           // named by that SCOPE PATH in its symbols
+                                           // (`slids.String`) — stable across TUs,
+                                           // where its frame id (def_id) is not.
+                                           // Empty: classSymbol uses name + def_id.
     bool has_ctor = false;                 // kSlid: an explicit `_()` -> a
     bool has_dtor = false;                 //   <Name>__$ctor/__$dtor symbol exists
     bool needs_ctor = false;               // kSlid: TRANSITIVE — explicit, or a
@@ -279,8 +286,20 @@ void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here);
 bool slidCtorHere(TypeRef ref);
 bool slidDtorHere(TypeRef ref);
 
+// An optional override of a CLASS leaf's spelling in spell(): given the kSlid, return
+// its spelling, or "" to keep the bare name. The .sli demand writer (main) installs
+// one so a demand reaches the template source's TU fully QUALIFIED
+// (`slids:Map<slids:String, int>`), resolvable there with no `alias` in force; it
+// clears it (nullptr) when done. Unset everywhere else.
+void setSlidSpeller(std::function<std::string(TypeRef)> speller);
+
+// Record a member class's stable SCOPE PATH (see Type::symbol_path). Resolve sets it
+// at class registration, where the enclosing frames are known.
+void setSlidSymbolPath(TypeRef ref, std::string const& path);
+
 // The disambiguated LLVM symbol base for a class kSlid handle (file-scope = bare
-// name; local = name + ".<frame>"). The ONE place a class name is mangled, and
+// name; a member of a file-scope namespace / class chain = its scope path
+// `Outer.Inner`; local = name + ".<frame>"). The ONE place a class name is mangled, and
 // only into emitted symbols — desugar (ctor/dtor defs) and codegen (calls / sizeof
 // / struct) both call it so definition and use agree.
 std::string classSymbol(TypeRef ref);

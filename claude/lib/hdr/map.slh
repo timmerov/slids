@@ -9,6 +9,9 @@ built upon red/black tree.
 
 import tree;
 
+/* slids namespace */
+slids {
+
 TreeNode : MapNode<Key, Value>(
     Key key_,
     Value value_
@@ -29,3 +32,5 @@ Map<Key, Value>(...) {
 
     void insert(Key key, Value value);
 }
+
+} /* slids */

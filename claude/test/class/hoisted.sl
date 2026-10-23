@@ -41,6 +41,7 @@ classes; identity rides the handle, never a spelling.
 */
 
 import string;
+alias slids;
 
 Outer(int x_ = -1) {
     alias Outerger = int;

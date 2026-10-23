@@ -989,6 +989,13 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     (calls / sizeof) so def and use agree, and living only in emitted LLVM. (This
     is the "defer name mangling to codegen" rule: scope is disambiguated by the
     entry-id/frame stack, never by a stored canonical name — v1's fatal trap.)
+    A MEMBER class registered at FILE scope (in a namespace / class chain that
+    reaches file scope — `slids:String`, a hoisted `Outer:Inner`) has a frame id
+    that differs per TU (it follows import order), so its symbol is its SCOPE
+    PATH instead: Type::symbol_path (`slids.String`), set by registerClassName
+    via memberSymbolPath and preferred by classSymbol. def_id (identity) is
+    unchanged. A namespace opened in a function body, or a local host class,
+    keeps the TU-local `.<frame>`; a template flavor keeps its canonical spelling.
   * TWO-PHASE REGISTRATION (so a field may FORWARD-reference a sibling class).
     registerClassName (Phase 1) makes every class name a known type — a kClass
     entry + a SLOTLESS interned handle + a placeholder ClassInfo — then
@@ -1132,9 +1139,14 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     definition (separate method entries), owned by the duplicate-definition check above.
     Canon overload_cls.sl (am1 / am0), virtual.sl (Namb), overload_fn.sl (amb_one /
     amb_zero).
-    resolve allows a method OVERLOAD SET in a class frame (a same-name method is an
-    overload; a collision with a non-function member is still a dup); a NAMESPACE
-    function stays single-definition. classifyScopeSignatures runs classifyFunctionSig-
+    resolve allows an OVERLOAD SET in a class frame AND a namespace frame (a same-name
+    function is an overload; a collision with a non-function member is still a dup).
+    A namespace pair with the same RESOLVED parameter list is a decl + its def: it
+    merges in the TYPES phase (mergeNamespaceFunction -> mergeFunctionRedecl, the
+    file-scope rule's one decode; the later entry is RETIRED — name cleared, moved to
+    a frame of its own). A class frame keeps separate decl/def entries. Classes and
+    namespaces opened in a FUNCTION BODY get the same signature pre-pass
+    (classifyBodyScopeSignatures). classifyScopeSignatures runs classifyFunctionSig-
     nature over EVERY member (defaults + num_required + infer-from-default) BEFORE any
     body types; fillDefaults is receiver-aligned. Method-only signature checks (a type-
     less param needs a default; a required param may not follow an optional) run in

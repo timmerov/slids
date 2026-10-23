@@ -24,6 +24,7 @@ and things get interesting.
 
 import string;
 import vector;
+alias slids;
 
 
 int32 main() {

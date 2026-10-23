@@ -7,6 +7,9 @@ dump prints the type name and value of a variable.
 uses the stringification operator #.
 */
 
+/* slids namespace */
+slids {
+
 /*
 this is the tuple type used by the dump templates.
 */
@@ -35,3 +38,5 @@ output:
     int x = 42 : 37;
 */
 void dump<T>(DumpTuple<T>^ tuple, char[] expected);
+
+} /* slids */

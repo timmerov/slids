@@ -102,6 +102,7 @@ claude says:
 
 /* a function returning a tuple — for the rvalue-spill case. */
 import string;
+alias slids;
 
 (int, int, int) make_tuple() {
     return (4, 5, 6);

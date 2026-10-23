@@ -50,6 +50,7 @@ local, not the method — exactly as a bare field is shadowed by a same-named lo
 */
 
 import string;
+alias slids;
 
 Method(int x_) {
     _() {

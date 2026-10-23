@@ -18,6 +18,7 @@ black height on every path, every child's parent_ points back.
 
 import string;
 import tree;
+alias slids;
 
 TreeNode : Node(
     int key_

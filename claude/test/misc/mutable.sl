@@ -134,6 +134,7 @@ caveats:
 */
 
 import string;
+alias slids;
 
 // parameter munge: `mutable char[]` opts out (-> char[]); plain `char[]`
 // defaults to a const element (-> (const char)[]); the primitive is by value.

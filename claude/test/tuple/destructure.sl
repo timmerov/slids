@@ -46,6 +46,7 @@ rule (the parse-level disambiguation of a tuple-type decl from a destructure).
 */
 
 import string;
+alias slids;
 
 (int, int) makePair() {       // a function returning a tuple — a destructure rhs
     return (11, 22);

@@ -80,6 +80,7 @@ ctor runs first, torn down last) both work.
 */
 
 import string;
+alias slids;
 
 Class(int c_) {
     _() {

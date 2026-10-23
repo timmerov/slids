@@ -286,6 +286,8 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
     c->tmpl_arg_toks = n.tmpl_arg_toks;
     c->param_types = n.param_types;
     c->captures = n.captures;
+    c->overload_frames = n.overload_frames;
+    c->lazy_body = n.lazy_body;
     c->capture_types = n.capture_types;
     c->self_entry_id = n.self_entry_id;
     for (auto const& d : n.dim_exprs)

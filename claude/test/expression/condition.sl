@@ -34,6 +34,7 @@ forlong.sl) and the logical AUGMENTED-ASSIGN `&&=` / `||=` / `^^=` (same "Operat
 */
 
 import string;
+alias slids;
 
 // A class is a valid condition operand IFF it defines op! — dispatched by `!`.
 Flag(int v_ = 0) {

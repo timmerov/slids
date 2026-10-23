@@ -264,6 +264,7 @@ import+ map;
 import random;
 import string;
 import+ vector;
+alias slids;
 
 stdc import {
     void exit(int status);

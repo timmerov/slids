@@ -124,6 +124,7 @@ open -> size deferred to link-time __$sizeof(). is_open / public-prefix are the 
 /* --- the running spec example: one class grown across five re-opens --- */
 
 import string;
+alias slids;
 
 Class(int incomplete = 1, ...) {           /* declare INCOMPLETE: 1 field + `...` */
     void method1() { println(String + "method1"); }

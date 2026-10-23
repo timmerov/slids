@@ -14,6 +14,9 @@ copying null terminated strings,
 copying null terminated strings limited by length.
 */
 
+/* slids namespace */
+slids {
+
 String(...)
 {
     /* constructor/destructor */
@@ -235,3 +238,5 @@ String : Format(
     /* overload * to format a floating point number in place. */
     op*(Format^ fmt, float64 x);
 }
+
+} /* slids */

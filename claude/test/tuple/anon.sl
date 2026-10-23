@@ -95,6 +95,7 @@ deferred to later landings:
 */
 
 import string;
+alias slids;
 
 enum Dir ( kN, kE, kS, kW );
 

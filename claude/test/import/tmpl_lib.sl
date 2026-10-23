@@ -26,6 +26,7 @@ compiles after it.
 import string;
 
 import tmpl_lib;
+alias slids;
 import tmpl_lib2;
 
 /* PRIVATE to this TU — an instance body may call it, because the instance
@@ -105,6 +106,16 @@ Box<T>() {
     int has() {
         if (p_ == nullptr) { return 0; }
         return 1;
+    }
+}
+
+Rank<T>() {
+    int has() {
+        if (p_ == nullptr) { return 0; }
+        return 1;
+    }
+    bool lt(Rank^ o) {
+        return p_^ < o^.p_^;
     }
 }
 

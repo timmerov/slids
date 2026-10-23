@@ -25,6 +25,7 @@ DEFERRED (commented out in main):
 import+ algorithm;
 import string;
 import vector;
+alias slids;
 
 /* a small class ordered by op<. */
 Item(int key_ = 0) {

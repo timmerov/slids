@@ -229,6 +229,7 @@ balance is visible in the golden; Op additionally prints copy/move so a FIRED op
 */
 
 import string;
+alias slids;
 
 // A hook class — prints id on ctor + dtor so ctor/dtor balance is visible.
 Class(int id_) {

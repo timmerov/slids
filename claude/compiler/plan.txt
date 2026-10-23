@@ -4118,6 +4118,46 @@ CROSS-TU — THE SOURCE IS THE AUTHOR'S CALL: `import` / `import+` (LANDED 2026-
     test/progress galaxy.sl needs `import+ vector; import+ algorithm;` (the user's dir).
   Detail: readme.txt TEMPLATES, THE SOURCE IS THE AUTHOR'S CALL; slids_reference.md Imports.
 
+THE LIBRARY MOVES INTO `slids { }` — NAMESPACE PARITY + LAZY TEMPLATE METHODS (LANDED 2026-10-22)
+  The user wrapped lib/ in the namespace `slids`. The fallout, each landed on the
+  user's go; the rule behind most of it (the user): A NAMESPACE CAN DO EVERYTHING
+  ITS ENCLOSING CONTEXT CAN. (The old "a namespace function stays single-
+  definition" was a past-Claude limitation — a code comment saying "today" — not
+  a user decision.)
+  - OVERLOADS IN A NAMESPACE. Separate entries at NAMES; a same-RESOLVED-signature
+    pair merges in TYPES (mergeNamespaceFunction -> mergeFunctionRedecl, shared
+    with file scope's Pass 1a; the later entry retired). A header decl merging
+    into an earlier relocated def takes the header's file_id (the declaration
+    site decides linkage). resolve's call-site overload count looks in the
+    callee's frame. Namespace globals type in-scope; member type sets; qualified
+    type-set names. Block-scope classes/namespaces get the signature pre-pass
+    (classifyBodyScopeSignatures) — it also fixed local-class method overloads.
+  - CROSS-TU CLASS SYMBOLS. A member class's frame id differs per TU, so its
+    symbol is its scope path (Type::symbol_path, `slids.String`).
+  - ONE OVERLOAD SET across every bare-visible scope (Node::overload_frames): a
+    file-scope `print(Mine^)` no longer hides `slids:print(String^)`.
+  - FILE-SCOPE `alias Ns;` before TYPES, so a field `Vector<int>` resolves.
+  - QUALIFIED .sli DEMANDS (widen::setSlidSpeller around the writer).
+  - THE TEMPLATE-SOURCE STRIP recurses into namespaces (it dropped `slids { }`
+    whole — no source bodies, "never completed"); a namespace template's owner
+    chain is opened for an instantiation that predates the snapshot pass.
+  - LAZY TEMPLATE METHODS (the user's decision, after Vector's new comparison ops
+    — "they worked for classes with op<; not tested with classes without"):
+    hooks / transfer ops / virtuals / synthesized eager, every other flavor
+    method built on first use by classify's sweep; .sli METHOD demands. Detail:
+    readme.txt TEMPLATES, LAZY TEMPLATE METHODS.
+  - BODY LOCALS SHADOW EVERY MEMBER (resolveNameDetail checks them first) —
+    `alias slids;` had made slids:print + a class method an ambiguous pair that
+    skipped self.sl's nested print.
+  - DIAGNOSTICS name the bound type, not the parameter: operator-not-defined
+    (diagClassName) and implicit-cast (peelAliases).
+  - TESTS. `alias slids;` after the imports of every test/ file that uses lib
+    (test/progress by the user); line-baking goldens shifted (macros,
+    tmpl_alias). Canon: test/misc/namespace.sl (parity block, Merge/pick,
+    Merge:Cup/Holder, three negatives), test/lib/vector.sl (Ranked, compare,
+    the Value negative), test/import Rank<T> (aggregated + inline-local + a
+    negative); tmpl_class.sl's Way chain now a pointer field.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

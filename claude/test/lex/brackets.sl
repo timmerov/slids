@@ -11,6 +11,7 @@ get uncommented one at a time by the runner.
 */
 
 import string;
+alias slids;
 
 //-EXPECT-ERROR: Mismatched bracket: expected ')', got '}'
 // ( }

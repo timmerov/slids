@@ -105,6 +105,7 @@ uninitialized operand; a non-lvalue swap operand; a narrowing move.
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

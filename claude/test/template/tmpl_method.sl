@@ -82,6 +82,7 @@ defining) a member template.
 
 /* the workhorse: explicit + inferred calls, field read/write, memoization. */
 import string;
+alias slids;
 
 Jar(int n_ = 0) {
     T scaled<T>(T v) { return v * n_; }

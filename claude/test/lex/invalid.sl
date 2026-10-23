@@ -7,6 +7,7 @@ ensure the lexer rejects invalid characters.
 */
 
 import string;
+alias slids;
 
 //-EXPECT-ERROR: Unexpected character: '@'
 // @

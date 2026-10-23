@@ -58,6 +58,7 @@ that a local or nested-function name would otherwise shadow.
 */
 
 import string;
+alias slids;
 
 Self(int x_) {
     Self^ this() {

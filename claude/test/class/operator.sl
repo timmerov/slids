@@ -350,6 +350,7 @@ TEST PLAN
 */
 
 import string;
+alias slids;
 
 DefaultMove(
     char c_,

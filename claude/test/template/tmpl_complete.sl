@@ -45,6 +45,7 @@ import string;
 /* `import+`: Vector<Pt> below is an instance over a locally defined private
    class, so this TU needs vector.sl's bodies. */
 import+ vector;
+alias slids;
 
 Grow<T>(T a_ = 1, ...) {
     T ga() { return a_; }

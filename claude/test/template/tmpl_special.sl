@@ -228,6 +228,7 @@ changed on either side.
 */
 
 import string;
+alias slids;
 
 /* the canon sets, plus Arrays2 so the complement excludes 2-D arrays too. */
 alias SignedIntegers = <int|int8|int16|int32|int64>;

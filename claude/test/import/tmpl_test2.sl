@@ -19,6 +19,7 @@ import string;
 
 import+ tmpl_lib;
 import library;
+alias slids;
 
 alias Integer2 = int;
 

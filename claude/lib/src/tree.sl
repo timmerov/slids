@@ -14,6 +14,9 @@ if this breaks rules 2,3 then recolor/rebalance.
 
 import tree;
 
+/* slids namespace */
+slids {
+
 TreeNode() {
     _() {}
     ~() {}
@@ -226,3 +229,5 @@ TreeNode() {
         }
     }
 }
+
+} /* slids */

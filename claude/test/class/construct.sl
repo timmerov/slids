@@ -173,6 +173,7 @@ terminator.
 */
 
 import string;
+alias slids;
 
 CtorDtor(int c_) {
     _() {

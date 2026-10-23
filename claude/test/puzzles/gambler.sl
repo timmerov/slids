@@ -8,6 +8,7 @@ gambler simulation
 */
 
 import string;
+alias slids;
 
 
 uint32 g_next = 1;

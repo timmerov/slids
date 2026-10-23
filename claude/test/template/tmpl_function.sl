@@ -99,6 +99,7 @@ scope, namespaces, blocks.
 */
 
 import string;
+alias slids;
 
 T add<T>(T a, T b) {
     return a + b;

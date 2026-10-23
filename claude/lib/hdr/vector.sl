@@ -10,6 +10,9 @@ import dump;
 import string;
 import vector;
 
+/* slids namespace */
+slids {
+
 Vector<T>(
     intptr size_ = 0,
     intptr capacity_ = 0,
@@ -358,3 +361,5 @@ Vector<T>(
         }
     }
 }
+
+} /* slids */

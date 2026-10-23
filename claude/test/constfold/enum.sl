@@ -74,6 +74,7 @@ the first constant must have an assigned value ?
 */
 
 import string;
+alias slids;
 
 enum (
     kUnnamed1,

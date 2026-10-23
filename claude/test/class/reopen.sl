@@ -137,6 +137,7 @@ so the rule genuinely is per-body there.
 /* STAGE A — a primary + block re-opens: later openings add members that see the
    primary's field, const, and method bare (and vice-versa). */
 import string;
+alias slids;
 
 Rc(int a_) {
     const int kOne = 1;

@@ -358,8 +358,8 @@ std::string memberQualifiedName(parse::Tree const& tree, int entry_id) {
 widen::TypeRef ensureAliasTemplatePattern(parse::Tree& tree, int entry_id,
                                           std::set<std::string>& visiting,
                                           bool& reported, diagnostic::Sink& diag);
-// The entry a template-alias use names — bare (scope-aware) or qualified
-// (`Deep:RT<int>`). -1 when absent (the caller reports).
+// The entry a template-alias use (or a type-set name) names — bare (scope-aware)
+// or qualified (`Deep:RT<int>`, `Space:Whole`). -1 when absent (the caller reports).
 int lookupAliasTemplateEntry(parse::Tree& tree, std::string const& name,
                              int file_id, int tok, diagnostic::Sink& diag,
                              bool& reported);
@@ -943,7 +943,11 @@ void resolveSetTermsInto(parse::Tree& tree, parse::TypeSetDecl const& decl,
                 break;
             case parse::SetTerm::K::kType: {
                 if (!t.ident.empty()) {
-                    int rid = resolveName(tree, t.ident);
+                    // Bare or QUALIFIED (`Space:Whole`) — a set may be a member.
+                    bool reported = false;
+                    int rid = lookupAliasTemplateEntry(tree, t.ident, file_id,
+                                                       term_tok, diag, reported);
+                    if (reported) break;
                     if (rid >= 0
                         && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
                         r.kind = parse::TypeSet::Term::K::kSetRef;
@@ -1117,6 +1121,18 @@ int findMemberLive(parse::Tree const& tree, int ns_frame,
 int resolveNameDetail(parse::Tree const& tree, std::string const& name,
                       int& other) {
     other = -1;
+    // A BODY LOCAL — a local, param, field, or nested function of the enclosing
+    // function bodies (lexical, not file scope) — is the innermost name: it shadows
+    // every class or namespace member, aliased or not, before the member scan can
+    // see (or call ambiguous) two members of the same name.
+    for (auto it = tree.live_entry_ids.rbegin();
+         it != tree.live_entry_ids.rend(); ++it) {
+        parse::Entry const& e = tree.entries[*it];
+        if (e.name != name || e.owner_ns_frame >= 0) continue;
+        if (e.parent_frame_id == kGlobalFrame) continue;
+        if (!entryVisible(tree, *it)) continue;   // the visibility rule
+        return *it;
+    }
     int first = -1;
     for (auto it = tree.open_ns_frames.rbegin();
          it != tree.open_ns_frames.rend(); ++it) {
@@ -1649,7 +1665,9 @@ void validateAliasTemplate(parse::Tree& tree, parse::Node& node,
 
 // ---- Namespace registration -------------------------------------------------
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
-                         diagnostic::Sink& diag, bool nested = false);
+                         diagnostic::Sink& diag, bool nested = false,
+                         bool signature_resolved = false);
+void resyncMungedParams(parse::Tree& tree, parse::Node& node);
 void registerLocalClasses(parse::Tree& tree,
                           std::vector<std::unique_ptr<parse::Node>>& stmts,
                           diagnostic::Sink& diag);
@@ -2042,6 +2060,20 @@ void resolveSignatureConstExprs(parse::Tree& tree, parse::Node& fn,
     }
 }
 
+// May this flavor method's body wait for its first use? Not a hook (the declarator
+// funnel calls it), not a transfer operator (the transfer invariant calls it), not
+// a virtual (the vtable names it), not a synthesized default — those are always
+// built. Everything else is reached only through a call classify can see.
+bool lazyEligible(parse::Tree const& tree, parse::Node const& m) {
+    if (m.kind != parse::Kind::kFunctionDef || !m.type_params.empty()) return false;
+    if (m.name == "_$ctor" || m.name == "_$dtor" || m.name == "_$octor") return false;
+    if (m.name == "op=" || m.name == "op<--" || m.name == "op<-->") return false;
+    if (m.resolved_entry_id < 0
+        || m.resolved_entry_id >= static_cast<int>(tree.entries.size())) return false;
+    parse::Entry const& e = tree.entries[m.resolved_entry_id];
+    return e.kind == parse::EntryKind::kFunction && !e.is_virtual && !e.synthesized;
+}
+
 void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
                         diagnostic::Sink& diag) {
     int frame = isClass
@@ -2095,6 +2127,18 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             // kFunctionDecl (forward decl) has no body — legitimately no-op'd below.
             // A member TEMPLATE's body stays pristine — snapshot the scope instead.
             if (!m->type_params.empty()) { snapshotTemplate(tree, *m, diag); continue; }
+            // LAZY TEMPLATE METHODS: a direct method of the flavor being drained is
+            // DEFERRED — its signature const-exprs resolve now (classify's signature
+            // pass reads them), its body on first use (buildLazyMethod).
+            if (isClass && tree.lazy_flavor && tree.lazy_flavor->cls == &node
+                && lazyEligible(tree, *m)) {
+                resolveSignatureConstExprs(tree, *m, diag);
+                m->lazy_body = true;
+                parse::Tree::LazyMethod lm = *tree.lazy_flavor;
+                lm.fn = m.get();
+                tree.lazy_methods[m->resolved_entry_id] = lm;
+                continue;
+            }
             resolveFunctionBody(tree, *m, diag, /*nested=*/false);
         } else if (m->kind == parse::Kind::kFunctionDecl
                    && !m->type_params.empty()) {
@@ -2129,6 +2173,83 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
     for (int i = 0; i < base_pushed; i++) tree.open_ns_frames.pop_back();
 }
 
+// THE REDECLARATION RULE of a function, one decode for file scope and namespaces:
+// `existing` is an earlier same-name function entry with the IDENTICAL resolved
+// parameter list as `node` (a redeclaration, or the definition of a forward decl).
+// A different return type and a second definition are errors (false); otherwise a
+// definition marks the entry defined HERE and the node takes the entry (true). The
+// caller owns what differs by scope (num_required, is_external).
+bool mergeFunctionRedecl(parse::Tree& tree, int existing, parse::Node& node,
+                         diagnostic::Sink& diag) {
+    parse::Entry& prev = tree.entries[existing];
+    if (prev.slids_type != node.return_type) {
+        diagnostic::report(diag, {node.file_id, node.tok,
+            "Return type '" + widen::spellOrEmpty(node.return_type)
+            + "' does not match earlier declaration's '"
+            + widen::spellOrEmpty(prev.slids_type) + "'.",
+            {{prev.file_id, prev.tok, "first declared here"}}});
+        return false;
+    }
+    bool is_def = (node.kind == parse::Kind::kFunctionDef);
+    if (is_def && prev.defined) {
+        diagnostic::report(diag, {node.file_id, node.tok,
+            "Duplicate definition of '" + node.name + "'.",
+            {{prev.def_file_id, prev.def_tok, "first defined here"}}});
+        return false;
+    }
+    if (is_def) {
+        prev.defined = true;
+        prev.def_file_id = node.file_id;
+        prev.def_tok = node.name_tok;
+    }
+    node.resolved_entry_id = existing;
+    return true;
+}
+
+// A NAMESPACE function, its signature just resolved (TYPES phase): every same-name
+// function registered at NAMES as its own entry (an overload set, like file scope);
+// a later entry whose parameter list matches an EARLIER one in the frame is that
+// function's redeclaration or definition — it merges into the earlier entry
+// (mergeFunctionRedecl) and its own entry is RETIRED: name cleared and moved to a
+// frame of its own, so no lookup and no same-frame overload check reaches it. On an
+// error the node keeps no entry, like a NAME-phase duplicate.
+// Earlier entries are resolved already: TYPES walks scopes in NAMES order.
+void mergeNamespaceFunction(parse::Tree& tree, parse::Node& node, int frame,
+                            diagnostic::Sink& diag) {
+    int self = node.resolved_entry_id;
+    int existing = -1;
+    for (int idx = 0; idx < self; idx++) {
+        parse::Entry const& pe = tree.entries[idx];
+        if (pe.kind == parse::EntryKind::kFunction && pe.owner_ns_frame == frame
+            && !pe.is_template && pe.tmpl_args.empty()
+            && pe.name == tree.entries[self].name
+            && pe.param_types == tree.entries[self].param_types) {
+            existing = idx;
+            break;
+        }
+    }
+    if (existing < 0) return;
+    parse::Entry& retired = tree.entries[self];   // the pair is ONE function
+    retired.name.clear();
+    retired.owner_ns_frame = -1;
+    retired.parent_frame_id = -2 - self;
+    if (!mergeFunctionRedecl(tree, existing, node, diag)) {
+        node.resolved_entry_id = -1;
+        return;
+    }
+    parse::Entry& kept = tree.entries[existing];
+    if (node.kind == parse::Kind::kFunctionDef)
+        kept.is_external = false;   // header-declared, defined HERE
+    // THE DECLARATION SITE DECIDES LINKAGE (desugar copyNode reads the entry's
+    // file_id). A relocated external def (`int Space:f() {}`) may register BEFORE
+    // the header opening that declares it; the header decl then merges into the
+    // def's entry, and the entry takes the header's position.
+    else if (fileIsImported(tree, node.file_id)) {
+        kept.file_id = node.file_id;
+        kept.tok = node.name_tok;
+    }
+}
+
 // The TYPES phase for ONE scope: now that EVERY name across every scope exists (the
 // NAME phase ran), resolve EVERY declared type with the scope frame OPEN — member
 // alias targets, then a class's FIELD types (via registerClassBody, attaching slots),
@@ -2155,6 +2276,11 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
         if (!m || m->kind != parse::Kind::kAliasDecl) continue;
         if (isQualified(*m) && m->return_type != widen::kNoType) continue;  // remote member
         if (m->resolved_entry_id < 0) continue;   // a duplicate — skipped at NAMES
+        // A member TYPE SET's terms resolve here — classes exist now.
+        if (m->type_set) {
+            resolveTypeSetTerms(tree, *m, diag);
+            continue;
+        }
         // A member alias TEMPLATE builds its PATTERN (node target stays pristine).
         if (!m->type_params.empty()) {
             validateAliasTemplate(tree, *m, diag);
@@ -2178,6 +2304,16 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
                     "A const variable of a non-scalar type (array, tuple, class, or "
                     "pointer) requires global storage, which is not yet supported.", {}});
             }
+            tree.entries[m->resolved_entry_id].slids_type = m->return_type;
+        } else if (m->kind == parse::Kind::kVarDeclStmt && m->is_global) {
+            // A namespace GLOBAL's declared type resolves HERE, in the namespace's
+            // scope, so it may name a sibling member class bare (the file-scope rule:
+            // run's Pass 1a resolves a file-scope global's type). Typeless stays
+            // kNoType — classify infers it.
+            if (isQualified(*m)) continue;   // remote-namespace member, done by relocation
+            if (m->resolved_entry_id < 0) continue;   // a duplicate — skipped at NAMES
+            if (m->return_type == widen::kNoType) continue;
+            resolveDeclType(tree, m->return_type, m->file_id, m->tok, diag);
             tree.entries[m->resolved_entry_id].slids_type = m->return_type;
         } else if (m->kind == parse::Kind::kFunctionDef
                 || m->kind == parse::Kind::kFunctionDecl) {
@@ -2208,6 +2344,7 @@ void resolveScopeTypes(parse::Tree& tree, parse::Node& node, bool isClass,
                 parse::Entry& e = tree.entries[m->resolved_entry_id];
                 e.slids_type = m->return_type;
                 e.param_types = std::move(ptypes);
+                if (!isClass) mergeNamespaceFunction(tree, *m, frame, diag);
             }
         } else if (m->kind == parse::Kind::kNamespaceDecl) {
             resolveScopeTypes(tree, *m, /*isClass=*/false, diag);
@@ -3565,15 +3702,57 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             tree.nested_call_checks.push_back(
                 {s.resolved_entry_id, tree.initialized_locals, s.file_id, s.tok});
         }
-        // Count same-name free-function overloads (unqualified calls only). With
-        // more than one, the pick needs argument TYPES, which only exist after
+        // Count same-name free-function overloads in the callee's scope (file scope
+        // for an unqualified call, or the callee's NAMESPACE however it is reached).
+        // With more than one, the pick needs argument TYPES, which only exist after
         // inference — defer the arity check + signature cache to classify. A
         // single candidate keeps the precise arity error here.
         int overloads = 0;
-        if (!isQualified(s)) {
-            for (parse::Entry const& e : tree.entries) {
+        // An UNQUALIFIED call sees every scope whose same-name functions are bare-
+        // visible here — each open namespace (`alias Ns;`, an enclosing namespace)
+        // and file scope — as ONE overload set: a file-scope `print(Mine^)` does not
+        // hide an imported `slids:print(String^)`. A nested (block) callee keeps its
+        // shadowing single pick.
+        s.overload_frames.clear();
+        if (!isQualified(s) && callee.kind == parse::EntryKind::kFunction
+            && (callee.owner_ns_frame >= 0 || callee.parent_frame_id == kGlobalFrame)) {
+            std::string const name = callee.name;
+            std::vector<int> frames;
+            for (auto it = tree.open_ns_frames.rbegin();
+                 it != tree.open_ns_frames.rend(); ++it) {
+                int f = *it;
+                if (std::find(frames.begin(), frames.end(), f) != frames.end()) continue;
+                if (parse::classEntryForFrame(tree, f) >= 0) continue;   // methods: own path
+                for (int id : tree.live_entry_ids) {
+                    parse::Entry const& e = tree.entries[id];
+                    if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame == f
+                        && e.name == name && entryVisible(tree, id)) {
+                        frames.push_back(f);
+                        break;
+                    }
+                }
+            }
+            for (int id : tree.live_entry_ids) {
+                parse::Entry const& e = tree.entries[id];
                 if (e.kind == parse::EntryKind::kFunction && e.owner_ns_frame < 0
-                    && e.name == s.name) {
+                    && e.parent_frame_id == kGlobalFrame && e.name == name
+                    && entryVisible(tree, id)) {
+                    frames.push_back(-1);
+                    break;
+                }
+            }
+            if (frames.size() > 1) {
+                s.overload_frames = frames;
+                overloads = 2;   // ranked by classify, whatever the count
+            }
+        }
+        if (overloads == 0 && (!isQualified(s) || callee.owner_ns_frame >= 0)) {
+            int owner = callee.owner_ns_frame;
+            std::string const name = callee.name;
+            for (parse::Entry const& e : tree.entries) {
+                if (e.kind == parse::EntryKind::kFunction
+                    && (owner < 0 ? e.owner_ns_frame < 0 : e.owner_ns_frame == owner)
+                    && e.name == name) {
                     overloads++;
                 }
             }
@@ -6226,11 +6405,28 @@ void resolveSpecConstraint(parse::Tree& tree, parse::Node& node,
     // set; no name to look up.
     if (node.spec->type_spelling != widen::kNoType) {
         widen::TypeRef ty = node.spec->type_spelling;
+        // A QUALIFIED name parses as a spelling (`T=Space:Whole`): a member SET
+        // is a set, not a one-type spelling.
+        if (widen::form(ty) == widen::Type::Form::kSlid) {
+            bool reported = false;
+            int rid = lookupAliasTemplateEntry(tree, widen::get(ty).name,
+                                               node.file_id, spec_tok, diag,
+                                               reported);
+            if (reported) return;
+            if (rid >= 0 && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
+                ti->second.spec_set_id = rid;
+                return;
+            }
+        }
         resolveDeclType(tree, ty, node.file_id, spec_tok, diag);
         ti->second.spec_type = canonSetType(ty);
         return;
     }
-    int rid = resolveName(tree, node.spec->set_name);
+    // Bare or QUALIFIED (`T=Space:Whole`) — a set may be a namespace member.
+    bool reported = false;
+    int rid = lookupAliasTemplateEntry(tree, node.spec->set_name, node.file_id,
+                                       spec_tok, diag, reported);
+    if (reported) return;
     if (rid >= 0 && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
         ti->second.spec_set_id = rid;
         return;
@@ -6554,13 +6750,15 @@ void collectMethodFields(parse::Tree& tree, widen::TypeRef cls,
 }
 
 void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
-                         diagnostic::Sink& diag, bool nested) {
+                         diagnostic::Sink& diag, bool nested,
+                         bool signature_resolved) {
     AccessFileScope afs(tree, fn.file_id);   // the visibility rule's use site
     if (!nested) tree.nested_call_checks.clear();   // per top-level function body
     // Signature const-exprs (defaults, dims) — before the body frame is pushed
     // (see resolveSignatureConstExprs; constfold then folds them and classify
-    // requires the result to be a literal constant).
-    resolveSignatureConstExprs(tree, fn, diag);
+    // requires the result to be a literal constant). A LAZY method resolved them
+    // when its body was deferred (signature_resolved) — never twice.
+    if (!signature_resolved) resolveSignatureConstExprs(tree, fn, diag);
     // ENUM CONTEXT for `return member;` — the declared return enum, if any;
     // restored on exit (a nested body sets its own).
     struct RetCtx {
@@ -7025,6 +7223,18 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
         // would collide with a same-name function), just a deferred duplication request.
         if (isFuncAlias(tree, *m)) { recordFuncAlias(tree, *m, frame); continue; }
         if (isDup(*m)) continue;
+        // A TYPE SET member (`alias Whole = <int|int64>;`): its entry now, its terms in
+        // the TYPES phase (they may name any class) — the file-scope split.
+        if (m->type_set) {
+            parse::Entry e;
+            e.kind = parse::EntryKind::kTypeSet;
+            e.name = m->name;
+            e.file_id = m->file_id;
+            e.tok = m->name_tok;
+            e.owner_ns_frame = frame;
+            m->resolved_entry_id = parse::addEntry(tree, std::move(e));
+            continue;
+        }
         parse::Entry e;
         e.kind = parse::EntryKind::kAlias;
         e.name = m->name;
@@ -7063,38 +7273,18 @@ void registerScopeNames(parse::Tree& tree, parse::Node& node, int frame,
             // A plain member beside a same-name TEMPLATE member is legal:
             // plain-beats-template dispatch (the plain set is tried first,
             // the template is the fallback) — `op+=(int)` + `op+=<T>(T)`.
-            // A same-name CLASS METHOD is an OVERLOAD — register it as a separate
-            // entry (classify picks among them by signature; an identical-signature
-            // pair is caught as a dup DEFINITION there). A same-name NON-function
-            // member (a const / alias / enum / nested class — a field is a slot, not
-            // a frame member) is a true duplicate. In a NAMESPACE a same-name function
-            // stays a duplicate too: only class methods + file-scope functions resolve
-            // overloaded calls today.
-            bool is_class_frame = (node.kind == parse::Kind::kClassDef);
+            // A same-name function — CLASS METHOD or NAMESPACE function — is an
+            // OVERLOAD: register it as a separate entry (classify picks among them by
+            // signature). A same-name NON-function member (a const / alias / enum /
+            // nested class — a field is a slot, not a frame member) is a true
+            // duplicate. Parameter types are provisional here, so a NAMESPACE
+            // function's same-signature pair (a decl + its def — routine, since a
+            // header declares `void Space:goodbye_world();` and its source defines
+            // it) merges in the TYPES phase (mergeNamespaceFunction), the file-scope
+            // rule. (A CLASS frame keeps separate entries for the pair — desugar's
+            // methodSymbol counts distinct SIGNATURES so it does not read as two.)
             int prev = findMemberDeclared(tree, frame, m->name);
-            // A NAMESPACE function's DECLARATION and DEFINITION merge into ONE entry —
-            // the rule a file-scope function already has. A namespace does not overload,
-            // so a same-name pair can only be a decl + its def, never two functions; and
-            // the pair is now routine, since a header declares `void Space:goodbye_world();`
-            // and its source defines it. Without the merge the two read as a duplicate.
-            // (A CLASS frame keeps separate entries — same-name methods ARE overloads —
-            // and desugar's methodSymbol counts distinct SIGNATURES so a decl+def pair
-            // there does not read as one.)
-            if (!is_class_frame && prev >= 0
-                && tree.entries[prev].kind == parse::EntryKind::kFunction
-                && m->kind == parse::Kind::kFunctionDef
-                && !tree.entries[prev].defined) {
-                parse::Entry& pe = tree.entries[prev];
-                pe.defined = true;
-                pe.is_external = false;      // declared in a header, but defined HERE
-                pe.def_file_id = m->file_id;
-                pe.def_tok = m->name_tok;
-                m->resolved_entry_id = prev;
-                continue;
-            }
-            if (prev >= 0
-                && !(is_class_frame
-                     && tree.entries[prev].kind == parse::EntryKind::kFunction)) {
+            if (prev >= 0 && tree.entries[prev].kind != parse::EntryKind::kFunction) {
                 parse::Entry const& pe = tree.entries[prev];
                 diagnostic::report(diag, {m->file_id, m->name_tok,
                     "Duplicate declaration of '" + m->name + "'.",
@@ -7143,6 +7333,46 @@ bool fieldContributesNeed(parse::Tree const& tree, widen::TypeRef ft, bool ctor)
 // `member_of >= 0`: a HOISTED class — a namespace-member of that host class frame
 // (owner_ns_frame = member_of, def_id = member_of so `Host:Inner` is distinct,
 // dup-checked among the host's members); reached only via `Host:Inner`, not bare.
+// The stable SCOPE PATH of a member frame for a class's symbol (widen classSymbol):
+// the namespace / class names from file scope down to `frame`, `.`-joined
+// (`slids`, `slids.Outer`). A host class that already has a path contributes it
+// whole. "" when the chain leaves file scope — a namespace opened in a function
+// body, or a host that is itself a local class — whose class stays TU-local and
+// keeps its `.<frame>` suffix.
+std::string memberSymbolPath(parse::Tree const& tree, int frame) {
+    std::vector<std::string> segs;
+    int guard = static_cast<int>(tree.entries.size()) + 2;
+    while (guard-- > 0) {
+        int found = -1;
+        for (std::size_t i = 0; i < tree.entries.size(); i++) {
+            parse::Entry const& q = tree.entries[i];
+            if (q.ns_frame_id == frame
+                && (q.kind == parse::EntryKind::kNamespace
+                    || q.kind == parse::EntryKind::kClass)) {
+                found = static_cast<int>(i);
+                break;
+            }
+        }
+        if (found < 0) return "";
+        parse::Entry const& e = tree.entries[found];
+        if (e.kind == parse::EntryKind::kClass) {
+            widen::Type const& ct = widen::get(widen::strip(e.slids_type));
+            if (!ct.symbol_path.empty()) { segs.push_back(ct.symbol_path); break; }
+            if (ct.def_id >= 0) return "";   // a local host: TU-local
+        }
+        segs.push_back(e.name);
+        if (e.owner_ns_frame < 0) {
+            if (e.parent_frame_id != kGlobalFrame) return "";   // opened in a body
+            break;
+        }
+        frame = e.owner_ns_frame;
+    }
+    std::string out;
+    for (auto it = segs.rbegin(); it != segs.rend(); ++it)
+        out += (out.empty() ? "" : ".") + *it;
+    return out;
+}
+
 void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,
                        int member_of, bool file_scope_def_id) {
     int decl_frame = parse::currentFrameId(tree);
@@ -7238,6 +7468,13 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // Slotless handle now; registerClassBody re-interns with the field slots (same
     // handle). The name becomes a KNOWN type immediately (placeholder ClassInfo).
     widen::TypeRef type = widen::internSlid(node.name, {}, def_id);
+    // A member class registered at FILE scope (not in a function body, where even a
+    // re-opened file-scope namespace holds a run-time-scoped class) is named by its
+    // scope path in symbols — the same in every TU (classSymbol).
+    if (member_of >= 0 && def_id >= 0 && decl_frame == kGlobalFrame) {
+        std::string path = memberSymbolPath(tree, member_of);
+        if (!path.empty()) widen::setSlidSymbolPath(type, path + "." + node.name);
+    }
     node.return_type = type;
     int cls_frame = parse::allocFrameId(tree);
     parse::Entry e;
@@ -7933,6 +8170,53 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
     }
 }
 
+// Re-sync what a parameter MUNGE rewrote into the entries that captured the
+// pre-munge types: the function entry's param_types, each body-frame param entry
+// (and its convention auto-deref mark), and `self`. Runs right after the munge —
+// and again for a LAZY method, whose body entries are registered only when its
+// first use builds it (the node's params were munged long before).
+void resyncMungedParams(parse::Tree& tree, parse::Node& node) {
+    // Re-sync the function entry's param_types so call-site stamping at
+    // classify sees the rewritten (pointer) types.
+    if (node.resolved_entry_id >= 0
+        && node.resolved_entry_id < static_cast<int>(tree.entries.size())) {
+        parse::Entry& e = tree.entries[node.resolved_entry_id];
+        for (std::size_t i = 0;
+             i < node.params.size() && i < e.param_types.size(); i++) {
+            if (node.params[i]) e.param_types[i] = node.params[i]->return_type;
+        }
+    }
+    // Re-sync each body-frame param entry's slids_type so SymTab seeding at
+    // codegen and identifier resolution at classify see the rewrite. A
+    // convention param that became a pointer marks its entry so classify's
+    // ident arm auto-derefs every use (the body stays generic).
+    for (auto& p : node.params) {
+        if (p && p->resolved_entry_id >= 0
+            && p->resolved_entry_id < static_cast<int>(tree.entries.size())) {
+            tree.entries[p->resolved_entry_id].slids_type = p->return_type;
+            if (p->tmpl_value_param
+                && widen::form(widen::strip(p->return_type))
+                   == widen::Type::Form::kPointer) {
+                tree.entries[p->resolved_entry_id].tmpl_ref_param = true;
+            }
+        }
+    }
+    // `self` mirrors the receiver's pointee and was registered PRE-munge
+    // — re-sync it so a CONST method's `self` is `const Class` (writes
+    // through self.field then hit the wall like any const chain).
+    if (node.self_entry_id >= 0
+        && node.self_entry_id < static_cast<int>(tree.entries.size())) {
+        for (auto& p : node.params) {
+            if (!p || p->name != "_$recv") continue;
+            widen::TypeRef st2 = widen::strip(p->return_type);
+            if (widen::form(st2) == widen::Type::Form::kPointer)
+                tree.entries[node.self_entry_id].slids_type =
+                    widen::get(st2).pointee;
+            break;
+        }
+    }
+}
+
 // Walk every function (file-scope / nested / method / namespace member) and munge
 // its parameter types. Recurses through children (nested fns, class methods, ns
 // members all live there). After rewriting the param's parse-node type, re-syncs
@@ -7969,45 +8253,7 @@ void mungeParamTypes(parse::Tree& tree, parse::Node& node, diagnostic::Sink& dia
                 }
             }
         }
-        // Re-sync the function entry's param_types so call-site stamping at
-        // classify sees the rewritten (pointer) types.
-        if (node.resolved_entry_id >= 0
-            && node.resolved_entry_id < static_cast<int>(tree.entries.size())) {
-            parse::Entry& e = tree.entries[node.resolved_entry_id];
-            for (std::size_t i = 0;
-                 i < node.params.size() && i < e.param_types.size(); i++) {
-                if (node.params[i]) e.param_types[i] = node.params[i]->return_type;
-            }
-        }
-        // Re-sync each body-frame param entry's slids_type so SymTab seeding at
-        // codegen and identifier resolution at classify see the rewrite. A
-        // convention param that became a pointer marks its entry so classify's
-        // ident arm auto-derefs every use (the body stays generic).
-        for (auto& p : node.params) {
-            if (p && p->resolved_entry_id >= 0
-                && p->resolved_entry_id < static_cast<int>(tree.entries.size())) {
-                tree.entries[p->resolved_entry_id].slids_type = p->return_type;
-                if (p->tmpl_value_param
-                    && widen::form(widen::strip(p->return_type))
-                       == widen::Type::Form::kPointer) {
-                    tree.entries[p->resolved_entry_id].tmpl_ref_param = true;
-                }
-            }
-        }
-        // `self` mirrors the receiver's pointee and was registered PRE-munge
-        // — re-sync it so a CONST method's `self` is `const Class` (writes
-        // through self.field then hit the wall like any const chain).
-        if (node.self_entry_id >= 0
-            && node.self_entry_id < static_cast<int>(tree.entries.size())) {
-            for (auto& p : node.params) {
-                if (!p || p->name != "_$recv") continue;
-                widen::TypeRef st2 = widen::strip(p->return_type);
-                if (widen::form(st2) == widen::Type::Form::kPointer)
-                    tree.entries[node.self_entry_id].slids_type =
-                        widen::get(st2).pointee;
-                break;
-            }
-        }
+        resyncMungedParams(tree, node);
     }
     for (auto& c : node.children) {
         if (c) mungeParamTypes(tree, *c, diag);
@@ -9643,6 +9889,23 @@ static bool requirePrivateInstanceSource(parse::Tree& tree, int tmpl_entry_id,
     return false;
 }
 
+// An entry's OWNER CHAIN — the namespace / class frames enclosing it, innermost
+// first (empty at file scope). Pushed outermost-first onto open_ns_frames, it is
+// the bare-name visibility of the entry's own body.
+std::vector<int> ownerChain(parse::Tree const& tree, int entry_id) {
+    std::vector<int> chain;
+    int guard = static_cast<int>(tree.entries.size()) + 2;
+    for (int owner = tree.entries[entry_id].owner_ns_frame;
+         owner >= 0 && guard-- > 0; ) {
+        chain.push_back(owner);
+        int oid = -1;
+        for (std::size_t i = 0; i < tree.entries.size(); i++)
+            if (tree.entries[i].ns_frame_id == owner) { oid = (int)i; break; }
+        owner = oid >= 0 ? tree.entries[oid].owner_ns_frame : -1;
+    }
+    return chain;
+}
+
 int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                              std::vector<widen::TypeRef> const& args,
                              int file_id, int tok, diagnostic::Sink& diag) {
@@ -9730,6 +9993,21 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     if (installed) {
         saved = saveResolveState(tree);
         installSnapshot(tree, it->second);
+    }
+    // ...but a NAMESPACE member template's body resolves with its owner chain open
+    // (the snapshot pass pushes it around the capture): open it here too, or a body
+    // naming its own template `Vector<T>` — or a sibling — misses when the trigger
+    // sits outside the namespace (`slids:Vector<float64>` in a consumer's field).
+    struct ChainGuard {
+        parse::Tree& t;
+        std::size_t n = 0;
+        ~ChainGuard() { for (std::size_t i = 0; i < n; i++) t.open_ns_frames.pop_back(); }
+    } chain_guard{tree};
+    if (!installed) {
+        std::vector<int> chain = ownerChain(tree, tmpl_entry_id);
+        for (auto c = chain.rbegin(); c != chain.rend(); ++c)
+            tree.open_ns_frames.push_back(*c);
+        chain_guard.n = chain.size();
     }
     parse::pushFrame(tree);
     std::size_t live_mark = tree.live_entry_ids.size();
@@ -9907,7 +10185,13 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             tree.inline_inst_ctx.push_back(
                 {tmpl_entry_id, file_id, tok, firstLocalArg(tree, args)});
         for (auto& c : clones) {
+            // LAZY TEMPLATE METHODS: each opening's eligible methods defer.
+            parse::Tree::LazyMethod lazy_ctx{nullptr, c.get(), tmpl_entry_id, iid,
+                                             args, inline_local};
+            parse::Tree::LazyMethod const* saved_lazy = tree.lazy_flavor;
+            tree.lazy_flavor = &lazy_ctx;
             resolveScopeBodies(tree, *c, /*isClass=*/true, diag);
+            tree.lazy_flavor = saved_lazy;
             mungeParamTypes(tree, *c, diag);
         }
         if (inline_local) tree.inline_inst_ctx.pop_back();
@@ -9981,7 +10265,12 @@ void drainClassTemplateBodies(parse::Tree& tree, diagnostic::Sink& diag) {
         std::size_t live_mark = tree.live_entry_ids.size();
         bindInstanceAliases(tree, tid, args);
         tree.tmpl_self_stack.push_back({tid, iid});
+        // LAZY TEMPLATE METHODS: this opening's eligible methods defer.
+        parse::Tree::LazyMethod lazy_ctx{nullptr, node, tid, iid, args, inl};
+        parse::Tree::LazyMethod const* saved_lazy = tree.lazy_flavor;
+        tree.lazy_flavor = &lazy_ctx;
         resolveScopeBodies(tree, *node, /*isClass=*/true, diag);
+        tree.lazy_flavor = saved_lazy;
         tree.tmpl_self_stack.pop_back();
         if (inl) tree.inline_inst_ctx.pop_back();
         // Keep the members the BODY phase registered (the synthesized transfer
@@ -10007,6 +10296,88 @@ void drainClassTemplateBodies(parse::Tree& tree, diagnostic::Sink& diag) {
         list.insert(list.begin() + at, std::move(pci.node));
     }
     tree.pending_class_instances.clear();
+}
+
+// A function subtree's munge re-sync (resyncMungedParams) for every function in it
+// — the method itself and any nested function / local-class method its body holds.
+static void resyncMungedTree(parse::Tree& tree, parse::Node& n) {
+    if (!n.type_params.empty()) return;   // a template pattern stays pristine
+    if (n.kind == parse::Kind::kFunctionDef || n.kind == parse::Kind::kFunctionDecl)
+        resyncMungedParams(tree, n);
+    for (auto& c : n.children)
+        if (c) resyncMungedTree(tree, *c);
+}
+
+// LAZY TEMPLATE METHODS — the resolve half of building one deferred method (see
+// Tree::lazy_methods): re-enter its flavor's definition-point scope exactly as the
+// drain does for the whole class (snapshot, the flavor's members live, T bound,
+// the template's bare name meaning THE INSTANCE, the class frame + base chain open)
+// and resolve the body. The parameter munge already ran on the node, so its body
+// entries re-sync after. The use that required it is the instantiation context.
+// False when `entry_id` is no pending lazy method.
+bool resolveLazyMethod(parse::Tree& tree, int entry_id, int use_file, int use_tok,
+                       diagnostic::Sink& diag) {
+    auto it = tree.lazy_methods.find(entry_id);
+    if (it == tree.lazy_methods.end() || !it->second.fn || !it->second.fn->lazy_body)
+        return false;
+    parse::Tree::LazyMethod lm = it->second;   // copy: resolution may add entries
+    lm.fn->lazy_body = false;
+    auto ti = tree.templates.find(lm.tmpl_entry_id);
+    if (ti == tree.templates.end() || !lm.cls) return false;
+    int frame = tree.entries[lm.instance_entry_id].ns_frame_id;
+    // The flavor's members — everything whose owner chain reaches its frame —
+    // re-published live (the snapshot's live set predates the flavor).
+    std::map<int, int> owner_of;   // ns frame -> its owner frame
+    for (parse::Entry const& e : tree.entries)
+        if (e.ns_frame_id >= 0
+            && (e.kind == parse::EntryKind::kClass
+                || e.kind == parse::EntryKind::kNamespace))
+            owner_of.emplace(e.ns_frame_id, e.owner_ns_frame);
+    std::vector<int> members;
+    for (std::size_t i = 0; i < tree.entries.size(); i++) {
+        int f = tree.entries[i].owner_ns_frame;
+        for (int guard = 64; f >= 0 && guard-- > 0; ) {
+            if (f == frame) { members.push_back(static_cast<int>(i)); break; }
+            auto o = owner_of.find(f);
+            f = o == owner_of.end() ? -1 : o->second;
+        }
+    }
+    if (lm.inline_local)
+        tree.inline_inst_ctx.push_back(
+            {lm.tmpl_entry_id, use_file, use_tok, firstLocalArg(tree, lm.args)});
+    diagnostic::InstantiationScope ictx(diag, use_file, use_tok,
+        parse::instanceSpelling(tree, lm.tmpl_entry_id, lm.args));
+    SavedResolveState saved = saveResolveState(tree);
+    installSnapshot(tree, ti->second);
+    parse::pushFrame(tree);
+    tree.live_entry_ids.insert(tree.live_entry_ids.end(),
+                               members.begin(), members.end());
+    bindInstanceAliases(tree, lm.tmpl_entry_id, lm.args);
+    tree.tmpl_self_stack.push_back({lm.tmpl_entry_id, lm.instance_entry_id});
+    {
+        // The class context resolveScopeBodies gives every member body.
+        parse::Node& cls = *lm.cls;
+        AccessFileScope afs(tree, cls.file_id);
+        int base_pushed = pushBaseChain(tree, cls);
+        tree.open_ns_frames.push_back(frame);
+        std::string saved_base = tree.current_base_name;
+        std::string saved_class = tree.current_class_name;
+        tree.current_base_name = cls.text;
+        auto ci = tree.classes.find(widen::strip(cls.return_type));
+        tree.current_class_name = ci != tree.classes.end() ? ci->second.name : "";
+        resolveFunctionBody(tree, *lm.fn, diag, /*nested=*/false,
+                            /*signature_resolved=*/true);
+        resyncMungedTree(tree, *lm.fn);
+        tree.current_base_name = saved_base;
+        tree.current_class_name = saved_class;
+        tree.open_ns_frames.pop_back();
+        for (int i = 0; i < base_pushed; i++) tree.open_ns_frames.pop_back();
+    }
+    tree.tmpl_self_stack.pop_back();
+    parse::popFrame(tree);
+    restoreResolveState(tree, saved);
+    if (lm.inline_local) tree.inline_inst_ctx.pop_back();
+    return true;
 }
 
 // Post-resolve instances (minted at classify): hand the nodes to the caller for
@@ -10046,41 +10417,51 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // it. (Consequence: a template body that references a TU-private name
     // fails with the natural unresolved-name error when instantiated with a
     // local type — such a body is only emittable by its own TU.)
+    // A NAMESPACE in a template source (the library's `slids { }`) is a scope, not
+    // content: it stays, with its own members filtered by the same rule, nested
+    // namespaces likewise; one left empty is dropped.
     {
-        bool dropped = false;
-        for (auto& ch : program->children) {
-            if (!ch || !fileIsTemplateSource(tree, ch->file_id)) continue;
-            bool keep = !ch->type_params.empty()
-                && (ch->kind == parse::Kind::kFunctionDef
-                    || ch->kind == parse::Kind::kClassDef
-                    || ch->kind == parse::Kind::kAliasDecl);
-            if (!keep) {
-                // Remember the dropped NAME: an inline-local instance body
-                // that references it gets the full private-name chain instead
-                // of a bare "Unknown ...". (The tokens survive the drop, so
-                // the record can caret the private definition.)
-                if (!ch->name.empty()) {
-                    char const* kind =
-                        ch->kind == parse::Kind::kFunctionDef  ? "function"
-                        : ch->kind == parse::Kind::kClassDef   ? "class"
-                        : ch->kind == parse::Kind::kAliasDecl  ? "alias"
-                        : ch->kind == parse::Kind::kEnumDecl   ? "enum"
-                        : ch->kind == parse::Kind::kNamespaceDecl ? "namespace"
-                                                               : "declaration";
-                    tree.stripped_privates.emplace(ch->name,
-                        parse::Tree::StrippedPrivate{kind, ch->file_id,
-                                                     ch->name_tok});
+        std::function<void(std::vector<std::unique_ptr<parse::Node>>&)> strip =
+            [&](std::vector<std::unique_ptr<parse::Node>>& list) {
+            bool dropped = false;
+            for (auto& ch : list) {
+                if (!ch || !fileIsTemplateSource(tree, ch->file_id)) continue;
+                if (ch->kind == parse::Kind::kNamespaceDecl
+                    && !ch->is_global && !ch->name.empty()) {
+                    strip(ch->children);
+                    if (!ch->children.empty()) continue;
                 }
-                ch.reset();
-                dropped = true;
+                bool keep = !ch->type_params.empty()
+                    && (ch->kind == parse::Kind::kFunctionDef
+                        || ch->kind == parse::Kind::kClassDef
+                        || ch->kind == parse::Kind::kAliasDecl);
+                if (!keep) {
+                    // Remember the dropped NAME: an inline-local instance body
+                    // that references it gets the full private-name chain instead
+                    // of a bare "Unknown ...". (The tokens survive the drop, so
+                    // the record can caret the private definition.)
+                    if (!ch->name.empty()) {
+                        char const* kind =
+                            ch->kind == parse::Kind::kFunctionDef  ? "function"
+                            : ch->kind == parse::Kind::kClassDef   ? "class"
+                            : ch->kind == parse::Kind::kAliasDecl  ? "alias"
+                            : ch->kind == parse::Kind::kEnumDecl   ? "enum"
+                            : ch->kind == parse::Kind::kNamespaceDecl ? "namespace"
+                                                                   : "declaration";
+                        tree.stripped_privates.emplace(ch->name,
+                            parse::Tree::StrippedPrivate{kind, ch->file_id,
+                                                         ch->name_tok});
+                    }
+                    ch.reset();
+                    dropped = true;
+                }
             }
-        }
-        if (dropped) {
-            program->children.erase(
-                std::remove(program->children.begin(), program->children.end(),
-                            nullptr),
-                program->children.end());
-        }
+            if (dropped) {
+                list.erase(std::remove(list.begin(), list.end(), nullptr),
+                           list.end());
+            }
+        };
+        strip(program->children);
     }
 
     // Out-of-line member defs — every external re-open form (`Ret Class:method(){…}`,
@@ -10162,6 +10543,21 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             if (ch->resolved_entry_id >= 0)
                 registerScopeNames(tree, *ch,
                     tree.entries[ch->resolved_entry_id].ns_frame_id, all_classes, diag);
+        }
+    }
+
+    // Pass 1a-import — file-scope bare `alias Ns;`. Opens the namespace for the
+    // whole file: pushed onto open_ns_frames and never popped within run() (file
+    // scope = the whole file). It runs right after the NAME phase — every namespace
+    // exists — and BEFORE any type resolves, so EVERY file-scope use sees the
+    // members unqualified: field and signature types (a class TEMPLATE `Vector<T>`
+    // through `alias slids;` included), const inits, and function bodies alike.
+    for (auto& ch : program->children) {
+        // THE VISIBILITY RULE: this child's file is the use site.
+        AccessFileScope afs(tree, ch ? ch->file_id : -1);
+        if (ch && ch->kind == parse::Kind::kAliasDecl
+            && ch->return_type == widen::kNoType && !ch->type_set) {
+            resolveBareAlias(tree, *ch, diag);
         }
     }
 
@@ -10306,28 +10702,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                 }
             }
             if (existing >= 0) {
-                parse::Entry& prev = tree.entries[existing];
-                if (prev.slids_type != ch->return_type) {
-                    diagnostic::report(diag, {ch->file_id, ch->tok,
-                        "Return type '" + widen::spellOrEmpty(ch->return_type)
-                        + "' does not match earlier declaration's '"
-                        + widen::spellOrEmpty(prev.slids_type) + "'.",
-                        {{prev.file_id, prev.tok, "first declared here"}}});
-                    continue;
-                }
-                if (is_def && prev.defined) {
-                    diagnostic::report(diag, {ch->file_id, ch->tok,
-                        "Duplicate definition of '" + ch->name + "'.",
-                        {{prev.def_file_id, prev.def_tok, "first defined here"}}});
-                    continue;
-                }
-                if (is_def) {
-                    prev.defined = true;
-                    prev.num_required = num_required;
-                    prev.def_file_id = ch->file_id;
-                    prev.def_tok = ch->name_tok;
-                }
-                ch->resolved_entry_id = existing;
+                if (mergeFunctionRedecl(tree, existing, *ch, diag) && is_def)
+                    tree.entries[existing].num_required = num_required;
                 continue;
             }
             // A plain function beside a same-name TEMPLATE is legal:
@@ -10426,19 +10802,6 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             "constants, and globals are allowed at file scope.", {}});
     }
 
-    // Pass 1a-import — file-scope bare `alias Ns;`. Opens the namespace for the
-    // whole file: pushed onto open_ns_frames and never popped within run() (file
-    // scope = the whole file), so all const inits and function bodies below see
-    // its members unqualified.
-    for (auto& ch : program->children) {
-        // THE VISIBILITY RULE: this child's file is the use site.
-        AccessFileScope afs(tree, ch ? ch->file_id : -1);
-        if (ch && ch->kind == parse::Kind::kAliasDecl
-            && ch->return_type == widen::kNoType && !ch->type_set) {
-            resolveBareAlias(tree, *ch, diag);
-        }
-    }
-
     // Pass 1b-enum — resolve file-scope enum member init expressions now that
     // every program-scope entry is registered, so a member init can reference a
     // file-scope const (registration happened early in Pass 1a-enum).
@@ -10465,14 +10828,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (auto& [tid, ti] : tree.templates) {
         if (!ti.def || ti.def->kind != parse::Kind::kClassDef) continue;
         if (ti.snapshot_taken) continue;
-        std::vector<int> chain;
-        for (int owner = tree.entries[tid].owner_ns_frame; owner >= 0; ) {
-            chain.push_back(owner);
-            int oid = -1;
-            for (std::size_t i = 0; i < tree.entries.size(); i++)
-                if (tree.entries[i].ns_frame_id == owner) { oid = (int)i; break; }
-            owner = oid >= 0 ? tree.entries[oid].owner_ns_frame : -1;
-        }
+        std::vector<int> chain = ownerChain(tree, tid);
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
             tree.open_ns_frames.push_back(*it);
         snapshotTemplate(tree, *ti.def, diag);
@@ -10593,6 +10949,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
             && tree.entries[id].is_template) {
             resolveDeclType(tree, t, -1, -1, diag);
             d.consumed = true;
+            // A METHOD demand: classify's lazy sweep builds it in this flavor.
+            if (!d.method.empty()) tree.method_demands.push_back({t, d.method});
             continue;
         }
         // else: a function / method template spelling — classify's turn — or
@@ -10650,7 +11008,8 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         // (`= import`) binds a C library symbol at link — likewise (stage 1 gates it to
         // file / namespace scope at PARSE, so no block/class foreign entry reaches here).
         if (e.kind == parse::EntryKind::kFunction && !e.defined && !e.is_pure
-            && !e.is_external && !e.is_foreign) {
+            && !e.is_external && !e.is_foreign
+            && !e.name.empty()) {   // a RETIRED entry (mergeNamespaceFunction) is no decl
             // A forward declaration is SATISFIED by a same-signature DEFINITION in
             // the same scope. A free function merges its decl + def into ONE entry
             // (Pass 1a, matched by signature); a class METHOD's decl + def stay

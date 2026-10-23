@@ -26,6 +26,7 @@ import string;
 import library;
 
 import extra;
+alias slids;
 
 /* a local COMPUTED-layout class (embeds the imported Rope by value). */
 LPack(int n_ = 7, Rope r_) { }

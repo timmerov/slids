@@ -96,6 +96,7 @@ examples:
 */
 
 import string;
+alias slids;
 
 const float kPi = 2.14 + 1.0;
 const int kFortyTwo = 6 * 7;

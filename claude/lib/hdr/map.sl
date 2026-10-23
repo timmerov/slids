@@ -10,6 +10,9 @@ built upon red/black tree.
 import map;
 import tree;
 
+/* slids namespace */
+slids {
+
 TreeNode : MapNode<Key, Value>() {
 
     alias MapIter = MapNode<Key, Value>^;
@@ -120,3 +123,5 @@ Map<Key, Value>(
         root_^.color_ = kBlack;
     }
 }
+
+} /* slids */

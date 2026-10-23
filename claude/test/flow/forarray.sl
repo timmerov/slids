@@ -111,6 +111,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 alias Cell = int;
 

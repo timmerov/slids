@@ -47,6 +47,7 @@ sign-extension into a mixed expression stays IR-verified only, not output-locked
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

@@ -7,6 +7,7 @@ test the lexer's ability to import a file.
 */
 
 import string;
+alias slids;
 
 import importee1;
 import importee2;

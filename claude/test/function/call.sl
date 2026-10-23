@@ -89,6 +89,7 @@ ident args widen via widen::convert.
 */
 
 import string;
+alias slids;
 
 // forward declaration (signature only); the definition is at the bottom of the
 // file, and it is both called and forward-referenced before that definition.

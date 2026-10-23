@@ -17,6 +17,7 @@ maps' destructors at different scope exits.
 
 import map;
 import string;
+alias slids;
 
 Map<String, String> : CapitalMap() {
 

@@ -225,6 +225,7 @@ deliberately NOT correct yet (still-broken / deferred):
 */
 
 import string;
+alias slids;
 
 Class(int a_) {
     _() { println(String + "Class:ctor: " + a_); }

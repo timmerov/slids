@@ -157,6 +157,7 @@ claude says:
 
 /* arity overload — same name, different parameter counts. */
 import string;
+alias slids;
 
 int32 area(int32 s) {
     return s * s;

@@ -37,6 +37,7 @@ import string;
 
 import+ tmpl_lib;
 import library;
+alias slids;
 
 /* a bodyless template declaration belongs in a header. */
 //-EXPECT-ERROR: must have a body
@@ -156,6 +157,19 @@ int32 main() {
     Box<Bird> bb;
     println(String + "bb = " + bb.has());
 
+    /* LAZY TEMPLATE METHODS, aggregated: Rank<Bird> (Bird has no op<) calls
+       only `has`, so its `lt` is neither demanded nor built anywhere; Rank<int>
+       calls `lt`, so the .sli demands it and tmpl_lib.o defines it. */
+    Rank<Bird> rkb;
+    println(String + "rkb = " + rkb.has());
+    int rk1 = 3;
+    int rk2 = 5;
+    Rank<int> rka;
+    rka.p_ = ^rk1;
+    Rank<int> rkc;
+    rkc.p_ = ^rk2;
+    println(String + "rk = " + rka.lt(rkc) + " " + rkc.lt(rka));
+
     /* NESTED template-instance ARGUMENTS across the seam: the demand
        spellings round-trip through the .sli and aggregate like any flavor —
        one level (`Box<Vector<int>>`), two (`Box<Box<int>>`), and a function
@@ -200,6 +214,14 @@ int32 main() {
     bl.p_ = ^lc;
     println(String + "bl2 = " + bl.has());
     println(String + "bl3 = " + bl.p_^.lv());
+    /* LAZY TEMPLATE METHODS, inline-local: Rank<Loc> (Loc has no op<) is
+       emitted here, and only the methods called are built. */
+    Rank<Loc> rkl;
+    println(String + "rkl = " + rkl.has());
+    /* compile error: calling `lt` builds it, and Loc has no op<. */
+    //-EXPECT-ERROR: Operator '<' is not defined on class 'Loc'.
+    //bool rklt = rkl.lt(rkl);
+    //println(String + "rklt = " + rklt);
     Loc lc2(9);
     bool pl = tdiff(^lc, ^lc2);
     println(String + "pl = " + pl);

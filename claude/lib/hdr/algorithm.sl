@@ -10,6 +10,8 @@ template implementations.
 
 import algorithm;
 
+/* slids namespace */
+slids {
 
 /*
 return the number of elements in an array.
@@ -78,8 +80,13 @@ void quicksort<T>(mutable T container) {
     }
 }
 
+} /* slids */
+
+/* math namespace */
+math {
+
 /* min template */
-T math:min<T>(T a, T b) {
+T min<T>(T a, T b) {
     if (a < b) {
         return a;
     }
@@ -87,9 +94,11 @@ T math:min<T>(T a, T b) {
 }
 
 /* max template */
-T math:max<T>(T a, T b) {
+T max<T>(T a, T b) {
     if (b < a) {
         return a;
     }
     return b;
 }
+
+} /* math */

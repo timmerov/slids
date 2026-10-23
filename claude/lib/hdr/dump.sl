@@ -10,6 +10,9 @@ uses the stringification operator #.
 import dump;
 import string;
 
+/* slids namespace */
+slids {
+
 /*
 usage:
     int x = 42;
@@ -39,3 +42,5 @@ void dump<T>(
         + tuple^[2] + " " + tuple^[3] + " = " + tuple^[4]^
         + " : " + expected);
 }
+
+} /* slids */

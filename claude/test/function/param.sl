@@ -48,6 +48,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 int one() {
     return 1;

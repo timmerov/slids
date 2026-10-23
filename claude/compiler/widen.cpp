@@ -1340,16 +1340,25 @@ void setSlidHookHere(TypeRef ref, bool ctor_here, bool dtor_here) {
 bool slidCtorHere(TypeRef ref) { return get(ref).ctor_here; }
 bool slidDtorHere(TypeRef ref) { return get(ref).dtor_here; }
 
+void setSlidSymbolPath(TypeRef ref, std::string const& path) {
+    arena().types[ref].symbol_path = path;
+}
+
 // The LLVM symbol base for a class (`<Name>__$ctor` etc. append to it). Minted
-// HERE — the only place a class name is disambiguated — from the bare name plus
-// the def_id (a local class's defining frame). File-scope (def_id < 0) stays the
-// bare name, so its IR is unchanged; a local class gets a `.<frame>` suffix that
-// exists only in the emitted symbol, never on the type, a map key, or a message.
+// HERE — the only place a class name is disambiguated. File-scope (def_id < 0)
+// stays the bare name, so its IR is unchanged. A member of a file-scope namespace /
+// class chain is its SCOPE PATH (`slids.String`): every TU that sees the class
+// agrees on it, so the symbol links across TUs. A local class gets a `.<frame>`
+// suffix — TU-local, and it exists only in the emitted symbol, never on the type,
+// a map key, or a message. (A path segment is an identifier, never digits-first,
+// so `A.B` cannot meet a local `B.<frame>`.)
 std::string classSymbol(TypeRef ref) {
     Type const& t = get(ref);
     assert(t.form == Type::Form::kSlid
            && "classSymbol: not a class handle (caller must strip to the kSlid)");
-    std::string base = t.def_id < 0 ? t.name : t.name + "." + std::to_string(t.def_id);
+    std::string base = !t.symbol_path.empty() ? t.symbol_path
+                     : t.def_id < 0 ? t.name
+                     : t.name + "." + std::to_string(t.def_id);
     // A template INSTANCE is named by its use spelling (`Vec<int>`), whose
     // `<` `>` `,` and space are not legal in an unquoted LLVM identifier —
     // $-escape them (injective, so distinct instances stay distinct symbols).
@@ -1506,6 +1515,12 @@ static std::string spellSuffixChild(TypeRef child) {
     return get(child).form == Type::Form::kConst ? "(" + s + ")" : s;
 }
 
+static std::function<std::string(TypeRef)> g_slid_speller;
+
+void setSlidSpeller(std::function<std::string(TypeRef)> speller) {
+    g_slid_speller = std::move(speller);
+}
+
 std::string spell(TypeRef ref) {
     Type const& t = get(ref);
     switch (t.form) {
@@ -1515,7 +1530,13 @@ std::string spell(TypeRef ref) {
         case Type::Form::kPrimitive: return t.name;
         case Type::Form::kVoid:      return "void";
         case Type::Form::kAnyptr:    return "anyptr";
-        case Type::Form::kSlid:      return t.name;
+        case Type::Form::kSlid: {
+            if (g_slid_speller) {
+                std::string s = g_slid_speller(ref);
+                if (!s.empty()) return s;
+            }
+            return t.name;
+        }
         case Type::Form::kPointer:   return spellSuffixChild(t.pointee) + "^";
         case Type::Form::kIterator:  return spellSuffixChild(t.pointee) + "[]";
         case Type::Form::kArray: {

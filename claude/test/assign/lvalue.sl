@@ -38,6 +38,7 @@ tick above). DEFERRED: SWAP (its questions outrank it) and const METHODS
 */
 
 import string;
+alias slids;
 
 Simple(int x_, int y_) {
 }

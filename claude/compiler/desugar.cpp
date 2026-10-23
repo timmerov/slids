@@ -1327,6 +1327,7 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
 // repopulates their members at program scope where codegen emits them.)
 void flattenScope(parse::Node const& node, ast::Node* prog,
                   parse::Tree const& in, int& next_id) {
+    if (node.lazy_body) return;   // an unbuilt LAZY method body holds no code
     // A member this TU does not AUTHOR still has to reach codegen — as a `declare`, so a
     // call to it links against the TU that does. Two shapes: a bodyless DECLARATION
     // (kFunctionDecl — the header's `void print();`), and, for a class whose synthesized
@@ -1405,6 +1406,8 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
                     && f->kind != parse::Kind::kFunctionDecl) continue;
                 if (!f->type_params.empty()) continue;   // a TEMPLATE method emits no
                                                          // code; its instances do
+                if (f->lazy_body) continue;   // a LAZY flavor method nothing used:
+                                              // never built, emits nothing
                 bool hook = (f->name == "_$ctor" || f->name == "_$dtor");
                 // A hook DECLARATION mints no symbol here. A hook is not a frame ENTRY at
                 // all (resolve's member loop skips `_$ctor`/`_$dtor`) — its presence lives
@@ -3665,6 +3668,7 @@ void collectGlobals(std::vector<std::unique_ptr<parse::Node>> const& nodes,
                 g.touch_symbol = stableGroupBase(in, gid) + "_touch";
             continue;   // finalized once in run(), after every opening is merged
         }
+        if (n->lazy_body) continue;   // an unbuilt LAZY method body holds no code
         if (n->kind == parse::Kind::kProgram
             || n->kind == parse::Kind::kNamespaceDecl
             || n->kind == parse::Kind::kClassDef

@@ -71,6 +71,7 @@ nested uses (`Pair<Vec<int>>`) landed with the `>>` closer split
 /* the workhorse: fields and methods on T, a user binary operator, and a member
    const (read from outside via the instance-qualified spelling). */
 import string;
+alias slids;
 
 Vec<T>(T x_ = 0, T y_ = 0) {
     const int kVid = 3;
@@ -754,7 +755,7 @@ int32 main() {
 
     /* ...and a METHOD-BODY chain reaches the drain flat — the total cap. */
     //-EXPECT-ERROR: depth limit
-    //Way<T>(T v_ = 0) {
+    //Way<T>(T^ p_ = nullptr) {
     //    void go() { Way<T^> w; w.go(); }
     //}
     //Way<int> wy;

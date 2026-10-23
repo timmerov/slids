@@ -860,6 +860,44 @@ Space {
 }
 ```
 
+**A namespace can do everything its enclosing context can.** Overloaded functions,
+forward declarations defined later (in the namespace or by the external form
+`int Space:f(int a) { ... }`), globals (including one whose class is a sibling
+member), classes, class and function templates, type sets, aliases and enums all
+work in a namespace exactly as they do at file scope — and in a namespace opened
+inside a function.
+
+```
+Space {
+    int over() { return 1; }
+    int over(int a) { return 10 + a; }   // an overload, not a duplicate
+    alias Whole = <int|int64>;           // a type set
+    int kind<T=Whole>(T v) { return 1; }
+}
+int outer<T=Space:Whole>(T v) { return 2; }   // a qualified type set
+```
+
+**`alias Ns;` imports a namespace** for the rest of the scope: its members are
+reachable bare — in field and signature types too, class templates included.
+
+**One overload set across scopes.** An unqualified call ranks every same-name
+function visible bare at the call — file scope's and each imported or enclosing
+namespace's — as one set; neither hides the other:
+
+```
+Merge { int pick(int a) { return a; } }
+alias Merge;
+int pick(Span^ s) { return s^.len(); }
+pick(4);       // Merge:pick
+pick(sp);      // ::pick
+```
+
+A function's own locals, parameters, fields and nested functions shadow every
+class and namespace member of the same name.
+
+The standard library lives in the namespace `slids` — `alias slids;` after the
+imports brings `String`, `Vector`, `println`, ... into scope bare.
+
 ---
 
 ## Inheritance
@@ -1503,6 +1541,22 @@ Multiple type parameters: `Pair<K, V>(K key_, V value_)`.
 **One instantiation per project build.** Declare a template signature in a `.slh` and put the body in the matching `.sl`. Each concrete instance (e.g. `Vec<float64>`) is emitted exactly once for the whole project, regardless of how many translation units use it.
 
 **Explicit instantiation.** Foo<int>;` forces a particular instance to be emitted.
+
+**A class template's methods are built only when used.** Instantiating `Vec<T>`
+for some `T` checks and emits only the methods something calls (plus the
+constructor, destructor, copy/move/swap operators and virtual methods, which are
+always built). So a method may require something of `T` — an `op<`, say — that
+not every `T` has; `Vector<Value>` is fine for a `Value` without `op<` until two
+of them are compared. Calling such a method reports the error with the chain of
+uses that required it:
+
+```
+Operator '<' is not defined on class 'Value'.
+in the instantiation of 'Vector<Value>', required from here.   // the call inside op<
+in the instantiation of 'Vector<Value>', required from here.   // your `a < b`
+```
+
+An error inside a method nothing calls is not reported.
 
 ---
 

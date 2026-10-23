@@ -101,6 +101,7 @@ claude says:
 */
 
 import string;
+alias slids;
 
 int[3] widenArr() {                          // int[3] returned from an int8[3] value
     int8 v[3] = (1, 2, 3);

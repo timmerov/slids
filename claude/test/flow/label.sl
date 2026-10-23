@@ -82,6 +82,7 @@ SESSION 6 — labels on loops (switch labels deferred / "distant future"):
 */
 
 import string;
+alias slids;
 
 enum Dir ( N, S, E, W );
 

@@ -20,6 +20,7 @@ namespaces may not be instantiated.
 
 /* open in global scope. */
 import string;
+alias slids;
 
 Space {
     const int kOne = 1;
@@ -209,6 +210,71 @@ Span(int len_) {
     int len() { return len_; }
 }
 
+/* --- a namespace can do everything its enclosing context can. --- */
+
+/* an OVERLOAD SET in a namespace: same name, different parameter lists. a call
+   inside the namespace reaches the whole set bare. */
+Space {
+    int over() { return 1; }
+    int over(int a) { return 10 + a; }
+    int over(int a, int b) { return 100 + a + b; }
+    int over_all() { return over() + over(2) + over(3, 4); }
+}
+
+/* overloads DECLARED in the namespace and DEFINED outside it (external form). */
+Space {
+    int ext(int a);
+    int ext(float64 x);
+}
+int Space:ext(int a) { return a * 2; }
+int Space:ext(float64 x) { return (int = x); }
+
+/* an overload set in a namespace opened inside a function. */
+int local_ns_over() {
+    Shelf {
+        int count() { return 5; }
+        int count(int n) { return n; }
+    }
+    return Shelf:count() + Shelf:count(6);
+}
+
+/* a namespace GLOBAL whose class is defined in the same namespace. */
+Space {
+    Dial(int pos_ = 3) {
+        int pos() { return pos_; }
+    }
+    Dial dial;
+}
+
+/* a TYPE SET in a namespace, constraining a specialized template inside the
+   namespace and, qualified, outside it. */
+Space {
+    alias Whole = <int|int64>;
+    int kind<T=Whole>(T v) { return 1; }
+    int kind<T>(T v) { return 2; }
+}
+int outer_kind<T=Space:Whole>(T v) { return 3; }
+int outer_kind<T>(T v) { return 4; }
+
+/* an unqualified call ranks ONE overload set across every scope visible bare:
+   an aliased namespace's overloads join file scope's — neither hides the other. */
+Merge {
+    int pick(int a) { return a; }
+}
+alias Merge;
+int pick(Span^ s) { return s^.len() * 10; }
+
+/* a namespace CLASS TEMPLATE, reached bare through `alias Merge;`, as the type of a
+   file-scope class's FIELD. */
+Merge {
+    Cup<T>(T v_ = 5) {
+        T get() { return v_; }
+    }
+}
+Holder(Cup<int> c_) {
+    int held() { return c_.get(); }
+}
+
 int32 main() {
 
     int x = Space:bar();
@@ -306,6 +372,30 @@ int32 main() {
     /* a class in a locally-opened namespace. */
     println(String + "lnc = " + local_ns_class());
 
+    /* a namespace overload set, qualified + bare from inside the namespace. */
+    println(String + "over = " + Space:over() + " " + Space:over(5) + " "
+        + Space:over(1, 2) + " all = " + Space:over_all());
+
+    /* namespace overloads defined by the external form. */
+    println(String + "ext = " + Space:ext(4) + " " + Space:ext(3.0));
+
+    /* an overload set in a locally-opened namespace. */
+    println(String + "lno = " + local_ns_over());
+
+    /* a namespace global of a namespace class. */
+    println(String + "dial = " + Space:dial.pos());
+
+    /* a namespace type set, inside and outside the namespace. */
+    println(String + "kind = " + Space:kind(1) + " " + Space:kind(1.5) + " "
+        + outer_kind(1) + " " + outer_kind(1.5));
+
+    /* file scope + an aliased namespace: one overload set. */
+    println(String + "pick = " + pick(4) + " " + pick(sp));
+
+    /* a file-scope field typed by an aliased namespace's class template. */
+    Holder hd;
+    println(String + "held = " + hd.held());
+
     /* compile error: need qualifier */
     //-EXPECT-ERROR: 'foo' needs a namespace qualifier
     //int e1 = foo();
@@ -357,3 +447,15 @@ int32 main() {
    pointing at the earlier declaration (the runner matches the note's text). */
 //-EXPECT-ERROR: first declared here
 //Space { const int kDupMember = 1; const int kDupMember = 2; }
+
+/* compile error: two same-signature definitions in a namespace. */
+//-EXPECT-ERROR: Duplicate definition of 'twice'.
+//Space { int twice(int a) { return a; } int twice(int b) { return b; } }
+
+/* compile error: a namespace overload differing only in return type. */
+//-EXPECT-ERROR: does not match earlier declaration's
+//Space { int ret(int a); int64 ret(int a) { return 1; } }
+
+/* compile error: a namespace function colliding with a sibling const. */
+//-EXPECT-ERROR: Duplicate declaration of 'kOver'.
+//Space { const int kOver = 1; int kOver() { return 2; } }

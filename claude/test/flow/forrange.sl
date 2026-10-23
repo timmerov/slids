@@ -74,6 +74,7 @@ lean no.
 
 /* basic ascending range, default cmp `<` step `+1`: body sees 0..n-1. */
 import string;
+alias slids;
 
 int sum_range(int n) {
     int s = 0;

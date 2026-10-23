@@ -33,6 +33,7 @@ alias Space; is rejected — a class is a type, not an importable namespace.
 */
 
 import string;
+alias slids;
 
 Space(int x_) {
     alias Float = float;

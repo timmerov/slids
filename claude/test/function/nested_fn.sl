@@ -83,6 +83,7 @@ claude says:
 
 /* a nested function using only its own parameter (no capture). */
 import string;
+alias slids;
 
 int basic(int x) {
     int dbl(int a) {

@@ -122,6 +122,7 @@ still errors per-segment.
 */
 
 import string;
+alias slids;
 
 Data(int x_) {
     bool less_than(Data^ rhs) {

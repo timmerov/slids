@@ -57,6 +57,7 @@ classify. Coverage in tuple/anon.sl, tuple/array.sl, tuple/combined.sl.
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

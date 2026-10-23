@@ -85,6 +85,7 @@ the diagnostic carries the suggestion note.
 */
 
 import string;
+alias slids;
 
 /* the debugging early-exit: the dead tail is compiled and checked, then
    dropped. */

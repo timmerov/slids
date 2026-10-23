@@ -490,6 +490,16 @@ struct Node {
     std::unique_ptr<TypeSetDecl> type_set;
     std::unique_ptr<SpecConstraint> spec;
     std::vector<widen::TypeRef> param_types;     // kCallStmt/kCallExpr: classify-cached resolved fn's param types
+    // kCallStmt/kCallExpr, UNQUALIFIED: the scopes whose same-name functions are all
+    // visible bare at the call — each open namespace frame (an `alias Ns;` import,
+    // an enclosing namespace) holding one, plus -1 for FILE scope. Resolve stamps it
+    // only when 2+ scopes contribute; classify then ranks their UNION. Empty: the
+    // anchor's own scope, as before.
+    std::vector<int> overload_frames;
+    // kFunctionDef, a METHOD of a class-template flavor: its body is LAZY — not yet
+    // resolved, so constfold / classify / desugar pass it by (signature only). The
+    // first use builds it (Tree::lazy_methods) and clears the flag.
+    bool lazy_body = false;
     // A NESTED function (kFunctionDef in a body) and each call to it carry the
     // entry ids of the enclosing-function locals/params it captures — passed
     // by reference (the host alloca's address) when the nested function is
@@ -891,12 +901,42 @@ struct Tree {
     // `args`: a FUNCTION-template demand's type arguments, RESOLVED at resolve (a class
     // spelling becomes its instance type) — the same TypeRefs a call inside the library
     // binds, so the instance memo hits instead of minting a duplicate. Empty until then.
+    // `method`: a METHOD demand (`Flavor<args>:name` in the .sli) — the consumer
+    // called this lazy method of the aggregated flavor, so the source builds it
+    // (every overload of the name). Empty for a flavor / function demand.
     struct InstDemand {
         std::string spelling;
         bool consumed = false;
         std::vector<widen::TypeRef> args;
+        std::string method;
     };
     std::vector<InstDemand> inst_demands;
+    // LAZY TEMPLATE METHODS. A method of a class-template flavor is built — body
+    // resolved, folded, typed, emitted — only when USED. The drain marks each
+    // eligible method (not a hook, a transfer operator, a virtual, or synthesized)
+    // Node::lazy_body and records here how to re-enter its flavor's scope later;
+    // classify's lazy sweep builds every one some classified code references.
+    // Keyed by the METHOD's entry id; `fn` and `cls` are stable (unique_ptr-owned).
+    struct LazyMethod {
+        Node* fn = nullptr;            // the method's kFunctionDef
+        Node* cls = nullptr;           // the flavor's class node (opening) holding it
+        int tmpl_entry_id = -1;
+        int instance_entry_id = -1;
+        std::vector<widen::TypeRef> args;
+        bool inline_local = false;     // drains under the private-name context
+    };
+    std::map<int, LazyMethod> lazy_methods;
+    // The flavor whose bodies resolveScopeBodies is resolving with laziness on
+    // (set around the drain's / late path's call): its direct eligible methods are
+    // deferred instead of resolved. nullptr everywhere else.
+    LazyMethod const* lazy_flavor = nullptr;
+    // RESOLVED method demands (the --instantiate TU): {the flavor type, method name}.
+    // classify's lazy sweep builds every overload of the name in the flavor.
+    std::vector<std::pair<widen::TypeRef, std::string>> method_demands;
+    // The methods this TU CALLS on an AGGREGATED flavor (declare-only here): flavor
+    // entry id -> method names. The .sli writer demands each, so the template source
+    // builds exactly the methods its consumers use.
+    std::map<int, std::set<std::string>> demanded_methods;
     // A LISTLESS flavor's DROPPED members, keyed by the flavor's ns_frame_id:
     // {the template's name, the names stripped from the clone (fields, methods,
     // and every member depending on the unbound list)}. The qualified-lookup

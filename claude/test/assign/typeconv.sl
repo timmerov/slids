@@ -159,6 +159,7 @@ value.
    class's op= — a value source through op=(int), a pointer source through
    op=(int^). The temp is destroyed at the end of the phrase. */
 import string;
+alias slids;
 
 Amt(int cents_) {
     _() {}

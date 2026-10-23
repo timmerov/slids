@@ -30,6 +30,7 @@ the address-identity check. a pointer flows into an intptr lvalue via ptrtoint.
 */
 
 import string;
+alias slids;
 
 Empty() {
     _() { println(String + "Empty:ctor"); }

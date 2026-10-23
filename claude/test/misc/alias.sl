@@ -22,6 +22,7 @@ use case is importing c functions with stupid names.
 */
 
 import string;
+alias slids;
 
 alias Integer = int;
 alias Float = float;

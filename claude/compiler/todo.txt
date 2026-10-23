@@ -82,6 +82,10 @@ BUGS
 
 UNBLOCKED FEATURES
 
+  * slids { qsort(); } is a namespace.
+    alias sl = slids; should be an alias to the namespace allowing:
+    sl:qsort();
+
   * should alias A = Template<B> instantiate the template?
     or should it be deferred until an actual template object is created?
     claude says 30-50 lines in resolve.cpp.

@@ -114,6 +114,7 @@ through an array, or around a longer cycle) is infinite-size and rejected — a
 */
 
 import string;
+alias slids;
 
 MyFirstClass(
     int a_,

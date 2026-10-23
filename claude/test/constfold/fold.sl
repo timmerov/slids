@@ -199,6 +199,7 @@ of an unsigned literal reports the small nominal, and ~'A' yields a char (value
 */
 
 import string;
+alias slids;
 
 int32 main() {
     // D1 — float binary fold (+ - * / %)

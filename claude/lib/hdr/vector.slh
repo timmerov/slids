@@ -6,6 +6,9 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 declare a template class in a header file.
 */
 
+/* slids namespace */
+slids {
+
 Vector<T>(...) {
     _();
     ~();
@@ -91,3 +94,5 @@ Vector<T>(...) {
     /* remove elements. */
     void remove(intptr index, intptr count = 1);
 }
+
+} /* slids */

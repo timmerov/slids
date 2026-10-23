@@ -147,6 +147,7 @@ header-owned template. (The out-of-line form targeting a template LANDED
    <> member set (aliases, an alias template, plain nested classes, an enum,
    a const, a global). */
 import string;
+alias slids;
 
 TClass<T>(T t_) {
     S smethod<S>(S s) {

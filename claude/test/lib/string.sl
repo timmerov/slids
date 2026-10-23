@@ -18,6 +18,7 @@ links libslids.o. (A module is never identified by file name.)
 */
 
 import string;
+alias slids;
 
 int32 main() {
 

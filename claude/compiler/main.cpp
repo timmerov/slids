@@ -191,8 +191,28 @@ int main(int argc, char** argv) {
         }
         return 1;
     }
-    for (auto& d : inst_demands)
-        parse_tree.inst_demands.push_back({d, false, {}});
+    // A METHOD demand is a flavor spelling + `:name` after the flavor's closing
+    // `>` (`slids:Vector<int>:compare`, `slids:Vector<int>:op>=`): the flavor
+    // and the lazy method to build. The `>` is found by bracket depth — an
+    // operator name may carry its own.
+    for (auto& d : inst_demands) {
+        std::string spelling = d, method;
+        std::size_t lt = d.find('<');
+        if (lt != std::string::npos) {
+            int depth = 0;
+            for (std::size_t i = lt; i < d.size(); i++) {
+                if (d[i] == '<') depth++;
+                else if (d[i] == '>' && --depth == 0) {
+                    if (i + 1 < d.size() && d[i + 1] == ':') {
+                        spelling = d.substr(0, i + 1);
+                        method = d.substr(i + 2);
+                    }
+                    break;
+                }
+            }
+        }
+        parse_tree.inst_demands.push_back({spelling, false, {}, method});
+    }
 
     // --scan-deps: the IMPORT SCAN — lex only, no compile. The lexer chased
     // the whole import closure and loaded each template source sitting beside
@@ -358,6 +378,65 @@ int main(int argc, char** argv) {
         std::map<std::string,
                  std::pair<std::set<std::string>, std::vector<std::string>>>
             targets;
+        // THE QUALIFIED SPELLING of a demand. The template source's --instantiate
+        // TU has none of this TU's `alias Ns;` imports in force, so the template's
+        // own name and every class in its arguments carry their full namespace path
+        // (`slids:Map<slids:String, int>`). A path is the owner chain of namespace /
+        // class names; a class that has a stable symbol path (Type::symbol_path)
+        // spells it with `:`. A class-template INSTANCE argument spells as its
+        // template (qualified) over its own arguments, recursively.
+        auto colons = [](std::string p) {
+            for (char& c : p) if (c == '.') c = ':';
+            return p;
+        };
+        auto qualPrefix = [&](int frame) -> std::string {
+            std::string out;
+            int guard = (int)parse_tree.entries.size() + 2;
+            while (frame >= 0 && guard-- > 0) {
+                int found = -1;
+                for (std::size_t i = 0; i < parse_tree.entries.size(); i++) {
+                    parse::Entry const& q = parse_tree.entries[i];
+                    if (q.ns_frame_id == frame
+                        && (q.kind == parse::EntryKind::kClass
+                            || q.kind == parse::EntryKind::kNamespace)) {
+                        found = (int)i;
+                        break;
+                    }
+                }
+                if (found < 0) break;
+                parse::Entry const& q = parse_tree.entries[found];
+                if (q.kind == parse::EntryKind::kClass) {
+                    widen::Type const& ct = widen::get(widen::strip(q.slids_type));
+                    if (!ct.symbol_path.empty()) return colons(ct.symbol_path) + ":" + out;
+                }
+                out = q.name + ":" + out;
+                frame = q.owner_ns_frame;
+            }
+            return out;
+        };
+        std::map<int, std::pair<int, std::vector<widen::TypeRef>>> class_inst_of;
+        for (auto& [tid, ti] : parse_tree.templates) {
+            if (!ti.def || ti.def->kind != parse::Kind::kClassDef) continue;
+            for (auto& [args, iid] : ti.instances) class_inst_of[iid] = {tid, args};
+        }
+        auto spellDemand = [&](int tid, std::vector<widen::TypeRef> const& args) {
+            parse::Entry const& te = parse_tree.entries[tid];
+            std::string s = qualPrefix(te.owner_ns_frame) + te.name + "<";
+            for (std::size_t k = 0; k < args.size(); k++) {
+                if (k) s += ", ";
+                s += widen::spellOrEmpty(args[k]);
+            }
+            return s + ">";
+        };
+        widen::setSlidSpeller([&](widen::TypeRef s) -> std::string {
+            int cid = parse::classEntryForType(parse_tree, s);
+            if (cid < 0) return "";
+            auto it = class_inst_of.find(cid);
+            if (it != class_inst_of.end())
+                return spellDemand(it->second.first, it->second.second);
+            widen::Type const& t = widen::get(s);
+            return t.symbol_path.empty() ? std::string() : colons(t.symbol_path);
+        });
         for (auto& [tid, ti] : parse_tree.templates) {
             if (!ti.def || ti.instances.empty()) continue;
             parse::Entry const& te = parse_tree.entries[tid];
@@ -399,29 +478,14 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (local) continue;
-                std::string spelling;
-                if (te.kind == parse::EntryKind::kClass) {
-                    spelling = parse_tree.entries[iid].name;  // canonical "Vector<int>"
-                } else {
-                    std::string qual;
-                    if (te.owner_ns_frame >= 0) {
-                        for (auto& oe : parse_tree.entries) {
-                            if (oe.ns_frame_id == te.owner_ns_frame
-                                && (oe.kind == parse::EntryKind::kClass
-                                    || oe.kind == parse::EntryKind::kNamespace)) {
-                                qual = oe.name + ":";
-                                break;
-                            }
-                        }
-                    }
-                    spelling = qual + te.name + "<";
-                    for (std::size_t k = 0; k < args.size(); k++) {
-                        if (k) spelling += ", ";
-                        spelling += widen::spellOrEmpty(args[k]);
-                    }
-                    spelling += ">";
-                }
-                slot.second.push_back(spelling);
+                slot.second.push_back(spellDemand(tid, args));
+                // LAZY TEMPLATE METHODS: each method this TU calls on the
+                // aggregated flavor — the source builds only what is demanded.
+                auto dm = parse_tree.demanded_methods.find(iid);
+                if (te.kind == parse::EntryKind::kClass
+                    && dm != parse_tree.demanded_methods.end())
+                    for (std::string const& mn : dm->second)
+                        slot.second.push_back(spellDemand(tid, args) + ":" + mn);
                 for (widen::TypeRef a : args) {
                     widen::TypeRef s = widen::strip(a);
                     while (widen::form(s) == widen::Type::Form::kPointer
@@ -435,6 +499,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        widen::setSlidSpeller(nullptr);   // spell() is bare again everywhere else
         std::string sli_path = out_path;
         {
             auto pos = sli_path.rfind(".ll");

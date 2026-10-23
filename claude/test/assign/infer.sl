@@ -62,6 +62,7 @@ deferred (not landed): inferring from classes / functions.
 */
 
 import string;
+alias slids;
 
 alias Integer = int;
 const int kFive = 5;

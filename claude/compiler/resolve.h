@@ -55,4 +55,11 @@ bool typeInSetValue(parse::Tree const& tree, widen::TypeRef t,
 // and free — when no class instantiation happened.
 std::vector<parse::Node*> takeResolvedClassInstances(parse::Tree& tree);
 
+// LAZY TEMPLATE METHODS: resolve the deferred body of the flavor method
+// `entry_id` (Tree::lazy_methods), the use at {use_file, use_tok} as its
+// instantiation context. Clears Node::lazy_body. False when it is no pending
+// lazy method. classify then folds and types the body (buildLazyMethod).
+bool resolveLazyMethod(parse::Tree& tree, int entry_id, int use_file, int use_tok,
+                       diagnostic::Sink& diag);
+
 }  // namespace resolve

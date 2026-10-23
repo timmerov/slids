@@ -40,6 +40,7 @@ candidate is "No matching overload" — the same wording as a free function.
 */
 
 import string;
+alias slids;
 
 /* the three field-count shapes a construction argument is checked against. */
 Nil0() { _() {} ~() {} }

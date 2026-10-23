@@ -49,6 +49,7 @@ import string;
 import library;
 
 import+ tmpl_lib;
+alias slids;
 
 /* THIS TU's private `Twin` — not declared in any header. two fields, scaled `tv()`. */
 Twin(int a_ = 5, int b_ = 6) {
