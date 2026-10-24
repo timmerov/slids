@@ -1364,6 +1364,10 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
     for (auto& d : slot->dim_exprs) {
         walk(d, tree, changed, diag, refreshes, no_substitute);
     }
+    // A class's FIELD ALIAS paths (a separate vector): their constant indices fold.
+    for (auto& a : slot->field_aliases) {
+        walk(a, tree, changed, diag, refreshes, no_substitute);
+    }
     if (slot->kind == parse::Kind::kUnaryExpr) {
         if (auto folded = tryFoldUnary(*slot, diag)) {
             slot = std::move(folded);
@@ -1662,6 +1666,7 @@ void runOn(parse::Tree& tree, parse::Node& fn, diagnostic::Sink& diag) {
         for (auto& c : fn.children) walk(c, tree, changed, diag, refreshes);
         for (auto& p : fn.params)   walk(p, tree, changed, diag, refreshes);
         for (auto& d : fn.dim_exprs) walk(d, tree, changed, diag, refreshes);
+        for (auto& a : fn.field_aliases) walk(a, tree, changed, diag, refreshes);
         if (diagnostic::hasErrors(diag)) return;
     }
     finalizeArrayDims(fn, tree, diag, refreshes);

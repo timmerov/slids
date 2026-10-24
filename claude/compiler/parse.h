@@ -475,6 +475,12 @@ struct Node {
     bool global_qualified = false;
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::unique_ptr<Node>> params;   // kFunctionDef/Decl: kParam nodes
+    // kClassDef: the FIELD ALIASES of this opening (`alias name = path` in the field
+    // list) — kParam nodes, name = the alias, children[0] = the PATH (a kIdentExpr
+    // root field, then kFieldExpr / constant-index kIndexExpr hops). Not slots: kept
+    // out of `params` so layout, construction and codegen never see them. classify
+    // expands a use `obj.name` to the path rooted at `obj`.
+    std::vector<std::unique_ptr<Node>> field_aliases;
     // Function TEMPLATES. On a kFunctionDef, a non-empty type_params marks a TEMPLATE
     // definition (`T add<T>(T a, T b)`): its body stays in pristine parse state — every
     // stage skips it — until a call site binds the type-list and classify clones +
@@ -742,9 +748,21 @@ struct ClassInfo {
     // hook scan: has_ctor false -> the hook is never called and its `__impl` is emitted
     // dead; and the header-class ADD check).
     std::vector<Node*> pending_hooks;
+    // FIELD ALIASES over every opening (the primary's + each re-open's kParam alias
+    // nodes, still OWNED by their opening). Not slots. `pending_aliases` collects a
+    // re-open's until registerClassBody folds them into `alias_params`.
+    // `aliases_checked`: classify validated every path once (validateFieldAliases).
+    std::vector<Node*> alias_params;
+    std::vector<Node*> pending_aliases;
+    bool aliases_checked = false;
     int fieldIndex(std::string const& f) const {
         for (std::size_t i = 0; i < field_names.size(); ++i)
             if (field_names[i] == f) return static_cast<int>(i);
+        return -1;
+    }
+    int aliasIndex(std::string const& f) const {
+        for (std::size_t i = 0; i < alias_params.size(); ++i)
+            if (alias_params[i]->name == f) return static_cast<int>(i);
         return -1;
     }
 };

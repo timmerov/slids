@@ -175,19 +175,40 @@ UNBLOCKED FEATURES
     - mechanics: grammar parseAliasDecl gets an expression rhs branch (`^ . [] call literal`
       = expression; a bare name is decided at resolve); resolve adds a block-scoped entry
       kind holding the rhs and replaces each use with cloneNode. nothing after resolve changes.
-    - same mechanism as the TODO tuple field aliases (`alias x_ = v_[0]`): clone + `self.`.
+    - same mechanism as the landed field aliases (classify expandFieldAlias: clone the path,
+      root it at the receiver).
 
-  * FIELD ALIASES — as spec'd in slids_reference.md "Field aliases (named tuples only)":
-        Vec3(int v_[3], alias x_ = v_[0], alias y_ = v_[1], alias z_ = v_[2])
-        Color(int r_, int g_, int b_, alias y_ = r_, alias u_ = g_, alias v_ = b_)
-    read/write, write through to the original. not fields, no storage.
-    an alias points only to a field or array element of the same tuple.
-    note: we can reopen templates and incomplete classes to add field aliases. e.g.
-        alias BlocMap = Map<Rankings, Bloc>;
-        MapNode<Rankings, Bloc>(alias rankings_ = key_, alias bloc_ = value_);
-        which = it^.rankings_[0];    // guthrie.sl vote(): no `rankings = ^it^.key_;`
-    an alias adds no storage, symbol, or method, so layout/ABI and the owning file's flavor
-    are untouched — a consumer may add them to a flavor it doesn't own.
+  * FIELD ALIAS REOPENS — reaching a class from other scopes, to add aliases (user, 2026-10-23).
+    canon: test/misc/alias.sl; real use: test/guthrie guthrie.sl 471 + 594 (`it^.rankings_[0]`
+    still fails: no spelling reaches slids:MapNode from guthrie).
+    - six forms must all reopen slids:MapNode (plain classes too):
+        slids:MapNode<.>(..)            slids:TreeNode:MapNode<.>(..)
+        slids { MapNode<.>(..) }        slids { TreeNode:MapNode<.>(..) }
+        alias slids; MapNode<.>(..)     alias slids; TreeNode:MapNode<.>(..)
+      today `Ns:X(non-empty)` is INHERITANCE from Ns (grammar looksLikeQualifiedScopeDef takes
+      only empty `()`): resolve must read a base spelling that resolves to a NAMESPACE as a
+      qualifier. under `alias Ns;` a file-scope opening whose name reaches an existing Ns
+      class reopens it (a same-scope class wins). namespaces already behave
+      (`alias Ns; space { }` = new file-scope ns; `Ns { }` reopens Ns).
+    - base on a reopen: optional; spelled must MATCH, else an error (same scope / explicit
+      qualifier — today `Other : Der(..)` is accepted silently). via alias-open only, a
+      mismatched base is a NEW file-scope declaration (`BlocMap:MapNode<.>` = a new template
+      deriving Map: valid, probably not the author's intent).
+    - complete / completed classes and templates add no fields, but may add aliases to
+      existing fields and sub-fields.
+    - a consumer may reopen a HEADER template with ALIASES ONLY (lift "A template declared
+      in a header is defined by its module's source file" for that case); methods/hooks are
+      errors — the --instantiate pre-link stage can't see them.
+    - bug: `Ns:MNode<A, B>() { methods }` drops its methods silently.
+    - checkTemplateAliasRoots skips a base that doesn't resolve (a namespace base); make it
+      an error.
+    - CONSTRAINED reopens: `MapNode<Key=Rankings, Value=Bloc>(alias ..)` applies only to the
+      admitted flavors (the function-template `T=` / type-set constraints, constraintAdmits).
+      reopen-only (on a primary it is specialization). aliases + methods yes, fields never.
+      today a reopen's list is placeholder names, so `MapNode<Rankings, Bloc>(..)` aliases
+      EVERY flavor.
+    - risk: a file-scope class named like an alias-opened ns class becomes a reopen (fields
+      -> a loud error).
 
 
 BLOCKED FEATURES

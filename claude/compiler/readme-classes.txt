@@ -1467,6 +1467,39 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   (REFINEMENTS, below). Canon test/class/reopen.sl.
 
 
+FIELD ALIASES (landed 2026-10-23; spans grammar / resolve / constfold / classify)
+
+  `alias name = field.path[k]` in a class (or class template) field list: a second name for
+  a field or sub-field. A NAME, never a slot — layout, sizeof, construction lists and
+  transfer are untouched. Canon test/misc/alias.sl (its `claude says` block is the map).
+  - STORAGE: Node::field_aliases (a kParam per alias; children[0] = the path: kIdentExpr
+    root, then kFieldExpr / kIndexExpr hops), apart from params so nothing slot-walking
+    sees it. ClassInfo::alias_params (all openings), pending_aliases (parked by a re-open
+    until registerClassBody), aliases_checked.
+  - GRAMMAR parseFieldAlias; a `^` / `^^` hop is rejected at parse. `alias` outside a class
+    field list (a function param list) is an error in parseParamList.
+  - RESOLVE: the duplicate-member check spans fields, aliases and class-frame members across
+    openings. Bare names in methods ride collectMethodFields -> `_$recv^.name`.
+    peekMemberType lets resolve's early type peeks (for-iterable dispatch) see an alias.
+    checkTemplateAliasRoots checks a class template's alias ROOTS at the definition, used or
+    not (skipped when the base spelling depends on the template list).
+  - CONSTFOLD folds index expressions inside field_aliases.
+  - CLASSIFY is the ONE expansion site: a kFieldExpr whose name misses every field ->
+    findFieldAlias (the class, then up the base chain; a nearer FIELD shadows) ->
+    expandFieldAlias rewrites the node in place into the cloned path rooted at the object
+    (`_$base` hops for an inherited alias), then infers it — so an alias is usable wherever
+    the field is (write, `^`, ##type, for, aug-assign). validateFieldAliases runs once per
+    class, used or not, against a synthetic `_$alias_probe` kLocalVar pushed straight onto
+    tree.entries (addEntry asserts: classify has no frame): no hop through a pointer /
+    iterator, constant index, bounds, cycles (aliasCycle).
+  - VISIBILITY: an alias declared in a template SOURCE is source-private like its fields
+    (memberDeclVisibleAt); a declare_only flavor drops source re-open clones' aliases and
+    keeps a consumer's. Refinements move field_aliases to the usurper.
+  - OPEN (todo.txt FIELD ALIAS REOPENS): reaching a class from another scope to alias it
+    (`Ns:X<.>(alias ..)` is inheritance from Ns today), consumer alias-only reopens of a
+    header template, `Key=Type` constrained reopens.
+
+
 REFINEMENTS (landed; spans resolve / classify; non-virtual)
 
   Re-opening a class from a RUN-TIME scope that is not its own does not join the class. It

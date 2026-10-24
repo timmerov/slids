@@ -558,13 +558,20 @@ int flatFieldWidth(parse::Tree& tree, widen::TypeRef cls) {
 // for importers. Cloned template bodies keep their source file_id, so a
 // library body touching `self.field` (or another instance's field) passes
 // this same test from inside a consumer TU.
+bool memberDeclVisibleAt(parse::Tree& tree, parse::Node const* p, int access_file);
+
 bool fieldVisibleAt(parse::Tree& tree, parse::ClassInfo const& info,
                     int idx, int access_file) {
     if (idx < 0 || idx >= static_cast<int>(info.field_params.size())) return true;
     // The synthetic slot-0 spellings (`_$base`, `_$vptr`) are the compiler's
     // own, never gated.
     if (info.field_names[idx].rfind("_$", 0) == 0) return true;
-    parse::Node const* p = info.field_params[idx];
+    return memberDeclVisibleAt(tree, info.field_params[idx], access_file);
+}
+
+// The template-source privacy gate for one member DECLARATION (a field's kParam, or a
+// field alias's): nameable only from the supplying source file and its paired header.
+bool memberDeclVisibleAt(parse::Tree& tree, parse::Node const* p, int access_file) {
     if (!p) return true;
     int f = p->file_id;
     if (f < 0 || f >= static_cast<int>(tree.file_template_source.size())) return true;
@@ -612,6 +619,183 @@ void reportPrivateField(parse::ClassInfo const& info, int idx,
     diagnostic::report(diag, {e.file_id, e.name_tok,
         "Field '" + info.field_names[idx] + "' of class '" + info.name
         + "' is private to its template source.", notes});
+}
+
+void inferExpr(parse::Tree& tree, parse::Node& e,
+               widen::TypeRef context, diagnostic::Sink& diag);
+
+// ---- FIELD ALIASES -----------------------------------------------------------
+// `alias name = path` in a class field list is a new LABEL for data in the object —
+// an offset, not code. A use `obj.name` (and a bare `name` in a method, which resolve
+// lowered to `_$recv^.name`) EXPANDS here to the path rooted at `obj`, then types as
+// that ordinary field / index chain; nothing after classify sees an alias.
+
+// The root of an alias path: the field ident every hop hangs off.
+parse::Node* aliasPathRoot(parse::Node& path) {
+    parse::Node* h = &path;
+    while (h->kind != parse::Kind::kIdentExpr && !h->children.empty() && h->children[0])
+        h = h->children[0].get();
+    return h;
+}
+
+void restampPositions(parse::Node& n, parse::Node const& at) {
+    n.file_id = at.file_id;
+    n.tok = at.tok;
+    n.name_tok = at.name_tok;
+    for (auto& c : n.children) if (c) restampPositions(*c, at);
+}
+
+// Clone alias `a`'s path with its root field hung off `base` (`root` -> `base.root`).
+// `at` restamps the clone's positions to a USE (null keeps the declaration's).
+std::unique_ptr<parse::Node> buildAliasPath(parse::Node const& a,
+                                            std::unique_ptr<parse::Node> base,
+                                            parse::Node const* at) {
+    auto path = parse::cloneNode(*a.children[0]);
+    if (at) restampPositions(*path, *at);
+    parse::Node* root = aliasPathRoot(*path);
+    root->kind = parse::Kind::kFieldExpr;
+    root->resolved_entry_id = -1;
+    root->children.clear();
+    root->children.push_back(std::move(base));
+    return path;
+}
+
+// The member `name` resolves to an ALIAS in `cls`'s chain (a field of the same name
+// at a nearer level shadows it): the alias node, its declaring class, and the
+// `_$base` hop count to it. Null when it names a field or nothing.
+parse::Node* findFieldAlias(parse::Tree& tree, widen::TypeRef cls,
+                            std::string const& name, widen::TypeRef& owner,
+                            int& depth) {
+    int guard = static_cast<int>(tree.classes.size()) + 2;
+    depth = 0;
+    for (widen::TypeRef c = widen::strip(cls); guard-- > 0; depth++) {
+        auto it = tree.classes.find(c);
+        if (it == tree.classes.end()) return nullptr;
+        if (it->second.fieldIndex(name) >= 0) return nullptr;
+        int ai = it->second.aliasIndex(name);
+        if (ai >= 0) { owner = c; return it->second.alias_params[ai]; }
+        c = widen::strip(parse::baseTypeOf(it->second));
+        if (c == widen::kNoType) return nullptr;
+    }
+    return nullptr;
+}
+
+// Chase alias `a`'s ROOT through aliases-of-aliases: the alias the chase revisits (a
+// cycle), or null when it bottoms out at a field (or at nothing — the probe reports it).
+parse::Node const* aliasCycle(parse::Tree& tree, widen::TypeRef owner,
+                              parse::Node const* a,
+                              std::vector<parse::Node const*>& seen) {
+    seen.push_back(a);
+    std::string const& root =
+        aliasPathRoot(const_cast<parse::Node&>(*a->children[0]))->name;
+    widen::TypeRef next_owner = widen::kNoType;
+    int depth = 0;
+    parse::Node const* b = findFieldAlias(tree, owner, root, next_owner, depth);
+    if (!b || b->children.empty() || !b->children[0]) return nullptr;
+    for (parse::Node const* s : seen) if (s == b) return b;
+    return aliasCycle(tree, next_owner, b, seen);
+}
+
+// Check every alias path of class `cls` ONCE, at its declaration: each hop types over
+// the layout (a synthetic probe object of the class), stays inside the object (no `^`
+// through a pointer / iterator field), and indexes by a folded constant.
+void validateFieldAliases(parse::Tree& tree, widen::TypeRef cls,
+                          diagnostic::Sink& diag) {
+    using F = widen::Type::Form;
+    widen::TypeRef s = widen::strip(cls);
+    auto it = tree.classes.find(s);
+    if (it == tree.classes.end() || it->second.aliases_checked) return;
+    it->second.aliases_checked = true;
+    std::vector<parse::Node*> aliases = it->second.alias_params;
+    if (aliases.empty()) return;
+    parse::Entry pe;
+    pe.kind = parse::EntryKind::kLocalVar;
+    pe.name = "_$alias_probe";
+    pe.slids_type = s;
+    pe.file_id = it->second.def_file_id;
+    pe.tok = it->second.def_tok;
+    // A bare entry, as a classify spill's (resolve is done; no frame to join).
+    int probe = static_cast<int>(tree.entries.size());
+    tree.entries.push_back(std::move(pe));
+    for (parse::Node* a : aliases) {
+        if (!a || a->children.empty() || !a->children[0]) continue;
+        std::vector<parse::Node const*> seen;
+        if (parse::Node const* hit = aliasCycle(tree, s, a, seen)) {
+            if (hit == a)
+                diagnostic::report(diag, {a->file_id, a->name_tok,
+                    "Field alias '" + a->name + "' is part of a cycle.", {}});
+            continue;   // a member of the cycle reports it
+        }
+        auto pr = std::make_unique<parse::Node>();
+        pr->kind = parse::Kind::kIdentExpr;
+        pr->name = "_$alias_probe";
+        pr->resolved_entry_id = probe;
+        pr->file_id = a->file_id;
+        pr->tok = a->name_tok;
+        pr->name_tok = a->name_tok;
+        auto path = buildAliasPath(*a, std::move(pr), nullptr);
+        std::vector<parse::Node*> hops;   // outermost -> root, then reversed
+        for (parse::Node* h = path.get();
+             h->kind != parse::Kind::kIdentExpr && !h->children.empty() && h->children[0];
+             h = h->children[0].get())
+            hops.push_back(h);
+        std::reverse(hops.begin(), hops.end());
+        for (std::size_t i = 0; i < hops.size(); i++) {
+            parse::Node* h = hops[i];
+            if (i > 0) {   // the root hangs off the object itself
+                bool had_const = false;
+                widen::TypeRef bt =
+                    peelAliasConst(h->children[0]->inferred_type, had_const);
+                if (widen::form(bt) == F::kPointer || widen::form(bt) == F::kIterator) {
+                    diagnostic::report(diag, {h->file_id, h->tok,
+                        "'" + a->name + "': a field alias cannot go through a pointer; "
+                        "it names data inside the object.", {}});
+                    break;
+                }
+            }
+            if (h->kind == parse::Kind::kIndexExpr
+                && (h->children.size() < 2 || !h->children[1]
+                    || h->children[1]->kind != parse::Kind::kIntLiteral)) {
+                parse::Node const* ix = h->children.size() > 1 && h->children[1]
+                    ? h->children[1].get() : h;
+                diagnostic::report(diag, {ix->file_id, ix->tok,
+                    "A field alias index must be a compile-time constant.", {}});
+                break;
+            }
+            inferExpr(tree, *h, widen::kNoType, diag);
+            if (diagnostic::hasErrors(diag)) break;
+        }
+    }
+}
+
+// `e` = `obj.name` where `name` is a FIELD ALIAS of `owner` (`depth` `_$base` hops up
+// from obj's class): rewrite `e` IN PLACE to the alias path rooted at `obj`, and type it.
+void expandFieldAlias(parse::Tree& tree, parse::Node& e, parse::Node const& a,
+                      widen::TypeRef owner, int depth, diagnostic::Sink& diag) {
+    parse::ClassInfo const& oinfo = tree.classes.at(owner);
+    if (!memberDeclVisibleAt(tree, &a, e.file_id)) {
+        diagnostic::report(diag, {e.file_id, e.name_tok,
+            "Field alias '" + a.name + "' of class '" + oinfo.name
+            + "' is private to its template source.",
+            {{a.file_id, a.name_tok, "'" + a.name + "' is supplied by the template "
+              "source, private to that file; declare it in the header to publish it."}}});
+        return;
+    }
+    validateFieldAliases(tree, owner, diag);
+    if (diagnostic::hasErrors(diag)) return;
+    std::unique_ptr<parse::Node> base = std::move(e.children[0]);
+    for (int h = 0; h < depth; h++) {
+        auto hop = std::make_unique<parse::Node>();
+        hop->kind = parse::Kind::kFieldExpr;
+        hop->name = "_$base";
+        hop->file_id = e.file_id;
+        hop->tok = e.tok;
+        hop->children.push_back(std::move(base));
+        base = std::move(hop);
+    }
+    auto path = buildAliasPath(a, std::move(base), &e);
+    e = std::move(*path);
+    inferExpr(tree, e, widen::kNoType, diag);
 }
 
 // AN IMPORTED INCOMPLETE FIELD CLASS has no visible fields, so an initializer naming
@@ -1303,6 +1487,10 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
     // abstract subobject (its pure vtable slots are null). The base subobject (`_$base`)
     // is exempt: a concrete derived overrides the pure slots. A pointer/reference field is
     // fine — that IS polymorphism. Checked once here, at the field.
+    // FIELD ALIAS paths are checked at the declaration, used or not (once per class,
+    // across its openings).
+    if (node.kind == parse::Kind::kClassDef)
+        validateFieldAliases(tree, node.return_type, diag);
     if (node.kind == parse::Kind::kClassDef) {
         for (auto& p : node.params) {
             if (!p || p->name == "_$base" || p->name == "_$vptr") continue;
@@ -2139,6 +2327,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             int idx = it->second.fieldIndex(e.name);
             if (idx < 0) {
+                // A FIELD ALIAS — own or inherited (a nearer level's field of the
+                // same name shadows it): expand to its path and type that.
+                {
+                    widen::TypeRef aowner = widen::kNoType;
+                    int adepth = 0;
+                    if (parse::Node* a = findFieldAlias(tree, bt, e.name, aowner, adepth)) {
+                        expandFieldAlias(tree, e, *a, aowner, adepth, diag);
+                        return;
+                    }
+                }
                 // An INHERITED field. The base is the unnamed slot-0 sub-object, so
                 // `obj.field` of a base field IS `obj._$base….field` — splice the hops
                 // and re-infer, the same `_$base` chain a BARE field name lowers to

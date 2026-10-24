@@ -4504,6 +4504,33 @@ struct Parser {
                 }
                 break;
             }
+            // A FIELD ALIAS — `alias name = path`. Legal only in a CLASS field list
+            // (allow_incomplete marks one); it is not a slot, so it goes to
+            // field_aliases, never params.
+            if (peek().kind == token::Kind::kAlias) {
+                if (!allow_incomplete) {
+                    error("A field alias is legal only in a class field list.");
+                    return false;
+                }
+                auto a = parseFieldAlias();
+                if (!a) return false;
+                node->field_aliases.push_back(std::move(a));
+                if (peek().kind == token::Kind::kComma) {
+                    int comma_tok = pos;
+                    advance();
+                    if (peek().kind == token::Kind::kRParen) {
+                        errorAt(comma_tok,
+                                "Expected a " + std::string(item) + " after ','.");
+                        return false;
+                    }
+                    continue;
+                }
+                if (peek().kind != token::Kind::kRParen) {
+                    error("Expected ',' or ')' in parameter list.");
+                    return false;
+                }
+                continue;
+            }
             // `[mutable] [type] name [= constexpr]` — the type is optional; a typeless
             // param infers its type from its default value. For a FUNCTION param
             // list, resolve/classify enforce that a typeless param HAS a default
@@ -4562,6 +4589,66 @@ struct Parser {
         }
         if (!expect(token::Kind::kRParen, ")")) return false;
         return true;
+    }
+
+    // `alias name = path` in a class field list, positioned at `alias`. The path is
+    // DATA — a field name, then `.field` / `[constant]` hops (parseSubscript's
+    // shape) — built as the ordinary expression nodes a use expands to. A `^` is an
+    // indirection, never an offset into the object.
+    std::unique_ptr<parse::Node> parseFieldAlias() {
+        int a_file = peek().file_id;
+        int a_tok = pos;
+        advance();   // alias
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected an alias name after 'alias'.");
+            return nullptr;
+        }
+        auto node = newNodeAt(parse::Kind::kParam, a_file, a_tok);
+        node->name = peek().text;
+        node->name_tok = pos;
+        advance();   // the alias name
+        if (peek().kind != token::Kind::kEquals
+            || peekKind(1) != token::Kind::kIdentifier) {
+            error("Expected '=' and a field path after the alias name.");
+            return nullptr;
+        }
+        advance();   // =
+        auto path = newNodeAt(parse::Kind::kIdentExpr, peek().file_id, pos);
+        path->name = peek().text;
+        path->name_tok = pos;
+        advance();   // the root field
+        while (true) {
+            if (peek().kind == token::Kind::kLBracket) {
+                path = parseSubscript(std::move(path));
+                if (!path) return nullptr;
+                continue;
+            }
+            if (peek().kind == token::Kind::kDot) {
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                advance();   // .
+                if (peek().kind != token::Kind::kIdentifier) {
+                    error("Expected a field name after '.'.");
+                    return nullptr;
+                }
+                auto f = newNodeAt(parse::Kind::kFieldExpr, op_file, op_tok);
+                f->children.push_back(std::move(path));
+                f->name = peek().text;
+                f->name_tok = pos;
+                advance();   // field name
+                path = std::move(f);
+                continue;
+            }
+            if (peek().kind == token::Kind::kBitXor
+                || peek().kind == token::Kind::kXorXor) {
+                error("'" + node->name + "': a field alias cannot go through a "
+                      "pointer; it names data inside the object.");
+                return nullptr;
+            }
+            break;
+        }
+        node->children.push_back(std::move(path));
+        return node;
     }
 
     // `Name(field-list) { body }` — a class definition. The field list is the

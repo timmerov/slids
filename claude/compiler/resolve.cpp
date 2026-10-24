@@ -1956,6 +1956,57 @@ struct EnumContext {
 widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
                                 diagnostic::Sink& diag, bool peek_calls = false);
 
+// The PEEKED type of member `name` of class `cls`: a field's declared type, or a FIELD
+// ALIAS's path walked over the layout from the class that declares it — searching the
+// base chain. kNoType when unknown (an inferred field type, no such member, an alias
+// cycle). resolve's lookahead only; classify expands and types an alias for real.
+widen::TypeRef peekMemberType(parse::Tree& tree, widen::TypeRef cls,
+                              std::string const& name, int depth = 0);
+
+widen::TypeRef peekAliasPath(parse::Tree& tree, widen::TypeRef cls,
+                             parse::Node const& path, int depth) {
+    if (path.kind == parse::Kind::kIdentExpr)
+        return peekMemberType(tree, cls, path.name, depth);
+    if (path.children.empty() || !path.children[0]) return widen::kNoType;
+    widen::TypeRef b = widen::strip(widen::removeConst(
+        peekAliasPath(tree, cls, *path.children[0], depth)));
+    if (path.kind == parse::Kind::kFieldExpr)
+        return widen::form(b) == widen::Type::Form::kSlid
+            ? peekMemberType(tree, b, path.name, depth) : widen::kNoType;
+    if (path.kind == parse::Kind::kIndexExpr
+        && widen::form(b) == widen::Type::Form::kArray) {
+        std::vector<int> dims = widen::get(b).dims;
+        if (dims.size() <= 1) return widen::get(b).elem;
+        return widen::internArray(widen::get(b).elem,
+            std::vector<int>(dims.begin() + 1, dims.end()));
+    }
+    return widen::kNoType;
+}
+
+widen::TypeRef peekMemberType(parse::Tree& tree, widen::TypeRef cls,
+                              std::string const& name, int depth) {
+    if (depth > 64) return widen::kNoType;   // an alias cycle (classify reports it)
+    int guard = static_cast<int>(tree.classes.size()) + 2;
+    for (widen::TypeRef c = widen::strip(cls);
+         widen::form(c) == widen::Type::Form::kSlid && guard-- > 0; ) {
+        auto it = tree.classes.find(c);
+        if (it == tree.classes.end()) break;
+        parse::ClassInfo const& info = it->second;
+        int fi = info.fieldIndex(name);
+        if (fi >= 0)
+            return fi < static_cast<int>(info.field_types.size())
+                ? info.field_types[fi] : widen::kNoType;
+        int ai = info.aliasIndex(name);
+        if (ai >= 0) {
+            parse::Node const* a = info.alias_params[ai];
+            if (a->children.empty() || !a->children[0]) return widen::kNoType;
+            return peekAliasPath(tree, c, *a->children[0], depth + 1);
+        }
+        c = widen::strip(parse::baseTypeOf(info));
+    }
+    return widen::kNoType;
+}
+
 // The enum frame a comparison operand would lend the OTHER side — peeked WITHOUT
 // resolving the node: a bare ident naming an enum-typed variable / const / class
 // FIELD (a method body's kField entry carries the declared type), or a field /
@@ -2112,6 +2163,19 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
             if (p && !p->children.empty() && p->children[0]) {
                 EnumContext ectx(tree, enumFrameForType(tree, p->return_type));   // `= kC`
                 resolveExpr(tree, *p->children[0], diag);
+            }
+        }
+        // A FIELD ALIAS path's INDEX exprs resolve here, like a default (a named
+        // const, `kGreen`); constfold folds them. The field NAMES in the path are
+        // members of the class layout — classify binds them at each use.
+        for (auto& a : node.field_aliases) {
+            if (!a || a->children.empty()) continue;
+            for (parse::Node* h = a->children[0].get(); h; ) {
+                if (h->kind == parse::Kind::kIndexExpr && h->children.size() > 1
+                    && h->children[1])
+                    resolveExpr(tree, *h->children[1], diag);
+                h = (h->kind == parse::Kind::kIdentExpr || h->children.empty())
+                    ? nullptr : h->children[0].get();
             }
         }
     } else {
@@ -4142,16 +4206,9 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
             b = widen::strip(widen::get(b).pointee);
         }
         b = widen::strip(widen::removeConst(b));
-        // An inherited field: walk the base chain until a class declares it.
-        while (widen::form(b) == widen::Type::Form::kSlid) {
-            auto it = tree.classes.find(b);
-            if (it == tree.classes.end()) return widen::kNoType;
-            int fi = it->second.fieldIndex(e.name);
-            if (fi >= 0 && fi < static_cast<int>(it->second.field_types.size()))
-                return it->second.field_types[fi];
-            b = parse::baseTypeOf(it->second);
-        }
-        return widen::kNoType;
+        // An inherited field (or field alias): walk the base chain until a class
+        // declares it.
+        return peekMemberType(tree, b, e.name);
     }
     if (e.kind == parse::Kind::kDerefExpr) {
         widen::TypeRef b = widen::strip(peekIterableType(tree, *e.children[0], diag, peek_calls));
@@ -6745,6 +6802,13 @@ void collectMethodFields(parse::Tree& tree, widen::TypeRef cls,
                              p ? p->file_id : info.def_file_id,
                              p ? p->name_tok : info.def_tok);
         }
+        // A FIELD ALIAS is reachable bare exactly like a field: `r` lowers to
+        // `_$recv^.r` and classify expands it. Its type is the peeked path's.
+        for (parse::Node const* a : info.alias_params) {
+            if (!seen.insert(a->name).second) continue;
+            out.emplace_back(a->name, peekMemberType(tree, cls, a->name), depth,
+                             a->file_id, a->name_tok);
+        }
         cls = parse::baseTypeOf(info);
     }
 }
@@ -7453,6 +7517,10 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
             for (auto& m : node.children)
                 if (m && parse::isImplicitMember(m->name))
                     info.pending_hooks.push_back(m.get());
+            // A re-open's FIELD ALIASES are legal open or closed (no storage, no
+            // slot): they join the class's set in registerClassBody.
+            for (auto& a : node.field_aliases)
+                if (a) info.pending_aliases.push_back(a.get());
             // The layout is the primary's regardless (a re-open node skips the class
             // BODY passes); any appended fields flow to the primary via pending_fields.
             node.is_reopen = true;
@@ -7553,6 +7621,36 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     };
     for (auto& p : node.params) addField(p.get());
     for (parse::Node* p : info.pending_fields) addField(p);
+    // FIELD ALIASES, over every opening. A pseudonym shares the class's member
+    // namespace: a field, another alias, or any member (method, nested type, const)
+    // of the same name is a duplicate. The path is checked in classify, once the
+    // field types are final (validateFieldAliases).
+    {
+        int cls_frame = tree.entries[node.resolved_entry_id].ns_frame_id;
+        auto addAlias = [&](parse::Node* a) {
+            if (!a) return;
+            int fdup = info.fieldIndex(a->name);
+            int adup = info.aliasIndex(a->name);
+            int mdup = (fdup < 0 && adup < 0 && cls_frame >= 0)
+                ? findMemberDeclared(tree, cls_frame, a->name) : -1;
+            if (fdup >= 0 || adup >= 0 || mdup >= 0) {
+                int nf = fdup >= 0 ? field_locs[fdup].first
+                       : adup >= 0 ? info.alias_params[adup]->file_id
+                       : tree.entries[mdup].file_id;
+                int nt = fdup >= 0 ? field_locs[fdup].second
+                       : adup >= 0 ? info.alias_params[adup]->name_tok
+                       : tree.entries[mdup].tok;
+                diagnostic::report(diag, {a->file_id, a->name_tok,
+                    "Duplicate member '" + a->name + "' in class '" + node.name + "'.",
+                    {{nf, nt, "first declared here"}}});
+                return;
+            }
+            info.alias_params.push_back(a);
+        };
+        for (auto& a : node.field_aliases) addAlias(a.get());
+        for (parse::Node* a : info.pending_aliases) addAlias(a);
+        info.pending_aliases.clear();
+    }
     // Constructor / destructor presence (parsed as `_$ctor`/`_$dtor` members), over
     // EVERY opening: the primary's own members plus the hooks re-opens contributed
     // (info.pending_hooks). The DECLARATION `_();` and the DEFINITION `_(){}` may sit
@@ -8521,6 +8619,8 @@ void mintUsurpers(parse::Tree& tree,
         // in the same-scope re-open they imitate.
         for (auto& m : ch->children)
             if (m) u->children.push_back(std::move(m));
+        for (auto& a : ch->field_aliases)
+            if (a) u->field_aliases.push_back(std::move(a));
         ch.reset();
     }
     // EXTERNAL form: ensure the target exists before the relocation walk looks for it.
@@ -9801,6 +9901,72 @@ static void restoreResolveState(parse::Tree& tree, SavedResolveState& s) {
     tree.access_file = s.access_file;
 }
 
+// A class template's FIELD ALIAS roots, checked at the DEFINITION — used or not
+// (an unused template never instantiates, so classify's per-class validation
+// never sees it). The root must name a field or alias of some opening, or a
+// field / alias up the base chain when the base spelling is independent of the
+// template's list (a dependent base is only knowable per flavor). The rest of the
+// path is per-flavor and stays classify's.
+static void checkTemplateAliasRoots(parse::Tree& tree, diagnostic::Sink& diag) {
+    for (auto& [tid, ti] : tree.templates) {
+        if (!ti.def || ti.def->kind != parse::Kind::kClassDef) continue;
+        std::vector<parse::Node*> openings{ti.def};
+        for (parse::Node* r : ti.reopens) openings.push_back(r);
+        std::set<std::string> known;
+        bool any = false;
+        for (parse::Node* o : openings) {
+            for (auto& p : o->params) if (p) known.insert(p->name);
+            for (auto& a : o->field_aliases)
+                if (a) { known.insert(a->name); any = true; }
+        }
+        if (!any) continue;
+        // The base's fields, when the base is a concrete class.
+        bool base_unknown = false;
+        parse::Node const* base_param = nullptr;
+        for (auto& p : ti.def->params)
+            if (p && p->name == "_$base") base_param = p.get();
+        if (base_param) {
+            for (std::string const& tp : ti.def->type_params)
+                if (spellingMentions(ti.def->text, tp)) base_unknown = true;
+            if (!ti.snapshot_taken) base_unknown = true;
+        }
+        if (base_param && !base_unknown) {
+            SavedResolveState saved = saveResolveState(tree);
+            installSnapshot(tree, ti);
+            diagnostic::Sink quiet;
+            widen::TypeRef bt = base_param->return_type;
+            resolveDeclType(tree, bt, base_param->file_id, base_param->tok, quiet);
+            restoreResolveState(tree, saved);
+            bt = widen::strip(bt);
+            if (!quiet.records.empty() || widen::form(bt) != widen::Type::Form::kSlid)
+                base_unknown = true;
+            int guard = static_cast<int>(tree.classes.size()) + 2;
+            for (widen::TypeRef c = bt; !base_unknown && c != widen::kNoType
+                                        && guard-- > 0; c = parse::classBaseType(tree, c)) {
+                auto ci = tree.classes.find(c);
+                if (ci == tree.classes.end()) { base_unknown = true; break; }
+                for (std::string const& f : ci->second.field_names) known.insert(f);
+                for (parse::Node const* a : ci->second.alias_params) known.insert(a->name);
+            }
+        }
+        if (base_unknown) continue;
+        for (parse::Node* o : openings) {
+            if (fileIsImported(tree, o->file_id)) continue;   // its own TU checks it
+            for (auto& a : o->field_aliases) {
+                if (!a || a->children.empty() || !a->children[0]) continue;
+                parse::Node const* h = a->children[0].get();
+                while (h->kind != parse::Kind::kIdentExpr && !h->children.empty()
+                       && h->children[0])
+                    h = h->children[0].get();
+                if (h->kind != parse::Kind::kIdentExpr || known.count(h->name)) continue;
+                diagnostic::report(diag, {h->file_id, h->tok,
+                    "Class template '" + ti.def->name + "' has no field '"
+                    + h->name + "'.", {}});
+            }
+        }
+    }
+}
+
 // The first type argument whose class is declared in THIS TU's own source
 // (not an imported header) — kNoType if none. Such a flavor cannot aggregate:
 // its spelling means nothing to the template source's compile, so it
@@ -10050,6 +10216,12 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             // exactly as for a plain incomplete class. (Their names are kept
             // for the private-field diagnostic: source_private_fields.)
             if (declare_only && o != def) c->params.clear();
+            // The source's FIELD ALIASES are private to it like its fields (they
+            // may name them); a consumer's own aliasing re-open keeps its aliases.
+            if (declare_only && o != def && o->file_id >= 0
+                && o->file_id < static_cast<int>(tree.file_template_source.size())
+                && tree.file_template_source[o->file_id])
+                c->field_aliases.clear();
             if (declare_only) {
                 if (o == def) {
                     for (auto& m : c->children) {
@@ -10970,7 +11142,9 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // snapshot (T re-bound). A body may demand further instances — the drain
     // loops to empty — then every instance node splices into its host list
     // after its template, where the remaining passes (munge below, then
-    // constfold/classify/desugar/codegen) walk it like any class.
+    // constfold/classify/desugar/codegen) walk it like any class. (The alias
+    // check first: resolving a concrete base may mint a flavor to drain.)
+    checkTemplateAliasRoots(tree, diag);
     drainClassTemplateBodies(tree, diag);
 
     // A class template whose `...` was never closed — used or not — errors.

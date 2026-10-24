@@ -4158,6 +4158,29 @@ THE LIBRARY MOVES INTO `slids { }` — NAMESPACE PARITY + LAZY TEMPLATE METHODS 
     the Value negative), test/import Rank<T> (aggregated + inline-local + a
     negative); tmpl_class.sl's Way chain now a pointer field.
 
+FIELD ALIASES — `alias name = field.path[k]` IN A CLASS FIELD LIST (LANDED 2026-10-23)
+  Canon test/misc/alias.sl (user): a pseudonym for a field or sub-field — "offsets into
+  the object layout. it's data. not code" — for every flavor of class and template; usable
+  everywhere the original is. Flat data only: no hop through a pointer / iterator (the
+  alias may NAME a pointer or iterator field). Index a compile-time constant. Chains to any
+  depth, alias-of-alias, inherited base fields, reopens (all flavors of a template).
+  Classes and template field lists only — not param lists, return tuples, destructures.
+  - NOT A SLOT: Node::field_aliases beside params; ClassInfo alias_params /
+    pending_aliases (reopens). layout, sizeof, construction, transfer untouched.
+  - grammar parseFieldAlias (rejects ^ outright); parseParamList rejects `alias` outside a
+    class field list.
+  - resolve: duplicate-member check across fields / aliases / class-frame members (and
+    reopens); bare names in methods ride collectMethodFields; peekMemberType for the early
+    type peeks; checkTemplateAliasRoots checks an UNUSED template's alias roots at the
+    definition (guthrie 471 had compiled as a never-used new template).
+  - constfold folds index exprs. classify is the ONE expansion site (kFieldExpr miss ->
+    findFieldAlias up the base chain, a nearer field shadows -> expandFieldAlias rewrites in
+    place, _$base hops included); validateFieldAliases once per class, used or not
+    (pointer hop, constant index, bounds, cycles).
+  - template-source aliases are source-private like source fields (memberDeclVisibleAt);
+    refinements move field_aliases to the usurper.
+  OPEN: reaching a class from another scope to alias it — todo.txt FIELD ALIAS REOPENS.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

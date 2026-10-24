@@ -296,6 +296,8 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
         c->children.push_back(ch ? cloneNode(*ch) : nullptr);
     for (auto const& p : n.params)
         c->params.push_back(p ? cloneNode(*p) : nullptr);
+    for (auto const& a : n.field_aliases)
+        c->field_aliases.push_back(a ? cloneNode(*a) : nullptr);
     return c;
 }
 

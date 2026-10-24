@@ -19,3 +19,22 @@ ip truthy
 np falsy
 !np= true
 bump= 101
+cmp= 10 20 30
+g= 21 sum= 61
+bright= 255 22 31
+green= 22
+aug= 256 32
+addr= 99
+type= int int[3]
+rgb sum= 153
+sizeof(Color)= 12
+v3= 1 20 3
+tmpl= 6 2.5
+chain= 7
+ptr= 4 iter= 8
+pixel= 9 9
+kernel= 6 12
+square= 3 15
+part= 3 7
+animal= 4 4
+local= 1 2

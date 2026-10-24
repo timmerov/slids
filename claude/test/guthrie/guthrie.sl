@@ -465,6 +465,16 @@ Bloc(
 alias BlocMap = Map<Rankings, Bloc>;
 
 /*
+alias the standard library Map iterator fields from
+generic key_ value_ for our use.
+*/
+MapNode<Key=Rankings, Value=Bloc>(
+    alias rankings_ = key_,
+    alias bloc_ = value_
+) {
+}
+
+/*
 this is a base class for specific electoral methods.
 in c++, the technique was called:
 Template Specialization of Member Function Outside the Class
@@ -571,6 +581,19 @@ GuthrieVoting(
     _() {} ~() {}
 
     void run() {
+
+        BlocMap bm;
+        Vector<int> vec;
+        vec.resize(3);
+        vec[0] = 1;
+        vec[1] = 2;
+        vec[2] = 3;
+        Bloc bloc;
+        bm.insert(vec, bloc);
+        for (it : bm) {
+            println(String + ##type(it) + " " + it^.rankings_[0]);
+        }
+        return;
 
         /* suppress unreachable error. */
         void;
@@ -969,13 +992,13 @@ GuthrieVoting(
 
         /* use the voter blocks. */
         for (it : bloc_map_) {
-            rankings = ^it^.key_;
-            bloc = ^it^.value_;
-            n = rankings^.size();
+        /*
+            n = it^.rankings_.size();
             for (i : 0..n) {
-                which = rankings^[i];
-                candidates_[which].utility_ += bloc^.utilities_[i];
+                which = it^.rankings_[i];
+                candidates_[which].utility_ += it^.bloc.utilities_[i];
             }
+        */
         }
 
         /* this might be the primary with extra candidates. */
