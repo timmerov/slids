@@ -1538,9 +1538,23 @@ FIELD ALIASES (landed 2026-10-23; spans grammar / resolve / constfold / classify
   - VISIBILITY: an alias declared in a template SOURCE is source-private like its fields
     (memberDeclVisibleAt); a declare_only flavor drops source re-open clones' aliases and
     keeps a consumer's. Refinements move field_aliases to the usurper.
-  - OPEN (todo.txt FIELD ALIAS REOPENS): reaching a class from another scope to alias it
-    (`Ns:X<.>(alias ..)` is inheritance from Ns today), consumer alias-only reopens of a
-    header template, `Key=Type` constrained reopens.
+  - CONSUMER ALIAS RE-OPENS (2026-10-24). A consumer may re-open a HEADER class or template
+    with field aliases ONLY (aliasesOnlyOpening: no field, no member of any kind) — aliases
+    expand in its own classify, so no flavor symbol changes; anything else is still "defined
+    by its module's source file". Plain re-opens and constrained ones (filters, readme.txt
+    CLASS-TEMPLATE ARMS) alike — guthrie 471's `MapNode<Key=Rankings, Value=Bloc>(alias ..)`
+    under `alias slids;`. COMPLETENESS IS THE HEADER'S: such an opening carries a trailing
+    `...` exactly when the header declares the class incomplete, and changes nothing — a TU
+    that side-loads the template source (`import+`) has seen the completion, one that does
+    not has not, and the rule must not depend on which. Without the `...`: "This opening
+    completes 'X', which its module defines; add a trailing '...' to keep it open."
+    (reportForeignCompletion; for a plain opaque class it replaces the closer-must-define-
+    hooks message when the closing opening adds no fields). Each flavor's clone of such an
+    opening is Node::completeness_neutral: the per-flavor merge takes its aliases and never
+    touches ClassInfo::is_open. Canon test/import tmpl_test.sl (Spec, Part, Hybrid).
+  - OPEN (todo.txt FIELD ALIAS REOPENS): the explicit qualified spellings with a non-empty
+    list (`Ns:X<.>(alias ..)` is still inheritance from Ns), consumer METHODS on a header
+    template (deferred).
 
 
 REFINEMENTS (landed; spans resolve / classify; non-virtual)

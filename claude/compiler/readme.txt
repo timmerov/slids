@@ -1157,7 +1157,8 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   become a silent wildcard; size binders are required by the pattern's
   spelling and may go unused. Free functions only: a method template's `T=`
   is rejected (out-of-line at registration; the inline spelling never parses
-  as a member).
+  as a member). CLASS templates take constraints too — on EVERY parameter,
+  binders excluded: CLASS-TEMPLATE ARMS below.
   TEMPLATE OPERATORS (canon operator_tmpl.sl) are template methods named
   `op<sym>` — the machinery rides whole. Grammar: the template-list parses
   after the MAX-MUNCHED symbol (the `<`-family needs whitespace — `op< <T>`;
@@ -1338,6 +1339,58 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   the declaration whether or not anyone instantiates. A NEVER-COMPLETED
   incomplete template is an error (at a use, or the end-of-resolve sweep;
   open_reported dedupes).
+  CLASS-TEMPLATE ARMS + CONSTRAINED RE-OPENS (2026-10-24; canon special.sl,
+  reopen_tmpl.sl, test/import Spec). A class template's list takes the
+  function-arm constraint forms on ANY parameter (`MapNode<Key=Rankings,
+  Value=Bloc>`): exact type, set name, inline set, complement, `()`;
+  binders (`A[N]`, `(N)`) are "not supported yet". Grammar:
+  parseClassTemplateList fills Node::type_param_specs (one slot per name,
+  null = unconstrained); the class-def lookaheads pass skipTypeArgGroup's
+  `constraints` flag so `=`, `|`, `!` are list vocabulary there only.
+  ARMS: a constrained opening WITH FIELDS, or a field-bearing one no
+  unconstrained arm of its ARITY claims, is a further PRIMARY — its own
+  template entry + TemplateInfo, registered under an internal name
+  (`Box#1`, never a lookup hit) and listed on the FAMILY HEAD (the first
+  registered: TemplateInfo::arms; every arm's `family` names the head).
+  So specializations, a catch-all beside them, and ARITY overloads
+  (`Box<T>` beside `Box<T, U>`) all coexist. Names spell from the def
+  (parse::templateName), and the "bare name means THE INSTANCE" redirects
+  compare families (templateFamily). SELECTION is once, at the top of
+  instantiateClassTemplate (every use funnels there): among the arms of the
+  use's arity, the ONE constrained arm admitting the arguments
+  (resolveClassSpecs resolves the targets at first selection, under the
+  template's file + owner chain; specAdmits is the membership test shared
+  with function arms); none -> the unconstrained arm, the CATCH-ALL; two ->
+  "Ambiguous specialization" (exact type has no priority over a set
+  containing it; a catch-all never rescues it); no arm -> "No
+  specialization". A lone constrained template still admits. A set an arm
+  names resolves ON DEMAND (ensureTypeSetResolved, via Tree::typeset_decls)
+  — a field type selects an arm in the TYPES phase, before the file-scope
+  alias-validate pass resolves set terms; resolveTypeSetTerms is idempotent.
+  The two template-argument count checks report the family's arities ("1 or
+  2 expected"). Duplicate arms compare set-name / type-spelling constraints
+  (classSpecKey); inline-set overlaps meet the ambiguity at selection.
+  RE-OPENS, rule (b) (user): a field-less opening with no constraints joins
+  the catch-all of its arity; one spelling an arm's constraints EXACTLY
+  joins that arm as an ordinary re-open (an incomplete specialization
+  closes this way, fields and all); any other constrained one FILTERS
+  (addClassTemplateFilter -> TemplateInfo::filter_reopens on the head): it
+  joins every flavor, of any arm of its arity, whose arguments it admits —
+  cloned after the arm's own openings and re-spelled positionally to the
+  arm's names (admittedFilters). A filter adds aliases, methods, operators,
+  and may implement a declared virtual; never fields, never a `...`; a
+  duplicate member is caught as the flavor builds; its alias roots must
+  name a field of some arm of its arity (checkTemplateAliasRoots). A
+  constrained field-less opening with no template before it is an error —
+  the shape an empty specialization would take (todo). cloneNode now copies
+  `spec` and type_param_specs (a nested class template re-registers per
+  flavor from its clone, arms included).
+  ACROSS TUs: a header declares the arms and filters (interface — a
+  declare_only flavor keeps every HEADER opening's declarations, sheds only
+  the template source's bodies); the template source defines the bodies by
+  re-opening (exact join / filter) and may NOT add an arm ("must be declared
+  in its header"); a consumer may add an aliases-only filter or re-open
+  (readme-classes.txt FIELD ALIASES, CONSUMER ALIAS RE-OPENS).
   OUT-OF-LINE MEMBERS OF A TEMPLATE (2026-07-26 — the todo item, landed):
   the owner SPELLS its template list — the definition's binder surface
   ("how do we know what T is") — for methods, method templates, hooks, and

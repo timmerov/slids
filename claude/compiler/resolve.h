@@ -4,7 +4,7 @@
 
 #include "widen.h"
 
-namespace parse { struct Tree; struct Node; struct TypeSet; }
+namespace parse { struct Tree; struct Node; struct TypeSet; struct SpecConstraint; }
 namespace diagnostic { struct Sink; }
 
 namespace resolve {
@@ -46,6 +46,15 @@ int retargetTemplateByArity(parse::Tree const& tree, int tid,
 bool typeInSet(parse::Tree const& tree, widen::TypeRef t, int set_id);
 bool typeInSetValue(parse::Tree const& tree, widen::TypeRef t,
                     parse::TypeSet const& ts);
+
+// Does `T` satisfy one template-list CONSTRAINT `sp`, its target resolved into
+// `set_id` / `type` / `inline_set`? A set name tests membership (or equality with a
+// single concrete type), an array pattern matches DEPTH-EXACT, a tuple pattern any
+// unnamed tuple. Shared by classify's function-arm selection and resolve's
+// class-arm selection.
+bool specAdmits(parse::Tree const& tree, parse::SpecConstraint const& sp, int set_id,
+                widen::TypeRef type, parse::TypeSet const& inline_set,
+                widen::TypeRef T);
 
 // CLASS-template instances minted AFTER resolve (a use inside a function
 // template's body — instantiated on demand from classify) arrive fully resolved

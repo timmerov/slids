@@ -465,16 +465,17 @@ Bloc(
 alias BlocMap = Map<Rankings, Bloc>;
 
 /*
-alias the standard library Map iterator fields from
-generic key_ value_ for our use.
+fancy feature unique to slids:
+MapNode has generic fields key_ and value_.
+alias them for the MapNode associated with BlocMap
+to rankings_ and bloc_ to make the code that iterates
+over a BlocMap more readable.
 */
-/*
 MapNode<Key=Rankings, Value=Bloc>(
     alias rankings_ = key_,
     alias bloc_ = value_
 ) {
 }
-*/
 
 /*
 this is a base class for specific electoral methods.
@@ -583,20 +584,7 @@ GuthrieVoting(
     _() {} ~() {}
 
     void run() {
-/*
-        BlocMap bm;
-        Vector<int> vec;
-        vec.resize(3);
-        vec[0] = 1;
-        vec[1] = 2;
-        vec[2] = 3;
-        Bloc bloc;
-        bm.insert(vec, bloc);
-        for (it : bm) {
-            println(String + ##type(it) + " " + it^.rankings_[0]);
-        }
-        return;
-*/
+
         /* suppress unreachable error. */
         void;
 
@@ -994,13 +982,12 @@ GuthrieVoting(
 
         /* use the voter blocks. */
         for (it : bloc_map_) {
-        /*
+            /* use pseudonyms: rankings_ and bloc_ instead of key_ and value_. */
             n = it^.rankings_.size();
             for (i : 0..n) {
                 which = it^.rankings_[i];
-                candidates_[which].utility_ += it^.bloc.utilities_[i];
+                candidates_[which].utility_ += it^.bloc_.utilities_[i];
             }
-        */
         }
 
         /* this might be the primary with extra candidates. */

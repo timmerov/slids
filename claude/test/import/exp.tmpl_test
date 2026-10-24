@@ -60,3 +60,6 @@ a=3 b=37
 hyh.t = 4
 a=8 b=37
 hybpriv = 102
+spec = 1 12 0 8 8 0
+spec aliases = 3 4 true
+part alias = 6 hybrid alias = 1

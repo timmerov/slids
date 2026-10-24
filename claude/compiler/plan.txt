@@ -4228,6 +4228,31 @@ A:B:C QUALIFIED RE-OPENS + `alias Ns;` RE-OPENS (LANDED 2026-10-24)
     method_tmpl, nested_tmpl, operator_tmpl, reopen_tmpl, special; test/misc/alias ->
     alias_msc; test/class/reopen -> reopen_cls (user). References updated in tests and docs.
 
+CLASS-TEMPLATE CONSTRAINTS: ARMS, FILTERS, CONSUMER ALIAS RE-OPENS (LANDED 2026-10-24)
+  User: "i want all features of template functions available for template classes."
+  Four phases, each with its tests; detail in readme.txt CLASS-TEMPLATE ARMS and
+  readme-classes.txt FIELD ALIASES (CONSUMER ALIAS RE-OPENS).
+  - 1 SYNTAX: a class list takes a constraint on EVERY parameter (a function arm takes one,
+    alone — the asymmetry is in todo.txt); binders rejected (deferred, user).
+  - 2 ARMS: specialization primaries + catch-all + arity overloads, one family per name
+    (internal arm names, the head lists them); selection once in instantiateClassTemplate;
+    type sets an arm names resolve on demand. Canon special.sl (Cbox family, Cpair, Cns,
+    Cder, a body-scope family; ambiguity / no-specialization / duplicate / arity / no
+    catch-all negatives).
+  - 3 CONSTRAINED RE-OPENS, rule (b): plain -> the catch-all of its arity; exact -> that arm
+    (closes an incomplete specialization); else a FILTER over admitted flavors of any arm.
+    cloneNode copies constraints. Canon reopen_tmpl.sl (Cbox exact/filter/renamed/operator,
+    guthrie's Gnode shape, Vbox virtual, qualified filter; six negatives).
+  - 4 ACROSS TUs: a consumer re-opens a header class/template with field ALIASES only (plain
+    or filter); completeness follows the HEADER (`...` iff the header declares it incomplete
+    — "This opening completes 'X' ..." otherwise; Node::completeness_neutral in the flavor
+    merge), since `import+` vs `import` changes what the TU has seen; a header declares arms
+    and filters, its template source defines them and may not add an arm. Canon test/import
+    (Spec family in tmpl_lib.slh/.sl; tmpl_test.sl uses + Spec/Part/Hybrid alias re-opens +
+    four negatives). guthrie 471 compiles (its use block at 594 is commented out).
+  - Also: diagnostics name templates by their def (parse::templateName); constraintAdmits
+    shares resolve::specAdmits; resolveOneSpec serves function and class constraints.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

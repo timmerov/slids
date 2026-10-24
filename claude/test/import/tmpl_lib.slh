@@ -213,6 +213,20 @@ Hybrid(int a, ...) {
     void print();
 }
 
+/* CLASS-TEMPLATE ARMS across the seam: the header declares the whole family — the
+   catch-all, a specialization, and a FILTER over `<int8|bool>` — as interface; the
+   template source defines the bodies by re-opening them. */
+Spec<T>(T a_ = 0) {
+    int kind();
+}
+Spec<T=int>(int z_ = 0, int w_ = 9) {
+    int kind();
+    int both();
+}
+Spec<T=<int8|bool>>() {
+    int pick();
+}
+
 /* the library-side witness: the source's own TU sees BOTH of Hybrid's fields, so its
    site fills the whole list and calls the hook-only entry — the half of the split a
    consumer cannot observe. */

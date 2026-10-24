@@ -159,6 +159,29 @@ example:
 currently, explicit class types must match exactly.
 a derived type does not match a specialization for its base.
 this decision may be revisited in the future.
+
+template classes can also be specialized with the same restrictions that
+apply to template functions.
+
+    Template<T=Numbers>(T x) {
+        T squared() {
+            return x*x;
+        }
+    }
+    Template<int> ti(7);
+    println(ti.squared());
+
+    Template<int^> tp;  // compile error.
+
+when template classes may be reopened, they may be reopened with specialization.
+
+    Template<T=Integers>(T x) {
+        T cubed() {
+            return x*x*x;
+        }
+    }
+    Template<int16> ti16(3);
+    println(ti16.cubed());
 */
 
 /*
@@ -360,6 +383,43 @@ Thing(int a) {
     }
 }
 
+/* CLASS TEMPLATE SPECIALIZATION — the function-arm forms, for classes. Each arm is
+   its own primary with its own fields; a use selects the one arm whose constraints
+   admit its arguments, else the unconstrained catch-all. */
+alias CFloats = <float32|float64>;
+Cbox<T>(T a_) { int kind() { return 0; } }
+Cbox<T=int>(int z_, int w_ = 9) {
+    int kind() { return 1; }
+    int both() { return z_ + w_; }
+}
+Cbox<T=CFloats>(T f_) { int kind() { return 2; } }
+Cbox<T=<bool|char>>(T b_) { int kind() { return 3; } }
+Cbox<T=!<int|CFloats|bool|char|int8|()>>(T x_) { int kind() { return 4; } }
+Cbox<T=()>(T t_) { int kind() { return 5; } }
+/* an ARITY overload beside the arms. */
+Cbox<T, U>(T a_, U b_) { int kind() { return 6; } }
+/* the catch-all's re-open reaches only the flavors the catch-all builds. */
+Cbox<T>() { T twice() { return a_ + a_; } }
+
+/* a field whose type selects an arm (laid out before any use in main). */
+Cholder(Cbox<int> hb) { }
+
+/* a two-parameter family: any parameter may carry a constraint. */
+Cpair<K, V>(K k_, V v_) { int kind() { return 0; } }
+Cpair<K=int, V>(int k_, V v_) { int kind() { return 1; } }
+Cpair<K=bool, V=bool>(bool k_, bool v_) { int kind() { return 2; } }
+
+/* a NAMESPACE family. */
+Cns {
+    Nb<T>(T a_) { int kind() { return 10; } }
+    Nb<T=int>(int z_) { int kind() { return 11; } }
+}
+
+/* DERIVED arms: each arm spells its own base. */
+Cbase(int b_) { }
+Cbase:Cder<T>(T d_) { int kind() { return 40; } }
+Cbase:Cder<T=int>(int d_) { int kind() { return 41 + b_; } }
+
 int32 main() {
     int iarr[2];
     iarr[0] = 0;
@@ -520,6 +580,35 @@ int32 main() {
     println(String + "bmx1    = " + bmx(x));
     println(String + "bmx2    = " + bmx(f25));
 
+    /* class template specialization. */
+    Cbox<int8> cb0 = (5);
+    Cbox<int> cb1 = (3);
+    Cbox<float64> cb2 = (1.5);
+    Cbox<bool> cb3 = (true);
+    Cbox<int16> cb4 = (7);
+    Cbox<(int, int)> cb5;
+    Cbox<int, int> cb6 = (1, 2);
+    println(String + "cbox    = " + cb0.kind() + cb1.kind() + cb2.kind() + cb3.kind()
+        + cb4.kind() + cb5.kind() + cb6.kind());                      // 0123456
+    println(String + "cboth   = " + cb1.both());                       // 12
+    println(String + "ctwice  = " + cb0.twice());                      // 10
+    println(String + "ctype   = " + ##type(cb1));                      // Cbox<int>
+    Cholder chd;
+    println(String + "chold   = " + chd.hb.both());                    // 9
+    Cpair<int8, int8> cp0 = (1, 2);
+    Cpair<int, int8> cp1 = (1, 2);
+    Cpair<bool, bool> cp2 = (true, false);
+    println(String + "cpair   = " + cp0.kind() + cp1.kind() + cp2.kind());   // 012
+    println(String + "cns     = " + Cns:Nb<int8>(1).kind() + " " + Cns:Nb<int>(1).kind());
+    Cder<int8> cd0 = (1, 2);
+    Cder<int> cd1 = (1, 2);
+    println(String + "cder    = " + cd0.kind() + " " + cd1.kind());     // 40 42
+
+    /* a BODY-scope family. */
+    Lb<T>(T a_) { int kind() { return 30; } }
+    Lb<T=int>(int z_) { int kind() { return 31; } }
+    println(String + "lb      = " + Lb<int8>(1).kind() + " " + Lb<int>(1).kind());
+
     return 0;
 }
 
@@ -633,3 +722,43 @@ int32 main() {
 /* a type set binds no type parameters. */
 //-EXPECT-ERROR: cannot have a template list
 //alias BadSet<Q> = <int|bool>;
+
+/* CLASS templates: two arms admitting the arguments are ambiguous — an exact-type
+   arm has no priority over a set containing it... */
+//-EXPECT-ERROR: Ambiguous specialization: 'Camb<int>' is admitted by more than one arm
+//Camb<T=int>(int a_) { }
+//Camb<T=<int|bool>>(T b_) { }
+//int32 use_camb() { Camb<int> c = (1); return c.a_; }
+
+/* ...and the catch-all never rescues the ambiguity. */
+//-EXPECT-ERROR: Ambiguous specialization: 'Camb2<int>' is admitted by more than one arm
+//Camb2<T>(T x_) { }
+//Camb2<T=int>(int a_) { }
+//Camb2<T=<int|bool>>(T b_) { }
+//int32 use_camb2() { Camb2<int> c = (1); return c.a_; }
+
+/* no arm admits and there is no catch-all. */
+//-EXPECT-ERROR: No specialization of class template 'Cnos' admits 'Cnos<bool>'.
+//Cnos<T=int>(int z_) { }
+//int32 use_cnos() { Cnos<bool> c = (true); return 0; }
+
+/* two arms with the same constraint. */
+//-EXPECT-ERROR: Duplicate specialization of class template 'Cdup'.
+//Cdup<T>(T a_) { }
+//Cdup<T=int>(int z_) { }
+//Cdup<T=int>(int y_) { }
+
+/* an argument count no arm takes. */
+//-EXPECT-ERROR: Wrong number of template arguments for 'Carity': 1 or 2 expected, got 3.
+//Carity<T>(T a_) { }
+//Carity<T, U>(T a_, U b_) { }
+//int32 use_carity() { Carity<int, int, int> c; return 0; }
+
+/* a plain re-open joins the catch-all of its arity — none here. */
+//-EXPECT-ERROR: Class template 'Cnoca' has no unconstrained arm taking 1 parameter(s) to re-open.
+//Cnoca<T=int>(int z_) { }
+//Cnoca<T>() { }
+
+/* a class template's constraint may not BIND names (deferred). */
+//-EXPECT-ERROR: A class template's constraint cannot bind names (not supported yet).
+//Carr<T=A[N]>(T a_) { }

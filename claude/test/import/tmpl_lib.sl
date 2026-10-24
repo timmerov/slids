@@ -200,10 +200,24 @@ int viaOwn() {
     return t.sum();
 }
 
+/* the arms' bodies: a plain re-open joins the catch-all, `T=int` joins that arm
+   exactly, and the `<int8|bool>` filter defines the header filter's member. */
+Spec<T>() { int kind() { return 0; } }
+Spec<T=int>() {
+    int kind() { return 1; }
+    int both() { return z_ + w_; }
+}
+Spec<T=<int8|bool>>() { int pick() { return 8; } }
+
 /* a re-open of a header template may not add fields (the header's layout is
    the layout everywhere). */
 //-EXPECT-ERROR: cannot add fields
 //Vector<T>(T zz_ = 9) { }
+
+/* nor may the template source add an ARM the header does not declare — every TU
+   must see one family. */
+//-EXPECT-ERROR: An arm of class template 'Spec' must be declared in its header.
+//Spec<T=float32>(float32 f_) { }
 
 /* public and private classes */
 Hybrid(int b = 37) {

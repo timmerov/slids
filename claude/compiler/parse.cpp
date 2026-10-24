@@ -171,10 +171,16 @@ int classEntryForFrame(Tree const& t, int ns_frame) {
     return -1;
 }
 
+std::string templateName(Tree const& t, int tmpl_entry) {
+    auto it = t.templates.find(tmpl_entry);
+    if (it != t.templates.end() && it->second.def) return it->second.def->name;
+    return (tmpl_entry >= 0 && tmpl_entry < (int)t.entries.size())
+        ? t.entries[tmpl_entry].name : std::string("?");
+}
+
 std::string instanceSpelling(Tree const& t, int tmpl_entry,
                              std::vector<widen::TypeRef> const& args) {
-    std::string s = (tmpl_entry >= 0 && tmpl_entry < (int)t.entries.size())
-        ? t.entries[tmpl_entry].name : std::string("?");
+    std::string s = templateName(t, tmpl_entry);
     s += "<";
     for (std::size_t i = 0; i < args.size(); ++i) {
         if (i) s += ", ";
@@ -223,6 +229,22 @@ std::unique_ptr<Node> makeReceiverParam(widen::TypeRef type, int file_id, int to
 // label, an empty construction slot). Serves template instantiation (resolve)
 // and the param-default fill (classify clones the validated default node at
 // each call site). MUST enumerate every Node field — keep in sync with Node.
+// A template-list constraint, deep (its inline set's terms included).
+static std::unique_ptr<SpecConstraint> cloneSpec(SpecConstraint const* s) {
+    if (!s) return nullptr;
+    auto c = std::make_unique<SpecConstraint>();
+    c->kind = s->kind;
+    c->set_name = s->set_name;
+    c->type_spelling = s->type_spelling;
+    c->name_tok = s->name_tok;
+    c->elem_binder = s->elem_binder;
+    c->elem_binder_tok = s->elem_binder_tok;
+    c->dim_binders = s->dim_binders;
+    c->arity_binder = s->arity_binder;
+    if (s->inline_set) c->inline_set = std::make_unique<TypeSetDecl>(*s->inline_set);
+    return c;
+}
+
 std::unique_ptr<Node> cloneNode(Node const& n) {
     auto c = std::make_unique<Node>();
     c->kind = n.kind;
@@ -282,6 +304,10 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
     c->global_qualified = n.global_qualified;
     c->type_params = n.type_params;
     c->type_param_toks = n.type_param_toks;
+    // The constraints ride the clone: a class template nested in a class template
+    // re-registers per flavor from its clone, arms and all.
+    c->spec = cloneSpec(n.spec.get());
+    for (auto const& sp : n.type_param_specs) c->type_param_specs.push_back(cloneSpec(sp.get()));
     c->tmpl_args = n.tmpl_args;
     c->tmpl_arg_toks = n.tmpl_arg_toks;
     c->param_types = n.param_types;

@@ -704,8 +704,11 @@ struct Parser {
     // closers are `>` (one level) or the max-munched `>>` (two — the second half
     // may be the group's own closer). A `>>` with no nested group open never
     // reads as a type, so `a < b >> c` stays an expression. Consumes nothing.
-    // The decl-recognition twin of looksLikeTemplateCallArgs.
-    int skipTypeArgGroup(int o) const {
+    // The decl-recognition twin of looksLikeTemplateCallArgs. `constraints`: a CLASS
+    // template's own list may carry `T=` constraints (`Box<T=int>`, `<K=<int|float>>`,
+    // `<T=!<...>>`), so `=`, `|`, and `!` are list vocabulary too — only the class-def
+    // lookaheads pass it, no expression position does.
+    int skipTypeArgGroup(int o, bool constraints = false) const {
         if (peekKind(o) != token::Kind::kLt) return o;
         int q = o + 1;
         int depth = 0;      // ( ) and [ ] nesting inside an argument
@@ -728,7 +731,10 @@ struct Parser {
                        || k == token::Kind::kColon || k == token::Kind::kColonColon
                        || k == token::Kind::kBitXor || k == token::Kind::kXorXor
                        || k == token::Kind::kConst || k == token::Kind::kComma
-                       || (k == token::Kind::kIntLiteral && depth > 0)) {
+                       || (k == token::Kind::kIntLiteral && depth > 0)
+                       || (constraints && (k == token::Kind::kEquals
+                                           || k == token::Kind::kBitOr
+                                           || k == token::Kind::kNot))) {
                 // type vocabulary — keep scanning
             } else {
                 return o;
@@ -4027,7 +4033,7 @@ struct Parser {
         // A `<...>` group after the leading name is either this class's own
         // TEMPLATE-LIST (`Vec<T>(fields){}`) or the type-args of an instance BASE
         // (`Vec<int> : Der(fields){}`) — skip it; the tail shape decides.
-        int start = skipTypeArgGroup(1);
+        int start = skipTypeArgGroup(1, /*constraints=*/true);
         // A derived class: `Base : Derived(field-list) { body }` — the field list
         // starts after `Base : Derived`. A non-derived class starts after the name.
         // The derived-name slot is NOT a hook: `C:_() { }` is a qualified CTOR, not an
@@ -4037,7 +4043,7 @@ struct Parser {
         if (peekKind(start) == token::Kind::kColon
             && peekKind(start + 1) == token::Kind::kIdentifier
             && !isHookHead(start + 1)) {
-            start = skipTypeArgGroup(start + 2);
+            start = skipTypeArgGroup(start + 2, /*constraints=*/true);
         }
         if (peekKind(start) != token::Kind::kLParen) return false;
         int depth = 0;
@@ -4079,7 +4085,7 @@ struct Parser {
         // A class TEMPLATE re-open spells its list on the final segment
         // (`Ns:Box<T>() { }`); without the skip the shape fell to looksLikeClassDef
         // as a NEW template deriving from Ns.
-        o = skipTypeArgGroup(o);
+        o = skipTypeArgGroup(o, /*constraints=*/true);
         return peekKind(o) == token::Kind::kLParen                       // re-open
             && peekKind(o + 1) == token::Kind::kRParen
             && peekKind(o + 2) == token::Kind::kLBrace;
@@ -4664,8 +4670,13 @@ struct Parser {
     // node->children; resolve binds bare field names to self.
     // A class's TEMPLATE-LIST — `Vec<T, U>(fields)`. The same shape (and the same
     // messages) as a function template's list.
+    // A class template's list: names, each optionally CONSTRAINED (`K=Rankings`,
+    // `T=<int|float>`, `T=!<...>`, `T=()`) — every parameter may carry one, unlike a
+    // function arm's single constrained parameter. A constraint may not BIND names
+    // (`T=A[N]`, `T=(N)`) yet. `specs` gets one slot per name, null = unconstrained.
     bool parseClassTemplateList(std::vector<std::string>& type_params,
-                                std::vector<int>& type_param_toks) {
+                                std::vector<int>& type_param_toks,
+                                std::vector<std::unique_ptr<parse::SpecConstraint>>& specs) {
         advance();   // <
         while (true) {
             if (peek().kind != token::Kind::kIdentifier) {
@@ -4681,9 +4692,23 @@ struct Parser {
             type_params.push_back(peek().text);
             type_param_toks.push_back(pos);
             advance();   // the name
+            specs.emplace_back();
+            if (peek().kind == token::Kind::kEquals) {
+                advance();   // =
+                int ctok = pos;
+                if (!parseSpecConstraint(type_params.back(), specs.back())) return false;
+                parse::SpecConstraint const& c = *specs.back();
+                if (!c.elem_binder.empty() || !c.dim_binders.empty()
+                    || !c.arity_binder.empty()) {
+                    errorAt(ctok, "A class template's constraint cannot bind names "
+                            "(not supported yet).");
+                    return false;
+                }
+            }
             if (peek().kind == token::Kind::kComma) { advance(); continue; }
             break;
         }
+        if (peek().kind == token::Kind::kRShift) splitRShift();   // `<T=<int>>`
         return expect(token::Kind::kGt, ">");
     }
 
@@ -4700,6 +4725,7 @@ struct Parser {
         // through widen::intern — the same discipline as a use site.
         std::vector<std::string> type_params;
         std::vector<int> type_param_toks;
+        std::vector<std::unique_ptr<parse::SpecConstraint>> type_param_specs;
         if (peek().kind == token::Kind::kLt) {
             int after = skipTypeArgGroup(0);
             if (after > 0 && peekKind(after) == token::Kind::kColon) {
@@ -4718,7 +4744,7 @@ struct Parser {
                 }
                 if (!expect(token::Kind::kGt, ">")) return nullptr;
                 name += ">";
-            } else if (!parseClassTemplateList(type_params, type_param_toks)) {
+            } else if (!parseClassTemplateList(type_params, type_param_toks, type_param_specs)) {
                 return nullptr;
             }
         }
@@ -4738,7 +4764,7 @@ struct Parser {
             advance();   // derived class name
             // The derived head's own template list (`Base : TDer<T>(...)`).
             if (peek().kind == token::Kind::kLt
-                && !parseClassTemplateList(type_params, type_param_toks)) {
+                && !parseClassTemplateList(type_params, type_param_toks, type_param_specs)) {
                 return nullptr;
             }
         }
@@ -4750,6 +4776,7 @@ struct Parser {
         node->text = base_name;          // "" if not derived
         node->type_params = std::move(type_params);
         node->type_param_toks = std::move(type_param_toks);
+        node->type_param_specs = std::move(type_param_specs);
 
         if (!parseParamList(node.get(), /*allow_mutable=*/false,
                             /*allow_incomplete=*/true,

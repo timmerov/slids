@@ -16,10 +16,10 @@ puts it in scope.
 
 //import algorithm;
 //import dump;
-//import map;
+import map;
 import string;
 alias slids;
-import vector;
+//import vector;
 
 int32 main() {
 /*

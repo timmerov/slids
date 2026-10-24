@@ -179,37 +179,36 @@ UNBLOCKED FEATURES
       root it at the receiver).
 
   * FIELD ALIAS REOPENS — reaching a class from other scopes, to add aliases (user, 2026-10-23).
-    canon: test/misc/alias_msc.sl; real use: test/guthrie guthrie.sl 471 + 594 (`it^.rankings_[0]`
-    still fails: no spelling reaches slids:MapNode from guthrie).
-    - the six forms with a NON-EMPTY (alias) list must reopen slids:MapNode:
+    canon: test/misc/alias_msc.sl; real use: test/guthrie guthrie.sl 471 + 594 (the use
+    block at 594 is commented out — unexercised).
+    - the explicit forms with a NON-EMPTY (alias) list must reopen slids:MapNode:
         slids:MapNode<.>(..)            slids:TreeNode:MapNode<.>(..)
         slids { MapNode<.>(..) }        slids { TreeNode:MapNode<.>(..) }
         alias slids; MapNode<.>(..)     alias slids; TreeNode:MapNode<.>(..)
-      the EMPTY `()` spellings land already (member/base walk, `<..>` head, `alias Ns;` —
-      readme-classes.txt RE-OPENING). open: `Ns:X(non-empty)` is still INHERITANCE from Ns,
-      silent; a 3+ segment head with a non-empty list is "Expected function name"; and
-      qualifyAliasedReopens only takes field-less openings, so an alias-list opening needs
-      it to accept an aliases-only list.
-    - an aliases-only opening of an INCOMPLETE class closes it (no trailing `...`) — for a
-      header class that makes the consumer a second closer: compile error, then link
-      errors. the author keeps it open: `MapNode<K, V>(alias rankings = key, ...)`.
-    - a consumer may reopen a HEADER template with ALIASES ONLY (lift "A template declared
-      in a header is defined by its module's source file" for that case); methods/hooks are
-      errors — the --instantiate pre-link stage can't see them. (methods: some cases could
-      be allowed — deferred, user 2026-10-24.)
+      open: `Ns:X(non-empty)` is still INHERITANCE from Ns, silent; a 3+ segment head with
+      a non-empty list is "Expected function name"; `Ns { X<.>(alias ..) }` is untested.
+    - a consumer re-open of a header template may add METHODS in some cases (user,
+      2026-10-24: deferred); today aliases only.
     - checkTemplateAliasRoots skips a base that doesn't resolve (a namespace base); make it
       an error.
-    - CONSTRAINED reopens: `MapNode<Key=Rankings, Value=Bloc>(alias ..)` applies only to the
-      admitted flavors (the function-template `T=` / type-set constraints, constraintAdmits).
-      reopen-only (on a primary it is specialization). aliases + methods yes, fields never.
-      today a reopen's list is placeholder names, so `MapNode<Rankings, Bloc>(..)` aliases
-      EVERY flavor.
     - lookup precedence: under `alias Ns;` a FIELD-bearing file-scope `X(..)` (not re-open-
       shaped) declares a separate class that the bare name never reaches — the alias import
       beats file scope in resolveNameDetail, silently (`::X` reaches it). undecided.
-    - risk (landed behavior): a field-less file-scope `X() { }` named like an alias-opened
-      ns class IS a reopen now — for an incomplete header class (String) it closes it, and
-      the closer rule reports the missing ctor/dtor.
+    - risk: a field-less file-scope `X() { }` named like an alias-opened ns class IS a
+      reopen — for an incomplete header class (String) it is "This opening completes
+      'String' ...; add a trailing '...'".
+
+
+  * CLASS TEMPLATE CONSTRAINTS — every function-template feature for class templates
+    (user, 2026-10-24). Open:
+    - a specialization arm with NO fields reads as a constrained re-open (the shapes are
+      the same: it joins/filters, or errors when no template precedes it); decide how to
+      spell an empty specialization.
+    - DEFERRED (user): pattern BINDERS in a class list (`T=A[N]`, `T=(N)` binding A / N /
+      the arity for the body) — rejected "cannot bind names (not supported yet)".
+    - asymmetry: a FUNCTION arm still takes ONE constrained parameter, alone in its list
+      ("A specialization constraint applies to a single-parameter template list"); a class
+      list takes one per parameter.
 
 
 BLOCKED FEATURES

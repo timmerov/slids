@@ -61,6 +61,21 @@ void synthesizeClassTransferOps(parse::Tree& tree, parse::Node& cnode,
 void synthesizeOpaqueCtor(parse::Tree& tree, parse::Node& cnode,
                           diagnostic::Sink& diag);
 
+// The ARM FAMILY a class-template entry belongs to: the head's entry id (see
+// TemplateInfo::family) — the entry itself for a lone template. A bare template
+// name resolves to the head, while an arm's own instantiation pushes the ARM on
+// tmpl_self_stack, so the "bare name means THE INSTANCE" redirects compare families.
+int templateFamily(parse::Tree const& tree, int tid) {
+    auto it = tree.templates.find(tid);
+    return (it != tree.templates.end() && it->second.family >= 0) ? it->second.family
+                                                                  : tid;
+}
+
+// The arities a class-template family takes, spelled for the count diagnostic
+// (defined with the arm selection, beside instantiateClassTemplate).
+std::string classFamilyArities(parse::Tree const& tree, int tid, std::size_t n,
+                               bool& takes);
+
 // Instantiate the CLASS template `tmpl_entry_id` with the canonicalized `args`.
 // Defined at resolve:: scope (with the template machinery, bottom of this file),
 // forward-declared here so resolveTypeRef's kTmplUse arm and the construction
@@ -475,11 +490,13 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                         "declared in a header (not supported yet).", {}});
                     return t;
                 }
-                if (!args.empty() && args.size() != nparams) {
+                bool takes = args.size() == nparams;
+                std::string arities = classFamilyArities(tree, id, args.size(), takes);
+                if (!args.empty() && !takes) {
                     reported = true;
                     diagnostic::report(diag, {file_id, tok,
                         "Wrong number of template arguments for '" + name + "': "
-                        + std::to_string(nparams) + " expected, got "
+                        + arities + " expected, got "
                         + std::to_string(args.size()) + ".", {}});
                     return t;
                 }
@@ -587,7 +604,8 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 if (tree.entries[id].is_template) {
                     for (auto it = tree.tmpl_self_stack.rbegin();
                          it != tree.tmpl_self_stack.rend(); ++it) {
-                        if (it->tmpl_entry == id)
+                        if (templateFamily(tree, it->tmpl_entry)
+                            == templateFamily(tree, id))
                             return tree.entries[it->instance_entry].slids_type;
                     }
                     reported = true;
@@ -972,6 +990,7 @@ void resolveTypeSetTerms(parse::Tree& tree, parse::Node& s,
     AccessFileScope afs(tree, s.file_id);
     int id = s.resolved_entry_id;
     if (id < 0 || !s.type_set) return;
+    if (tree.typesets.count(id)) return;   // resolved on demand already (a class arm)
     parse::TypeSet ts;
     resolveSetTermsInto(tree, *s.type_set, ts, s.file_id, s.tok, diag);
     tree.typesets[id] = std::move(ts);
@@ -992,6 +1011,7 @@ void registerTypeSet(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag,
     d.track_body_local = false;
     s.resolved_entry_id = registerDeclarator(tree, d, BindMode::Declare, reused,
                                              diag);
+    if (s.resolved_entry_id >= 0) tree.typeset_decls[s.resolved_entry_id] = &s;
     if (resolve_terms) resolveTypeSetTerms(tree, s, diag);
 }
 
@@ -1184,7 +1204,7 @@ bool reportPrivateNameInInline(parse::Tree& tree, std::string const& name,
     if (sp == tree.stripped_privates.end()) return false;
     parse::Tree::InlineInstCtx const& ctx = tree.inline_inst_ctx.back();
     if (ctx.tmpl_entry < 0) return false;
-    std::string tname = tree.entries[ctx.tmpl_entry].name;
+    std::string tname = parse::templateName(tree, ctx.tmpl_entry);
     std::string lname = "?";
     int lfile = -1, ltok = -1;
     auto ci = tree.classes.find(ctx.local_arg);
@@ -3000,7 +3020,11 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                     int self = -1;
                     for (auto it = tree.tmpl_self_stack.rbegin();
                          it != tree.tmpl_self_stack.rend(); ++it) {
-                        if (it->tmpl_entry == id) { self = it->instance_entry; break; }
+                        if (templateFamily(tree, it->tmpl_entry)
+                            == templateFamily(tree, id)) {
+                            self = it->instance_entry;
+                            break;
+                        }
                     }
                     if (self < 0) {
                         diagnostic::report(diag, {e.file_id, e.tok,
@@ -3560,7 +3584,10 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         if (entry.is_template) {
             for (auto it = tree.tmpl_self_stack.rbegin();
                  it != tree.tmpl_self_stack.rend(); ++it) {
-                if (it->tmpl_entry == id) { id = it->instance_entry; break; }
+                if (templateFamily(tree, it->tmpl_entry) == templateFamily(tree, id)) {
+                    id = it->instance_entry;
+                    break;
+                }
             }
         }
         s.resolved_entry_id = id;
@@ -3661,11 +3688,13 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
                 }
                 auto ti = tree.templates.find(tid);
                 if (ti == tree.templates.end()) return;   // registration errored
-                if (s.tmpl_args.size() != ti->second.def->type_params.size()) {
+                bool takes = false;
+                std::string arities =
+                    classFamilyArities(tree, tid, s.tmpl_args.size(), takes);
+                if (!takes) {
                     diagnostic::report(diag, {s.file_id, s.name_tok,
                         "Wrong number of template arguments for '" + s.name + "': "
-                        + std::to_string(ti->second.def->type_params.size())
-                        + " expected, got " + std::to_string(s.tmpl_args.size())
+                        + arities + " expected, got " + std::to_string(s.tmpl_args.size())
                         + ".", {}});
                     return;
                 }
@@ -6440,57 +6469,65 @@ void resolveTemplatePatterns(parse::Tree& tree, parse::Node& node, int entry_id,
 // body would have resolved), not at registration — the function pre-pass
 // registers templates before the surrounding scope's aliases, but statement
 // order holds here, so a set declared above the template is live.
-void resolveSpecConstraint(parse::Tree& tree, parse::Node& node,
-                           diagnostic::Sink& diag) {
-    if (!node.spec) return;
-    auto ti = tree.templates.find(node.resolved_entry_id);
-    if (ti == tree.templates.end()) return;
+// One constraint's target into set_id / type / inline_set — the function arm's
+// single `spec` and each of a class arm's per-parameter constraints alike.
+void resolveOneSpec(parse::Tree& tree, parse::SpecConstraint const& sp, int file_id,
+                    int fallback_tok, int& set_id, widen::TypeRef& type,
+                    parse::TypeSet& inline_set, diagnostic::Sink& diag) {
     // An INLINE set (`T=<int|float>`): resolve the terms into the template's
     // own TypeSet — anonymous, no entry.
-    if (node.spec->kind == parse::SpecConstraint::K::kInlineSet) {
-        if (node.spec->inline_set) {
-            resolveSetTermsInto(tree, *node.spec->inline_set,
-                                ti->second.spec_inline, node.file_id,
-                                node.name_tok, diag);
+    if (sp.kind == parse::SpecConstraint::K::kInlineSet) {
+        if (sp.inline_set) {
+            resolveSetTermsInto(tree, *sp.inline_set, inline_set, file_id,
+                                fallback_tok, diag);
         }
         return;
     }
-    if (node.spec->kind != parse::SpecConstraint::K::kSetName) return;
-    int spec_tok = node.spec->name_tok >= 0 ? node.spec->name_tok
-                                            : node.name_tok;
+    if (sp.kind != parse::SpecConstraint::K::kSetName) return;
+    int spec_tok = sp.name_tok >= 0 ? sp.name_tok : fallback_tok;
     // A full TYPE SPELLING (`T=int`, `T=int^`, `T=(int,int)`) — a one-type
     // set; no name to look up.
-    if (node.spec->type_spelling != widen::kNoType) {
-        widen::TypeRef ty = node.spec->type_spelling;
+    if (sp.type_spelling != widen::kNoType) {
+        widen::TypeRef ty = sp.type_spelling;
         // A QUALIFIED name parses as a spelling (`T=Space:Whole`): a member SET
         // is a set, not a one-type spelling.
         if (widen::form(ty) == widen::Type::Form::kSlid) {
             bool reported = false;
             int rid = lookupAliasTemplateEntry(tree, widen::get(ty).name,
-                                               node.file_id, spec_tok, diag,
+                                               file_id, spec_tok, diag,
                                                reported);
             if (reported) return;
             if (rid >= 0 && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
-                ti->second.spec_set_id = rid;
+                set_id = rid;
                 return;
             }
         }
-        resolveDeclType(tree, ty, node.file_id, spec_tok, diag);
-        ti->second.spec_type = canonSetType(ty);
+        resolveDeclType(tree, ty, file_id, spec_tok, diag);
+        type = canonSetType(ty);
         return;
     }
     // Bare or QUALIFIED (`T=Space:Whole`) — a set may be a namespace member.
     bool reported = false;
-    int rid = lookupAliasTemplateEntry(tree, node.spec->set_name, node.file_id,
+    int rid = lookupAliasTemplateEntry(tree, sp.set_name, file_id,
                                        spec_tok, diag, reported);
     if (reported) return;
     if (rid >= 0 && tree.entries[rid].kind == parse::EntryKind::kTypeSet) {
-        ti->second.spec_set_id = rid;
+        set_id = rid;
         return;
     }
-    widen::TypeRef ty = widen::internOrNone(node.spec->set_name);
-    resolveDeclType(tree, ty, node.file_id, spec_tok, diag);
-    ti->second.spec_type = canonSetType(ty);
+    widen::TypeRef ty = widen::internOrNone(sp.set_name);
+    resolveDeclType(tree, ty, file_id, spec_tok, diag);
+    type = canonSetType(ty);
+}
+
+void resolveSpecConstraint(parse::Tree& tree, parse::Node& node,
+                           diagnostic::Sink& diag) {
+    if (!node.spec) return;
+    auto ti = tree.templates.find(node.resolved_entry_id);
+    if (ti == tree.templates.end()) return;
+    resolveOneSpec(tree, *node.spec, node.file_id, node.name_tok,
+                   ti->second.spec_set_id, ti->second.spec_type,
+                   ti->second.spec_inline, diag);
 }
 
 // Every name mentioned anywhere in a subtree (idents, callees, assign targets).
@@ -7084,9 +7121,176 @@ int tryMergeGlobalDecl(parse::Tree& tree, int prev, parse::Node const& d) {
 // demand). The entry is a kClass with is_template set and NO slids_type/ns_frame,
 // so nothing downstream can mistake it for a real class. A template owns its name
 // in its scope. `owner` >= 0 registers a namespace/class member.
+// A CONSUMER may re-open a HEADER template with FIELD ALIASES only: they expand in
+// the consumer's own classify, so no flavor symbol changes. Any member (a method, a
+// hook, a const ...) or field would grow the flavor in this TU alone — and the
+// --instantiate stage defining the flavor never sees it.
+bool aliasesOnlyOpening(parse::Node const& n) {
+    for (auto const& p : n.params)
+        if (p && p->name != "_$vptr") return false;
+    for (auto const& m : n.children)
+        if (m) return false;
+    return true;
+}
+
+// The opening would COMPLETE `def`'s incomplete header template outside its module
+// (no trailing `...`): that file is not the template's to close.
+void reportForeignCompletion(diagnostic::Sink& diag, parse::Node const& node,
+                             parse::Node const& decl) {
+    diagnostic::report(diag, {node.file_id, node.name_tok,
+        "This opening completes '" + node.name + "', which its module defines; add a "
+        "trailing '...' to keep it open.",
+        {{decl.file_id, decl.name_tok, "declared here"}}});
+}
+
+// Does this class-template opening carry any `T=` constraint?
+bool classTemplateConstrained(parse::Node const& n) {
+    for (auto const& sp : n.type_param_specs)
+        if (sp) return true;
+    return false;
+}
+
+// A constraint's identity for the duplicate check — the set-name / type-spelling
+// form only (an inline set or a pattern compares as unknown, "", and two arms
+// that overlap that way meet the ambiguity at selection instead).
+std::string classSpecKey(parse::SpecConstraint const* sp) {
+    if (!sp) return "*";
+    if (sp->kind != parse::SpecConstraint::K::kSetName) return "";
+    return sp->type_spelling != widen::kNoType ? widen::spellOrEmpty(sp->type_spelling)
+                                               : sp->set_name;
+}
+
+// Register `node` as a further ARM of the class-template family headed by `head`:
+// its own template entry (under an internal name — a lookup finds only the head)
+// and TemplateInfo, listed on the head.
+void addClassTemplateArm(parse::Tree& tree, parse::Node& node, int head,
+                         std::vector<std::unique_ptr<parse::Node>>* host_list,
+                         int owner, diagnostic::Sink& diag) {
+    parse::Node const* hdef = tree.templates.at(head).def;
+    if (fileIsImported(tree, hdef->file_id) && !fileIsImported(tree, node.file_id)
+        && !fileIsTemplateSource(tree, node.file_id)
+        && !fileIsSibling(tree, hdef->file_id)) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "A template declared in a header is defined by its module's source "
+            "file; '" + node.name + "' cannot be re-opened here.",
+            {{hdef->file_id, hdef->name_tok, "declared here"}}});
+        return;
+    }
+    // A header template's ARMS are its header's: every TU must see the same family,
+    // so the template source re-opens the arms (an exact match joins one) but never
+    // adds one of its own.
+    if (fileIsImported(tree, hdef->file_id) && !fileIsImported(tree, node.file_id)) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "An arm of class template '" + node.name + "' must be declared in its "
+            "header.", {{hdef->file_id, hdef->name_tok, "declared here"}}});
+        return;
+    }
+    std::vector<int> arms = tree.templates.at(head).arms;
+    if (arms.empty()) arms.push_back(head);
+    for (int a : arms) {
+        parse::Node const* ad = tree.templates.at(a).def;
+        if (ad->type_params.size() != node.type_params.size()) continue;
+        bool same = true;
+        for (std::size_t i = 0; i < node.type_params.size() && same; i++) {
+            parse::SpecConstraint const* x =
+                i < node.type_param_specs.size() ? node.type_param_specs[i].get() : nullptr;
+            parse::SpecConstraint const* y =
+                i < ad->type_param_specs.size() ? ad->type_param_specs[i].get() : nullptr;
+            std::string kx = classSpecKey(x), ky = classSpecKey(y);
+            same = !kx.empty() && kx == ky;
+        }
+        if (same) {
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "Duplicate specialization of class template '" + node.name + "'.",
+                {{ad->file_id, ad->name_tok, "first defined here"}}});
+            return;
+        }
+    }
+    parse::Entry e;
+    e.kind = parse::EntryKind::kClass;
+    e.name = node.name + "#" + std::to_string(arms.size());   // never a lookup hit
+    e.is_template = true;
+    e.defined = true;
+    e.file_id = node.file_id;
+    e.tok = node.name_tok;
+    if (owner >= 0) e.owner_ns_frame = owner;
+    int id = parse::addEntry(tree, std::move(e));
+    node.resolved_entry_id = id;
+    parse::TemplateInfo ti;
+    ti.def = &node;
+    ti.host_list = host_list;
+    ti.cls_open = node.is_incomplete;
+    ti.family = head;
+    tree.templates[id] = std::move(ti);
+    parse::TemplateInfo& h = tree.templates.at(head);
+    if (h.arms.empty()) {
+        h.arms.push_back(head);
+        h.family = head;
+    }
+    h.arms.push_back(id);
+}
+
+// Register a FILTERING re-open on the family head: a constrained, field-less opening
+// matching no arm exactly. It adds members (aliases, methods, operators — never
+// fields, never a `...`) to the flavors whose arguments it admits, of any arm of its
+// arity; instantiateClassTemplate clones it into each.
+void addClassTemplateFilter(parse::Tree& tree, parse::Node& node, int head,
+                            diagnostic::Sink& diag) {
+    parse::Node const* hdef = tree.templates.at(head).def;
+    // A header template's filters: its header declares them (the members every TU
+    // sees), its template source defines their bodies; a CONSUMER may add a filter of
+    // field aliases only (the plain consumer re-open's rule).
+    if (fileIsImported(tree, hdef->file_id) && !fileIsImported(tree, node.file_id)) {
+        bool consumer = !fileIsTemplateSource(tree, node.file_id)
+                     && !fileIsSibling(tree, hdef->file_id);
+        if (consumer && !aliasesOnlyOpening(node)) {
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "A template declared in a header is defined by its module's source "
+                "file; '" + node.name + "' cannot be re-opened here.",
+                {{hdef->file_id, hdef->name_tok, "declared here"}}});
+            return;
+        }
+    }
+    std::vector<int> arms = tree.templates.at(head).arms;
+    if (arms.empty()) arms.push_back(head);
+    bool arity_seen = false;
+    for (int a : arms)
+        if (tree.templates.at(a).def->type_params.size() == node.type_params.size())
+            arity_seen = true;
+    if (!arity_seen) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "A re-open's template list must match class template '" + node.name + "'s.",
+            {{hdef->file_id, hdef->name_tok, "first declared here"}}});
+        return;
+    }
+    if (node.is_incomplete) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "A constrained re-open of '" + node.name + "' cannot carry a trailing "
+            "'...': it adds members, not layout.", {}});
+        return;
+    }
+    node.resolved_entry_id = head;
+    parse::TemplateInfo::FilterReopen f;
+    f.node = &node;
+    tree.templates.at(head).filter_reopens.push_back(std::move(f));
+}
+
 void registerClassTemplate(parse::Tree& tree, parse::Node& node,
                            std::vector<std::unique_ptr<parse::Node>>* host_list,
                            int owner, diagnostic::Sink& diag) {
+    // A CONSTRAINED opening (below): with fields, a SPECIALIZATION ARM; field-less, a
+    // constrained RE-OPEN — of the arm whose constraints it matches exactly, else a
+    // FILTER over the flavors it admits.
+    int constrained_tok = -1;
+    for (std::size_t i = 0; i < node.type_param_specs.size(); i++)
+        if (node.type_param_specs[i] && constrained_tok < 0)
+            constrained_tok = node.type_param_toks[i];
+    bool opening_has_fields = false;
+    for (auto& p : node.params)
+        if (p && p->name != "_$vptr" && p->name != "_$base") {
+            opening_has_fields = true;
+            break;
+        }
     // The deferred forms, rejected up front (they would otherwise ride the
     // clone). Both scans run before the re-open divert below, so they cover
     // EVERY opening, and both fire only for a HEADER-owned template — a
@@ -7126,6 +7330,64 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
         // whether or not anyone instantiates.
         if (tree.entries[prev].kind == parse::EntryKind::kClass
             && tree.entries[prev].is_template) {
+            // THE ARMS. A constrained primary, or a field-bearing one no
+            // unconstrained arm of its ARITY claims, is a NEW ARM of the family
+            // (a specialization, a catch-all beside specializations, an arity
+            // overload). A field-less opening is a RE-OPEN of the catch-all of its
+            // arity; a field-bearing one meets that catch-all's `...` rules.
+            int head = templateFamily(tree, prev);
+            auto hit = tree.templates.find(head);
+            if (hit == tree.templates.end()) return;   // registration errored
+            std::vector<int> arms = hit->second.arms;
+            if (arms.empty()) arms.push_back(head);
+            int plain = -1;
+            bool arity_seen = false;
+            for (int a : arms) {
+                parse::Node const* ad = tree.templates.at(a).def;
+                if (ad->type_params.size() != node.type_params.size()) continue;
+                arity_seen = true;
+                if (!classTemplateConstrained(*ad)) plain = a;
+            }
+            if (constrained_tok >= 0) {
+                // The arm whose constraints this opening spells EXACTLY: a re-open of
+                // that arm (an incomplete specialization closes this way). Otherwise
+                // fields make a new arm and a field-less opening FILTERS.
+                int exact = -1;
+                for (int a : arms) {
+                    parse::Node const* ad = tree.templates.at(a).def;
+                    if (ad->type_params.size() != node.type_params.size()) continue;
+                    bool same = true;
+                    for (std::size_t i = 0; i < node.type_params.size() && same; i++) {
+                        std::string kx = classSpecKey(i < node.type_param_specs.size()
+                            ? node.type_param_specs[i].get() : nullptr);
+                        std::string ky = classSpecKey(i < ad->type_param_specs.size()
+                            ? ad->type_param_specs[i].get() : nullptr);
+                        same = !kx.empty() && kx == ky;
+                    }
+                    if (same) exact = a;
+                }
+                if (exact < 0 || (opening_has_fields && !tree.templates.at(exact).cls_open)) {
+                    if (opening_has_fields)
+                        addClassTemplateArm(tree, node, head, host_list, owner, diag);
+                    else
+                        addClassTemplateFilter(tree, node, head, diag);
+                    return;
+                }
+                prev = exact;
+            } else if (opening_has_fields && plain < 0) {
+                addClassTemplateArm(tree, node, head, host_list, owner, diag);
+                return;
+            }
+            if (constrained_tok < 0 && plain < 0 && arity_seen) {
+                diagnostic::report(diag, {node.file_id, node.name_tok,
+                    "Class template '" + node.name + "' has no unconstrained arm "
+                    "taking " + std::to_string(node.type_params.size())
+                    + " parameter(s) to re-open.",
+                    {{hit->second.def->file_id, hit->second.def->name_tok,
+                      "first declared here"}}});
+                return;
+            }
+            if (constrained_tok < 0 && plain >= 0) prev = plain;   // its arity's catch-all
             auto it = tree.templates.find(prev);
             if (it == tree.templates.end()) return;   // registration errored
             parse::TemplateInfo& ti = it->second;
@@ -7134,16 +7396,36 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
             // re-open would grow the flavors in THIS TU only — silently
             // diverging from every other TU's (and from the aggregated
             // definitions).
+            bool consumer_aliases = false;
             if (fileIsImported(tree, ti.def->file_id)
                 && !fileIsImported(tree, node.file_id)
                 && !fileIsTemplateSource(tree, node.file_id)
                 && !fileIsSibling(tree, ti.def->file_id)) {
-                diagnostic::report(diag, {node.file_id, node.name_tok,
-                    "A template declared in a header is defined by its "
-                    "module's source file; '" + node.name
-                    + "' cannot be re-opened here.",
-                    {{ti.def->file_id, ti.def->name_tok, "declared here"}}});
-                return;
+                // ...except with FIELD ALIASES only. Such an opening follows the
+                // HEADER's completeness, never the TU's view of it (a TU that side-
+                // loads the template source has seen the completion; one that does
+                // not has not): `...` exactly when the header declares the template
+                // incomplete, and it changes nothing.
+                if (!aliasesOnlyOpening(node)) {
+                    diagnostic::report(diag, {node.file_id, node.name_tok,
+                        "A template declared in a header is defined by its "
+                        "module's source file; '" + node.name
+                        + "' cannot be re-opened here.",
+                        {{ti.def->file_id, ti.def->name_tok, "declared here"}}});
+                    return;
+                }
+                if (ti.def->is_incomplete && !node.is_incomplete) {
+                    reportForeignCompletion(diag, node, *ti.def);
+                    return;
+                }
+                if (!ti.def->is_incomplete && node.is_incomplete) {
+                    diagnostic::report(diag, {node.file_id, node.name_tok,
+                        "Class template '" + node.name + "' is already complete; it "
+                        "cannot be re-opened as incomplete.",
+                        {{ti.def->file_id, ti.def->name_tok, "first defined here"}}});
+                    return;
+                }
+                consumer_aliases = true;
             }
             if (node.type_params.size() != ti.def->type_params.size()) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
@@ -7173,7 +7455,9 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
                     has_fields = true;
                     break;
                 }
-            if (ti.cls_open) {
+            if (consumer_aliases) {
+                // completeness is the header's (above)
+            } else if (ti.cls_open) {
                 ti.cls_open = node.is_incomplete;   // no trailing `...` -> closed
             } else if (has_fields) {
                 diagnostic::report(diag, {node.file_id, node.name_tok,
@@ -7196,6 +7480,12 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
         parse::Entry const& pe = tree.entries[prev];
         reportNameCollision(diag, "Duplicate declaration of '" + node.name + "'.",
                             pe.file_id, pe.tok, node.file_id, node.name_tok);
+        return;
+    }
+    if (constrained_tok >= 0 && !opening_has_fields) {
+        diagnostic::report(diag, {node.file_id, node.name_tok,
+            "A constrained re-open needs the class template '" + node.name
+            + "' declared before it.", {}});
         return;
     }
     parse::Entry e;
@@ -7486,7 +7776,9 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
             //   closed + fields  -> error: a complete class adds no fields
             //   closed + `...`   -> error: a complete class cannot re-open incomplete
             // Either way the re-open closes (or keeps) the class per its own `...`.
-            if (info.is_open) {
+            if (node.completeness_neutral) {
+                // a consumer's alias opening of a header template's flavor: aliases only
+            } else if (info.is_open) {
                 // Point at the appended fields; leave them OWNED by this re-open node so
                 // the body phase resolves their default exprs (resolveClassMemberBodies
                 // walks node.params with the class frame open). registerClassBody interns
@@ -7805,7 +8097,16 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
                 + "' must be defined in the same source file.", {}});
         }
         if (info.declared_incomplete) {
-            if (closed_here && !(ctor_defined && dtor_defined)) {
+            bool closer_adds_fields = false;
+            if (info.closer)
+                for (auto const& p : info.closer->params)
+                    if (p && p->name != "_$vptr" && p->name != "_$base")
+                        closer_adds_fields = true;
+            if (closed_here && !(ctor_defined && dtor_defined) && !closer_adds_fields) {
+                // An opening adding NO fields completed it — an alias or member
+                // opening that forgot its `...`, not the class's real closer.
+                reportForeignCompletion(diag, *info.closer, node);
+            } else if (closed_here && !(ctor_defined && dtor_defined)) {
                 diagnostic::report(diag, {info.closer->file_id, info.closer->name_tok,
                     "The file that closes class '" + node.name
                     + "' must define its constructor and destructor.",
@@ -8367,6 +8668,27 @@ bool typeInSet(parse::Tree const& tree, widen::TypeRef t, int set_id) {
 bool typeInSetValue(parse::Tree const& tree, widen::TypeRef t,
                     parse::TypeSet const& ts) {
     return typeInSetValueImpl(tree, t, ts);
+}
+
+bool specAdmits(parse::Tree const& tree, parse::SpecConstraint const& sp, int set_id,
+                widen::TypeRef type, parse::TypeSet const& inline_set,
+                widen::TypeRef T) {
+    using F = widen::Type::Form;
+    widen::TypeRef t = widen::deepAliasStrip(T);
+    while (widen::form(t) == F::kConst) t = widen::get(t).underlying;
+    switch (sp.kind) {
+        case parse::SpecConstraint::K::kSetName:
+            if (set_id >= 0) return typeInSetImpl(tree, t, set_id);
+            return type != widen::kNoType && t == type;
+        case parse::SpecConstraint::K::kInlineSet:
+            return typeInSetValueImpl(tree, t, inline_set);
+        case parse::SpecConstraint::K::kArray:
+            return widen::form(t) == F::kArray
+                && widen::get(t).dims.size() == sp.dim_binders.size();
+        case parse::SpecConstraint::K::kTuple:
+            return widen::form(t) == F::kTuple;
+    }
+    return false;
 }
 
 // Find a class def node named `name` directly among `nodes` (the first opening).
@@ -9626,7 +9948,7 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
         return -1;
     if (inline_local && ti.def->kind != parse::Kind::kFunctionDef) {
         diagnostic::report(diag, {file_id, tok,
-            "Instantiating '" + tree.entries[tmpl_entry_id].name
+            "Instantiating '" + parse::templateName(tree, tmpl_entry_id)
             + "' with a local type needs its template source (the .sl beside "
             "its header), which was not found.", {}});
         return -1;
@@ -10125,6 +10447,47 @@ static void checkTemplateAliasRoots(parse::Tree& tree, diagnostic::Sink& diag) {
             }
         }
     }
+    // A FILTERING re-open's alias roots: a field or alias of SOME arm of its arity
+    // (which flavors it reaches is per use). An arm with a base is not followed —
+    // skipped, like a base the check above cannot resolve.
+    for (auto& [hid, hti] : tree.templates) {
+        if (hti.filter_reopens.empty()) continue;
+        std::vector<int> arms = hti.arms;
+        if (arms.empty()) arms.push_back(hid);
+        for (auto const& f : hti.filter_reopens) {
+            if (f.node->field_aliases.empty()) continue;
+            std::set<std::string> known;
+            bool has_base = false;
+            for (int a : arms) {
+                parse::TemplateInfo const& at = tree.templates.at(a);
+                if (at.def->type_params.size() != f.node->type_params.size()) continue;
+                std::vector<parse::Node*> openings{at.def};
+                for (parse::Node* r : at.reopens) openings.push_back(r);
+                for (parse::Node* o : openings) {
+                    for (auto& p : o->params) {
+                        if (!p) continue;
+                        if (p->name == "_$base") has_base = true;
+                        known.insert(p->name);
+                    }
+                    for (auto& a2 : o->field_aliases) if (a2) known.insert(a2->name);
+                }
+            }
+            for (auto const& g : hti.filter_reopens)
+                for (auto& a2 : g.node->field_aliases) if (a2) known.insert(a2->name);
+            if (has_base) continue;
+            for (auto& a : f.node->field_aliases) {
+                if (!a || a->children.empty() || !a->children[0]) continue;
+                parse::Node const* h = a->children[0].get();
+                while (h->kind != parse::Kind::kIdentExpr && !h->children.empty()
+                       && h->children[0])
+                    h = h->children[0].get();
+                if (h->kind != parse::Kind::kIdentExpr || known.count(h->name)) continue;
+                diagnostic::report(diag, {h->file_id, h->tok,
+                    "Class template '" + hti.def->name + "' has no field '"
+                    + h->name + "'.", {}});
+            }
+        }
+    }
 }
 
 // The first type argument whose class is declared in THIS TU's own source
@@ -10200,7 +10563,7 @@ static bool requirePrivateInstanceSource(parse::Tree& tree, int tmpl_entry_id,
         notes.push_back({use_file, use_tok, "'" + parse::instanceSpelling(tree,
             tmpl_entry_id, args) + "' is instantiated here"});
     notes.push_back({tree.entries[tmpl_entry_id].file_id, tree.entries[tmpl_entry_id].tok,
-        "template '" + tree.entries[tmpl_entry_id].name + "' is declared here"});
+        "template '" + parse::templateName(tree, tmpl_entry_id) + "' is declared here"});
     widen::TypeRef loc = firstLocalArg(tree, args);
     auto ci = tree.classes.find(loc);
     if (ci != tree.classes.end())
@@ -10232,9 +10595,185 @@ std::vector<int> ownerChain(parse::Tree const& tree, int entry_id) {
     return chain;
 }
 
+// A type set an arm's constraint names, with the sets ITS terms name: resolve their
+// terms now if the file-scope pass has not reached them yet.
+void ensureTypeSetResolved(parse::Tree& tree, int set_id, std::set<int>& seen,
+                           diagnostic::Sink& diag) {
+    if (set_id < 0 || !seen.insert(set_id).second) return;
+    if (!tree.typesets.count(set_id)) {
+        auto d = tree.typeset_decls.find(set_id);
+        if (d != tree.typeset_decls.end()) resolveTypeSetTerms(tree, *d->second, diag);
+    }
+    auto ts = tree.typesets.find(set_id);
+    if (ts == tree.typesets.end()) return;
+    std::vector<int> refs;
+    for (auto const& t : ts->second.terms)
+        if (t.kind == parse::TypeSet::Term::K::kSetRef) refs.push_back(t.set_id);
+    for (int r : refs) ensureTypeSetResolved(tree, r, seen, diag);
+}
+
+// Resolve an opening's per-parameter constraint targets, in the template's own
+// scope: the opening's file visibility and the template's owner chain open.
+void resolveSpecsOf(parse::Tree& tree, parse::Node const& def, int scope_entry,
+                    std::vector<parse::TemplateInfo::ClassSpec>& out,
+                    diagnostic::Sink& diag) {
+    AccessFileScope afs(tree, def.file_id);
+    std::vector<int> chain = ownerChain(tree, scope_entry);
+    for (auto c = chain.rbegin(); c != chain.rend(); ++c) tree.open_ns_frames.push_back(*c);
+    std::vector<parse::TemplateInfo::ClassSpec> specs(def.type_params.size());
+    for (std::size_t i = 0; i < def.type_params.size(); i++) {
+        if (i >= def.type_param_specs.size() || !def.type_param_specs[i]) continue;
+        resolveOneSpec(tree, *def.type_param_specs[i], def.file_id, def.type_param_toks[i],
+                       specs[i].set_id, specs[i].type, specs[i].inline_set, diag);
+        std::set<int> seen;
+        ensureTypeSetResolved(tree, specs[i].set_id, seen, diag);
+        for (auto const& t : specs[i].inline_set.terms)
+            if (t.kind == parse::TypeSet::Term::K::kSetRef)
+                ensureTypeSetResolved(tree, t.set_id, seen, diag);
+    }
+    for (std::size_t i = 0; i < chain.size(); i++) tree.open_ns_frames.pop_back();
+    out = std::move(specs);
+}
+
+// An arm's constraint targets, resolved once.
+void resolveClassSpecs(parse::Tree& tree, int arm, diagnostic::Sink& diag) {
+    if (tree.templates.at(arm).class_specs_resolved) return;
+    tree.templates.at(arm).class_specs_resolved = true;
+    std::vector<parse::TemplateInfo::ClassSpec> specs;
+    resolveSpecsOf(tree, *tree.templates.at(arm).def, arm, specs, diag);
+    tree.templates.at(arm).class_specs = std::move(specs);
+}
+
+// Does every constrained parameter of `def` admit its argument?
+bool specsAdmit(parse::Tree& tree, parse::Node const& def,
+                std::vector<parse::TemplateInfo::ClassSpec> const& specs,
+                std::vector<widen::TypeRef> const& args) {
+    for (std::size_t i = 0; i < args.size() && i < def.type_param_specs.size(); i++) {
+        parse::SpecConstraint const* sp = def.type_param_specs[i].get();
+        if (!sp || i >= specs.size()) continue;
+        parse::TemplateInfo::ClassSpec const& cs = specs[i];
+        if (!specAdmits(tree, *sp, cs.set_id, cs.type, cs.inline_set, args[i]))
+            return false;
+    }
+    return true;
+}
+
+bool classArmAdmits(parse::Tree& tree, int arm, std::vector<widen::TypeRef> const& args) {
+    parse::TemplateInfo const& ti = tree.templates.at(arm);
+    return specsAdmit(tree, *ti.def, ti.class_specs, args);
+}
+
+// The FILTERING re-opens of `arm`'s family that admit `args` (resolving each
+// one's constraints at its first test).
+std::vector<parse::Node*> admittedFilters(parse::Tree& tree, int arm,
+                                          std::vector<widen::TypeRef> const& args,
+                                          diagnostic::Sink& diag) {
+    std::vector<parse::Node*> out;
+    int head = templateFamily(tree, arm);
+    auto hit = tree.templates.find(head);
+    if (hit == tree.templates.end() || args.empty()) return out;
+    for (std::size_t k = 0; k < tree.templates.at(head).filter_reopens.size(); k++) {
+        parse::TemplateInfo::FilterReopen& f = tree.templates.at(head).filter_reopens[k];
+        if (f.node->type_params.size() != args.size()) continue;
+        if (!f.resolved) {
+            f.resolved = true;
+            std::vector<parse::TemplateInfo::ClassSpec> specs;
+            resolveSpecsOf(tree, *f.node, head, specs, diag);
+            tree.templates.at(head).filter_reopens[k].specs = std::move(specs);
+        }
+        parse::TemplateInfo::FilterReopen const& g = tree.templates.at(head).filter_reopens[k];
+        if (specsAdmit(tree, *g.node, g.specs, args)) out.push_back(g.node);
+    }
+    return out;
+}
+
+// The arities a class-template family takes, ascending, spelled for a message
+// ("1", "1 or 2"); `takes` reports whether `n` is among them.
+std::string classFamilyArities(parse::Tree const& tree, int tid, std::size_t n,
+                               bool& takes) {
+    int head = templateFamily(tree, tid);
+    auto hit = tree.templates.find(head);
+    std::set<std::size_t> ns;
+    if (hit != tree.templates.end()) {
+        std::vector<int> arms = hit->second.arms;
+        if (arms.empty()) arms.push_back(head);
+        for (int a : arms) ns.insert(tree.templates.at(a).def->type_params.size());
+    }
+    takes = ns.count(n) > 0;
+    std::string s;
+    std::size_t k = 0;
+    for (std::size_t v : ns) {
+        if (k) s += (k + 1 == ns.size()) ? " or " : ", ";
+        s += std::to_string(v);
+        k++;
+    }
+    return s;
+}
+
+// SELECT THE ARM a use instantiates: among the family's arms of this ARITY, the one
+// constrained arm whose constraints admit the arguments; none -> the unconstrained
+// arm (the CATCH-ALL); two -> ambiguous (an exact-type arm has no priority over a
+// set containing it, and a catch-all never rescues the ambiguity — the function
+// rules). Returns the arm's entry id, `tid` itself for a lone template, -1 reported.
+int selectClassArm(parse::Tree& tree, int tid, std::vector<widen::TypeRef> const& args,
+                   int file_id, int tok, diagnostic::Sink& diag) {
+    int head = templateFamily(tree, tid);
+    auto hit = tree.templates.find(head);
+    if (hit == tree.templates.end() || args.empty()) return tid;
+    std::vector<int> arms = hit->second.arms;
+    if (arms.empty()) {
+        // A LONE template: nothing to choose, but a constrained one still admits.
+        if (!classTemplateConstrained(*hit->second.def)) return tid;
+        arms.push_back(head);
+    }
+    std::string tname = hit->second.def->name;
+    std::vector<int> admitted;
+    int catch_all = -1;
+    for (int a : arms) {
+        parse::Node const* ad = tree.templates.at(a).def;
+        if (ad->type_params.size() != args.size()) continue;
+        if (!classTemplateConstrained(*ad)) { catch_all = a; continue; }
+        resolveClassSpecs(tree, a, diag);
+        if (classArmAdmits(tree, a, args)) admitted.push_back(a);
+    }
+    std::string use = tname + "<";
+    for (std::size_t i = 0; i < args.size(); i++) {
+        if (i) use += ", ";
+        use += widen::spellOrEmpty(args[i]);
+    }
+    use += ">";
+    if (admitted.size() > 1) {
+        std::vector<diagnostic::Note> notes;
+        for (int a : admitted) {
+            parse::Node const* d = tree.templates.at(a).def;
+            notes.push_back({d->file_id, d->name_tok, "admits it"});
+        }
+        diagnostic::report(diag, {file_id, tok,
+            "Ambiguous specialization: '" + use + "' is admitted by more than one "
+            "arm of class template '" + tname + "'.", std::move(notes)});
+        return -1;
+    }
+    if (admitted.size() == 1) return admitted[0];
+    if (catch_all >= 0) return catch_all;
+    std::vector<diagnostic::Note> notes;
+    for (int a : arms) {
+        parse::Node const* d = tree.templates.at(a).def;
+        if (d->type_params.size() == args.size())
+            notes.push_back({d->file_id, d->name_tok, "does not admit it"});
+    }
+    diagnostic::report(diag, {file_id, tok,
+        "No specialization of class template '" + tname + "' admits '" + use + "'.",
+        std::move(notes)});
+    return -1;
+}
+
 int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                              std::vector<widen::TypeRef> const& args,
                              int file_id, int tok, diagnostic::Sink& diag) {
+    // A family of ARMS: the use names the family; pick the arm here, once, for every
+    // caller (type uses, constructions, qualifiers, demands).
+    tmpl_entry_id = selectClassArm(tree, tmpl_entry_id, args, file_id, tok, diag);
+    if (tmpl_entry_id < 0) return -1;
     auto it = tree.templates.find(tmpl_entry_id);
     if (it == tree.templates.end()) return -1;
     {
@@ -10263,7 +10802,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         if (!it->second.open_reported) {
             it->second.open_reported = true;
             diagnostic::report(diag, {file_id, tok,
-                "Class template '" + tree.entries[tmpl_entry_id].name
+                "Class template '" + parse::templateName(tree, tmpl_entry_id)
                 + "' is declared incomplete ('...') and never completed; "
                 "close it with a re-open that omits the '...'.", {}});
         }
@@ -10294,7 +10833,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         for (parse::Node* r : it->second.reopens) scan(r);
         if (has_decls && !has_bodies) {
             diagnostic::report(diag, {file_id, tok,
-                "Instantiating '" + tree.entries[tmpl_entry_id].name
+                "Instantiating '" + parse::templateName(tree, tmpl_entry_id)
                 + "' with a local type needs its template source (the .sl "
                 "beside its header), which was not found.", {}});
             return -1;
@@ -10357,9 +10896,31 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         openings.push_back(def);
         for (parse::Node* r : tree.templates.at(tmpl_entry_id).reopens)
             openings.push_back(r);
+        // The family's FILTERING re-opens that admit this flavor, after the arm's own.
+        std::vector<parse::Node*> filters =
+            admittedFilters(tree, tmpl_entry_id, args, diag);
+        for (parse::Node* r : filters) openings.push_back(r);
         for (parse::Node* o : openings) {
             auto c = cloneDeep(*o);
+            // A filter is spelled under its own names: bind them BY POSITION to this
+            // arm's (the registration-time rename of an ordinary re-open).
+            if (std::find(filters.begin(), filters.end(), o) != filters.end()
+                && o->type_params != def->type_params) {
+                std::map<std::string, std::string> m;
+                for (std::size_t i = 0; i < o->type_params.size(); i++)
+                    if (o->type_params[i] != def->type_params[i])
+                        m[o->type_params[i]] = def->type_params[i];
+                c->text = renameIdentsInSpelling(c->text, m);
+                for (auto& ch : c->children) if (ch) renameTypeParams(*ch, m);
+                for (auto& p : c->params) if (p) renameTypeParams(*p, m);
+            }
             c->type_params.clear();
+            c->type_param_specs.clear();
+            // A CONSUMER's aliases-only opening of a header template: completeness
+            // stays the header's (registerClassTemplate checked its `...`).
+            if (o != def && fileIsImported(tree, def->file_id)
+                && !fileIsImported(tree, o->file_id) && aliasesOnlyOpening(*o))
+                c->completeness_neutral = true;
             c->type_param_toks.clear();
             c->name = iname;
             c->resolved_entry_id = -1;   // a re-open pattern points at the
@@ -10382,8 +10943,15 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                 && o->file_id < static_cast<int>(tree.file_template_source.size())
                 && tree.file_template_source[o->file_id])
                 c->field_aliases.clear();
+            // A HEADER opening beyond the primary (an arm's filter, a header re-open)
+            // is interface like the primary: its members are declarations to keep.
+            // Only the template source's openings shed their bodies.
+            bool header_opening = o == def
+                || (fileIsImported(tree, o->file_id) && o->file_id >= 0
+                    && o->file_id < static_cast<int>(tree.file_template_source.size())
+                    && !tree.file_template_source[o->file_id]);
             if (declare_only) {
-                if (o == def) {
+                if (header_opening) {
                     for (auto& m : c->children) {
                         if (m && m->kind == parse::Kind::kFunctionDef) {
                             m->kind = parse::Kind::kFunctionDecl;

@@ -65,6 +65,14 @@ Twin(int t_ = 3) {
     int tv() { return t_ + 1; }
 }
 
+/* a CONSUMER re-opens header classes and templates with FIELD ALIASES only — they
+   expand here, no flavor symbol changes: an arm (spelled exactly), a filter, and the
+   incomplete Part / Hybrid, kept open with a trailing `...`. */
+Spec<T=int>(alias zed_ = z_) { }
+Spec<T=<int8|bool>>(alias first_ = a_) { }
+Part<T>(alias pp_ = pub_, ...) { }
+Hybrid(alias ha_ = a, ...) { }
+
 Holder(
     Grow<int> a_,
     Grow<int> b_,
@@ -429,5 +437,33 @@ int32 main() {
     hyg.print();
     println(String + "hybpriv = " + hybpriv());   // 102: the completer set both
 
+    /* CLASS-TEMPLATE ARMS across the seam: selected here, defined by the template
+       source's --instantiate pass; plus this TU's own alias re-opens. */
+    Spec<int> spi(3);
+    Spec<int8> sp8(4);
+    Spec<bool> spb(true);
+    Spec<int16> sp16(5);
+    println(String + "spec = " + spi.kind() + " " + spi.both() + " " + sp8.kind()
+        + " " + sp8.pick() + " " + spb.pick() + " " + sp16.kind());   // 1 12 0 8 8 0
+    println(String + "spec aliases = " + spi.zed_ + " " + sp8.first_ + " " + spb.first_);
+    Part<int> ppa(6);
+    println(String + "part alias = " + ppa.pp_ + " hybrid alias = " + hyba.ha_);
+
     return 0;
 }
+
+/* a consumer may not add an ARM to a header template... */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T=float32>(float32 f_) { }
+
+/* ...nor a filter with a member. */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T=<int8|bool>>() { int mine() { return 1; } }
+
+/* an alias opening without `...` would COMPLETE the incomplete header template here. */
+//-EXPECT-ERROR: This opening completes 'Part', which its module defines; add a trailing '...' to keep it open.
+//Part<T>(alias pq_ = pub_) { }
+
+/* ...and the incomplete header CLASS. */
+//-EXPECT-ERROR: This opening completes 'Hybrid', which its module defines; add a trailing '...' to keep it open.
+//Hybrid(alias hb_ = a) { }

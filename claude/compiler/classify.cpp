@@ -3812,28 +3812,11 @@ std::vector<int> specializationArms(parse::Tree& tree, int tid,
 // array pattern matches DEPTH-EXACT on the dimension count; a tuple pattern
 // matches any unnamed tuple.
 bool constraintAdmits(parse::Tree& tree, int tid, widen::TypeRef T) {
-    using F = widen::Type::Form;
     auto it = tree.templates.find(tid);
     if (it == tree.templates.end() || !it->second.def
         || !it->second.def->spec) return false;
-    parse::SpecConstraint const& sp = *it->second.def->spec;
-    widen::TypeRef t = widen::deepAliasStrip(T);
-    while (widen::form(t) == F::kConst) t = widen::get(t).underlying;
-    switch (sp.kind) {
-        case parse::SpecConstraint::K::kSetName:
-            if (it->second.spec_set_id >= 0)
-                return resolve::typeInSet(tree, t, it->second.spec_set_id);
-            return it->second.spec_type != widen::kNoType
-                && t == it->second.spec_type;
-        case parse::SpecConstraint::K::kInlineSet:
-            return resolve::typeInSetValue(tree, t, it->second.spec_inline);
-        case parse::SpecConstraint::K::kArray:
-            return widen::form(t) == F::kArray
-                && widen::get(t).dims.size() == sp.dim_binders.size();
-        case parse::SpecConstraint::K::kTuple:
-            return widen::form(t) == F::kTuple;
-    }
-    return false;
+    return resolve::specAdmits(tree, *it->second.def->spec, it->second.spec_set_id,
+                               it->second.spec_type, it->second.spec_inline, T);
 }
 
 // The unconstrained same-scope sibling admitting `nargs` — the CATCH-ALL of a

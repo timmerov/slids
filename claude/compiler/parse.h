@@ -312,6 +312,11 @@ struct Node {
                                  // — an INCOMPLETE class. A later same-scope re-open may
                                  // append fields until one CLOSES it (a re-open whose
                                  // field tuple omits the trailing `...`).
+    bool completeness_neutral = false;  // kClassDef: a flavor's clone of a CONSUMER's
+                                 // aliases-only re-open of a header template — the
+                                 // per-flavor merge takes its aliases but never
+                                 // reads or changes the class's open/closed state
+                                 // (that is the header's, checked at registration).
     bool is_usurper = false;     // kClassDef: the anonymous zero-field DERIVED class a
                                  // REFINEMENT desugars to — `Class : $Class()` minted in a
                                  // run-time scope, registered under the REFINED class's own
@@ -495,6 +500,10 @@ struct Node {
     // template, spec holds the `<T=...>` constraint. Null on every other node.
     std::unique_ptr<TypeSetDecl> type_set;
     std::unique_ptr<SpecConstraint> spec;
+    // kClassDef template: one CONSTRAINT slot per type_params entry (null =
+    // unconstrained) — `Box<T=int>`, `MapNode<Key=Rankings, Value=Bloc>`. (A function
+    // arm keeps its single constraint in `spec`.)
+    std::vector<std::unique_ptr<SpecConstraint>> type_param_specs;
     std::vector<widen::TypeRef> param_types;     // kCallStmt/kCallExpr: classify-cached resolved fn's param types
     // kCallStmt/kCallExpr, UNQUALIFIED: the scopes whose same-name functions are all
     // visible bare at the call — each open namespace frame (an `alias Ns;` import,
@@ -851,6 +860,35 @@ struct TemplateInfo {
     int spec_set_id = -1;
     widen::TypeRef spec_type = widen::kNoType;
     TypeSet spec_inline;
+    // CLASS-TEMPLATE ARMS. Every same-name same-scope PRIMARY (a specialization
+    // `Box<T=int>(..)`, an arity overload `Box<T, U>(..)`, the catch-all) is its own
+    // template entry with its own TemplateInfo; the FIRST registered is the family
+    // HEAD, which lists them all (`arms`, head first) — the others register under an
+    // internal name so a name lookup only ever finds the head. `family` is the head's
+    // id on every arm once a second one joins (-1 = a lone template). Selection by
+    // arity + membership happens once, in instantiateClassTemplate.
+    int family = -1;
+    std::vector<int> arms;
+    // Per type param (def->type_param_specs): the resolved constraint target, as
+    // spec_set_id / spec_type / spec_inline are for a function arm's one constraint.
+    // Resolved at the arm's first selection.
+    struct ClassSpec {
+        int set_id = -1;
+        widen::TypeRef type = widen::kNoType;
+        TypeSet inline_set;
+    };
+    std::vector<ClassSpec> class_specs;
+    bool class_specs_resolved = false;
+    // FILTERING RE-OPENS (on the family head, or a lone template): a constrained,
+    // field-less opening whose constraints match no arm exactly. It joins every
+    // flavor — of any arm of its arity — whose arguments its constraints admit,
+    // cloned after that arm's own openings and re-spelled to the arm's names.
+    struct FilterReopen {
+        Node* node = nullptr;
+        std::vector<ClassSpec> specs;
+        bool resolved = false;
+    };
+    std::vector<FilterReopen> filter_reopens;
 };
 
 struct Tree {
@@ -866,6 +904,11 @@ struct Tree {
     // Type sets, keyed by their kTypeSet entry id. Filled at registration
     // (terms resolved eagerly, in declaration order); read by membership tests.
     std::map<int, TypeSet> typesets;
+    // kTypeSet entry id -> its declaring node, so a set a CLASS-template arm's
+    // constraint names can resolve on demand: an arm is selected at its first
+    // instantiation, which a field type triggers before the file-scope sets'
+    // terms resolve (resolve's ensureTypeSetResolved).
+    std::map<int, Node*> typeset_decls;
     // Instance kFunctionDef nodes minted during classify's walk, each waiting to be
     // spliced into its host list once the walk is over. Spliced right AFTER the
     // template's own definition node (`after`) — never at the list's end, where a
@@ -1230,6 +1273,9 @@ int  classEntryForFrame(Tree const& t, int ns_frame);
 // instantiation-context notes (diagnostic::InstantiationScope).
 std::string instanceSpelling(Tree const& t, int tmpl_entry,
                              std::vector<widen::TypeRef> const& args);
+// A template's name as written — its definition's name, so a class-template ARM
+// (registered under an internal name) reads as the family's.
+std::string templateName(Tree const& t, int tmpl_entry);
 // A class TYPE -> its own member frame (ns_frame_id); -1 if not a registered class.
 // The class->frame bridge (inverse of classEntryForFrame), built on classEntryForType.
 int  classNsFrame(Tree const& t, widen::TypeRef cls);
