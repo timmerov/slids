@@ -212,7 +212,7 @@ Vector<int> : VDer(int vd_ = 0) {
 //Vec2<T>(...) { }
 
 /* a re-open's template list must match the primary's COUNT — the names are
-   the opening's own choice (positional re-spelling, tmpl_class.sl). */
+   the opening's own choice (positional re-spelling, class.sl). */
 //-EXPECT-ERROR: template list must match
 //Grow<U, W>() {
 //    U bad() { return 1; }

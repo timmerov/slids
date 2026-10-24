@@ -315,7 +315,7 @@ AS LANDED (2026-10-21)
     PARKED past kEndOfInput; grammar's `>>` split had to shift parked indices.
   - THE NEGATIVE RUNNER: a `.slh` case now also compiles the header's sibling `.sl` (where a
     template header's own completion is judged); Ngrow passes there.
-  - SWEEP: test/template tmpl_complete.sl; test/import tmpl_test, tmpl_test2, bird;
+  - SWEEP: test/template complete.sl; test/import tmpl_test, tmpl_test2, bird;
     test/guthrie guthrie.sl and electorate.sl (chaining — `import+ vector` added beside
     `import electorate`); test/lib algorithm.sl, vector.sl. lib/ needed nothing.
     test/progress galaxy.sl needs `import+ vector; import+ algorithm;` (the user's dir).

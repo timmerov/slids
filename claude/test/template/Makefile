@@ -19,14 +19,15 @@ LIB_BUILD = ../../build/lib
 IFLAGS    = -I $(LIB_HDR)
 
 SAMPLES = \
-	tmpl_alias \
-	tmpl_class \
-	tmpl_complete \
-	tmpl_function \
-	tmpl_method \
-	tmpl_nested \
-	tmpl_operator \
-	tmpl_special
+	alias_tmpl \
+	class \
+	complete \
+	function \
+	method_tmpl \
+	nested_tmpl \
+	operator_tmpl \
+	reopen_tmpl \
+	special
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

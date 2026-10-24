@@ -218,7 +218,7 @@ the decay change: a bare-T param meeting an ARRAY argument now binds T to
 the ARRAY type — arrays ride the class/tuple rung of the convention of
 convenience ((const T)^; the call passes the whole-array reference). the
 old decayed-iterator binding is gone; an iterator binding is still
-reachable with an explicit type-list (tmpl_function.sl's string-literal
+reachable with an explicit type-list (function.sl's string-literal
 call now spells `zork<char[]>`).
 
 sizeof note: the canon comment expects `five = sizeof("hello")`, but sizeof

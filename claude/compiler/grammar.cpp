@@ -4055,7 +4055,8 @@ struct Parser {
 
     // Pure lookahead: does a bare-identifier head form a QUALIFIED external scope
     // def — `A:B:…:X { }` (a namespace member of the qualified scope) or
-    // `A:B:…:X() { }` (an external re-open of a hoisted class, EMPTY parens)? At
+    // `A:B:…:X() { }` / `A:…:X<T>() { }` (an external re-open of a hoisted class or
+    // class template, EMPTY parens)? At
     // least one qualifier segment is required (`A:X`), which distinguishes it from
     // a plain namespace (`A { }`, no colon). A non-empty param list (`A:X(fields)`)
     // is NOT matched — that is inheritance (`Base:Derived(fields)`), left to
@@ -4075,6 +4076,10 @@ struct Parser {
                && !isHookHead(o + 1)) o += 2;
         // `o` now indexes the token after the final segment.
         if (peekKind(o) == token::Kind::kLBrace) return true;           // namespace
+        // A class TEMPLATE re-open spells its list on the final segment
+        // (`Ns:Box<T>() { }`); without the skip the shape fell to looksLikeClassDef
+        // as a NEW template deriving from Ns.
+        o = skipTypeArgGroup(o);
         return peekKind(o) == token::Kind::kLParen                       // re-open
             && peekKind(o + 1) == token::Kind::kRParen
             && peekKind(o + 2) == token::Kind::kLBrace;

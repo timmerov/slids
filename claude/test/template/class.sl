@@ -59,13 +59,13 @@ choice, bound BY POSITION: `U Vec<U>:m(U v)` renames T to U, and the
 subtree re-spells to the pattern's names at relocation (one simultaneous
 map — a multi-param re-spelling may SWAP names). a BARE template owner
 (`T Vec:m()`) is a compile error naming both remedies; a template's
-consts, aliases, and enums are added by a RE-OPEN (tmpl_complete.sl).
+consts, aliases, and enums are added by a RE-OPEN (complete.sl).
 a re-open's list matches by COUNT and re-spells positionally too — the
 same rule (`Pair<A, B>() { ... }`).
 
-template methods inside a template class landed later (tmpl_nested.sl);
+template methods inside a template class landed later (nested_tmpl.sl);
 nested uses (`Pair<Vec<int>>`) landed with the `>>` closer split
-(tmpl_nested.sl tier 3).
+(nested_tmpl.sl tier 3).
 */
 
 /* the workhorse: fields and methods on T, a user binary operator, and a member
@@ -730,7 +730,7 @@ int32 main() {
     //Wrap<int> nw; int q5 = nw.wsum(); println(String + "q5 = " + q5);
 
     /* an empty type-list names the LISTLESS flavor — a qualifier only,
-       never a storage type (the per-flavor repeal, tmpl_nested.sl). */
+       never a storage type (the per-flavor repeal, nested_tmpl.sl). */
     //-EXPECT-ERROR: does not name a usable type
     //Vec<> ev; int q6 = ev.sum(); println(String + "q6 = " + q6);
 

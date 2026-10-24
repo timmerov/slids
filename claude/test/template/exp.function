@@ -15,7 +15,7 @@ s = 36
 e = 49
 za =  62
 11 3
-tmpl_function.sl:line#: int64 answer = 42
+function.sl:line#: int64 answer = 42
 nt = 42
 ne = 4
 nx = 12

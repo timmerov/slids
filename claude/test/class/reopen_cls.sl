@@ -353,6 +353,48 @@ Outer(int o_) {
     Sib:op+=(int a) { s_ += a; }
 }
 
+/* A:B:C — every STEP of a qualified path is a MEMBER step (the next segment is declared
+   inside this one) or a BASE step (this segment is the next one's base, declared beside
+   it). a path that reaches an existing class re-opens it; the member step is tried first. */
+
+/* member, base: Qa a namespace, Qb a class in it, Qc a class in Qa deriving from Qb. */
+Qa {
+    Qb(int b_) { }
+    Qb:Qc(int c_) { }
+}
+Qa:Qb:Qc() { int cm() { return b_ + c_; } }
+
+/* base, base: Pa <- Pb <- Pc, all at file scope. */
+Pa(int a_) { }
+Pa:Pb(int b_) { }
+Pb:Pc(int c_) { }
+Pa:Pb:Pc() { int cm() { return a_ + b_ + c_; } }
+
+/* base, member: Ma is Mb's base; Mc is a class nested in Mb. */
+Ma(int a_) { }
+Ma:Mb(int b_) { Mc(int c_) { } }
+Ma:Mb:Mc() { int cm() { return c_ * 2; } }
+
+/* the member step wins: Wa holds a nested Wb AND a file-scope Wb derives from Wa;
+   `Wa:Wb()` re-opens the NESTED one (canon `Class:Reopen()`). */
+Wa(int a_) { Wb(int n_) { } }
+Wa:Wb(int d_) { }
+Wa:Wb() { int which() { return n_ + 100; } }
+
+/* every segment resolves but the class does not exist: a NEW nested class. */
+Na { Nb(int b_) { } }
+Na:Nb:Nc() { int k() { return 4; } }
+
+/* a qualified re-open of a namespace CLASS TEMPLATE (the `<..>` group on the last
+   segment) adds members to every flavor. */
+Tn { Tbox<T>(T v_) { } }
+Tn:Tbox<T>() { T twice() { return v_ + v_; } }
+
+/* `alias Ns;` puts Ns in the same scope: a bare opening re-opens Ns's class. */
+Al { Abox(int v_) { } }
+alias Al;
+Abox() { int inc() { return v_ + 1; } }
+
 Forward(int a_) {
     _(); ~();
 }
@@ -535,6 +577,22 @@ int32 main() {
     println(String + "le.sum = " + le.sum());          // 7
     println(String + "le.e = " + Lce:E:kY);            // 1
 
+    /* A:B:C member / base steps. */
+    Qa:Qc qc = (1, 2);
+    println(String + "qc.cm = " + qc.cm());            // 3    (member, base)
+    Pc pc = (1, 2, 3);
+    println(String + "pc.cm = " + pc.cm());            // 6    (base, base)
+    Mb:Mc mc = (5);
+    println(String + "mc.cm = " + mc.cm());            // 10   (base, member)
+    Wa:Wb wb = (7);
+    println(String + "wb.which = " + wb.which());      // 107  (member step wins)
+    Na:Nb:Nc nc2;
+    println(String + "nc.k = " + nc2.k());             // 4    (new nested class)
+    Tn:Tbox<int> tb = (21);
+    println(String + "tb.twice = " + tb.twice());      // 42   (qualified template re-open)
+    Abox ab = (6);
+    println(String + "ab.inc = " + ab.inc());          // 7    (re-open via alias Ns)
+
     Forward fwd;
     Split sp = (3);                             // hooks defined in two SEPARATE re-opens
     Late lt = (4);                              // hooks added by a re-open, never declared
@@ -671,3 +729,22 @@ int32 main() {
 //-EXPECT-ERROR: A constructor or destructor may only appear in a class body
 //Dn { }
 //Dn:_() { }
+
+/* A:B:C — a class first segment and a NAMESPACE second segment that is not its member. */
+//-EXPECT-ERROR: 'Ka' has no class or namespace member 'Kn'
+//Ka(int a_) { }
+//Kn { Kc(int c_) { } }
+//Ka:Kn:Kc() { }
+
+/* A:B:C — two classes, the first neither the second's scope nor its base. */
+//-EXPECT-ERROR: 'Jb' is neither a member of 'Ja' nor derived from it
+//Ja(int a_) { }
+//Jb(int b_) { Jc(int c_) { } }
+//Ja:Jb:Jc() { }
+
+/* A:B:C:D — the base step holds (Ha <- Hb) but the next one does not. */
+//-EXPECT-ERROR: 'Hc' is neither a member of 'Hb' nor derived from it
+//Ha(int a_) { }
+//Ha:Hb(int b_) { }
+//Hc(int c_) { Hd(int d_) { } }
+//Ha:Hb:Hc:Hd() { }

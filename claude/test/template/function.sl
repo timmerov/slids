@@ -84,7 +84,7 @@ parameter rules — a t-free subtree imposes no constraint at inference, and on
 the way to a T inside a `T^` / `T[]` shape the normal conversions apply
 (array decay into the pointee, an element-address ITERATOR into a reference,
 rvalue materialization into a reference). a
-BARE T meeting an array binds the ARRAY type itself (canon tmpl_special.sl —
+BARE T meeting an array binds the ARRAY type itself (canon special.sl —
 arrays ride the class/tuple rung of the convention of convenience; an
 iterator binding needs an explicit type-list). after binding (inferred or
 explicit) the call is an ordinary single-candidate call: widening / implicit
@@ -219,7 +219,7 @@ T concrete<T>(T a, Pair p) {
 /* a template declared inside a METHOD body: its instances are nested functions
    in the method's scope, so the body may even read the enclosing object's
    FIELD through the ordinary field machinery. (In the class BODY itself a
-   template is a template METHOD — rejected at parse, tmpl_method's item.) */
+   template is a template METHOD — rejected at parse, method_tmpl.sl's item.) */
 Tally(int c_ = 0) {
     int bump(int by) {
         T scale<T>(T v) { return v * 2; }
@@ -386,7 +386,7 @@ int32 main() {
     int e = sq<int>(7); println(String + "e = " + e);
 
     /* a string-literal argument binds T to its ARRAY type since the
-       tmpl_special landing (arrays no longer decay at inference); the explicit
+       special.sl landing (arrays no longer decay at inference); the explicit
        iterator type-list keeps this the mixed-signature iterator case. */
     int za = 62;
     zork<char[]>("za = ", za);

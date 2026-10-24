@@ -34,7 +34,7 @@ SAMPLES = \
 	operator \
 	overload_cls \
 	refine \
-	reopen \
+	reopen_cls \
 	self \
 	virtual
 

@@ -233,7 +233,7 @@ int32 main() {
     //alias LR<U> = U[];
 
     /* a use inside a function-template type-list PARSES now (the nested-type
-       landing, tmpl_nested.sl); this case then stops in dump's body, where the
+       landing, nested_tmpl.sl); this case then stops in dump's body, where the
        String chain meets the reference-typed T value. */
     //-EXPECT-ERROR: Arithmetic is not allowed on a reference
     //dump<Ref<uint32> >(#y);

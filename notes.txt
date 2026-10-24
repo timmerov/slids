@@ -8,7 +8,7 @@ remove landed items from todo.txt. update stale entries.
 
 ❯ ending session now. summarize this discussion so we can resume here next session. -
   reopen namespace header templates to add aliases.
-  add template function type filtering the template classes.
+  add template function type filtering to template classes.
   fix lost methods.
   more. go.
   guthrie.sl:

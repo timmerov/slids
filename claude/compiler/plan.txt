@@ -1419,7 +1419,7 @@ Phase 5 — classes
     member's alias_label). The `#x` 5-tuple LANDED (`(##file, ##line, ##type(x),
     ##name(x), ^x)`, desugars in grammar parseUnary); aliased-FUNCTION
     `##type(Fn)` waits on function aliases (todo.txt).
-    Canon: test/misc/macros.sl, alias.sl, constfold/enum.sl.
+    Canon: test/misc/macros.sl, alias_msc.sl, constfold/enum.sl.
 
 Phase 6 — const correctness
   Threads through phases 3-5; land after classes have the bones.
@@ -1487,7 +1487,7 @@ Phase 6 — const correctness
 Phase 7 — class advanced
   * hoisted classes (file-scope hoist across reopens) — LANDED (see Phase 5 "HOISTED
     classes"; a nested class introduced/re-opened via a class re-open is reachable — the
-    RE-OPENING entry below + test/class/reopen.sl Host:Nested / Bag:Item).
+    RE-OPENING entry below + test/class/reopen_cls.sl Host:Nested / Bag:Item).
   * SINGLE INHERITANCE (`Base : Derived(fields){body}`) — LANDED (non-virtual). The
     base is an UNNAMED FIRST FIELD: grammar injects `_$base : Base` at slot 0, so
     layout, FLAT construction (base fields splice in: `Derived d = (b0,b1,own...)`,
@@ -1579,7 +1579,7 @@ Phase 7 — class advanced
     intermediate resolve passes skip a qualified leaf). A qualified MUTABLE var is rejected
     ("Only constants, aliases, and enums may be defined by qualified name"). Chained
     (`C1:Ns1:C2:Ns2:C3:m`) + external-ns merge both work. The cross-scope run-time variant is
-    split into REFINEMENTS below. Canon test/class/reopen.sl (Stages A-F: block/method/
+    split into REFINEMENTS below. Canon test/class/reopen_cls.sl (Stages A-F: block/method/
     namespace/hoisted-reopen/chained + const/alias/enum in file/namespace/class/function scope;
     field-add / redefine / leak / bad-path negatives). [[project_reopen_classes]]
     FOLLOW-UP 2026-07-28: the external OPERATOR form (`bool C:op==(...)`, and the produce-self
@@ -1591,7 +1591,7 @@ Phase 7 — class advanced
     because parseDefinitionMember falls through to parseFunctionDef with no recognizer at all.
     Fixed with skipOpName — the `op` counterpart to isHookHead, ONE spelling used by the bare
     name slot AND the qualified TAIL, plus `: op` joining isHookHead in the no-return-type
-    early-out. Canon test/class/reopen.sl (STAGE E: both spellings in a class body and a function
+    early-out. Canon test/class/reopen_cls.sl (STAGE E: both spellings in a class body and a function
     body).
   * A CTOR/DTOR IS A METHOD WITH RESTRICTIONS — LANDED 2026-07-16. The governing rule (canon):
     a ctor/dtor is a method with restrictions, LIKE AN OPERATOR, so every syntax a method admits
@@ -1612,7 +1612,7 @@ Phase 7 — class advanced
     reinterpreted only a ONE-segment leading identifier as the qualifier, but parseQualifiedName
     swallows the whole `A:B` chain as the "return type"; it now splits the spelling back into
     segments (token-count checked, 2n-1, so segment->token stays exact). Hooks and operators were
-    one fix. Canon reopen.sl: `Ext` / `Hh:Nst` / `Hs:Veg` / `Hc2:Sib` positives (external,
+    one fix. Canon reopen_cls.sl: `Ext` / `Hh:Nst` / `Hs:Veg` / `Hc2:Sib` positives (external,
     chained, namespace-body, class-body) + no-return-type / no-params / namespace-target
     negatives. [[project_reopen_class_lifecycle]]
   * CLASS LIFECYCLE ACROSS OPENINGS — LANDED 2026-07-16. The ctor/dtor contract is per CLASS,
@@ -1639,7 +1639,7 @@ Phase 7 — class advanced
     scan, so has_ctor stayed false, the hook was NEVER CALLED, and its `__impl` was emitted DEAD
     — it compiled, linked, ran, and printed nothing. parseGlobal keeps its own per-body pairing
     check (its own `_$gctor`/`_$gdtor` + its own messages): a global group is ONE body and cannot
-    be re-opened, so per-body is correct there. Canon test/class/reopen.sl Stage G — positives
+    be re-opened, so per-body is correct there. Canon test/class/reopen_cls.sl Stage G — positives
     `Forward` (decl in primary, def in a re-open), `Split` (halves in two re-opens), `Late` (a
     re-open adds both, undeclared); each FAILS without the fix, `Late` by printing nothing. Five
     negatives pin the obligation + pairing across openings (regression locks: each produced the
@@ -2057,14 +2057,14 @@ Phase 9 — templates
     rvalue-materialization aligners apply only to REACH a T — `dump(#answer)`
     infers through a tuple-ref; the iterator aligner FIXED 2026-09-17: a `T^`
     pattern meeting `^arr[i]` binds the ELEMENT, not the iterator — canon
-    tmpl_function.sl / tmpl_method.sl). NO
+    function.sl / method_tmpl.sl). NO
     overloading: a template owns its name; the call retargets at the instance
     and rides the single-candidate path. Two hard-won invariants: an instance
     entry is never name-live (a recursive call must re-unify via the TEMPLATE,
     else a re-binding recursion pins T), and instances splice AFTER their def,
     never at list end (a statement after `return` breaks trailing-return
     analysis). Full design: readme.txt TEMPLATES. Canon
-    test/template/tmpl_function.sl. Deferred out of this landing: overload
+    test/template/function.sl. Deferred out of this landing: overload
     participation, `>>` closer split, unchecked uninstantiated bodies (todo).
   * template aliases                                LANDED (single-TU) 2026-07-21
     The type-level twin, on the same marker machinery. A USE `Ref<int>` is a
@@ -2079,7 +2079,7 @@ Phase 9 — templates
     tree.entries is a VECTOR — an Entry& held across addEntry dangles (the
     pattern write hit freed memory; nondeterministic, then a segfault); re-index
     at every touch. Full design: readme.txt TEMPLATES. Canon
-    test/template/tmpl_alias.sl. Deferred: NESTED TEMPLATE TYPES (todo umbrella:
+    test/template/alias_tmpl.sl. Deferred: NESTED TEMPLATE TYPES (todo umbrella:
     `>>` split + gate angle-depth).
   * template methods                                LANDED (single-TU) 2026-07-21
     Rode the function-template machinery WHOLE — the landing was diverts plus a
@@ -2097,14 +2097,14 @@ Phase 9 — templates
     undisturbed. Two funnel guards: instances never join an overload set
     (declaredMemberOverloads) and never trip the method dup-definition check (a
     T-free instance shares the template's exact signature by design). Full
-    design: readme.txt TEMPLATES. Canon test/template/tmpl_method.sl. Deferred:
+    design: readme.txt TEMPLATES. Canon test/template/method_tmpl.sl. Deferred:
     out-of-line template METHODS (bundled with cross-TU), operator templates.
     THEN — EXTERNAL NAMESPACE TEMPLATES (same day): `T Space:f<T>(v) { }` — the
     qualified template head always parses; the TARGET decides at relocation,
     where its kind is known. A namespace target relocates like any external
     member and the member-template divert does the rest (zero template-specific
     relocation code); a class target rejects there, deferred as above. Canon
-    tmpl_function.sl (external thrice + the member-collision negative).
+    function.sl (external thrice + the member-collision negative).
   * template classes                                LANDED (single-TU) 2026-07-22
     THE SHAPE: the pattern is the fn-template bookmark (pristine body + scope
     snapshot, kClass entry with is_template and NO type/frame/ClassInfo), but
@@ -2133,7 +2133,7 @@ Phase 9 — templates
     cap (512) backstops the 64-deep nesting guard — without it, a compile-time
     HANG. Type-list REQUIRED (no inference from construction args); a template
     owns its name (no re-open / redefinition). Full design: readme.txt
-    TEMPLATES. Canon test/template/tmpl_class.sl (74 golden lines; 17
+    TEMPLATES. Canon test/template/class.sl (74 golden lines; 17
     negatives). Deferred: incomplete (`...`), external members, template
     methods inside a class template, nested uses (`Pair<Vec<int>>`, the `>>`
     umbrella — an alias argument smuggles an instance in today), qualified
@@ -2159,7 +2159,7 @@ Phase 9 — templates
     early stamp hid the primary from a NAMESPACE-member re-open's merge
     lookup, which re-registered a second class and defined the synthesized
     transfer ops twice (invalid IR at llc; file/block scope unaffected).
-    Canon test/template/tmpl_complete.sl (40 golden lines; 10 negatives).
+    Canon test/template/complete.sl (40 golden lines; 10 negatives).
     Still deferred: header-declared incomplete templates (cross-TU), member
     template methods, listless re-opens (a collision by design).
   * cross-TU templates + `--instantiate`                LANDED 2026-07-22
@@ -2254,7 +2254,7 @@ Phase 9 — templates
     the asymmetry. Author-side up-front checking stays deferred with
     two-phase.
   * nested templates (three tiers)                       LANDED 2026-07-23
-    Canon test/template/tmpl_nested.sl. Diverts on existing machinery; ONE
+    Canon test/template/nested_tmpl.sl. Diverts on existing machinery; ONE
     new mechanism total.
     TIER 1 — a TEMPLATE METHOD inside a CLASS TEMPLATE. The guard in
     registerClassTemplate narrowed to HEADER-owned templates (focused "may
@@ -2300,13 +2300,13 @@ Phase 9 — templates
     self-NESTED alias use (`Ref<Ref<T>>`) false-cycled — a use's ARGUMENTS
     now resolve BEFORE the alias name joins the visiting set (composition,
     not a cycle; the true-cycle check inside ensureAliasTemplatePattern
-    stands). Stale negatives converted: tmpl_class.sl (the tier-1
-    rejection), tmpl_alias.sl (the nested-use pair — one now positive, one
+    stands). Stale negatives converted: class.sl (the tier-1
+    rejection), alias_tmpl.sl (the nested-use pair — one now positive, one
     repointed at the print-intrinsic limit it stops at today).
     DIAGNOSTIC (same session): a commonType failure spells an ALIAS operand
     label=target ('T=float', 'X=int', 'Integer=int') via classify's
     spellForMessage — found reading the tier-1 detour where 'T' and 'X'
-    hid the bound types; user chose the format. Negatives in tmpl_nested.sl
+    hid the bound types; user chose the format. Negatives in nested_tmpl.sl
     (the exact Box<float>.viaT(2) case) and expression/mixed.sl.
     Suite: 84 positives / 894 negatives, 0 failures.
     THEN — HOISTED ALIAS TEMPLATES + THE BODY PLACEMENTS (same day). An
@@ -2320,7 +2320,7 @@ Phase 9 — templates
     local-function / alias templates inside a template FUNCTION's or
     METHOD's body ride pristine-body + block-scope registration as-is —
     probed, then pinned (viaAlias/viaLocal/viaFn/Meth/Meth2). Every form
-    of tmpl_nested.sl's canon nesting list is now landed TU-local.
+    of nested_tmpl.sl's canon nesting list is now landed TU-local.
     Negative: alias target using an unlisted outer param.
   * the vector-sandbox batch (four landings)             LANDED 2026-07-23
     test/progress/vector* (the user's cross-TU template Vector library —
@@ -2359,7 +2359,7 @@ Phase 9 — templates
     (inline-local Vector<Value> + aggregated Vector<int> via .sli) and runs
     with ctor/dtor count 0 after every scope. Suite green throughout.
   * the convention of convenience                        LANDED 2026-07-23
-    Canon tmpl_function.sl + tmpl_method.sl (user's design; v1 had it): a
+    Canon function.sl + method_tmpl.sl (user's design; v1 had it): a
     BARE-`T` parameter passes by value when T binds a primitive (references
     ARE primitives — the pointer copies) and as `(const T)^` otherwise, so
     one generic body serves every binding. UNIFORM — every template kind,
@@ -2376,11 +2376,11 @@ Phase 9 — templates
     every consumer composes; `^arg` collapses via the `^X^` cancellation;
     the generated ident is marked against re-entrant double-deref).
     Call sites needed NOTHING (a class lvalue already converts to `T^` by
-    address). Converted tmpl_function's "T may not bind a class by value"
+    address). Converted function.sl's "T may not bind a class by value"
     negative into the marquee positive (add(p1, p2) through op+); pinned
     class bindings across namespace/block/nested-in-template functions,
     hoisted/derived/virtual/template flavors, the outer-T member-template
-    param (tmpl_nested r8), and the concrete-param rejection.
+    param (nested_tmpl.sl r8), and the concrete-param rejection.
   * ARITY-ONLY template overloading                      LANDED 2026-07-23
     Driven by dump.slh (the sandbox's two same-name `dump<T>` arities).
     THE RULE: same-scope same-name templates coexist iff their ARITY RANGES
@@ -2404,8 +2404,8 @@ Phase 9 — templates
     (a demand spelling carries no arity; an uncalled arity emits as unused
     external code — bloat, not breakage — noted for future refinement).
     Instance symbols already encode param types (Itanium), so same-name
-    instances never collide. Canon: tmpl_function twoWay + dfl negative,
-    tmpl_method pairup, tmpl_nested choose (per-flavor), cross-TU
+    instances never collide. Canon: function.sl twoWay + dfl negative,
+    method_tmpl.sl pairup, nested_tmpl.sl choose (per-flavor), cross-TU
     tmpl_lib.slh/.sl tpair through the .sli chain (one demand spelling,
     both flavors emitted). Suite green; dump.slh compiles.
   * the arithmetic convenience (int -> float mixing)     LANDED 2026-07-23
@@ -2424,13 +2424,13 @@ Phase 9 — templates
     lowering arm (sitofp/uitofp — the explicit-cast path already had one).
     Also: checkValueWiden's messages now spell aliases label=target.
     Thirteen pinned negatives converted to positives across widen.sl,
-    mixed.sl, constant.sl, tmpl_nested.sl (the 'T=float'/'X=int' pin moved
+    mixed.sl, constant.sl, nested_tmpl.sl (the 'T=float'/'X=int' pin moved
     to mixed.sl's COMPARISON form); new negatives pin the walls (bool mix,
     comparison mix, shift count, int-lvalue aug). augment.sl gained the
     float-lvalue aug positives; its bitwise `&=` negative survived
     unchanged. Suite green; the galaxy sandbox builds end-to-end.
   * template operators + PLAIN BEATS TEMPLATE            LANDED 2026-07-23
-    Canon tmpl_operator.sl (user's design; excludes op= op<-- op<-->).
+    Canon operator_tmpl.sl (user's design; excludes op= op<-- op<-->).
     A template OPERATOR is a template method named `op<sym>` — the whole
     machinery rides. GRAMMAR: the template-list parses after the
     MAX-MUNCHED symbol (looksLikeFunctionDef's op arm + the parse head's
@@ -2461,16 +2461,16 @@ Phase 9 — templates
     instance id). Registration: the plain-clash arms removed at all four
     sites (registerTemplateFunction, the member loop, the file-scope and
     nested-fn passes). Four "may not share its name" negatives converted
-    to plain-beats-template positives (tmpl_function coex, tmpl_method
-    Coex both orders, tmpl_nested CoexF per-flavor); same-arity
+    to plain-beats-template positives (function.sl coex, method_tmpl.sl
+    Coex both orders, nested_tmpl.sl CoexF per-flavor); same-arity
     template-template stays a collision (dup + the new BadA operator
-    negative). tmpl_operator pins: canon scalar op*<T> (int + float),
+    negative). operator_tmpl.sl pins: canon scalar op*<T> (int + float),
     the op+=(int)/op+=<T>(T) canon pair, template comparison + op[]
     (read AND write), a CLASS operand through the convention, the spaced
     `op< <T>`, the out-of-line `Ool:op*<T>`, a class-template flavor's
     template op, and the three exclusion negatives. Suite green.
   * instance-qualified spellings (`Kit<int>:member`)      LANDED 2026-07-24
-    Canon tmpl_class.sl (the iq block). LIFTS the two spelling limits the
+    Canon class.sl (the iq block). LIFTS the two spelling limits the
     nested-templates landing recorded: an instance's members now HAVE a
     qualified spelling from outside (`Kit<int>:Sub` / `:Elem` / `:E:eOne` /
     `:kBase`), and the `Base:` bypass CAN name an instance base
@@ -2513,7 +2513,7 @@ Phase 9 — templates
     relocateOutOfLineMembers rejects the definition kinds focused ("Cannot
     add a member to a template instance") before the sibling walk
     mis-blames the scope.
-    FALLOUT, resolved next day: tmpl_nested.sl's tier-2 negative
+    FALLOUT, resolved next day: nested_tmpl.sl's tier-2 negative
     (`TClass<int>:SClass<float>`, "the qualifier is the bare host name")
     was the exact spelling this landing legalizes — converted to a
     positive (nq); the walk reaches the flavor's per-instance sub-pattern.
@@ -2534,7 +2534,7 @@ Phase 9 — templates
     DECLARED fallback when frameInsideInstance (the owner-frame walk to
     the first class frame, '<' in its name) — at all four walker lookup
     sites; namespaces and plain classes keep pure liveness. Regression:
-    tmpl_class.sl fnC + iq23.
+    class.sl fnC + iq23.
     CROSS-TU (same day; canon tmpl_test.sl y1-y3, tmpl_test2.sl r2b/y4):
     a header template's const + member alias ride declare-only clones
     whole (leaf members are not stripped) and answer instance-qualified
@@ -2590,7 +2590,7 @@ Phase 9 — templates
     Suite: 905 negatives, all positives green.
   * NESTED SPECIES + DEEP CHAINS                          LANDED 2026-07-24
     (The instance-qualified landing's completion pass — canon
-    tmpl_class.sl Spec + tmpl_nested.sl Host2/Spc3.) EVERY nested-class
+    class.sl Spec + nested_tmpl.sl Host2/Spc3.) EVERY nested-class
     species rides the per-flavor machinery, pinned: a plain nested
     class; nested DERIVED from the SIBLING, from a FILE-SCOPE base, and
     from a TEMPLATE-INSTANCE base spelled with the outer T (virtual —
@@ -2652,13 +2652,13 @@ Phase 9 — templates
     the rule and BOTH remedies — instance-qualify the host / re-list
     the param, each verified by probe before the wording shipped — plus
     a note careting the target. Every other pattern-build failure keeps
-    the requireKnownType fallback. Negatives: tmpl_nested.sl BadAl (the
+    the requireKnownType fallback. Negatives: nested_tmpl.sl BadAl (the
     TU-local pin, marker updated from "Unknown type") + tmpl_test.sl
     (the cross-TU flavor).
     Suite: import + template, all positives and negatives green.
 
   * PER-FLAVOR NESTED MEMBERS + THE LISTLESS FLAVOR       LANDED 2026-07-26
-    (The canon repeal, tmpl_nested.sl top comment: the self-contained
+    (The canon repeal, nested_tmpl.sl top comment: the self-contained
     hoisted-list design and the bare-host qualifier are OUT.) Every
     nested member of a class template is PER FLAVOR: the file-scope
     "Outer:Inner" sub-pattern registration was REMOVED (with its two
@@ -2696,13 +2696,13 @@ Phase 9 — templates
     (reportListlessStripped). A bare pattern qualifier (`TClass:member`,
     any depth, patternRejects) errors naming both remedies. `<>`
     composes at depth (`Host2<int>:H<>:kH`).
-    Suite: template positives + negatives green (tmpl_nested.sl reworked
+    Suite: template positives + negatives green (nested_tmpl.sl reworked
     to the new canon: repealed re-list idioms rewritten, BadU/BadAl
     repealed into positives, the new negatives — dependent-through-<>,
     bare qualifier, storage/argument walls, the distinct-type wall).
     KNOWN FALLOUT in out-of-scope files (stale pins of the old
-    behavior): tmpl_class.sl:643 + tmpl_alias.sl:211 (`X<>` was a parse
-    error, now the listless rules answer), tmpl_method.sl:345
+    behavior): class.sl:643 + alias_tmpl.sl:211 (`X<>` was a parse
+    error, now the listless rules answer), method_tmpl.sl:345
     (`j.scaled<>(1)` was a parse error, now empty-explicit-list =
     inference and it compiles), import/tmpl_test.sl:70+:155 (bare-host
     header-alias spelling repealed; the chain diagnostic it pinned is
@@ -2759,8 +2759,8 @@ Phase 9 — templates
     THE MUNGE BECAME TRANSITIVE with it (internConst∘deepConst on the
     pointee; the conv arm too): a `(char[], ...)^` param's tuple pointee
     freezes what its slot POINTERS reach — which REVERTED the 5th
-    slice's dump-tuple respellings (tmpl_alias's DumpTuple, macros' and
-    tmpl_function's dump params are back to plain `char[]` slots: the
+    slice's dump-tuple respellings (alias_tmpl.sl's DumpTuple, macros' and
+    function.sl's dump params are back to plain `char[]` slots: the
     author writes natural slots, the param contract supplies the
     recursive const; the earlier "why isn't the munged (const Tuple)^
     sufficient" answer was WRONG — it described the compiler's one-level
@@ -2815,15 +2815,15 @@ Phase 9 — templates
     became the read-only deref pin + the cv_neg_ret negative.
     Suite fallout beyond that: string-literal respellings (hello,
     iterator incl. char-iterator locals, macros ##date/##time, lex,
-    tmpl_alias's DumpTuple + tmpl_function's dump tuples, mutable's
+    alias_tmpl.sl's DumpTuple + function.sl's dump tuples, mutable's
     munge dst -> the sized COPY), evaluate's ptr_rhs + return_fn's
-    mkHolder took `mutable`, tmpl_alias's pick (alias-spelled pointer
+    mkHolder took `mutable`, alias_tmpl.sl's pick (alias-spelled pointer
     param) took `mutable`, second<T>'s body local spells the munged
     const. Canon: mutable.sl (flow block: add-const / cast-drop /
     array-copy positives, the three blessed string spellings, the
     deep-const return; 8 negatives: decl/assign/move/return drops, the
     tuple-slot AND positional launders, the `^^` depth drop, the lying
-    middle) + tmpl_function.sl (deref1 + cv_neg_ret). lvalue.sl's
+    middle) + function.sl (deref1 + cv_neg_ret). lvalue.sl's
     documented escape flipped to "closed". KNOWN: test/progress
     (user's library, off-limits) has literal-tuple fallout
     (galaxy.sl's dump) awaiting the user's pass.
@@ -2852,7 +2852,7 @@ Phase 9 — templates
     const arrays, string literals into `mutable char[]`, const classes
     into `mutable T^`; `<mutable>` casts through end-to-end.
     Canon mutable.sl (the caller-side block + 5 neg_pass_* negatives)
-    + tmpl_function.sl (the CONVENTION block: cvread/cvshow/cvbump
+    + function.sl (the CONVENTION block: cvread/cvshow/cvbump
     positives — `const T` for a class binding's auto-deref'd ##type,
     `(const CvP)^` for a pointer binding — and cv_neg_write /
     cv_neg_mut / cv_neg_pass). STILL OPEN: the general flow rule at
@@ -2889,7 +2889,7 @@ Phase 9 — templates
     are deferred, so field writes through the receiver stay legal.
     BLAST RADIUS: six functions in three files needed `mutable`
     (lvalue.sl tick; call.sl tuple_by_pointer / class_by_pointer /
-    mutate_pair / mix_call; tmpl_function.sl bump) — the suite reads
+    mutate_pair / mix_call; function.sl bump) — the suite reads
     params far more than it writes them. FREE CONSEQUENCE: the todo's
     "mutable REQUIRED on op<--/op<--> params" enforces itself — a
     transfer operator whose body writes its source now rejects unless
@@ -2946,7 +2946,7 @@ Phase 9 — templates
     multi-param re-spelling may SWAP names). A BARE template owner
     (`T Vec:m()`) is a compile error naming both remedies — this REPEALS
     the previously-landed bare external forms wholesale: a template's
-    consts/aliases/enums are now added by a RE-OPEN (tmpl_complete.sl's
+    consts/aliases/enums are now added by a RE-OPEN (complete.sl's
     Ext block rewritten). The RE-OPEN list rule relaxed the same way:
     match by COUNT, names re-spell positionally (the "must match" exact-
     name check now fires only on arity).
@@ -2965,11 +2965,11 @@ Phase 9 — templates
     the landed per-flavor machinery — methods, method templates
     (explicit + inferred calls), HOOKS, and OPERATORS on template owners
     all rode free (probed end-to-end before pinning).
-    Canon tmpl_class.sl (the ool block: plain/renamed/template-method
+    Canon class.sl (the ool block: plain/renamed/template-method
     forms, the renamed re-open, the swap re-spelling pinning position-
     beats-name, hooks+operator balanced; four negatives: bare owner,
     arity, list-on-non-template, concrete-type-in-list) +
-    tmpl_complete.sl (Ext rewritten to the re-open form; the re-open
+    complete.sl (Ext rewritten to the re-open form; the re-open
     "must match" negative repointed at arity). Suite green everywhere;
     bug.sl (the repro) now compiles its yes-shapes and rejects its
     no-shapes.
@@ -2994,7 +2994,7 @@ Phase 9 — templates
     frame), and STATICS through a class qualifier (consts/aliases/enums
     defer to the qualified-name lookup before the rewrite — pinned
     positive QIn:viaConst). Canon method.sl: QOut/QBad/QBad2 +
-    neg_qual_file + the QVB flavor negative; tmpl_class.sl's two
+    neg_qual_file + the QVB flavor negative; class.sl's two
     file-scope negatives re-pinned from "Unresolved identifier" to the
     rule. bug.sl (the repro) now rejects.
 
@@ -3397,7 +3397,7 @@ into the consumer (layout) and so needed a GATE, not a drop.
   Detail: readme.txt SOURCE-PRIVATE FIELDS; readme-classes.txt CONSTRUCTION.
 
 MUTABLE-T PARAMS + BURIED-CONST BINDINGS (landed 2026-08-18).
-Canon rewrite in tmpl_function.sl: `mutable` becomes legal on a bare-T
+Canon rewrite in function.sl: `mutable` becomes legal on a bare-T
 value param, judged on the CONVERTED form — by-value (primitive) binding
 IGNORES it, a class/tuple binding's convention reference is minted MUTABLE
 (body writes reach the caller; an rvalue argument is allowed, the mutation
@@ -3426,7 +3426,7 @@ Default unchanged: no keyword, hard-const convention, canon B stands
   - OPEN EDGE (CLOSED 2026-10-19): the --instantiate demand-pool binder
     stripped const from demand spellings; it now uses canonicalBinding, the
     explicit-list rule (see DEMAND PATH below).
-  - Coverage: tmpl_function.sl — the `mut` identity across every binding
+  - Coverage: function.sl — the `mut` identity across every binding
     kind, mutation-reaches-caller, rvalue discard, all three
     `same<(const int)^>` spellings, the sizeof(T) footgun pin (##type
     spells `T` for every mutable binding — no munge, no rebuilt type),
@@ -3436,7 +3436,7 @@ Default unchanged: no keyword, hard-const convention, canon B stands
   binding + the convention's munge arm + the I..E mangling note.
 
 TEMPLATE SPECIALIZATION + TYPE SETS (landed 2026-08-18).
-Canon tmpl_special.sl: same-name same-arity template ARMS selected by the
+Canon special.sl: same-name same-arity template ARMS selected by the
 deduced T's membership in a TYPE SET. `alias Name = <type-list>;` declares
 a set (kTypeSet — a constraint, never a type): `|` adds, `|!` removes,
 built LEFT TO RIGHT (removing an absent member is a no-op; `<!int8|Integers>`
@@ -3472,7 +3472,7 @@ const kept.
     Arrays now ride the class/tuple convention rung — param munges to
     pointer-to-(const)-array (the existing array-param arm), the call
     passes the whole-array reference (rung 0), `mutable` opts writes in.
-    An iterator binding needs an explicit type-list (tmpl_function.sl's
+    An iterator binding needs an explicit type-list (function.sl's
     string-literal call now spells `zork<char[]>`). This supersedes the
     2026-08-18 buried-const entry's "array decay unchanged" line.
   - Guard rails: an UNUSED element-type binder errors at registration (a
@@ -3481,11 +3481,11 @@ const kept.
     T or each other; the constraint owns a single-param list; method
     templates reject `T=`; a type position naming a set reports "is a
     type set, not a type".
-  - CANON CONFLICT flagged, nothing changed: tmpl_special's comment
+  - CANON CONFLICT flagged, nothing changed: special.sl's comment
     expects sizeof("hello") == 5, but sizeof counts the NUL (canon
     test/misc/sizeof.sl: "Hello, World!" is 14; slids_reference.md's
     sizeof section still claims 5) — sizeof and countof both yield 6.
-  - Coverage: tmpl_special.sl — the four canon shapes (1-D/2-D/class
+  - Coverage: special.sl — the four canon shapes (1-D/2-D/class
     array/element), every Primitives corner, string literal (N counts the
     NUL), explicit lists (membership + literal-decay-into-Primitives),
     alias/const canonicalization, L2R removal (BigIntegers), removal-
@@ -3518,7 +3518,7 @@ ambiguity-example additions).
   - A constraint may be a full TYPE SPELLING — `T=int` (primitive
     KEYWORDS parse now), `T=int^`, `T=(int,int)`, `T=int[]`, `T=Box<int>`
     — a one-type set; bare identifiers still resolve set-first.
-  - Coverage: tmpl_special.sl — the canon mixed pair (inferred + explicit
+  - Coverage: special.sl — the canon mixed pair (inferred + explicit
     both ways), shape-mixed arms + differently-shaped catch-all, all five
     type-spelling kinds, body-scope mixed pair with `T=int`; negatives:
     the canon error pair, ambiguity-not-rescued, two-unconstrained clash
@@ -4084,7 +4084,7 @@ CROSS-CUTTING — INCOMPLETE TEMPLATES ARE INCOMPLETE CLASSES + LAYOUT WORDS (LA
      Tagged's default-construct-only negative became the `tagged init` positive;
      extra.slh/extra.sl repurposed from the deleted rule's negatives into the golden-checked
      owner-computed pin (Pack, imported by consumer.sl); Grow's pr5 negative now gets the
-     opaque refusal. test/template tmpl_complete.sl: cross-TU c-rows incl. VDer (a local class
+     opaque refusal. test/template complete.sl: cross-TU c-rows incl. VDer (a local class
      over Vector<int>, formerly a negative).
   Detail: readme-classes.txt OPAQUE CLASSES / DERIVING FROM AN OPAQUE CLASS / COMPUTED
   LAYOUT; readme.txt SOURCE-PRIVATE FIELDS.
@@ -4112,7 +4112,7 @@ CROSS-TU — THE SOURCE IS THE AUTHOR'S CALL: `import` / `import+` (LANDED 2026-
     `.sl` for a `.slh` case, where `Ngrow` fires.
   - THE CHAINING RULE (user): the header DECLARING the instantiated template is the one to
     `import+`, however it arrives.
-  - SWEEP. import -> import+: test/template tmpl_complete.sl; test/import tmpl_test.sl,
+  - SWEEP. import -> import+: test/template complete.sl; test/import tmpl_test.sl,
     tmpl_test2.sl, bird.sl; test/guthrie guthrie.sl; test/lib algorithm.sl, vector.sl;
     added `import+ vector;` to test/guthrie electorate.sl (chaining). lib/ needed none.
     test/progress galaxy.sl needs `import+ vector; import+ algorithm;` (the user's dir).
@@ -4153,13 +4153,13 @@ THE LIBRARY MOVES INTO `slids { }` — NAMESPACE PARITY + LAZY TEMPLATE METHODS 
     (diagClassName) and implicit-cast (peelAliases).
   - TESTS. `alias slids;` after the imports of every test/ file that uses lib
     (test/progress by the user); line-baking goldens shifted (macros,
-    tmpl_alias). Canon: test/misc/namespace.sl (parity block, Merge/pick,
+    alias_tmpl.sl). Canon: test/misc/namespace.sl (parity block, Merge/pick,
     Merge:Cup/Holder, three negatives), test/lib/vector.sl (Ranked, compare,
     the Value negative), test/import Rank<T> (aggregated + inline-local + a
-    negative); tmpl_class.sl's Way chain now a pointer field.
+    negative); class.sl's Way chain now a pointer field.
 
 FIELD ALIASES — `alias name = field.path[k]` IN A CLASS FIELD LIST (LANDED 2026-10-23)
-  Canon test/misc/alias.sl (user): a pseudonym for a field or sub-field — "offsets into
+  Canon test/misc/alias_msc.sl (user): a pseudonym for a field or sub-field — "offsets into
   the object layout. it's data. not code" — for every flavor of class and template; usable
   everywhere the original is. Flat data only: no hop through a pointer / iterator (the
   alias may NAME a pointer or iterator field). Index a compile-time constant. Chains to any
@@ -4191,9 +4191,42 @@ REFINEMENT MEMBERS JOIN + THE OPERAND IN THE NO-OPERATOR MESSAGE (LANDED 2026-10
   - DIAGNOSTIC: "Operator 'X' is not defined on class 'C' for type 'R'." when C declares
     the operator family but no overload takes R (noClassOperatorMsg, three sites); the bare
     message otherwise, so no existing marker moved. Detail: readme-classes.txt.
-  - FOUND, OPEN: `Ns:X<A,B>() { .. }` never reaches Ns:X — grammar's
-    looksLikeQualifiedScopeDef doesn't skip the `<..>` group, so it parses as a NEW file-scope
-    template deriving from Ns, silent while unused (todo.txt FIELD ALIAS REOPENS).
+  - FOUND: `Ns:X<A,B>() { .. }` never reached Ns:X — grammar's looksLikeQualifiedScopeDef
+    didn't skip the `<..>` group, so it parsed as a NEW file-scope template deriving from Ns,
+    silent while unused. Fixed by the next entry.
+
+A:B:C QUALIFIED RE-OPENS + `alias Ns;` RE-OPENS (LANDED 2026-10-24)
+  User rulings: a re-open happens in the SAME scope, and the same scope includes a namespace
+  reached explicitly or through `alias Ns;`; a different run-time scope is a refinement. "if
+  A:B:C can be a re-open it should be a re-open."
+  - THE WALK: every qualifier step is a MEMBER step or, failing that, a BASE step (the next
+    segment is a class beside this class level, deriving from it); the final segment gets the
+    base step too. Member first (`Class:Reopen()` canon). Was: base spellings errored
+    ("'Aa' has no class or namespace member 'Bb'") or — `A:Bb:C()` with Bb : C — silently
+    minted a new nested class A:Bb:C.
+  - GRAMMAR: the qualified head skips a `<..>` group on the last segment — `Ns:Box<T>() { }`
+    re-opens the namespace template (was a stray new template deriving from Ns, methods lost).
+    Fallout fixed: a single-segment class opening whose first segment is no local scope is the
+    inheritance spelling (map.sl's `TreeNode : MapNode<Key, Value>() { }`).
+  - TARGET: a class re-open joins the namespace opening that HOLDS the class (slids is opened
+    by string.slh before vector.slh — the re-open had become the primary).
+  - `alias Ns;`: qualifyAliasedReopens rewrites a field-less, base-less opening that names a
+    class in an aliased namespace to the explicit `Ns:X` form; two aliased namespaces ->
+    "qualify the re-open". bug.sl's `alias slids; Vector<T>() { .. }` now reaches the header
+    template and gets "defined by its module's source file".
+  - DIAGNOSTIC: "'Jb' is neither a member of 'Ja' nor derived from it." for a class segment
+    beside a class level it doesn't derive from; other failures keep their messages.
+  - DROPPED (user): "base on a re-open must match" and "complete classes accept aliases" as
+    separate items. OPEN: the non-empty (alias) list forms — todo.txt FIELD ALIAS REOPENS.
+  - TESTS: test/class/reopen_cls.sl A:B:C block (member/base, base/base, base/member, member
+    wins, new nested class, qualified template, alias Ns; three negatives);
+    test/template/reopen_tmpl.sl (qualified + renamed + namespace-block + alias + nested +
+    base-step template re-opens; missing list, count, two aliased namespaces, header template
+    qualified and via alias).
+  - TEST RENAMES (user): test/template tmpl_X -> X, or X_tmpl when another test directory has
+    a test of that base name (binaries share bin/): alias_tmpl, class, complete, function,
+    method_tmpl, nested_tmpl, operator_tmpl, reopen_tmpl, special; test/misc/alias ->
+    alias_msc; test/class/reopen -> reopen_cls (user). References updated in tests and docs.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

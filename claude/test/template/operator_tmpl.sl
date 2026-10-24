@@ -34,7 +34,7 @@ operator overloads are special case of methods.
 they are subject to same rules as plain and template methods.
 including the conventions of convenience for passing objects as references,
 and rewriting type arguments are reference to cons.
-see tmpl_method.sl.
+see method_tmpl.sl.
 */
 
 /*

@@ -19,7 +19,7 @@ LIB_BUILD = ../../build/lib
 IFLAGS    = -I $(LIB_HDR)
 
 SAMPLES = \
-	alias \
+	alias_msc \
 	bug \
 	hello \
 	macros \

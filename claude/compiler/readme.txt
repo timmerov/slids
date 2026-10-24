@@ -1100,7 +1100,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   back the instance id. The cross-TU decl/def merge picks the
   matching header declaration AMONG the siblings. Uniform across every
   template kind, declaration site, and class flavor.
-  SPECIALIZATION + TYPE SETS (canon tmpl_special.sl, 2026-08-18). A TYPE SET
+  SPECIALIZATION + TYPE SETS (canon special.sl, 2026-08-18). A TYPE SET
   (`alias Name = <type-list>;`) registers a kTypeSet entry — a specialization
   constraint, NOT a type (a type position reports "is a type set, not a
   type"). Terms separate on `|`: a type spelling (`int`, `int^`, `(int,int)`,
@@ -1158,7 +1158,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   spelling and may go unused. Free functions only: a method template's `T=`
   is rejected (out-of-line at registration; the inline spelling never parses
   as a member).
-  TEMPLATE OPERATORS (canon tmpl_operator.sl) are template methods named
+  TEMPLATE OPERATORS (canon operator_tmpl.sl) are template methods named
   `op<sym>` — the machinery rides whole. Grammar: the template-list parses
   after the MAX-MUNCHED symbol (the `<`-family needs whitespace — `op< <T>`;
   `op<<T>` is the shift symbol). Dispatch is INFERENCE-ONLY (an operator use
@@ -1171,7 +1171,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   — every stage skips a kFunctionDef with non-empty type_params (constfold's walk,
   classify's walks, desugar's copyNode/flattenScope/collectGlobals, resolve's munge) —
   until a call binds the type-list. An uninstantiated body is therefore UNCHECKED
-  beyond parse (pinned by tmpl_function.sl's nonsense template; todo).
+  beyond parse (pinned by function.sl's nonsense template; todo).
 
   REGISTRATION (resolve) builds the entry's PATTERN signature: copies of the declared
   types resolved in a pushed frame where each type parameter aliases a marker leaf — a
@@ -1202,7 +1202,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   finding T: a marker leaf binds its argument's type EXACTLY (conflicts error —
   widening never reconciles, and `int^` vs `(const int)^` CONFLICT; a
   BY-VALUE T meeting an array argument binds the ARRAY TYPE ITSELF — canon
-  tmpl_special.sl 2026-08-18, superseding the earlier decayed-iterator
+  special.sl 2026-08-18, superseding the earlier decayed-iterator
   binding: arrays ride the class/tuple rung of the convention of convenience,
   the instance's param munges to a pointer-to-(const)-array and the call
   passes the whole-array reference; an iterator binding is still reachable
@@ -1569,7 +1569,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     sources. The compile's `.d` lists a source only when it was loaded.
   - --instantiate's injected provenance imports are plain: an aggregated
     demand never needs another module's source.
-  Canon: test/template tmpl_complete.sl (`import+ vector` for Vector<Pt>;
+  Canon: test/template complete.sl (`import+ vector` for Vector<Pt>;
   negatives: missing `import+ map`, unneeded `import+ map`, both ways);
   test/import (`import+ tmpl_lib` in tmpl_test/tmpl_test2/bird; the `.slh`
   negative in tmpl_lib.slh); test/guthrie electorate.sl (the chaining case:
@@ -1793,7 +1793,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   tree.entries at every touch; never hold an Entry& across resolution. The
   entries-vector twin of the arena's retired capture-before-intern discipline.
 
-  THE CONVENTION OF CONVENIENCE (canon tmpl_function.sl + tmpl_method.sl): a
+  THE CONVENTION OF CONVENIENCE (canon function.sl + method_tmpl.sl): a
   parameter whose type is a BARE template type parameter (`T v`) passes by
   value when T binds a primitive — references are primitives; the pointer
   itself copies — and as `(const T)^` otherwise ("nothing better until
@@ -1830,7 +1830,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     through the `^X^` cancellation back to the reference; the generated
     inner ident is marked against re-entrant double-deref.
 
-  NESTED TEMPLATES (canon test/template/tmpl_nested.sl). Three TU-local
+  NESTED TEMPLATES (canon test/template/nested_tmpl.sl). Three TU-local
   forms; the landing was diverts on existing machinery plus ONE mechanism:
   - a TEMPLATE METHOD inside a CLASS TEMPLATE: the flavor clone re-runs
     plain-class registration, whose member divert mints the method pattern
@@ -1909,7 +1909,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   TEMPLATE METHOD's body rides the pristine-body + block-scope registration
   machinery as-is (the instance's body resolves, the block pre-passes
   register the nested pattern, it instantiates on the enclosing binding) —
-  pinned in tmpl_nested.sl, zero compiler changes. Every form of the canon
+  pinned in nested_tmpl.sl, zero compiler changes. Every form of the canon
   nesting list (alias/method/type/class/function × class/function/method
   hosts) is landed TU-local.
   Cross-TU: the nested BODY-CARRYING forms (nested class, template method)
@@ -1931,7 +1931,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   spells an ALIAS operand as label=target ('T=float', 'Integer=int') — the
   bound types were unreadable through bare template-param labels.
 
-  INSTANCE-QUALIFIED SPELLINGS (canon tmpl_class.sl, the iq block). An
+  INSTANCE-QUALIFIED SPELLINGS (canon class.sl, the iq block). An
   instance's members are nameable from outside: `Kit<int>:Sub` (nested
   class — every type position: decl, signature, field, global, array,
   sizeof, new, alias target), `Kit<int>:Elem` (member alias),
@@ -1975,7 +1975,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   user-op= nested classes; hoisted templates derived from a file-scope
   base or an instance base of their OWN list; templates inside PLAIN
   nested classes; namespace-hosted chains (`Spc3:B<int>:C<float>`) —
-  canon tmpl_class.sl (Spec) + tmpl_nested.sl (Host2).
+  canon class.sl (Spec) + nested_tmpl.sl (Host2).
 
   DEFERRED: TYPE-ranked overloading AMONG templates (arity-only is landed —
   same-arity same-name TEMPLATES stay a collision; plain-beats-template
@@ -2002,8 +2002,8 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   2026-07-26 — the binder-list head, above; the bare-host/instance-
   qualified UNIFICATION question dissolved with the 2026-07-26 per-flavor
   repeal — the bare-host spelling no longer exists.) Canon
-  test/template/tmpl_function.sl + tmpl_alias.sl + tmpl_method.sl +
-  tmpl_class.sl + tmpl_complete.sl + tmpl_nested.sl; cross-TU canon
+  test/template/function.sl + alias_tmpl.sl + method_tmpl.sl +
+  class.sl + complete.sl + nested_tmpl.sl; cross-TU canon
   test/import/tmpl_test.sl +
   tmpl_test2.sl + tmpl_lib.slh/.sl + tmpl_lib2.slh/.sl.
 

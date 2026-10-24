@@ -15,7 +15,7 @@ methods (PLAIN BEATS TEMPLATE: the plain set is probed first, the template binds
 what no plain takes), shadows and is shadowed across the base chain like any
 method (the `Base:m(v)` bypass spelling pins a base's template through a shadow),
 may not be `virtual`, and its instances leave a virtual class's vtable
-undisturbed. TEMPLATE OPERATORS (`op*<T>(Vec^ a, T b)`, canon tmpl_operator.sl)
+undisturbed. TEMPLATE OPERATORS (`op*<T>(Vec^ a, T b)`, canon operator_tmpl.sl)
 are template methods named `op<sym>`: inference-only dispatch, plain-beats-
 template per family (`op+=(int)` beside `op+=<T>(T)`), per-INSTANCE validation
 of the operator rules; template op= / op<-- / op<--> are rejected (the
@@ -46,7 +46,7 @@ calling free templates. Bound as a type ARGUMENT, a class (or another instance,
 via an alias — `alias VI = Vec<int>; Pair<VI, int8>`) propagates its
 needs/hooks through the instance's fields transitively. Instantiation timing,
 the self-name stack, member liveness, and the runaway caps: readme.txt
-TEMPLATES. Canon test/template/tmpl_class.sl.
+TEMPLATES. Canon test/template/class.sl.
 
 A class template may be INCOMPLETE, RE-OPENED, and COMPLETED, like a plain
 class: every opening repeats the (matching) template list, the `...` rules
@@ -59,7 +59,7 @@ plain class's openings do. EXTERNAL members (`T Ext:gete()`, `const int
 Ext:kk`, alias, enum) relocate into the pattern and ride every instance. A
 NEVER-COMPLETED incomplete template errors (an incomplete class completes
 cross-TU via its header; header-declared INCOMPLETE templates stay deferred).
-Canon test/template/tmpl_complete.sl.
+Canon test/template/complete.sl.
 
 CROSS-TU class templates are LANDED (readme.txt TEMPLATES owns the design):
 the header declares the template — full field list, member DECLARATIONS,
@@ -96,7 +96,7 @@ template's own body — the qualifier canonicalizes to the registered
 instance before the depth walk); an instance qualifier is never a
 REGISTRATION target ("Cannot add a member to a template instance").
 NESTED TEMPLATES
-landed TU-local (readme.txt TEMPLATES; canon tmpl_nested.sl): a TEMPLATE
+landed TU-local (readme.txt TEMPLATES; canon nested_tmpl.sl): a TEMPLATE
 METHOD inside a class template (per-flavor patterns; the snapshot carries
 the flavor's self-redirect), a HOISTED class OR alias template — PER
 FLAVOR since the 2026-07-26 repeal: the qualifier binds the outer params
@@ -117,14 +117,14 @@ SIBLING, a file-scope class, or a template INSTANCE (spelled with the
 outer T, virtual + dispatchable); a hoisted template may derive from a
 file-scope class or an instance of its OWN list; hooks and user
 transfer operators in nested classes fire per flavor — canon
-tmpl_class.sl (Spec) + tmpl_nested.sl (Host2). OUT-OF-LINE members of a
+class.sl (Spec) + nested_tmpl.sl (Host2). OUT-OF-LINE members of a
 class template LANDED 2026-07-26: the owner SPELLS its template list —
 the definition's binder surface, positional (a definition or a RE-OPEN
 may RENAME the params; the subtree re-spells to the pattern's names) —
 for methods, method templates, hooks, and operators; a BARE template
 owner is a compile error, and a template's consts/aliases/enums are
-added by a re-open (readme.txt TEMPLATES; canon tmpl_class.sl ool block
-+ tmpl_complete.sl Ext).
+added by a re-open (readme.txt TEMPLATES; canon class.sl ool block
++ complete.sl Ext).
 
 
 CLASSES + CTOR/DTOR (landed this phase; spans every stage)
@@ -1353,7 +1353,7 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   re-opened again, both work.
 
   THE LIFECYCLE IS THE UNION OF EVERY OPENING. A ctor/dtor is a member like any other, so the
-  DECLARATION `_();` may sit in the primary with its DEFINITION in a re-open (canon reopen.sl
+  DECLARATION `_();` may sit in the primary with its DEFINITION in a re-open (canon reopen_cls.sl
   `Forward`), the two halves may land in two SEPARATE re-opens (`Split`), or a re-open may add
   both with no declaration anywhere (`Late`). But an is_reopen node skips the class BODY passes,
   so its hooks are invisible to the primary's lifecycle scan — the same problem pending_fields
@@ -1413,7 +1413,7 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   the two scopes that GATE on looksLikeFunctionDef — a class body and a function body — rejected
   it, a function body falling through to a var-decl ("Expected ';'" at the ':'). parseFunctionDef
   could always parse the shape; only the recognizer was missing the case, which is the exact
-  hazard this section warns about. Canon test/class/reopen.sl (STAGE E, class body + function
+  hazard this section warns about. Canon test/class/reopen_cls.sl (STAGE E, class body + function
   body, both spellings).
 
   THE LEADING CHAIN IS THE QUALIFIER. An out-of-line member with NO return type — `C:op+=(…)`,
@@ -1426,12 +1426,17 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   a token-count check (a bare chain of n segments is 2n-1 tokens) confirms the declarator consumed
   exactly the colon chain and no type suffix, so segment -> token stays exact for the carets.
   The TAIL disambiguates at grammar (looksLikeQualifiedScopeDef, checked BEFORE
-  looksLikeClassDef): `{` -> namespace, `()` -> class re-open, `(fields)` -> inheritance. The
+  looksLikeClassDef): `{` -> namespace, `()` -> class re-open, `(fields)` -> inheritance. A
+  `<..>` group on the LAST segment is skipped first (2026-10-24), so `Ns:Box<T>() { }` is a
+  qualified TEMPLATE re-open — before, it fell to looksLikeClassDef as a NEW template deriving
+  from the namespace Ns, silent while nothing instantiated it. The
   empty-parens `A:B() {}` is genuinely AMBIGUOUS with an empty-field DERIVED class
   `A : B() {}` (token-identical); grammar always routes it as a re-open, then relocation (below)
   decides SEMANTICALLY: if A is a CLASS whose openings do not already contain B, it is
   reinterpreted in place as inheritance (B derives from A); B already in A -> re-open; A a
-  namespace -> create nested. The form works in ANY scope the class is DECLARED in — file,
+  namespace -> create nested. And when A is NO local scope at all (declared in another opening
+  or file — map.sl's `TreeNode : MapNode<Key, Value>() { }`), a single-segment class opening is
+  likewise the inheritance spelling, not a failed re-open. The form works in ANY scope the class is DECLARED in — file,
   namespace body, class body, function body / nested block — because relocation runs per-scope
   (below), not only over program->children.
 
@@ -1447,6 +1452,34 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   whose immediate scope is a CLASS gets the implicit `_$recv` spliced in HERE (via
   parse::makeReceiverParam); the parser does NOT add a receiver to a qualified method in a
   class body (else `_$recv` doubles — Outer's from the parser, the target's from relocation).
+
+  THE WALK: MEMBER AND BASE STEPS (2026-10-24). Each step of the qualifier path is a MEMBER step
+  (the next segment is a class/namespace among this level's openings' children) or, failing
+  that, a BASE step (this level is a CLASS and the next segment is a class BESIDE it — among
+  the same holders — spelled as deriving from it; openingDerivesFrom compares the last segment
+  of Node::text, list stripped). The member step goes first, so `Class:Reopen()` keeps naming
+  the nested class even when a sibling also derives from Class. The FINAL segment gets the same
+  base step: a class opening that is no member of the last level but names a class beside it
+  deriving from it re-opens THAT class (moved to its holders, or left in place unqualified when
+  the holders are this scope). So `Ns:Base:Cls()`, `A:B:C()` up a base chain, and a base step
+  followed by member steps all re-open; a path that resolves but reaches no existing class is
+  still a definition (a new nested class). A class re-open joins the namespace OPENING THAT
+  HOLDS the class: a namespace opened in several files (`slids` in string.slh and vector.slh)
+  would otherwise take it into an opening registered before the class exists, and the re-open
+  would become the primary. Canon test/class/reopen_cls.sl (A:B:C block),
+  test/template/reopen_tmpl.sl.
+
+  `alias Ns;` IS THE SAME SCOPE (2026-10-24, user). An opening in a different RUN-TIME scope is a
+  refinement; the same scope includes a namespace reached explicitly (`Ns:X`, `Ns { X }`) or
+  through `alias Ns;`. qualifyAliasedReopens runs at the head of relocation in non-run-time
+  scopes (relocation precedes registration, so it reads SYNTAX — the alias siblings' paths and
+  the namespace openings in this `children`): a bare re-open-shaped opening (no fields, no
+  base) whose name is no local sibling's but IS a class in an aliased namespace is rewritten to
+  the explicit `Ns:X` form, so it obeys every rule that form does (a header template is
+  rejected; an incomplete header class is CLOSED by an empty `()` — the closer rule fires). A
+  class in two aliased namespaces: "qualify the re-open". A FIELD-bearing opening is not
+  re-open-shaped and stays a separate file-scope class — which a bare name never reaches,
+  because the open-namespace chain (alias imports included) is searched before file scope.
 
   SAME-SCOPE for classes; namespaces open anywhere. A CLASS re-open is same-scope: the target
   must be a local sibling opening in THIS `children`. Re-opening a class merely VISIBLE from an
@@ -1464,7 +1497,9 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
 
   DIAGNOSTICS. A missing path segment is careted at the SPECIFIC failing segment, named against
   its parent scope: `'Gone' is not a class or namespace in scope` (first segment) /
-  `'Onest' has no class or namespace member 'Gone'` (a later one). An external member on a
+  `'Onest' has no class or namespace member 'Gone'` (a later one), or — when the failing segment
+  is a class BESIDE a class level that it does not derive from — `'Jb' is neither a member of
+  'Ja' nor derived from it`. An external member on a
   class merely visible from an enclosing scope hits the same first-segment message OUTSIDE a
   run-time scope; inside one it is a refinement instead and no error is due.
   (`Ns:Member()` of a non-existent NAMESPACE member silently creates a new empty
@@ -1472,14 +1507,14 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   non-existent member of a CLASS is instead read as INHERITANCE — the empty-field derived
   `Class : New()` — see the empty-parens disambiguation above.) OUT OF SCOPE for
   re-open proper: `global` vars, `...` incomplete classes, and the cross-scope run-time variant
-  (REFINEMENTS, below). Canon test/class/reopen.sl.
+  (REFINEMENTS, below). Canon test/class/reopen_cls.sl.
 
 
 FIELD ALIASES (landed 2026-10-23; spans grammar / resolve / constfold / classify)
 
   `alias name = field.path[k]` in a class (or class template) field list: a second name for
   a field or sub-field. A NAME, never a slot — layout, sizeof, construction lists and
-  transfer are untouched. Canon test/misc/alias.sl (its `claude says` block is the map).
+  transfer are untouched. Canon test/misc/alias_msc.sl (its `claude says` block is the map).
   - STORAGE: Node::field_aliases (a kParam per alias; children[0] = the path: kIdentExpr
     root, then kFieldExpr / kIndexExpr hops), apart from params so nothing slot-walking
     sees it. ClassInfo::alias_params (all openings), pending_aliases (parked by a re-open
@@ -1678,7 +1713,7 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   (`VB<int8>:tagv()` inside a `VB<int>`-derived): "Cannot call method ... without an
   instance", note at the declaration. STATICS through the same spelling (a const, an alias,
   an enum) are untouched — they defer to the qualified-name lookup before the rewrite. Canon
-  method.sl (QOut/QBad) + tmpl_class.sl (the two file-scope negatives).
+  method.sl (QOut/QBad) + class.sl (the two file-scope negatives).
 
   GOTCHA. A virtual method's DEFAULT ARGUMENT binds from the STATIC receiver type (a call-site
   rewrite) while the body is chosen dynamically — a base pointer uses the base's default even
@@ -1810,7 +1845,7 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     instance over a locally defined private class), plain `import` never does — readme.txt
     TEMPLATES, THE SOURCE IS THE AUTHOR'S CALL; design record plan-template.txt. The import-leak fix of 2026-10-14 (THE VISIBILITY RULE,
     readme.txt TEMPLATES) SCOPED the names a loaded source brings in; it stands unchanged.
-    Canon test/template tmpl_complete.sl (the c-rows: locals, a global, sizeof, by-value
+    Canon test/template complete.sl (the c-rows: locals, a global, sizeof, by-value
     embedding, new / array / tuple, a flavor of a flavor, the inline-local Vector<Pt>, a local
     class deriving from an aggregated flavor) and test/import tmpl_test.sl / tmpl_test2.sl.
     Opaque changes three things — its size is a
@@ -1978,7 +2013,7 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     pass each other; base methods on a derived receiver, a base field read by a derived method,
     the upcast, `new`, copy/move/swap/assign, an initializer `Tagged ti(1, '?')`), PDer (tmpl_lib —
     over an opaque template FLAVOR, `PDer pd = (1, 2)` / `PDer pe(,6)` with the private `sec_`
-    mid-layout), and test/template tmpl_complete.sl VDer (a `.sl`-local class over `Vector<int>`).
+    mid-layout), and test/template complete.sl VDer (a `.sl`-local class over `Vector<int>`).
 
   COMPUTED LAYOUT — embedding an opaque class BY VALUE (LANDED 2026-07-29).
     A class (or tuple, or array) embedding an imported incomplete class by value is legal: a

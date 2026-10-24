@@ -8755,6 +8755,83 @@ void pushUsurpScope(parse::Tree& tree,
 // by contrast, may be opened in ANY scope: a qualified LEAF (const/alias/enum) whose first
 // segment names an enclosing-scope namespace is registered into that namespace's frame in
 // place (registerQualifiedLeaf) rather than physically moved.
+// Does this class opening name `base` as its base class? The base is spelled on the
+// primary (`Base : Name(...)`, kept on Node::text); compare its LAST segment, list
+// stripped, with a qualifier segment's base name. A usurper's text is the class it
+// refines, not a base spelling.
+bool openingDerivesFrom(parse::Node const* n, std::string const& base) {
+    if (!n || n->kind != parse::Kind::kClassDef || n->is_usurper || n->text.empty())
+        return false;
+    std::string b = n->text;
+    std::size_t lt = b.find('<');
+    if (lt != std::string::npos) b.resize(lt);
+    std::size_t c = b.rfind(':');
+    if (c != std::string::npos) b = b.substr(c + 1);
+    return b == base;
+}
+
+// `alias Ns;` puts Ns in the SAME scope: a bare re-open-shaped class opening (no
+// fields, no base) whose name is no local sibling's but IS a class in an aliased
+// namespace re-opens that class — rewritten to the explicit `Ns:X() { }` form, so
+// the relocation below (and every rule the explicit form obeys) handles it. Runs
+// before registration, so it reads the SYNTAX: the alias siblings' paths and the
+// namespace openings in this `children`. A class in two aliased namespaces is an
+// error — the re-open must be qualified.
+void qualifyAliasedReopens(std::vector<std::unique_ptr<parse::Node>>& children,
+                           diagnostic::Sink& diag) {
+    std::vector<std::vector<std::string>> paths;
+    for (auto& ch : children)
+        if (ch && ch->kind == parse::Kind::kAliasDecl
+            && ch->return_type == widen::kNoType && !ch->type_set
+            && !ch->global_qualified) {
+            std::vector<std::string> p = ch->qualifier;
+            p.push_back(ch->name);
+            paths.push_back(std::move(p));
+        }
+    if (paths.empty()) return;
+    for (auto& ch : children) {
+        if (!ch || ch->kind != parse::Kind::kClassDef || !ch->qualifier.empty()
+            || ch->is_usurper) continue;
+        bool shaped = true;   // a re-open: no fields and no base
+        for (auto& p : ch->params)
+            if (p && p->name != "_$vptr") { shaped = false; break; }
+        if (!shaped) continue;
+        std::vector<parse::Node*> local;
+        collectScopeOpenings(children, ch->name, local);
+        if (local.size() > 1) continue;   // a same-scope class wins
+        std::vector<std::vector<std::string> const*> hits;
+        for (auto const& path : paths) {
+            std::vector<parse::Node*> level;
+            collectScopeOpenings(children, path[0], level);
+            for (std::size_t i = 1; i < path.size() && !level.empty(); i++) {
+                std::vector<parse::Node*> next;
+                for (parse::Node* n : level) collectScopeOpenings(n->children, path[i], next);
+                level = std::move(next);
+            }
+            std::vector<parse::Node*> cls;
+            for (parse::Node* n : level)
+                if (n->kind == parse::Kind::kNamespaceDecl)
+                    collectScopeOpenings(n->children, ch->name, cls);
+            bool is_class = false;
+            for (parse::Node* c : cls)
+                if (c->kind == parse::Kind::kClassDef) is_class = true;
+            if (is_class) hits.push_back(&path);
+        }
+        if (hits.size() > 1) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "'" + ch->name + "' is a class in more than one aliased namespace; "
+                "qualify the re-open.", {}});
+            ch.reset();
+            continue;
+        }
+        if (hits.empty()) continue;
+        ch->qualifier = *hits[0];
+        ch->qualifier_toks.assign(ch->qualifier.size(), ch->name_tok);
+    }
+    children.erase(std::remove(children.begin(), children.end(), nullptr),
+                   children.end());
+}
+
 void relocateOutOfLineMembers(parse::Tree& tree,
                               std::vector<std::unique_ptr<parse::Node>>& children,
                               diagnostic::Sink& diag, bool runtime_scope) {
@@ -8763,6 +8840,7 @@ void relocateOutOfLineMembers(parse::Tree& tree,
     // local sibling. File / namespace / class scopes never refine — there a
     // non-local target still errors per segment.
     if (runtime_scope) mintUsurpers(tree, children);
+    else qualifyAliasedReopens(children, diag);
     bool moved = false;
     for (auto& ch : children) {
         if (!ch) continue;
@@ -8863,13 +8941,36 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                     rename[binders[i][j]] = pat->type_params[j];
             return true;
         };
-        // Walk the qualifier path to the target scope. At each level the candidates
-        // are the class/namespace nodes named seg among the children of the previous
-        // level's openings; the target is the first opening of the final segment
-        // (appending to any opening is equivalent — they share one frame).
+        // Walk the qualifier path to the target scope. Each STEP is a MEMBER step —
+        // the next segment is a class/namespace among the children of this level's
+        // openings — or, failing that, a BASE step — this level is a CLASS and the
+        // next segment is a class BESIDE it (same holders) spelled as deriving from
+        // it (`A:B:C` with B : C). The member step is tried first: `Class:Reopen()`
+        // names the nested class even when a sibling also derives from Class. The
+        // target is the first opening of the final segment (appending to any opening
+        // is equivalent — they share one frame).
         std::vector<parse::Node*> level;
+        std::vector<parse::Node*> holders;      // the openings holding `level`; empty = `children`
+        auto namedIn = [&](std::vector<parse::Node*> const& hs, std::string const& nm) {
+            std::vector<parse::Node*> out;
+            if (hs.empty()) collectScopeOpenings(children, nm, out);
+            else for (parse::Node* h : hs) collectScopeOpenings(h->children, nm, out);
+            return out;
+        };
+        auto allClasses = [](std::vector<parse::Node*> const& lvl) {
+            for (parse::Node* p : lvl)
+                if (p->kind != parse::Kind::kClassDef) return false;
+            return !lvl.empty();
+        };
+        auto derivedBeside = [&](std::string const& from, std::string const& nm) {
+            std::vector<parse::Node*> sib = namedIn(holders, nm);
+            for (parse::Node* s : sib)
+                if (openingDerivesFrom(s, from)) return sib;
+            return std::vector<parse::Node*>{};
+        };
         collectScopeOpenings(children, bases[0], level);
         std::size_t fail_i = 0;                 // segment index where the walk emptied
+        bool fail_beside = false;               // ...beside a class it does not derive from
         bool seg_error = false;
         // The single-segment `A:B() {}` shape defers segment 0's template
         // check to the AMBIGUITY block below: with no member B it is
@@ -8884,8 +8985,16 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             std::vector<parse::Node*> next;
             for (parse::Node* p : level)
                 collectScopeOpenings(p->children, bases[i], next);
-            level = std::move(next);
             fail_i = i;
+            if (!next.empty()) {
+                holders = level;                // member step: one level down
+            } else if (allClasses(level)) {
+                next = derivedBeside(bases[i - 1], bases[i]);   // base step: same holders
+                if (next.empty())
+                    for (parse::Node* s : namedIn(holders, bases[i]))
+                        if (s->kind == parse::Kind::kClassDef) fail_beside = true;
+            }
+            level = std::move(next);
             if (!level.empty() && !checkSegment(i, level)) seg_error = true;
         }
         if (seg_error) {
@@ -8893,7 +9002,31 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             moved = true;
             continue;
         }
+        // Reinterpret a single-segment `A:B() { }` as a derived class of the CURRENT
+        // scope: mirror grammar's inheritance setup (base name on ->text + the unnamed
+        // `_$base` slot-0 field of type A) and leave the node in place with the
+        // qualifier cleared, so ordinary registration handles it as `A : B()`.
+        auto asInheritance = [&]() {
+            auto bp = std::make_unique<parse::Node>();
+            bp->kind = parse::Kind::kParam;
+            bp->name = "_$base";
+            bp->file_id = ch->file_id;
+            bp->tok = ch->name_tok;
+            bp->name_tok = ch->name_tok;
+            bp->return_type = widen::internOrNone(ch->qualifier[0]);
+            ch->text = ch->qualifier[0];
+            ch->params.insert(ch->params.begin(), std::move(bp));
+            ch->qualifier.clear();
+            ch->qualifier_toks.clear();
+        };
         if (level.empty()) {
+            // `A:B() { }` whose A is no local scope at all is not a qualified re-open:
+            // it is the inheritance spelling (`TreeNode : MapNode<K, V>() { }` with
+            // TreeNode declared in another opening or file).
+            if (ch->kind == parse::Kind::kClassDef && ch->qualifier.size() == 1) {
+                asInheritance();
+                continue;
+            }
             // A LEAF whose FIRST segment is not a local sibling may still target a
             // NAMESPACE opened in an enclosing scope (namespaces open in any scope):
             // register it into that namespace's frame in place, then drop the node. A
@@ -8922,6 +9055,11 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             std::string msg;
             if (fail_i == 0) {
                 msg = "'" + seg + "' is not a class or namespace in scope.";
+            } else if (fail_beside) {
+                // Neither step holds: not a member, and the class of that name beside
+                // it does not derive from it.
+                msg = "'" + seg + "' is neither a member of '" + ch->qualifier[fail_i - 1]
+                    + "' nor derived from it.";
             } else {
                 std::string parent = ch->qualifier[0];
                 for (std::size_t i = 1; i < fail_i; i++)
@@ -8933,6 +9071,31 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                 {ch->file_id, ch->qualifier_toks[fail_i], msg, {}});
             continue;
         }
+        // The FINAL segment's base step: a CLASS opening that is no member of the
+        // last level but names a class beside it deriving from it (`Ns:Base:Cls() { }`
+        // with Base : Cls) re-opens THAT class — it moves to the holders (or, when
+        // they are this scope, simply stays here, unqualified). The member reading
+        // wins, so this fires only when the last level has no such member.
+        parse::Node* base_target = nullptr;
+        if (ch->kind == parse::Kind::kClassDef && allClasses(level)) {
+            std::vector<parse::Node*> member;
+            for (parse::Node* p : level)
+                collectScopeOpenings(p->children, ch->name, member);
+            if (member.empty()
+                && !derivedBeside(bases.back(), ch->name).empty()) {
+                if (holders.empty()) {
+                    ch->qualifier.clear();
+                    ch->qualifier_toks.clear();
+                    continue;
+                }
+                base_target = holders.front();
+                for (parse::Node* h : holders) {
+                    std::vector<parse::Node*> m;
+                    collectScopeOpenings(h->children, ch->name, m);
+                    if (!m.empty()) { base_target = h; break; }
+                }
+            }
+        }
         // AMBIGUITY: `A:B() {}` (a qualified class re-open, empty parens) is
         // token-identical to an empty-field DERIVED class `A : B() {}`. Disambiguate
         // semantically: if `A` is a CLASS that does NOT already contain a class/namespace
@@ -8940,39 +9103,36 @@ void relocateOutOfLineMembers(parse::Tree& tree,
         // A::B. (B already an opening of A -> re-open, relocated below; A a namespace ->
         // create nested, below.) Only the single-segment `A:B` form — a multi-segment
         // path is a genuine nested-scope target.
-        if (ch->kind == parse::Kind::kClassDef && ch->qualifier.size() == 1
+        if (!base_target
+            && ch->kind == parse::Kind::kClassDef && ch->qualifier.size() == 1
             && level.front()->kind == parse::Kind::kClassDef) {
             std::vector<parse::Node*> b_openings;
             for (parse::Node* a_open : level)
                 collectScopeOpenings(a_open->children, ch->name, b_openings);
             if (b_openings.empty()) {
-                // Reinterpret as a derived class of the CURRENT scope: mirror grammar's
-                // inheritance setup (base name on ->text + the unnamed `_$base` slot-0
-                // field of type A) and leave the node in place with the qualifier cleared,
-                // so ordinary registration handles it as `A : B()`.
-                auto bp = std::make_unique<parse::Node>();
-                bp->kind = parse::Kind::kParam;
-                bp->name = "_$base";
-                bp->file_id = ch->file_id;
-                bp->tok = ch->name_tok;
-                bp->name_tok = ch->name_tok;
-                bp->return_type = widen::internOrNone(ch->qualifier[0]);
-                ch->text = ch->qualifier[0];
-                ch->params.insert(ch->params.begin(), std::move(bp));
-                ch->qualifier.clear();
-                ch->qualifier_toks.clear();
+                asInheritance();
                 continue;
             }
         }
         // The DEFERRED segment-0 template check (see defer0 above): B is a
         // member of A, so this IS the external re-open route after all — a
         // bare template qualifier gets the member rule here.
-        if (defer0 && !checkSegment(0, level)) {
+        if (!base_target && defer0 && !checkSegment(0, level)) {
             ch.reset();
             moved = true;
             continue;
         }
-        parse::Node* target = level.front();
+        parse::Node* target = base_target ? base_target : level.front();
+        // A CLASS re-open joins the opening that already HOLDS the class, so it lands
+        // after the primary: a namespace opened in several files (`slids` in string.slh
+        // and vector.slh) would otherwise take it into an opening registered BEFORE the
+        // class exists, and the re-open would become the primary.
+        if (!base_target && ch->kind == parse::Kind::kClassDef)
+            for (parse::Node* p : level) {
+                std::vector<parse::Node*> m;
+                collectScopeOpenings(p->children, ch->name, m);
+                if (!m.empty()) { target = p; break; }
+            }
         // An external member of a CLASS TEMPLATE (`T Vec<T>:m() { }`, binder
         // list spelled, checked + renamed above) relocates into the PATTERN's
         // children — before registration reads them — and so rides every

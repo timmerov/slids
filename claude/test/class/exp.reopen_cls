@@ -48,6 +48,13 @@ os.eq = true
 os.aug = 15
 le.sum = 7
 le.e = 1
+qc.cm = 3
+pc.cm = 6
+mc.cm = 10
+wb.which = 107
+nc.k = 4
+tb.twice = 42
+ab.inc = 7
 Forward:ctor: 0
 Split:ctor: 0
 Late:ctor: 0
