@@ -4181,6 +4181,20 @@ FIELD ALIASES — `alias name = field.path[k]` IN A CLASS FIELD LIST (LANDED 202
     refinements move field_aliases to the usurper.
   OPEN: reaching a class from another scope to alias it — todo.txt FIELD ALIAS REOPENS.
 
+REFINEMENT MEMBERS JOIN + THE OPERAND IN THE NO-OPERATOR MESSAGE (LANDED 2026-10-24)
+  - REFINEMENTS: a usurper's synthesized op=($Class^) shadowed the refined class's
+    converting op= — `String() { .. }` in main, then `String s = "hi";`, reported "'$String'
+    has 0 field(s) but 3 initializer(s)"; a local class failed the same way. Not opaque-
+    specific. declaredMemberOverloads now JOINS a usurper frame's members to the refined
+    class's (same user signature: the refined member wins) instead of stopping there. Canon
+    test/class/refine.sl (Conv + String block). Detail: readme-classes.txt REFINEMENTS.
+  - DIAGNOSTIC: "Operator 'X' is not defined on class 'C' for type 'R'." when C declares
+    the operator family but no overload takes R (noClassOperatorMsg, three sites); the bare
+    message otherwise, so no existing marker moved. Detail: readme-classes.txt.
+  - FOUND, OPEN: `Ns:X<A,B>() { .. }` never reaches Ns:X — grammar's
+    looksLikeQualifiedScopeDef doesn't skip the `<..>` group, so it parses as a NEW file-scope
+    template deriving from Ns, silent while unused (todo.txt FIELD ALIAS REOPENS).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

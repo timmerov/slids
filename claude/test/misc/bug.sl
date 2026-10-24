@@ -19,8 +19,14 @@ puts it in scope.
 //import map;
 import string;
 alias slids;
-//import vector;
-
+import vector;
+/*
+Vector<T>() {
+    void printone() {
+        println(String + self[0]);
+    }
+}
+*/
 int32 main() {
 /*
     /*
@@ -31,6 +37,24 @@ int32 main() {
     Format fmt(,Format:Option:kLeftJustify);
 */
     //println("Hello, World!");
-
+/*
+    Template<T>(T a) { }
+    Template<T>() {
+        void print() {
+            println(String + a);
+        }
+    }
+    Template<int> x;
+    x.print();
+    Class(int c) {
+    }
+    Template<Class> y;
+    y.print();
+*/
+/*
+    Vector<String> vec;
+    vec.append("hello");
+    vec.printone();
+*/
     return 0;
 }

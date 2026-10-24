@@ -468,11 +468,13 @@ alias BlocMap = Map<Rankings, Bloc>;
 alias the standard library Map iterator fields from
 generic key_ value_ for our use.
 */
+/*
 MapNode<Key=Rankings, Value=Bloc>(
     alias rankings_ = key_,
     alias bloc_ = value_
 ) {
 }
+*/
 
 /*
 this is a base class for specific electoral methods.
@@ -581,7 +583,7 @@ GuthrieVoting(
     _() {} ~() {}
 
     void run() {
-
+/*
         BlocMap bm;
         Vector<int> vec;
         vec.resize(3);
@@ -594,7 +596,7 @@ GuthrieVoting(
             println(String + ##type(it) + " " + it^.rankings_[0]);
         }
         return;
-
+*/
         /* suppress unreachable error. */
         void;
 

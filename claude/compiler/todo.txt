@@ -199,7 +199,12 @@ UNBLOCKED FEATURES
     - a consumer may reopen a HEADER template with ALIASES ONLY (lift "A template declared
       in a header is defined by its module's source file" for that case); methods/hooks are
       errors — the --instantiate pre-link stage can't see them.
-    - bug: `Ns:MNode<A, B>() { methods }` drops its methods silently.
+    - bug: `Ns:MNode<A, B>() { .. }` never reaches Ns:MNode — methods AND aliases are lost.
+      grammar looksLikeQualifiedScopeDef wants `(` `)` `{` after the last segment and doesn't
+      skip a `<..>` group, so the opening parses as a NEW file-scope template MNode<A,B>
+      deriving from Ns; silent because nothing instantiates it (instantiating it reports
+      "'Ns' is a namespace, not a type"). the namespace-base-as-qualifier fix above covers
+      it; a grammar-only fix would cover only this.
     - checkTemplateAliasRoots skips a base that doesn't resolve (a namespace base); make it
       an error.
     - CONSTRAINED reopens: `MapNode<Key=Rankings, Value=Bloc>(alias ..)` applies only to the

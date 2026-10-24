@@ -62,8 +62,11 @@ THE USURPER. re-opening a class from a RUN-TIME scope that is not its own does n
 join the class — it mints an anonymous zero-field DERIVED class `$Class : Class` in
 that scope (resolve's mintUsurpers, the ONE find-or-create funnel both trigger forms
 share, so every opening in a scope merges into one usurper). refined members SHADOW
-the base's through the ordinary most-derived-frame rule (declaredMemberOverloads stops
-at the first frame carrying the name) — no new lookup rule.
+the base's, but the usurper's frame does not STOP the lookup the way a real derived
+class's does: declaredMemberOverloads JOINS its members to the refined class's (a
+same-signature refined member wins). without the join the usurper's synthesized
+op=($Class^) hid every converting op= of the class it refines, and `Class c = value` in
+the scope fell through to field-list construction.
 
 TWO SPELLINGS, ONE FUNNEL. the BLOCK form `Class() { }` is folded into the usurper by
 mintUsurpers; the EXTERNAL form `void Class:m() { }` relocates into it as an ordinary
@@ -127,6 +130,14 @@ alias slids;
 Data(int x_) {
     bool less_than(Data^ rhs) {
         return (x_ < rhs^.x_);
+    }
+}
+
+/* a class with a CONVERTING op= (a source that is not a Conv). */
+Conv(int n_) {
+    op=(char[] s) {
+        n_ = 0;
+        while (s[n_] != '\0') { n_ += 1; }
     }
 }
 
@@ -201,6 +212,23 @@ int32 main() {
         Data p = (5);
         Data q = (5);
         println(String + "inverted == = " + (p == q));   // false
+    }
+
+    /* a refinement does not HIDE the refined class's converting op=: the usurper's
+       own synthesized op=($Class^) joins the base's operators instead of shadowing
+       them, so `= value` in the scope still dispatches — for a local class and for an
+       imported opaque one (String), whose op+ chain must reach the base too. */
+    {
+        Conv() {
+            int twice() { return n_ * 2; }
+        }
+        Conv c = "abc";                                  // Conv:op=(char[])
+        println(String + "conv twice = " + c.twice());   // 6
+        String() {
+            intptr len() { return size(); }
+        }
+        String s = "hello";                              // String:op=(char[])
+        println(String + "len = " + s.len());            // 5
     }
 
     /* NESTED refinement: the inner scope refines what the name means THERE, so its

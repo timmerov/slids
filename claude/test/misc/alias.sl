@@ -109,7 +109,9 @@ qualified / alias-open reopens (`Ns:X<.>(alias..)`, `alias Ns; X<.>`)
 must reach Ns:X — today `Ns:X(nonempty)` is inheritance from Ns.
 consumer alias-only reopens of header templates. `Key=Type` constrained
 reopens (today a reopen list is placeholder names: ALL flavors).
-`Ns:X<A,B>() { methods }` drops its methods silently.
+`Ns:X<A,B>() { .. }` never reaches Ns:X (methods AND aliases lost):
+grammar looksLikeQualifiedScopeDef doesn't skip `<..>`, so it parses as
+a NEW file-scope template deriving from Ns, silent while unused.
 */
 
 import string;

@@ -739,6 +739,14 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
     kBinaryExpr arm has had the no-viable-operator guard since the class-binary work; the
     kAugAssignStmt arm never got it. Now: "Operator '+=' is not defined on class 'X'." Pinned
     by evaluate.sl's neg_aug_no_op.
+  * THE NO-OPERATOR MESSAGE NAMES THE OPERAND WHEN IT IS THE REASON (2026-10-24). All three
+    rejects (the aggregate-RHS head, the binary catch-all, the aug-assign) build the text in
+    one helper, noClassOperatorMsg. When the class DECLARES an operator dispatch could have
+    used — binary: any `op<OP>` or `op<OP>=`, any arity; aug-assign: `op<OP>=` — the operand
+    is why nothing applied, so it appends " for type 'R'" (aliases peeled): "Operator '+' is
+    not defined on class 'String' for type 'Class'." A class with no such operator keeps the
+    bare message. The aug-assign arm captures the rhs type BEFORE the coercion retry can
+    wrap it. A class RHS under a non-class LHS still names the RHS class, unchanged.
   * COUNTING LIVES IN evaluate.sl, NOT operator.sl. operator.sl's OpDefs/Sum have no
     ctor/dtor, so a fuse and a no-fuse print identically there — which is exactly how the old
     target-keyed chain fuse survived for months with green goldens. evaluate.sl's Acc / Str /
@@ -1553,6 +1561,17 @@ REFINEMENTS (landed; spans resolve / classify; non-virtual)
   a nested refinement (whose usurper derives from the enclosing one) wins in ONE lookup for an
   instance declared outside both. Stamping is one helper, stampUsurp, called from the read arm
   and the assign-target arm, so a refined `op=` sees what a refined method sees.
+
+  MEMBERS JOIN, THEY DON'T SHADOW (2026-10-24). A real derived class's frame STOPS member lookup
+  (declaredMemberOverloads: the most-derived frame carrying the name shadows its bases). A
+  usurper's must not: every class gets synthesized op= / op<-- / op<-->(Self^), the usurper
+  included, so its `op=($Class^)` hid every converting op= of the refined class and `Class c =
+  value` in the scope fell through to field-list construction ("'$String' has 0 field(s) but 3
+  initializer(s)"). Lookup at a usurper frame (recognized by its `$` name) now collects its
+  members and CONTINUES into the refined class's frame; a refined member with the same user
+  signature drops the base's (that is how a replaced method still replaces). Local and opaque
+  classes alike; the `String + ...` op+ chain inside a String refinement rides the same join.
+  Canon refine.sl (Conv, String).
 
   TEMPLATES COMPOSE FOR FREE. `sort(array)` inside the scope infers `T = $Data` and instantiates
   a SECOND flavor whose body finds the refined member; outside, `T = Data`. No mechanism — the

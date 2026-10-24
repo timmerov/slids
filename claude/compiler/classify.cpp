@@ -1272,6 +1272,8 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
 bool explodeAggregateExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag);
 void explodeAggregateAug(parse::Tree& tree, parse::Node& s, widen::TypeRef fn_return_type,
                          diagnostic::Sink& diag, bool is_shift);
+std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
+                                         std::string const& name);
 bool classHasOperatorArity(parse::Tree& tree, widen::TypeRef cls,
                            std::string const& opname, std::size_t nUserParams);
 bool isArithBitBinaryOp(std::string const& op);
@@ -1317,6 +1319,24 @@ widen::TypeRef peelAliases(widen::TypeRef t) {
             return t;
     }
     return t;
+}
+
+// "Operator 'X' is not defined on class 'C'." — the reject when a class LHS
+// dispatched to no operator. When C DOES declare one of `opnames` (the
+// operators that dispatch could have used), the operand is why none applies,
+// so the message names its type too: "... on class 'String' for type 'Class'."
+// Aliases peeled (a flavor's `T` reads as the bound type).
+std::string noClassOperatorMsg(parse::Tree& tree, std::string const& op,
+                               std::vector<std::string> const& opnames,
+                               widen::TypeRef cls, widen::TypeRef operand) {
+    std::string msg = "Operator '" + op + "' is not defined on class '"
+                    + diagClassName(cls) + "'";
+    bool declared = false;
+    for (auto const& n : opnames)
+        if (!declaredMemberOverloads(tree, cls, n).empty()) declared = true;
+    if (operand != widen::kNoType && declared)
+        msg += " for type '" + widen::spellOrEmpty(peelAliases(operand)) + "'";
+    return msg + ".";
 }
 
 // The CLASS a parameter wants, seeing through a reference / iterator param (`Class^` — the
@@ -3086,8 +3106,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // it is. (A class RHS is a SCALAR BROADCAST operand: `pair + Acc(10)`.)
                 if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "Operator '" + op + "' is not defined on class '"
-                        + diagClassName(lref) + "'.", {}});
+                        noClassOperatorMsg(tree, op, {"op" + op, "op" + op + "="}, lref,
+                                           rref), {}});
                     return;
                 }
                 bool is_cmp = (op == "==" || op == "!=" || op == "<"
@@ -3215,12 +3235,12 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // invalid IR.) Nothing legitimate reaches here with a class operand.
             if (widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
                 || widen::form(widen::strip(rref)) == widen::Type::Form::kSlid) {
-                widen::TypeRef cls =
-                    widen::form(widen::strip(lref)) == widen::Type::Form::kSlid
-                        ? lref : rref;
+                bool lhs_cls =
+                    widen::form(widen::strip(lref)) == widen::Type::Form::kSlid;
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "Operator '" + op + "' is not defined on class '"
-                    + diagClassName(cls) + "'.", {}});
+                    noClassOperatorMsg(tree, op, {"op" + op, "op" + op + "="},
+                                       lhs_cls ? lref : rref,
+                                       lhs_cls ? rref : widen::kNoType), {}});
                 return;
             }
 
@@ -3944,9 +3964,6 @@ bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& d
     s.resolved_entry_id = iid;
     return true;
 }
-
-std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
-                                         std::string const& name);
 
 // TEMPLATE-OPERATOR FALLBACK (plain beats template): when a plain operator
 // probe found nothing, bind a same-name TEMPLATE operator's pattern over the
@@ -6538,8 +6555,23 @@ void classifyStmtList(parse::Tree& tree,
 std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
                                          std::string const& name) {
     std::vector<int> cands;
+    // A REFINEMENT's usurper (`$Class`) IS the refined class for its scope, not a class
+    // deriving from it: its members JOIN the refined class's instead of shadowing them
+    // (else its synthesized op=($Class^) hides every converting op= of the class it
+    // refines). A refined member of the same signature still wins over the base's.
+    std::vector<int> usurper_cands;
+    auto sameUserSig = [&](int a, int b) {
+        auto const& pa = tree.entries[a].param_types;
+        auto const& pb = tree.entries[b].param_types;
+        return pa.size() == pb.size() && std::equal(pa.begin() + 1, pa.end(), pb.begin() + 1);
+    };
     for (int fr : parse::classAndBaseFrames(tree, widen::strip(cls))) {
         if (fr < 0) continue;
+        int cid = parse::classEntryForFrame(tree, fr);
+        auto itc = cid >= 0 ? tree.classes.find(tree.entries[cid].slids_type)
+                            : tree.classes.end();
+        bool usurper = itc != tree.classes.end() && !itc->second.name.empty()
+                    && itc->second.name[0] == '$';
         // Every DECLARED member of this name in the frame — defined, pure, OR external.
         std::vector<int> frame;
         for (std::size_t id = 0; id < tree.entries.size(); id++) {
@@ -6568,7 +6600,14 @@ std::vector<int> declaredMemberOverloads(parse::Tree& tree, widen::TypeRef cls,
                     }
                 if (covered) continue;
             }
-            cands.push_back(id);
+            bool refined = false;
+            for (int ud : usurper_cands)
+                if (sameUserSig(ud, id)) { refined = true; break; }
+            if (!refined) cands.push_back(id);
+        }
+        if (usurper) {   // join, don't shadow: the refined class's frame comes next
+            usurper_cands = cands;
+            continue;
         }
         break;   // most-derived frame with the name shadows its bases
     }
@@ -8036,6 +8075,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // class as before.
             if (widen::form(widen::strip(s.return_type)) == widen::Type::Form::kSlid) {
                 inferExpr(tree, rhs, widen::kNoType, diag);
+                widen::TypeRef rhs_type = rhs.inferred_type;   // before a coercion wrap
                 std::string opname = "op" + op + "=";
                 bool expr_lhs = s.children.size() == 2;
                 if (dispatchAssignInit(tree, s, s.return_type, rhs, opname,
@@ -8065,8 +8105,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // test could see the hole because a class with no operator is not something
                 // the operator tests exercise.
                 diagnostic::report(diag, {s.file_id, s.tok,
-                    "Operator '" + op + "=' is not defined on class '"
-                    + diagClassName(s.return_type) + "'.", {}});
+                    noClassOperatorMsg(tree, op + "=", {opname}, s.return_type, rhs_type),
+                    {}});
                 return;
             }
 
