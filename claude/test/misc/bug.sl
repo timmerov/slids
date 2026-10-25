@@ -18,8 +18,9 @@ puts it in scope.
 //import dump;
 import map;
 import string;
-alias slids;
 //import vector;
+
+alias slids;
 
 int32 main() {
 /*

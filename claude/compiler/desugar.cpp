@@ -773,6 +773,7 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     node->fill_from_slot = p.fill_from_slot;
     node->class_conversion = p.class_conversion;
     node->agg_conv_spill = p.agg_conv_spill;
+    node->alias_literal = p.alias_literal;
     node->class_op_chain = p.class_op_chain;
     node->op_collapse_head = p.op_collapse_head;
     node->op_bin_eid = p.op_bin_eid;
@@ -1147,6 +1148,9 @@ std::unique_ptr<ast::Node> lowerForTuple(parse::Node const& p,
         N = static_cast<int>(slots.size());
         T = slots[0];                                     // homogeneous element
     }
+    // A STRING LITERAL loops over its characters only — the trailing nul is not part
+    // of the loop (canon test/flow/forarray.sl). A variable holding one is an array.
+    if (itp.kind == parse::Kind::kStringLiteral) N -= 1;
     widen::TypeRef iter_type = widen::internIterator(T);  // T[]
     // The binding's declared type: as-written (typed / by-ref) or the element
     // (typeless fresh, off the entry — classify forces a reference for a
@@ -1896,6 +1900,7 @@ std::unique_ptr<ast::Node> cloneAstExpr(ast::Node const& n) {
     c->fill_from_slot = n.fill_from_slot;
     c->class_conversion = n.class_conversion;
     c->agg_conv_spill = n.agg_conv_spill;
+    c->alias_literal = n.alias_literal;
     c->class_op_chain = n.class_op_chain;
     c->op_collapse_head = n.op_collapse_head;
     c->op_bin_eid = n.op_bin_eid;
@@ -2203,7 +2208,8 @@ std::vector<std::unique_ptr<ast::Node>> lowerAggCopyStmt(ast::Node& s,
     std::unique_ptr<ast::Node> srcNode;        // moved out of s
 
     if (s.kind == ast::Kind::kVarDeclStmt) {
-        if (s.children.empty() || s.is_const || s.default_move_init) return repl;
+        if (s.children.empty() || s.is_const || s.default_move_init
+            || s.alias_literal) return repl;   // an alias copies nothing
         // The declared type rides on the node (copyNode copies it; a desugar-minted
         // decl stamps it) — NEVER index tree.entries by a local's id (minted locals
         // have no entry; see the for-lowering INVARIANT).
@@ -2703,6 +2709,10 @@ void liftSretCallExprs(std::unique_ptr<ast::Node>& node,
             && "agg_conv_spill node must carry [spill decl, per-slot tuple]");
         auto decl = std::move(node->children[0]);
         auto tuple = std::move(node->children[1]);
+        // The spilled source may carry spills of its own (a decayed computed array
+        // whose explode spilled an operand) — they run first.
+        for (auto& ch : decl->children)
+            liftSretCallExprs(ch, pre, next_id, /*root_intercepted=*/true);
         pre.push_back(std::move(decl));
         liftSretCallExprs(tuple, pre, next_id, false);
         node = std::move(tuple);

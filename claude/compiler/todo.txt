@@ -9,6 +9,20 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
+  * vector.sl remove(T^ it, count) does `it - storage` on a reference: "Arithmetic is not allowed on a
+    reference" when any flavor's remove-by-pointer is used (guthrie 1815). likely `<T[]> <mutable> it`.
+
+  * a computed array decayed into a pointer that OUTLIVES the statement dangles silently:
+    char[] p = arr + c;  p = arr + c;  return arr + c; (char[] fn)  <char[]> (arr + c)  (char arr[2]).
+    the decay funnel's _$decay spill dies at the semicolon. earlier ruling: an array rvalue in a
+    pointer target is an error, not a spill. only call arguments / operator operands should spill.
+
+  * a GLOBAL const char array bound to a string literal still gets its own storage; canon
+    (constfold/string_literal.sl) says the variable points at the literal. locals alias already.
+
+  * String ss; ss += arr + c; (char arr[2], char c) says "No matching overload for 'op+='", but
+    String + (arr + c) and f(arr + c) (f takes char[]) compile. the same computed char[2] should bind.
+
   * a bare 0 or 1 literal in a String chain prints as a bool once the chain is already a String:
     println(String + 0) prints 0, but println(String + "" + 0) prints false (and 1 prints true).
     the literal converts through String's op=(bool) instead of the integer one.

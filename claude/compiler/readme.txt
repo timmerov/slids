@@ -270,7 +270,15 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     target through the ARRAY DECAY below, not as a pointer of its own — and it takes a
     pointer type from CONTEXT (classify's kStringLiteral arm, the same trick nullptr
     uses), because the decay funnel re-infers and would otherwise re-stamp it as the
-    array. A COMPARISON
+    array. OPERATIONS on a literal (2026-10-24, canon constfold/string_literal.sl):
+    constant index reads fold in constfold (tryFoldLiteralIndex), a runtime index
+    and `^"lit"[i]` address the pool constant (emitElementAddr's kStringLiteral
+    base; `(const char)[]`), every built-in operator rejects a literal operand
+    (rejectStringLiteralOperand), an N-1 / non-char aggregate init or destructure
+    sees it as a tuple of chars (stringLiteralAsTuple), a for-loop skips the NUL
+    (lowerForTuple), and a LOCAL const char array bound to one aliases the pool
+    constant (Node::alias_literal — no alloca). See plan.txt STRING LITERAL
+    OPERATIONS. A COMPARISON
     uses these same rules — ptrImplicitOk plus ptrBaseUpcastOk (derived->base, the
     base at offset 0, but NOT for both pointer kinds alike: a REFERENCE names one
     object and always demotes, while an ITERATOR strides by its pointee, so it
@@ -289,7 +297,13 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     Canon test/expression/compare.sl. An ARRAY source
     DECAYS to a pointer: a bare array implicitly casts to the ELEMENT pointer
     `Type[]`/`Type^` — classify rewrites it to `^arr[0]` (checkValueAssign /
-    wrapArrayAsElemAddr), so it flows through the normal pointer path. The
+    wrapArrayAsElemAddr), so it flows through the normal pointer path. A COMPUTED
+    array (`arr + c` explodes to a per-slot tuple; anything not a bare lvalue)
+    has no address: the funnel first spills it to a SEQ-placed `_$decay` temp
+    (spillComputedArray — dies at the semicolon) and decays the temp (2026-10-24;
+    canon test/pointer/iterator.sl). desugar's agg_conv_spill arm lifts a spill
+    nested in another spill's decl first. OPEN (todo.txt): the spill also fires
+    for a decl / assign / return / cast pointer target, which dangles. The
     WHOLE-array ref `Type[N]^` is NOT implicit from a bare array (write `^arr`);
     only a function ARGUMENT gets the whole-ref convenience (`fn(arr)`==`fn(^arr)`).
   * accept — terminal. intptr <- pointer/nullptr lowers to ptrtoint; pointer/
@@ -2443,8 +2457,11 @@ STAGE FILES (.h / .cpp pairs)
             (stampInferredEnum) so a later `l = kSlids;` reads in context; one
             inferred from a STRUCTURAL init gets Entry::peek_type stamped
             (stampInferredPeekType: a single-object `new T` -> T^; an
-            unqualified name / field / deref / index / call / cast /
-            conversion -> its peekIterableType) — peekIterableType falls back to it while
+            unqualified name / field / deref / index / address-of / call / cast /
+            conversion -> its peekIterableType; a CLASS index peeks op[]'s
+            unanimous declared return, a returned reference naming the element —
+            peekMethodReturn, shared with peekCallReturn; the index's own type
+            never matters) — peekIterableType falls back to it while
             slids_type is empty, so `p = parent_; p^.f = kC;` reads in
             context, and entryEnumFrame falls back to it too, so `l2 = lang;
             l2 = kC;` does. CALLS (2026-10-16): every enum-context peek passes
@@ -2692,11 +2709,18 @@ STAGE FILES (.h / .cpp pairs)
             through the reference — a declared plain `T^` over `const T` elements
             mismatches (for-array at resolve, for-tuple in classify's
             kForTupleStmt arm — the rule the `ref^ :` reuse check always
-            enforced). ONE LIMIT: a class whose type is only INFERRED at classify
-            (a typeless local `b = C()`, a slot of a typeless tuple) cannot be
-            understood — for-class lowers at resolve, whose scope frames are gone
-            by classify — and rejects with an honest "class type ... is inferred;
-            requires a declared class type" (not a false "not a class").
+            enforced). INFERRED CONTAINERS (2026-10-24): a typeless local
+            iterable whose peek_type is a class routes to understandForClass (a
+            by-value local, const dropped), and the expression forms ride the
+            peek's address-of / class-index arms — `w = v`, `q = ^v; q^`,
+            `grid[i]`, `r = grid[0]` all lower here. ONE LIMIT: a class whose
+            type resolve cannot peek (a construction init `b = C()`, a slot of a
+            typeless tuple, a call whose overloads disagree) cannot be understood
+            — for-class lowers at resolve — and rejects with "The class type
+            ('C') of the for-loop container cannot be inferred." plus a note
+            "'b' is defined here." naming the typeless local (Entry::inferred) at
+            the ROOT of the container — walked through deref / address-of / field
+            / index BASES — when there is one.
             The INFER-AS-REFERENCE
             head `for (name^ : iter)` (Node.infer_ref, parsed as `IDENT ^ :`) makes
             the typeless loop var bind each element's ADDRESS: for-array forces

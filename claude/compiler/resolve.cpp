@@ -2072,7 +2072,7 @@ void stampInferredEnum(parse::Tree& tree, int var_id, parse::Node const* rhs) {
 // An INFERRED variable whose init's type reads off its STRUCTURE gets that type
 // as its resolve-time peek type, so a store / comparison through it
 // (`p^.field = kC;`) finds the field's enum: a single-object `new T` (heap or
-// placement) is a `T^`; an unqualified name / field / deref / index / call /
+// placement) is a `T^`; an unqualified name / field / deref / index / address-of / call /
 // cast / conversion peeks (peekIterableType — a call only when every overload
 // agrees on its return type). Any other init shape leaves it unstamped.
 void stampInferredPeekType(parse::Tree& tree, int var_id, parse::Node* rhs,
@@ -2087,7 +2087,8 @@ void stampInferredPeekType(parse::Tree& tree, int var_id, parse::Node* rhs,
     }
     if ((rhs->kind == parse::Kind::kIdentExpr && !isQualified(*rhs))
         || rhs->kind == parse::Kind::kFieldExpr || rhs->kind == parse::Kind::kDerefExpr
-        || rhs->kind == parse::Kind::kIndexExpr || rhs->kind == parse::Kind::kCallExpr
+        || rhs->kind == parse::Kind::kIndexExpr || rhs->kind == parse::Kind::kAddrOfExpr
+        || rhs->kind == parse::Kind::kCallExpr
         || rhs->kind == parse::Kind::kMethodCallStmt
         || rhs->kind == parse::Kind::kCastExpr || rhs->kind == parse::Kind::kConvertExpr)
         tree.entries[var_id].peek_type =
@@ -3215,6 +3216,9 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 resolveExpr(tree, *base, diag, unevaluated);
                 return;
             }
+            // A STRING LITERAL is storage too — N bytes in the constant pool — so
+            // `^"lit"[i]` / `^"lit"` have an address (canon constfold/string_literal.sl).
+            if (base->kind == parse::Kind::kStringLiteral) return;
             if (base->kind != parse::Kind::kIdentExpr) {
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "The operand of '^' must be a variable or array element.",
@@ -4114,6 +4118,23 @@ widen::TypeRef unanimousReturn(parse::Tree& tree, std::vector<int> const& ids) {
     return ret;
 }
 
+// The return type every overload of method `name` declares across class `cls`
+// and its bases (unanimousReturn), or kNoType. `cls` may arrive const-wrapped.
+widen::TypeRef peekMethodReturn(parse::Tree& tree, widen::TypeRef cls,
+                                std::string const& name) {
+    cls = widen::strip(widen::removeConst(widen::strip(cls)));
+    if (widen::form(cls) != widen::Type::Form::kSlid) return widen::kNoType;
+    std::vector<int> frames = parse::classAndBaseFrames(tree, cls);
+    std::vector<int> ids;
+    for (int i = 0; i < static_cast<int>(tree.entries.size()); i++) {
+        parse::Entry const& g = tree.entries[i];
+        if (g.kind == parse::EntryKind::kFunction && g.name == name
+            && std::find(frames.begin(), frames.end(), g.owner_ns_frame) != frames.end())
+            ids.push_back(i);
+    }
+    return unanimousReturn(tree, ids);
+}
+
 // A CALL's return type at resolve, for ENUM CONTEXT — QUIET (a peek never reports;
 // the call's own resolution does). `f(args)`: the unqualified name's overloads (same
 // frame, same owner); `recv.m(args)`: the receiver's type peeked (through one pointer
@@ -4143,16 +4164,7 @@ widen::TypeRef peekCallReturn(parse::Tree& tree, parse::Node& e, diagnostic::Sin
     if (widen::form(b) == widen::Type::Form::kPointer
         || widen::form(b) == widen::Type::Form::kIterator)
         b = widen::strip(widen::get(b).pointee);
-    b = widen::strip(widen::removeConst(b));
-    if (widen::form(b) != widen::Type::Form::kSlid) return widen::kNoType;
-    std::vector<int> frames = parse::classAndBaseFrames(tree, b);
-    for (int i = 0; i < static_cast<int>(tree.entries.size()); i++) {
-        parse::Entry const& g = tree.entries[i];
-        if (g.kind == parse::EntryKind::kFunction && g.name == e.name
-            && std::find(frames.begin(), frames.end(), g.owner_ns_frame) != frames.end())
-            ids.push_back(i);
-    }
-    return unanimousReturn(tree, ids);
+    return peekMethodReturn(tree, b, e.name);
 }
 
 // A cast's target-type SPELLING, read QUIETLY for a peek that may run before the
@@ -4261,7 +4273,20 @@ widen::TypeRef peekIterableType(parse::Tree& tree, parse::Node& e,
             std::vector<widen::TypeRef> const& slots = widen::get(b).slots;
             if (k >= 0 && k < static_cast<long>(slots.size())) return slots[k];
         }
-        return widen::kNoType;
+        // A CLASS base indexes through op[]: the element is what op[] declares
+        // (a returned reference names the element lvalue itself). Only the base
+        // must be typed — the index's type matters only to overloads that
+        // disagree, and then unanimousReturn already gives up.
+        widen::TypeRef r = peekMethodReturn(tree, b, "op[]");
+        if (widen::form(widen::strip(r)) == widen::Type::Form::kPointer)
+            return widen::get(widen::strip(r)).pointee;
+        return r;
+    }
+    if (e.kind == parse::Kind::kAddrOfExpr) {
+        // `^lvalue` — a reference to whatever the operand peeks as.
+        if (e.children.empty() || !e.children[0]) return widen::kNoType;
+        widen::TypeRef b = peekIterableType(tree, *e.children[0], diag, peek_calls);
+        return b == widen::kNoType ? widen::kNoType : widen::internPointer(b);
     }
     if (peek_calls && (e.kind == parse::Kind::kCastExpr
                        || e.kind == parse::Kind::kConvertExpr)) {
@@ -5121,6 +5146,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 if (id < 0) return Completion::Normal;   // non-assignable reuse rejected
                 if (!reused) {
                     s.resolved_entry_id = id;
+                    tree.entries[id].inferred = true;
                     s.kind = parse::Kind::kVarDeclStmt;   // fresh: alloca + classify infer
                     // rhs BEFORE marking initialized, so `x = x` reads x uninitialized.
                     for (auto& ch : s.children) {
@@ -5829,6 +5855,15 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // used as an iterable can only be a tuple — route it as one with a
             // deferred type (homogeneity + arity resolve in classify); classify
             // errors if it doesn't actually infer to a tuple.
+            // A typeless local whose initializer PEEKED as a class (`w = v;`,
+            // `r = grid[0];`) iterates as that class — a by-value local, so const
+            // drops.
+            if (iter_var && tree.entries[enum_id].slids_type == widen::kNoType
+                && widen::form(widen::strip(widen::removeConst(widen::strip(
+                       tree.entries[enum_id].peek_type)))) == widen::Type::Form::kSlid) {
+                return understandForClass(tree, s, widen::strip(widen::removeConst(
+                    widen::strip(tree.entries[enum_id].peek_type))), diag);
+            }
             if (iter_var && tree.entries[enum_id].slids_type == widen::kNoType) {
                 return understandForTuple(tree, s, widen::kNoType,
                                        /*is_literal=*/false, /*is_lvalue=*/true, diag);

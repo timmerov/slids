@@ -26,3 +26,7 @@ lit[3]= d
 lend^= f
 litdiff= 5
 lit!=null= true
+fn var= x
+fn int= 30
+bin= x
+fn call= 23

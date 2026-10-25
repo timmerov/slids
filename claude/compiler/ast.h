@@ -128,6 +128,8 @@ struct Node {
                                  // class — children are [default-construct `_$cret`
                                  // decl, `_$cret.op=(src)` call]; resolved_entry_id is
                                  // the `_$cret` id. desugar lifts both into a temp.
+    bool alias_literal = false;  // kVarDeclStmt: bound to its string literal init's pool
+                                 // constant — no alloca, no init (parse::Node twin).
     bool agg_conv_spill = false; // kConvertExpr: an aggregate conversion with a spilled
                                  // side-effecting source — children = [spill decl, the
                                  // per-slot tuple]. desugar hoists the spill, yields the

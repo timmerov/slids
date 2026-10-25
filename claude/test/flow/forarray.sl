@@ -68,6 +68,12 @@ normal local variable shadowing rules for scopes apply to these scopes.
                         |body|
           |--loop-var--------|
 
+if the array is a string literal then the trailing nul is not part of the loop.
+
+    for (ch : "hello") {
+        // loops 5 times, not 6.
+    }
+
 note:
 the compiler inserts instructions at the start of the loop body.
 */
@@ -476,12 +482,13 @@ int32 main() {
 
 
     /* the EMPTY STRING: `""` is `const char[1]` — the NUL is its one element,
-       so the loop runs once and sees 0. (A zero-length array is not a type:
-       "Array size must be a positive integer constant".) */
+       and a literal's NUL is not part of the loop, so the body never runs. (A
+       zero-length array is not a type: "Array size must be a positive integer
+       constant".) */
     int en = 0;
     int ez = 0;
     for (c : "") { en = en + 1; ez = ez + c; }
-    println(String + "empty_str= " + en + " " + ez);      // 1 0
+    println(String + "empty_str= " + en + " " + ez);      // 0 0
     const char es[1] = "";
     int en2 = 0;
     for (c : es) { en2 = en2 + 1 + c; }
@@ -514,6 +521,19 @@ int32 main() {
     int shx = 0;
     for (x : nx) { shx = shx + x; int x = 100; shx = shx + x; }
     println(String + "shadow= " + shx);                   // 306
+
+    /* a string LITERAL loops over its characters only — the trailing nul is not
+       part of the loop. A variable holding a literal is an ordinary array: 6. */
+    int nlit = 0;
+    for (ch : "hello") { nlit = nlit + 1; ch; }
+    println(String + "literal passes= " + nlit);          // 5
+    String lit_chars;
+    for (ch : "abc") { lit_chars += ch; }
+    println(String + "literal chars= " + lit_chars);      // abc
+    held = "hello";
+    int nheld = 0;
+    for (ch : held) { nheld = nheld + 1; ch; }
+    println(String + "held passes= " + nheld);            // 6
     return 0;
 }
 

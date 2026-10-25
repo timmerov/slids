@@ -3256,7 +3256,9 @@ tuple slots, whole-array refs, array-returning calls, const flow).
     say "'b' is not a[] ... class" (false); it now says the class type is
     inferred and a declared class type is required. Supporting it would need
     resolve-time typing of construction-initialized typeless locals — an
-    open design question, not a bug.
+    open design question, not a bug. (2026-10-24: the peekable inits —
+    copy, address-of, class index — now iterate; see FOR-CLASS OVER
+    INFERRED CONTAINERS below.)
   - Diagnostic wording: both for-iterable rejections now enumerate all four
     forms ("array, enum, class, or tuple" / "an array, an enum, a class, or
     a tuple"); three EXPECT-ERROR markers moved with it.
@@ -4252,6 +4254,54 @@ CLASS-TEMPLATE CONSTRAINTS: ARMS, FILTERS, CONSUMER ALIAS RE-OPENS (LANDED 2026-
     four negatives). guthrie 471 compiles (its use block at 594 is commented out).
   - Also: diagnostics name templates by their def (parse::templateName); constraintAdmits
     shares resolve::specAdmits; resolveOneSpec serves function and class constraints.
+
+FOR-CLASS OVER INFERRED CONTAINERS + COMPUTED-ARRAY DECAY (LANDED 2026-10-24)
+  Found porting guthrie (line 1748, then 1835).
+  - INFERRED CONTAINERS (user: "B!!!!!!!! then A"). `candidates = ^g.candidates_; for (c :
+    candidates^)` rejected: for-class lowers at resolve, and resolve's structural peek
+    (Entry::peek_type) had three gaps — no address-of arm, no class-index arm, and the bare-name
+    iterable ignored peek_type. All three closed (peekMethodReturn: op[]'s unanimous declared
+    return, shared with peekCallReturn; per the user, `x[y]` needs only x typed). Enum context
+    gains the same arms. Canon test/flow/forclass.sl (IdxGrid; seven inferred shapes).
+  - THE DIAGNOSTIC for what is left (a construction init, a typeless tuple slot): "The class type
+    ('C') of the for-loop container cannot be inferred." + note "'x' is defined here." on the
+    typeless local at the container's ROOT (deref / address-of / field / index bases; never the
+    index). Entry::inferred marks a local declared without a type.
+  - COMPUTED-ARRAY DECAY: an element-wise array result (found via guthrie's `" " + c`) passed to a
+    `char[]` / `int[]` param or a class operator asserted in codegen — the decay funnel took
+    `^n[0]` of an array that lives in no variable. wrapArrayAsElemAddr now spills a non-lvalue
+    array to a SEQ `_$decay` temp (spillComputedArray); desugar's agg_conv_spill arm lifts a
+    spill nested in another spill's decl (`f(arr + h())`, the 2-operand kConvertExpr assert).
+    Canon test/pointer/iterator.sl. A string LITERAL no longer reaches it: see STRING LITERAL
+    OPERATIONS below.
+  - guthrie now stops in vector.sl remove(T^) (todo.txt).
+
+STRING LITERAL OPERATIONS (LANDED 2026-10-24)
+  Canon test/constfold/string_literal.sl (user) + test/flow/forarray.sl's literal loop rule.
+  - INDEX: `"ab"[1]` folds to the char in constfold (tryFoldLiteralIndex; the nul at N-1
+    included); an out-of-range constant index is the ordinary array bounds error; a runtime
+    index reads the pool constant (emitElementAddr takes a kStringLiteral base). Was a codegen
+    assert.
+  - ADDRESS: `^"lit"[i]` is `(const char)[]` into the pool (resolve accepts a literal-rooted
+    operand; classify's kAddrOfExpr consts the element off the literal root; constfold never
+    folds the index read under `^`).
+  - REJECTED: unary, binary, shift, comparison, and aug-assign with a string literal operand —
+    "Operator 'X' is not defined on a string literal." (rejectStringLiteralOperand, asked by
+    the explode, the comparison arm, the unary arm, explodeAggregateAug). A class operator
+    dispatches first, so `String + "x"` is unaffected. guthrie 1835 now errors here.
+  - INITIALIZERS: a target that is not exactly `char[N]` — N-1 slots, or another element type
+    char widens into — sees the literal as a tuple literal of its chars (stringLiteralAsTuple,
+    in checkValueAssign and the destructure); `char letters[5] = "hello"`, `int16 w[6]`,
+    a 5-target destructure.
+  - LOOP: `for (ch : "hello")` runs 5 times (lowerForTuple drops the nul); a variable holding a
+    literal is an array (6). forarray.sl's `""` case flipped from 1 pass to 0.
+  - ALIAS: a LOCAL const char array bound to a literal (typed N / N-1, or typeless) has no
+    storage — Node::alias_literal; codegen registers the pool constant's symbol in place of an
+    alloca; desugar's aggregate-copy split skips it. The pool dedups, so equal text shares an
+    address. Globals still own their storage.
+  - assign/vardecl.sl's too-SHORT negative (`char s[5] = "hello"`) deleted (user); too-LONG stays.
+  - iterator.sl's literal computed-array cases moved here as negatives; its computed-array
+    coverage now uses array variables (+ `sum2(nums + ten())` for the nested spill).
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

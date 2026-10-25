@@ -658,18 +658,9 @@ the `=` form (`int x = (1, 2)`).
 //    return 0;
 //}
 
-/* A CHAR ARRAY FROM A STRING LITERAL must match the literal's size EXACTLY. The literal
-   is `const char[N]` with N counting the NUL, so these are ordinary array-shape
-   mismatches — no rule of their own. */
-
-/* too SHORT: C would accept this and silently drop the terminating NUL, leaving an
-   unterminated buffer. Slids does not. */
-//-EXPECT-ERROR: Cannot assign 'const char[6]' to 'char[5]'
-//int32 neg_str_short() {
-//    char s[5] = "hello";
-//    s;
-//    return 0;
-//}
+/* A CHAR ARRAY FROM A STRING LITERAL takes N or N-1 slots — the literal is
+   `const char[N]` with N counting the NUL, which the target may omit (canon
+   constfold/string_literal.sl). Any other size is an ordinary array-shape mismatch. */
 
 /* too LONG: there is no defined fill for the tail. */
 //-EXPECT-ERROR: Cannot assign 'const char[6]' to 'char[10]'

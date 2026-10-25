@@ -350,6 +350,13 @@ bool isBareLvalue(parse::Node const& n) {
 // with no duplicated side effect? Forward-declared here for the class-field spread + spill.
 bool isReReadableLvalue(parse::Node const& n);
 
+// Spill a COMPUTED array to a SEQ-placed temp (defined with THE SPILL FUNNEL below).
+void spillComputedArray(parse::Tree& tree, parse::Node& n);
+
+// A built-in operator rejects a string literal operand (defined with the explode).
+bool rejectStringLiteralOperand(parse::Node const& n, std::string const& op,
+                                diagnostic::Sink& diag);
+
 // The preferred user-facing spelling for an inferred-from-literal type: the
 // 32-bit defaults read as int / uint / float (their narrow preferred names), so
 // `a = 42` infers `int` (matching an explicitly-typed sibling's ##type), not the
@@ -901,7 +908,7 @@ widen::TypeRef arrayFirstElem(widen::TypeRef arr) {
 // an iterator over the element type. Codegen then handles an ordinary address-of, so
 // no codegen change is needed; the CALLER re-infers. An `int^` target demotes the
 // `Type[]` result to a reference through the normal iterator->reference rule.
-void wrapArrayAsElemAddr(parse::Node& n) {
+void wrapArrayAsElemAddr(parse::Tree& tree, parse::Node& n) {
     // A STRING LITERAL is already an address at the IR level: it names N bytes in the
     // constant pool and codegen emits a pointer to them. There is no alloca to index and
     // no lvalue to take, so its decay is a pure TYPE change — re-stamp it as the element
@@ -912,6 +919,10 @@ void wrapArrayAsElemAddr(parse::Node& n) {
         n.inferred_type = widen::internIterator(widen::internConst(widen::intern("char")));
         return;
     }
+    // A COMPUTED array (`" " + c` explodes to a per-slot tuple; an array-returning
+    // call) is not storage either, and has no address to take: spill it to a temp
+    // first and decay the temp.
+    if (!isBareLvalue(n)) spillComputedArray(tree, n);
     int fid = n.file_id, tk = n.tok;
     auto zero = std::make_unique<parse::Node>();
     zero->kind = parse::Kind::kIntLiteral;
@@ -927,6 +938,37 @@ void wrapArrayAsElemAddr(parse::Node& n) {
     addr->file_id = fid; addr->tok = tk;
     addr->children.push_back(std::move(idx));
     n = std::move(*addr);
+}
+
+// A string literal as a TUPLE LITERAL of its first `count` chars — its length (no
+// nul) or length + 1 (with the nul). An initializer / destructure target that is not
+// exactly `char[N]` sees the literal this way (canon constfold/string_literal.sl:
+// the target consumes every character, may omit the nul, and holds any type a char
+// widens into), so the ordinary tuple -> array / destructure path widens each char.
+void stringLiteralAsTuple(parse::Node& lit, std::size_t count) {
+    auto tup = std::make_unique<parse::Node>();
+    tup->kind = parse::Kind::kTupleExpr;
+    tup->file_id = lit.file_id;
+    tup->tok = lit.tok;
+    for (std::size_t i = 0; i < count; i++) {
+        auto ch = std::make_unique<parse::Node>();
+        ch->kind = parse::Kind::kCharLiteral;
+        ch->text = std::to_string(i < lit.text.size()
+                                  ? static_cast<unsigned char>(lit.text[i]) : 0);
+        ch->file_id = lit.file_id;
+        ch->tok = lit.tok;
+        tup->children.push_back(std::move(ch));
+    }
+    lit = std::move(*tup);
+}
+
+// The slot count of an array (first dimension) or tuple; -1 otherwise.
+int aggregateCountOrNone(widen::TypeRef t) {
+    widen::TypeRef s = widen::strip(t);
+    if (widen::form(s) == widen::Type::Form::kArray) return widen::get(s).dims.front();
+    if (widen::form(s) == widen::Type::Form::kTuple)
+        return static_cast<int>(widen::get(s).slots.size());
+    return -1;
 }
 
 // An aggregate is an array OR a tuple — arrays are homogeneous tuples, and the
@@ -2054,6 +2096,12 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // wall's oracle re-derives the operand's declared constness.
                 widen::TypeRef pt = operand.inferred_type;
                 widen::TypeRef ct = constAwareLvalueType(tree, operand);
+                // A STRING LITERAL root is read-only pool storage (`^"lit"[i]`).
+                parse::Node const* root = &operand;
+                while (root->kind == parse::Kind::kIndexExpr && !root->children.empty()
+                       && root->children[0])
+                    root = root->children[0].get();
+                if (root->kind == parse::Kind::kStringLiteral) ct = root->inferred_type;
                 if (ct != widen::kNoType && constInStoredValue(ct)
                     && !constInStoredValue(pt)
                     && widen::form(widen::strip(pt))
@@ -2670,7 +2718,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // its address. `<Type[]> arr` / `<Type^> arr` (canon) then reinterpret the
             // element iterator (whole-array-ref you spell `^arr`, no cast).
             if (isArrayType(operand.inferred_type)) {
-                wrapArrayAsElemAddr(operand);
+                wrapArrayAsElemAddr(tree, operand);
                 inferExpr(tree, operand, widen::kNoType, diag);
             }
             std::string to = widen::spellOrEmpty(e.return_type);
@@ -2924,6 +2972,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // context. Infer ONCE here so the class-operator probe below can read the
             // type (the branches no longer re-infer).
             inferExpr(tree, operand, op == "!" ? widen::kNoType : context, diag);
+            if (rejectStringLiteralOperand(operand, op, diag)) return;
             // A unary +/-/~/! on a CLASS dispatches its ARITY-0 operator (op+/op-/op~/
             // op!), which returns a built-in — `-a` -> `a.op-()` (canon 98-107). Mirrors
             // the comparison rewrite: turn this node into the method-call expression;
@@ -3112,6 +3161,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 }
                 bool is_cmp = (op == "==" || op == "!=" || op == "<"
                             || op == "<=" || op == ">"  || op == ">=");
+                if (is_cmp && (rejectStringLiteralOperand(lhs, op, diag)
+                               || rejectStringLiteralOperand(rhs, op, diag)))
+                    return;
                 if (is_cmp) {
                     bool anytup =
                         widen::form(widen::strip(lref)) == widen::Type::Form::kTuple
@@ -5390,6 +5442,19 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
 void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                       diagnostic::Sink& diag) {
     if (dest == widen::kNoType) return;
+    // A STRING LITERAL into an aggregate that is not exactly its own `char[N]` —
+    // N-1 slots (no nul), or another element type — is its chars as a tuple literal.
+    if (rhs.kind == parse::Kind::kStringLiteral && !isPtrLikeType(dest)) {
+        int c = aggregateCountOrNone(dest);
+        int len = static_cast<int>(rhs.text.size());
+        bool own = isArrayType(dest) && c == len + 1
+            && widen::get(widen::strip(dest)).dims.size() == 1
+            && widen::deepStrip(arrayFirstElem(dest)) == widen::deepStrip(widen::intern("char"));
+        if (!own && (c == len || c == len + 1)) {
+            stringLiteralAsTuple(rhs, static_cast<std::size_t>(c));
+            inferExpr(tree, rhs, dest, diag);
+        }
+    }
     // ARRAY -> ELEMENT POINTER decay (implicit): an array lvalue takes its element
     // address `^arr[0]` when the target is a pointer whose pointee is the array's
     // element type; rewrite to the explicit address-of so the normal pointer path
@@ -5412,7 +5477,7 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
                    dest);
         if (pointee != widen::kNoType
             && (widen::deepStrip(pointee) == widen::deepStrip(elem) || base_decay)) {
-            wrapArrayAsElemAddr(rhs);
+            wrapArrayAsElemAddr(tree, rhs);
             inferExpr(tree, rhs, dest, diag);
         }
     }
@@ -5748,6 +5813,15 @@ std::unique_ptr<parse::Node> seqSpill(std::unique_ptr<parse::Node> decl,
     return w;
 }
 
+// The decay funnel's spill (wrapArrayAsElemAddr): a computed array becomes a
+// `_$decay` temp read, SEQ-placed — the temp is read by this one expression, so it
+// dies at the semicolon.
+void spillComputedArray(parse::Tree& tree, parse::Node& n) {
+    widen::TypeRef t = n.inferred_type;
+    Spill sp = spillToTemp(tree, std::make_unique<parse::Node>(std::move(n)), t, "_$decay");
+    n = std::move(*seqSpill(std::move(sp.decl), std::move(sp.read)));
+}
+
 // Collect the entry ids a destructure's slots BIND (recursing into nested slots).
 void collectDestructureTargets(parse::Node const& node, std::set<int>& ids) {
     for (std::size_t i = 1; i < node.children.size(); i++) {
@@ -5803,10 +5877,16 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
 
     parse::Node& rhs0 = *s.children[0];
     inferExpr(tree, rhs0, widen::kNoType, diag);
+    std::size_t ntargets = s.children.size() - 1;
+    // A STRING LITERAL source with one target per char (the nul omitted) is its
+    // chars as a tuple literal (canon constfold/string_literal.sl).
+    if (rhs0.kind == parse::Kind::kStringLiteral && ntargets == rhs0.text.size()) {
+        stringLiteralAsTuple(rhs0, ntargets);
+        inferExpr(tree, rhs0, widen::kNoType, diag);
+    }
     widen::TypeRef srcType = rhs0.inferred_type;
 
     std::vector<widen::TypeRef> slots = destructureSlots(srcType);
-    std::size_t ntargets = s.children.size() - 1;
     if (slots.empty()) {
         diagnostic::report(diag, {s.file_id, s.tok,
             "The right side of a destructure must be a tuple or array; got '"
@@ -6189,7 +6269,22 @@ std::unique_ptr<parse::Node> operandSlot(AggOperand& a, std::size_t i) {
 // Explode `e` (a kBinaryExpr or kUnaryExpr with at least one AGGREGATE operand) into a
 // tuple literal of per-slot operations, then classify it. Returns false when no operand
 // is an aggregate (the ordinary scalar path owns the node).
+// A string literal is never an operand of a BUILT-IN operator (canon
+// constfold/string_literal.sl): `"ab" + 1` would add to every byte, the nul
+// included. Reports and returns true when `n` is one. A class operator is not
+// built-in — `String + "x"` dispatches before any of these checks.
+bool rejectStringLiteralOperand(parse::Node const& n, std::string const& op,
+                                diagnostic::Sink& diag) {
+    if (n.kind != parse::Kind::kStringLiteral) return false;
+    diagnostic::report(diag, {n.file_id, n.tok,
+        "Operator '" + op + "' is not defined on a string literal.", {}});
+    return true;
+}
+
 bool explodeAggregateExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag) {
+    // Every operator but a comparison and `!` takes an aggregate apart here.
+    for (auto& c : e.children)
+        if (c && rejectStringLiteralOperand(*c, e.text, diag)) return true;
     // Every AGGREGATE operand must have the same slot count — a scalar one broadcasts.
     // This is the ONE shape rule now; the nested case needs no rule of its own, because a
     // nested slot pair explodes in its turn and asks the same question there.
@@ -7368,7 +7463,7 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
                 && widen::deepStrip(pointee)
                        == widen::deepStrip(
                               arrayFirstElem(e.children[1]->inferred_type))) {
-                wrapArrayAsElemAddr(*e.children[1]);
+                wrapArrayAsElemAddr(tree, *e.children[1]);
                 inferExpr(tree, *e.children[1], pt, diag);
                 break;
             }
@@ -7952,6 +8047,22 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                                 "tuple.", {}});
                             break;
                         }
+                    }
+                }
+                // A LOCAL const char array bound to a string literal — typed with N or
+                // N-1 slots, or typeless — ALIASES it: no storage, no copy (canon
+                // constfold/string_literal.sl). The literal is read-only, so an alias
+                // and a copy differ only in the address.
+                if (!s.is_global && s.children[0]->kind == parse::Kind::kStringLiteral
+                    && isArrayType(s.return_type) && constInStoredValue(s.return_type)
+                    && widen::get(widen::strip(s.return_type)).dims.size() == 1
+                    && widen::deepStrip(arrayFirstElem(s.return_type))
+                           == widen::deepStrip(widen::intern("char"))) {
+                    int c = aggregateCountOrNone(s.return_type);
+                    int len = static_cast<int>(s.children[0]->text.size());
+                    if (c == len || c == len + 1) {
+                        s.alias_literal = true;
+                        return;
                     }
                 }
                 // The initializer obeys the assignment relation (a typeless init
@@ -8888,18 +8999,30 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 // error already fired.)
                 bool is_class = widen::form(widen::strip(it_ref.inferred_type))
                                 == widen::Type::Form::kSlid;
-                if (is_class && it_ref.kind == parse::Kind::kIdentExpr) {
+                if (is_class) {
+                    // Name the typeless local at the container's ROOT — walked
+                    // through deref / address-of / field / index BASES (an index
+                    // never matters: only the base must be typed).
+                    std::vector<diagnostic::Note> notes;
+                    parse::Node const* root = &it_ref;
+                    while (root && !root->children.empty()
+                           && (root->kind == parse::Kind::kDerefExpr
+                               || root->kind == parse::Kind::kAddrOfExpr
+                               || root->kind == parse::Kind::kFieldExpr
+                               || root->kind == parse::Kind::kIndexExpr))
+                        root = root->children[0].get();
+                    if (root && root->kind == parse::Kind::kIdentExpr
+                        && root->resolved_entry_id >= 0
+                        && tree.entries[root->resolved_entry_id].inferred) {
+                        parse::Entry const& v = tree.entries[root->resolved_entry_id];
+                        notes.push_back({v.file_id, v.tok,
+                                         "'" + v.name + "' is defined here."});
+                    }
                     diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
-                        "The class type of '" + it_ref.name + "' ('"
+                        "The class type ('"
                         + widen::spellOrEmpty(widen::strip(it_ref.inferred_type))
-                        + "') is inferred; a for-loop over a class requires a "
-                          "container with a declared class type.", {}});
-                } else if (is_class) {
-                    diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
-                        "The for-loop operand's class type ('"
-                        + widen::spellOrEmpty(widen::strip(it_ref.inferred_type))
-                        + "') is inferred; a for-loop over a class requires a "
-                          "container with a declared class type.", {}});
+                        + "') of the for-loop container cannot be inferred.",
+                        std::move(notes)});
                 } else if (it_ref.kind == parse::Kind::kIdentExpr) {
                     diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
                         "'" + it_ref.name + "' is not an array, enum, class, or tuple.", {}});
@@ -9324,6 +9447,11 @@ void explodeAggregateAug(parse::Tree& tree, parse::Node& s, widen::TypeRef fn_re
                          diagnostic::Sink& diag, bool is_shift) {
     parse::Node& rhs = *s.children.back();
     std::string const op = s.text;
+    if (rejectStringLiteralOperand(rhs, op + "=", diag)) {
+        s.inferred_type = s.return_type;
+        s.op_type = s.return_type;
+        return;
+    }
     // A shift's COUNT is not a slot value — it stands alone (flexing it to the lhs leaf
     // type would mis-type it). Any other scalar rhs flexes, so `int8[3] += 1` keeps int8.
     if (!is_shift && !isAggregateType(rhs.inferred_type)) {

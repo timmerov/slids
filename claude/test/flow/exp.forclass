@@ -133,6 +133,13 @@ ns-qualified global:
   6
 ref param deref: 6
 tuple-slot container: 6
+inferred copy: 6
+inferred address-of: 6
+class index: 60
+class index, inferred index: 60
+inferred class index: 6
+inferred address-of index: 60
+inferred deref index: 60
 class_range: 6
 shadow: 12
 class head reuse: 0

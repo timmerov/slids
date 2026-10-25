@@ -238,7 +238,7 @@ Vector<T>(
         return ^self[index];
     }
 
-    /* remove elements. */
+    /* remove elements by index. */
     void remove(intptr index, intptr count = 1) {
         /*
         move the tail into the gap.
@@ -253,6 +253,13 @@ Vector<T>(
         }
         /* resize and destruct elements. */
         resize(size_ - count);
+    }
+
+    /* remove elements by pointer to element. */
+    void remove(T^ it, intptr count = 1) {
+        storage = <T[]> storage_;
+        index = <T[]> it - storage;
+        remove(index, count);
     }
 
 /* private interface. */

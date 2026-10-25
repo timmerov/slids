@@ -407,6 +407,9 @@ struct Node {
                                  // call] and stamps resolved_entry_id = the `_$cret` id;
                                  // desugar lifts the two into a `_$cret` temp (an rvalue
                                  // via op=), the class analog of a construction lift.
+    bool alias_literal = false;  // kVarDeclStmt: a LOCAL const char array bound to a
+                                 // string literal (children[0]) — no storage of its own;
+                                 // codegen gives it the pooled constant's address.
     bool agg_conv_spill = false; // kConvertExpr: an AGGREGATE conversion whose source
                                  // was side-effecting, so classify spilled it once into a
                                  // `_$cinit` temp — children = [spill decl, the per-slot
@@ -594,6 +597,9 @@ struct Entry {
                                   // `l2 = kC;` reads in ENUM CONTEXT. classify still
                                   // stamps slids_type from the rhs; only
                                   // peekIterableType and entryEnumFrame read this.
+    bool inferred = false;        // LocalVar: declared WITHOUT a type (`x = rhs;`) —
+                                  // slids_type is stamped by classify. Diagnostics
+                                  // name it when resolve could not see its type.
     std::vector<widen::TypeRef> param_types;  // Function only
     // Function only — default parameters. num_required = count of leading params
     // without a default (required); params [num_required..param_types.size()) are

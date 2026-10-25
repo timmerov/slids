@@ -21,7 +21,8 @@ IFLAGS    = -I $(LIB_HDR)
 SAMPLES = \
 	constant \
 	enum \
-	fold
+	fold \
+	string_literal
 
 .PHONY: all clean negatives positives $(SAMPLES)
 

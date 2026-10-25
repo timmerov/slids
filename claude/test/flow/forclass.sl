@@ -342,6 +342,17 @@ pool {
     global IdxVec nsvec = (2, 4, 6);
 }
 
+// a class whose op[] returns a CLASS reference — `grid[i]` is itself a container.
+IdxGrid(IdxVec r0_ = (1, 2, 3), IdxVec r1_ = (10, 20, 30)) {
+    int size() {
+        return 2;
+    }
+    IdxVec^ op[](int i) {
+        if (i == 0) { return ^r0_; }
+        return ^r1_;
+    }
+}
+
 // A reference PARAM's deref as the container.
 int sumThrough(IdxVec^ v) {
     int t = 0;
@@ -616,6 +627,39 @@ int32 main() {
     }
     println(String + "tuple-slot container: " + slotsum);      // 6
 
+    // ---- INFERRED containers: resolve peeks a typeless local's class type
+    //      off its initializer's structure — a copy, an address-of, a class
+    //      index (op[]'s declared return; the index's own type never matters) ----
+    IdxVec iv2;
+    IdxGrid grid;
+    cw = iv2;
+    q = ^iv2;
+    gi = 1;
+    row = grid[0];
+    rp = ^grid[1];
+    gp = ^grid;
+    int inf = 0;
+    for (x : cw) { inf += x; }
+    println(String + "inferred copy: " + inf);                 // 6
+    inf = 0;
+    for (x : q^) { inf += x; }
+    println(String + "inferred address-of: " + inf);           // 6
+    inf = 0;
+    for (x : grid[1]) { inf += x; }
+    println(String + "class index: " + inf);                   // 60
+    inf = 0;
+    for (x : grid[gi]) { inf += x; }
+    println(String + "class index, inferred index: " + inf);   // 60
+    inf = 0;
+    for (x : row) { inf += x; }
+    println(String + "inferred class index: " + inf);          // 6
+    inf = 0;
+    for (x : rp^) { inf += x; }
+    println(String + "inferred address-of index: " + inf);     // 60
+    inf = 0;
+    for (x : gp^[1]) { inf += x; }
+    println(String + "inferred deref index: " + inf);          // 60
+
 
     // ---- a class-for nested with a DIFFERENT short form (range inner, bound
     //      from the element): 1 + 2 + 3 = 6 ----
@@ -831,10 +875,11 @@ int32 main() {
 //    return 0;
 //}
 
-// A TYPELESS local's class type is inferred at classify — too late for the
-// for-class lowering at resolve (the protocol lookup and rewrite need the scope
-// frames). An honest rejection, not a false "not a class".
-//-EXPECT-ERROR: is inferred; a for-loop over a class requires a container with a declared class type
+// A TYPELESS local whose initializer resolve cannot peek (a construction) has its
+// class type inferred only at classify — too late for the for-class lowering at
+// resolve (the protocol lookup and rewrite need the scope frames). An honest
+// rejection, not a false "not a class".
+//-EXPECT-ERROR: The class type ('IdxVec') of the for-loop container cannot be inferred.
 //int neg_inferred_class_local() {
 //    b = IdxVec();
 //    for (x : b) {
@@ -843,9 +888,20 @@ int32 main() {
 //    return 0;
 //}
 
+// the note names the typeless local at the ROOT of the container expression.
+//-EXPECT-ERROR: 'bp' is defined here.
+//int neg_inferred_class_root() {
+//    b = IdxVec();
+//    bp = ^b;
+//    for (x : bp^) {
+//        return x;
+//    }
+//    return 0;
+//}
+
 // ...and the expression form of the same limit: a class in a TYPELESS tuple's
 // slot (the outer tuple's type — and so the slot's — is inferred at classify).
-//-EXPECT-ERROR: is inferred; a for-loop over a class requires a container with a declared class type
+//-EXPECT-ERROR: 'tb' is defined here.
 //int neg_inferred_class_slot() {
 //    tb = (IdxVec(), IdxVec());
 //    for (x : tb[0]) {

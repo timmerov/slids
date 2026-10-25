@@ -10,8 +10,7 @@ import guthrie;
 
 int32 main() {
 
-    GuthrieVoting guthrie;
-    guthrie.run();
+    g_guthrie.run();
 
     return 0;
 }

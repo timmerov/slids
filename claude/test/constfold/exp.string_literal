@@ -1,0 +1,14 @@
+sizeof= 6
+index= b nul= 0
+runtime index= c
+addr= el (const char)[]
+hello
+op= there
+letters= ho text nul= 0
+destructure= hello
+destructure z= 0hello
+wide= 104 0 111
+ptr= he
+alias= asl const char[6]
+same address= true true true
+copy= b false

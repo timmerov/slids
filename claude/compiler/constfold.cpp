@@ -1166,6 +1166,29 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
 // size an array dimension. Operands that need inference — a deref, an index,
 // arithmetic — and a slid type are left as kSizeofExpr for classify. Like
 // ##type, sizeof never evaluates its operand, so the operand is not substituted.
+// `"ab"[1]` -> 'b': a string literal read at a constant in-range index (the nul at
+// index N-1 included) folds to the char. An out-of-range index stays for classify's
+// array bounds error.
+std::unique_ptr<parse::Node> tryFoldLiteralIndex(parse::Node& n) {
+    if (n.children.size() != 2 || !n.children[0] || !n.children[1]) return nullptr;
+    parse::Node const& lit = *n.children[0];
+    parse::Node const& idx = *n.children[1];
+    if (lit.kind != parse::Kind::kStringLiteral
+        || (idx.kind != parse::Kind::kIntLiteral && idx.kind != parse::Kind::kUintLiteral))
+        return nullptr;
+    long long i = std::strtoll(idx.text.c_str(), nullptr, 10);
+    if (i < 0 || i > static_cast<long long>(lit.text.size())) return nullptr;
+    unsigned char c = i < static_cast<long long>(lit.text.size())
+        ? static_cast<unsigned char>(lit.text[i]) : 0;
+    auto ch = std::make_unique<parse::Node>();
+    ch->kind = parse::Kind::kCharLiteral;
+    ch->text = std::to_string(c);
+    ch->file_id = n.file_id;
+    ch->tok = n.tok;
+    assignNominal(*ch);
+    return ch;
+}
+
 std::unique_ptr<parse::Node> tryFoldSizeof(parse::Node& n, parse::Tree& tree) {
     long long size = -1;
     if (!n.children.empty()
@@ -1347,6 +1370,18 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         }
         return;
     }
+    // `^"lit"[i]` is an ADDRESS into the literal, not a read: fold its index, never
+    // the subscript itself (the read below would leave `^` a char to point at).
+    if (slot->kind == parse::Kind::kAddrOfExpr && !slot->children.empty()
+        && slot->children[0] && slot->children[0]->kind == parse::Kind::kIndexExpr
+        && slot->children[0]->children.size() == 2
+        && slot->children[0]->children[0]
+        && slot->children[0]->children[0]->kind == parse::Kind::kStringLiteral) {
+        walk(slot->children[0]->children[1], tree, changed, diag, refreshes,
+             no_substitute);
+        assignNominal(*slot);
+        return;
+    }
     // A LAZY template method's body is unresolved until its first use builds it
     // (runOn folds it then) — fold only its signature (params, dims) now.
     if (!slot->lazy_body) {
@@ -1385,6 +1420,11 @@ void walk(std::unique_ptr<parse::Node>& slot, parse::Tree& tree,
         }
     } else if (slot->kind == parse::Kind::kIdentExpr) {
         if (!no_substitute && trySubstituteConst(slot, tree)) {
+            changed = true;
+        }
+    } else if (slot->kind == parse::Kind::kIndexExpr) {
+        if (auto folded = tryFoldLiteralIndex(*slot)) {
+            slot = std::move(folded);
             changed = true;
         }
     }

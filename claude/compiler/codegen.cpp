@@ -1085,6 +1085,10 @@ std::string emitElementAddr(ast::Node const& index_expr, SymTab const& syms,
         addr = emitExpr(*node->children[0], syms, pool, out, diag,
                         node->children[0]->inferred_type);
         cur = node->inferred_type;   // the pointee
+    } else if (node->kind == ast::Kind::kStringLiteral) {
+        // A string literal is storage: its pooled constant's symbol IS its address.
+        addr = "@.str_" + std::to_string(strings::add(pool, node->text));
+        cur = node->inferred_type;   // const char[N]
     } else {
         assert(node->kind == ast::Kind::kIdentExpr && node->resolved_entry_id >= 0
             && "emitElementAddr: subscript base must be a variable or a deref");
@@ -1657,6 +1661,8 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
                         "declare a new variable (e.g. 'Class x = Class(...)').", {}});
                     return "null";
                 }
+                if (operand.kind == ast::Kind::kStringLiteral)   // `^"lit"`: the pool constant
+                    return "@.str_" + std::to_string(strings::add(pool, operand.text));
                 assert(operand.kind == ast::Kind::kIdentExpr
                     && operand.resolved_entry_id >= 0
                     && "kAddrOfExpr: operand must be a resolved variable");
@@ -2809,6 +2815,8 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kVarDeclStmt: {
             // Consts are substituted away by constfold and have no runtime form.
             if (stmt.is_const) return;
+            // An alias of a string literal has nothing to construct (hoist pre-pass).
+            if (stmt.alias_literal) return;
             assert(stmt.resolved_entry_id >= 0
                 && "kVarDeclStmt: classify did not stamp resolved_entry_id");
             // The alloca + SymTab registration were HOISTED to the function entry
@@ -3843,6 +3851,17 @@ void emitFunction(ast::Node const& fn, strings::Pool& pool,
         // construction (and reads/writes) go straight through %sret.in.
         if (d->nrvo) {
             syms[d->resolved_entry_id] = {"%sret.in", llty, d->return_type};
+            continue;
+        }
+        // A const char array bound to a string literal ALIASES it: its storage is the
+        // pooled constant (read-only, static), so no alloca and no copy.
+        if (d->alias_literal) {
+            assert(!d->children.empty() && d->children[0]
+                && d->children[0]->kind == ast::Kind::kStringLiteral
+                && "alias_literal decl must keep its string literal init");
+            syms[d->resolved_entry_id] = {
+                "@.str_" + std::to_string(strings::add(pool, d->children[0]->text)),
+                llty, d->return_type};
             continue;
         }
         std::string regname = std::string("%") + d->name + "."

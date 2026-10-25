@@ -6,6 +6,10 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 analyze guthrie voting.
 */
 
+/* the class called by main. */
 GuthrieVoting(...) {
     void run();
 }
+
+/* declare the global object. */
+global GuthrieVoting g_guthrie;

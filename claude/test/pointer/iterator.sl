@@ -144,6 +144,22 @@ int32 main() {
        never null. */
     println(String + "lit!=null= " + (lit != nullptr));  // true
 
+    /* a COMPUTED array decays too. Element-wise arithmetic on array variables
+       yields an array that lives in no variable, so it has no address of its own:
+       it is spilled to a temp that dies at the semicolon, and the temp decays. (A
+       string LITERAL never gets here: built-in operators reject one, see
+       constfold/string_literal.sl.) `z0` is a zero char, so `two + z0` keeps its
+       NUL. */
+    char c = 'A';
+    char z0 = c - c;
+    char two[2] = "x";
+    int nums[2] = (1, 2);
+    println(String + "fn var= " + firstChar(two + z0));     // x
+    println(String + "fn int= " + sum2(nums * 10));         // 30
+    println(String + "bin= " + (two + z0));                 // x
+    /* an operand evaluated once spills INSIDE the computed array's own temp. */
+    println(String + "fn call= " + sum2(nums + ten()));     // 23
+
     return 0;
 }
 
@@ -152,6 +168,14 @@ int32 main() {
    and this is the shape that will enforce it when const enforcement lands. */
 char firstChar(char[] s) {
     return s[0];
+}
+
+int sum2(int[] p) {
+    return p[0] + p[1];
+}
+
+int ten() {
+    return 10;
 }
 
 intptr litLen(char[] s) {
