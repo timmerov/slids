@@ -1073,8 +1073,11 @@ struct Parser {
     // because no EXPRESSION operand puts a top-level `=` after a type-shaped
     // lead), else a full expression. Also the parse behind the conversion
     // SHORTHAND (`lvalue TYPE = expr;`), which enters at the type with no
-    // parens at all.
-    std::unique_ptr<parse::Node> parseConvertChain(int file_id) {
+    // parens at all. Under the shorthand a POINTER target (`^` / `[]` outermost)
+    // makes the link the POINTER CAST SHORTHAND instead: `p T^ = q;` builds the
+    // kCastExpr `<T^> q` (pointer/cast.sl canon) — the ordinary cast rules apply.
+    // The long form keeps its "may not be a pointer type" error.
+    std::unique_ptr<parse::Node> parseConvertChain(int file_id, bool shorthand = false) {
         int op_tok = pos;
         Declarator d;
         if (!parseDeclarator(NamePolicy::Forbidden, /*parse_name_dims=*/false,
@@ -1087,9 +1090,13 @@ struct Parser {
         if (!expect(token::Kind::kEquals, "=")) return nullptr;
         std::unique_ptr<parse::Node> operand =
             (isTypeStart(peek().kind) || looksLikeConvTarget())
-                ? parseConvertChain(file_id) : parseExpr();
+                ? parseConvertChain(file_id, shorthand) : parseExpr();
         if (!operand) return nullptr;
-        auto node = newNodeAt(parse::Kind::kConvertExpr, file_id, op_tok);
+        widen::Type::Form tf = widen::form(widen::strip(widen::internOrNone(target)));
+        bool is_cast = shorthand
+            && (tf == widen::Type::Form::kPointer || tf == widen::Type::Form::kIterator);
+        auto node = newNodeAt(is_cast ? parse::Kind::kCastExpr : parse::Kind::kConvertExpr,
+                              file_id, op_tok);
         node->return_type = widen::internOrNone(target);
         node->return_type_seg_toks = std::move(target_seg_toks);
         if (d.any_dim_expr) node->dim_exprs = std::move(conv_dims);
@@ -1984,7 +1991,7 @@ struct Parser {
         // conversion the whole init). The kVarDeclStmt-of-kConvertExpr is the
         // long form's exact shape; resolve onward see nothing new.
         if (startsConvShorthand()) {
-            auto init = parseConvertChain(stmt_file);
+            auto init = parseConvertChain(stmt_file, /*shorthand=*/true);
             if (!init) return nullptr;
             node->children.push_back(std::move(init));
         } else if (peek().kind == token::Kind::kEquals
@@ -2401,7 +2408,7 @@ struct Parser {
             // wins; the long form is the escape hatch there.
             std::unique_ptr<parse::Node> rhs;
             if (startsConvShorthand()) {
-                rhs = parseConvertChain(stmt_file);
+                rhs = parseConvertChain(stmt_file, /*shorthand=*/true);
             } else {
                 if (!expect(token::Kind::kEquals, "=")) return nullptr;
                 rhs = parseExpr();
@@ -2451,7 +2458,7 @@ struct Parser {
         // otherwise read `t (...)` as a call; a call is never followed by
         // top-level `=`, so the shape is free).
         if (startsConvShorthand()) {
-            auto rhs = parseConvertChain(stmt_file);
+            auto rhs = parseConvertChain(stmt_file, /*shorthand=*/true);
             if (!rhs) return nullptr;
             if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
             auto node = newNodeAt(parse::Kind::kAssignStmt, stmt_file, stmt_tok);
@@ -3913,10 +3920,30 @@ struct Parser {
             // is decl-impossible. The bare twin `x Amt = e` is token-identical
             // to a decl (`Amt x = e` reversed) and stays a decl: THE DECL SHAPE
             // WINS, and the long form `x = (Amt = e)` is the escape hatch.
+            // The POINTER CAST SHORTHAND is decl-impossible too: `p Node^ = q`,
+            // `it Ns:T[] = q` put a `^` / empty `[]` after the second identifier
+            // (a declared name carries only SIZED dims) before the `=`.
             if (next == token::Kind::kIdentifier) {
                 int ta = skipTypeArgGroup(2);
                 bool conv_shorthand = peekKind(2) == token::Kind::kLt && ta > 2
                     && peekKind(ta) == token::Kind::kEquals;
+                if (!conv_shorthand) {
+                    while (peekKind(ta) == token::Kind::kColon
+                           && peekKind(ta + 1) == token::Kind::kIdentifier) {
+                        ta = skipTypeArgGroup(ta + 2);
+                    }
+                    int end = skipTypeSuffixes(ta);
+                    bool ptr_suffix = false;
+                    for (int o = ta; o < end; o++) {
+                        token::Kind k = peekKind(o);
+                        if (k == token::Kind::kBitXor || k == token::Kind::kXorXor
+                            || (k == token::Kind::kLBracket
+                                && peekKind(o + 1) == token::Kind::kRBracket)) {
+                            ptr_suffix = true;
+                        }
+                    }
+                    conv_shorthand = ptr_suffix && peekKind(end) == token::Kind::kEquals;
+                }
                 if (!conv_shorthand) return parseVarDeclStmt();
                 return parseNameLedStmt();
             }

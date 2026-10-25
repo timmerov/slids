@@ -792,8 +792,9 @@ int32 main() {
     //int8  en = (int = 5);
     //println(String + "x= " + en);
 
-    /* the shorthand rejects a pointer target exactly like the long form. */
-    //-EXPECT-ERROR: A type conversion target may not be a pointer type
+    /* a pointer target makes the shorthand a pointer CAST (pointer/cast.sl):
+       `shep int^ = shnp;` is `<int^> shnp`, and an int is no cast operand. */
+    //-EXPECT-ERROR: only 'intptr' may be cast to or from a pointer
     //int shnp = 5;
     //shep int^ = shnp;
     //println(String + "x= " + shep^);

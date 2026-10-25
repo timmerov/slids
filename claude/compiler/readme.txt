@@ -2207,6 +2207,17 @@ STAGE FILES (.h / .cpp pairs)
             type-args. The decl-init slot (`decl-type name conv-type = expr`)
             takes ident / alias / qualified / class conv types (no collision —
             the decl's own type+name are already consumed);
+            the POINTER CAST SHORTHAND `ptr Ptr = qtr;` (canon
+            test/pointer/cast.sl) rides the same three slots: when a
+            shorthand link's target strips to a reference / iterator,
+            parseConvertChain(shorthand=true) builds the kCastExpr `<Ptr> qtr`
+            instead of a kConvertExpr (per link, so `p A^ = void^ = q` is
+            `<A^> <void^> q`) — the ordinary cast rules apply in classify, no
+            loophole; the long form `(T^ = e)` keeps its conversion error. A
+            SECOND decl-gate carve-out: `ident ident[:seg]*` then a suffix run
+            holding a `^` / EMPTY `[]`, then `=` (`p Node^ = q`) routes to the
+            shorthand — a declared name carries only SIZED dims, so
+            `x Amt[3] = e` stays a decl. `p T^= q` (no space) lexes `^=`;
             alias,
             namespace decl, 0/1/N-arg call possibly qualified, bare inc/dec,
             return, if/else, while + post-condition do-while, the long-form for,

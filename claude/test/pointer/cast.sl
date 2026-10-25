@@ -149,6 +149,11 @@ an iterator to an array.
     Type[5]^ arr_ref = ^arr;
     Type[5][] arr_iter = <Type[5][]> ^arr;
 
+pointer cast shorthand notation is similar to type conversion shorthand.
+it combines a declaration with a type cast.
+
+    ptr Ptr = qtr; --> Ptr ptr = <Ptr> qtr;
+
 note:
 testing casting between base and derived pointers is in class/inheritance.sl.
 */
@@ -326,6 +331,26 @@ int32 main() {
     int32[5]^ dwhole = ^darr;                            // whole-array ref: ^arr, no cast
     println(String + "decay whole= " + dwhole^[0] + " " + dwhole^[4]);   // 10 50
 
+    /* pointer cast SHORTHAND: `ptr Ptr = qtr;` is `Ptr ptr = <Ptr> qtr;` — the
+       ordinary cast rules, in every slot the conversion shorthand reaches. */
+    shv void^ = ref;                                     // new var, implicit strip
+    shb int32^ = shv;                                    // void^ -> typed (explicit add)
+    println(String + "sh void= " + shb^);                       // 99
+    shn int32^ = num;                                    // intptr -> pointer
+    println(String + "sh intptr= " + shn^);                     // 99
+    shi int32[] = eref;                                  // reference -> iterator
+    println(String + "sh iter= " + shi^);                       // 7
+    sha Pint^ = vp;                                      // identifier-led target
+    println(String + "sh alias= " + sha^);                      // 99
+    shc int32^ = void^ = hp;                             // chained: <int32^> <void^> hp
+    println(String + "sh chain= " + (<intptr> shc == ha));      // true
+    shb int32^ = fromi;                                  // EXISTING var: iterator -> ref
+    println(String + "sh assign= " + shb^);                     // 8
+    refs[0] int32^ = xnum;                               // store into an index slot
+    println(String + "sh store= " + refs[0]^);                  // 8
+    int32^ shd int32^ = vp;                              // decl-type init slot
+    println(String + "sh decl= " + shd^);                       // 99
+
     /* compile errors — each uncommented in isolation by the negative runner. */
 
     //-EXPECT-ERROR: Cannot implicitly cast 'void^' to 'int32^'
@@ -375,6 +400,20 @@ int32 main() {
 
     //-EXPECT-ERROR: Cannot implicitly cast 'int16^' to 'int32'
     //ref^ = hp;
+
+    /* the pointer cast shorthand is no loophole: the explicit cast rules apply. */
+    //-EXPECT-ERROR: reinterpret indirectly through 'void^'
+    //shx int16^ = ref;
+    //println(String + "bad= " + shx^);
+
+    //-EXPECT-ERROR: only 'intptr' may be cast to or from a pointer
+    //shy int32^ = a;
+    //println(String + "bad= " + shy^);
+
+    /* an identifier-led target obeys the same rules. */
+    //-EXPECT-ERROR: reinterpret indirectly through 'void^'
+    //shz Pint^ = hp;
+    //println(String + "bad= " + shz^);
 
     return 0;
 }

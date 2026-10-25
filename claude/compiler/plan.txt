@@ -3303,6 +3303,28 @@ parens dropped; `x int = get_float();`, `int vol int = 3.14*r*r*h;`,
   Detail: readme.txt grammar statements + conversion passages;
   readme-classes.txt VALUE CONVERSION bullet.
 
+POINTER CAST SHORTHAND (landed 2026-10-25).
+Canon: test/pointer/cast.sl header — `ptr Ptr = qtr; --> Ptr ptr = <Ptr> qtr;`,
+"similar to type conversion shorthand"; user: the normal casting rules apply,
+not a loophole — additional syntax to make the language symmetric.
+  - A PURE GRAMMAR DESUGAR riding the conversion shorthand's three slots
+    (name-led assign, chained-lvalue store, decl init): parseConvertChain
+    takes `shorthand`; a link whose target strips to kPointer / kIterator
+    builds a kCastExpr instead of a kConvertExpr. Per link, so chains mix:
+    `shc int32^ = void^ = hp` is `<int32^> <void^> hp`. The long form
+    `(int^ = e)` keeps "A type conversion target may not be a pointer type".
+  - The slot was already claimed: a primitive pointer target reached the
+    conversion shorthand and died on the conversion error (typeconv.sl's
+    shorthand pointer-target negative now expects the CAST error — `<int^>`
+    of an int — "only 'intptr' may be cast to or from a pointer").
+  - SECOND decl-gate carve-out in parseStmt: `ident ident[:seg]*` + a suffix
+    run holding a `^` / EMPTY `[]`, then `=` (`p Node^ = q`, `sha Pint^ = vp`)
+    is the shorthand — a declared name carries only SIZED dims, so
+    `x Amt[3] = e` stays a decl. Accepted edge: `p T^= q` lexes `^=`.
+  Coverage: cast.sl sh* block (void^ -> typed, intptr -> ptr, ref -> iter,
+  alias target, chain, existing var, index store, decl-init) + three
+  negatives (unrelated pointers, int operand, alias target).
+
 THE `void;` REACHABILITY MARKER (landed 2026-08-03).
 Canon: test/flow/void.sl header. `void;` is a no-op statement, legal
 anywhere in a runtime code block (reachable ones included); its ONLY side
