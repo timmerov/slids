@@ -669,6 +669,12 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
         would land on its OLD value.
       - no destination at all (a call arg, a nested operand) -> a `_$optmp` lifted into the
         statement's `pre` by liftSretCallExprs, statement-scoped by its existing wrap.
+      - a COMPOUND-operator rhs (`t += a + b + c`, 2026-10-25) -> NO destination either: the
+        target is READ, not replaced, so dispatchAssignInit's exact-class-chain bail is
+        TRANSFER-ONLY (op= / op<--) and the chain stays the ARGUMENT of `t.op+=(...)` — one
+        `_$optmp`, one operator call. No associativity assumed (`t -= a + b` = t - (a+b)); a
+        target inside the chain reads its old value. Canon evaluate.sl block CA. [OPEN:
+        fusing into the target — todo.txt COMPOUND-ASSIGN CHAIN FUSING.]
   * THE LADDER (desugar::lowerOpChain, walking the left spine innermost-first):
       1. a fresh `Class` / `Class()` / `Class(args)` at the HEAD COLLAPSES INTO the
          accumulator — constructed with those args, never materialized as an operand.

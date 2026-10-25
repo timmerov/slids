@@ -1575,6 +1575,54 @@ int32 main() {
         println(String + "CO end (locals dtor next)");
     }
 
+    // ---- CA: A CHAIN AS THE RHS OF A COMPOUND OPERATOR ----
+    //
+    // `t += a + b + c` reads the target, so the chain cannot build IN it (that is the `=`
+    // case). The SAFE lowering: the chain builds into ONE statement-scoped accumulator --
+    // the normal minimum-temp chain -- and the compound operator runs ONCE on it. The
+    // accumulator dies at the SEMICOLON (its dtor prints BEFORE "CAn end"). No associativity
+    // is assumed: `t -= a + b` is t - (a + b), and a target inside the chain reads its OLD
+    // value. (Fusing straight into the target is an open todo.)
+    println(String + "CA: compound assign from a chain");
+    {
+        Acc ka = Acc(1);
+        Acc kb = Acc(2);
+        Acc kc = Acc(3);
+        Acc kt = Acc(100);
+
+        // CA1: same operator family -- one accumulator (ka + kb, then += kc), one op+=.
+        println(String + "CA1: kt += ka + kb + kc");
+        kt += ka + kb + kc;
+        println(String + "CA1 end kt=" + kt.v_);             // 106
+
+        // CA2: a DIFFERENT compound operator -- t - (a + b), never t - a - b.
+        println(String + "CA2: kt -= ka + kb");
+        kt -= ka + kb;
+        println(String + "CA2 end kt=" + kt.v_);             // 103
+
+        // CA3: the TARGET inside the chain -- the accumulator reads kt's OLD value.
+        println(String + "CA3: kt += ka + kt");
+        kt += ka + kt;
+        println(String + "CA3 end kt=" + kt.v_);             // 207
+
+        // CA4: a FIELD target (the expression-lvalue form).
+        println(String + "CA4: kbox.a_ += ka + kb");
+        Box kbox(Acc(10));
+        kbox.a_ += ka + kb;
+        println(String + "CA4 end kbox.a_=" + kbox.a_.v_);   // 13
+
+        // CA5: the ONLY-op+= class -- the accumulator seeds by op= then fuses by op+=.
+        println(String + "CA5: ks += sa + sb + sc");
+        Str sa = Str(1);
+        Str sb = Str(2);
+        Str sc = Str(3);
+        Str ks = Str(50);
+        ks += sa + sb + sc;
+        println(String + "CA5 end ks=" + ks.v_);             // 56
+
+        println(String + "CA end (locals dtor next)");
+    }
+
     return 0;
 }
 

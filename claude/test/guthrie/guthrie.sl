@@ -599,6 +599,7 @@ GuthrieVoting(
             vote();
             guthrie_.find_winner();
             show_satisfaction();
+println(##line);
 /* ==tsc== */
 /*
             check_criteria();
@@ -739,19 +740,13 @@ GuthrieVoting(
         disperse_candidates();
         /* sort them. */
         quicksort(candidates_);
-println(##line);
         single_transferable_vote_primary();
-println(##line);
         name_candidates();
-println(##line);
-/* ==tsc== */
-/*
-        if (kShowVoterBlocs) {
+        if (kShowVoterBlocs) { void;
             show_bloc_map();
         }
         show_candidate_positions();
         rank_candidates();
-*/
     }
 
     void pick_candidates_from_electorate() {
@@ -876,9 +871,7 @@ println(##line);
         }
 
         /* repeat for correct approvals. sigh. */
-println(##line);
         create_blocs();
-println(##line);
     }
 
     void name_candidates() {
@@ -889,12 +882,11 @@ println(##line);
         }
     }
 
-/* ==tsc== */
-/*
     void show_candidate_positions() {
-        LOG("Candidate positions:");
-        for (auto&& candidate : candidates_ ) {
-            LOG(" "<<candidate.name_<<": "<<candidate.position_.to_string());
+        println("Candidate positions:");
+        for (candidate : candidates_ ) {
+            println(String + " " + candidate^.name_ + ": " +
+                candidate^.position_.to_string());
         }
     }
 
@@ -902,50 +894,49 @@ println(##line);
         bool quiet = false
     ) {
         /* every candidate rank orders the others. */
-        for (auto&& candidate : candidates_) {
+        for (candidate : candidates_) {
             rank_other_candidates(candidate);
         }
 
         if (quiet == false) {
-            LOG("Candidate rankings of other candidates:");
-            for (auto&& candidate : candidates_ ) {
-                std::stringstream ss;
-                ss<<" "<<candidate.name_<<":";
-                for (int i = 1; i < ncandidates_; ++i) {
-                    int rank = candidate.rankings_[i];
-                    float64 utility = candidate.utilities_[i];
+            println("Candidate rankings of other candidates:");
+            for (candidate : candidates_ ) {
+                ss = String + " " + candidate^.name_ + ":";
+                for (i : 1..ncandidates_) {
+                    int rank = candidate^.rankings_[i];
+                    float64 utility = candidate^.utilities_[i];
                     if (i > 1) {
-                        ss<<" >";
+                        ss += " >";
                     }
-                    ss<<" "<<candidates_[rank].name_<<" ("<<utility<<")";
+                    ss += String + " " + candidates_[rank].name_
+                        + " (" + utility + ")";
                 }
-                LOG(ss.str());
+                println(ss);
             }
         }
     }
 
     void rank_other_candidates(
-        Candidate& candidate
+        Candidate^ candidate
     ) {
-        candidate.rankings_.reserve(ncandidates_);
-        candidate.utilities_.reserve(ncandidates_);
-        candidate.rankings_.clear();
-        candidate.utilities_.clear();
+        candidate^.rankings_.reserve(ncandidates_);
+        candidate^.utilities_.reserve(ncandidates_);
+        candidate^.rankings_.clear();
+        candidate^.utilities_.clear();
 
-        for (int i = 0; i < ncandidates_; ++i) {
-            auto& other = candidates_[i];
-            float64 utility = candidate.position_.utility(other.position_);
+        for (i : 0..ncandidates_) {
+            other = ^candidates_[i];
+            float64 utility = candidate^.position_.utility(other^.position_);
             int k = 0;
-            for (; k < i; ++k) {
-                if (utility > candidate.utilities_[k]) {
+            for (k : 0..i) {
+                if (utility > candidate^.utilities_[k]) {
                     break;
                 }
             }
-            candidate.rankings_.insert(candidate.rankings_.begin() + k, i);
-            candidate.utilities_.insert(candidate.utilities_.begin() + k, utility);
+            candidate^.rankings_.insert(k, i);
+            candidate^.utilities_.insert(k, utility);
         }
     }
-*/
 
     /*
     calculate the total utilities of all of the candidates.
@@ -1213,33 +1204,27 @@ println(##line);
         bloc_map_ <-- new_bloc_map;
     }
 
-/* ==tsc== */
-/*
     void show_bloc_map() {
-        int n = bloc_map_.size();
-        LOG("Voter blocs ("<<n<<"):");
-        for (auto&& it : bloc_map_) {
-            auto& rankings = it.first;
-            auto& bloc = it.second;
-            std::stringstream ss;
-            ss<<" ";
-            int nrankings = rankings.size();
-            for (int k = 0; k < nrankings; ++k) {
-                int which = rankings[k];
-                ss<<candidates_[which].name_;
+        n int = bloc_map_.size();
+        println(String + "Voter blocs (" + n + "):");
+        for (it : bloc_map_) {
+            String ss = " ";
+            nrankings int = it^.rankings_.size();
+            for (k : 0..nrankings) {
+                int which = it^.rankings_[k];
+                ss += candidates_[which].name_;
             }
-            ss<<" size: "<<bloc.size_<<" utilities:";
-            for (int i = 0; i < nrankings; ++i) {
-                ss<<" "<<bloc.utilities_[i];
+            ss += String + " size: " + it^.bloc_.size_ + " utilities:";
+            for (i : 0..nrankings) {
+                ss += String + " " + it^.bloc_.utilities_[i];
             }
-            ss<<" n: "<<bloc.napprovals_<<" approvals:";
-            for (int i = 0; i < nrankings; ++i) {
-                ss<<" "<<bloc.approvals_[i];
+            ss += String + " n: " + it^.bloc_.napprovals_ + " approvals:";
+            for (i : 0..nrankings) {
+                ss += String + " " + it^.bloc_.approvals_[i];
             }
-            LOG(ss.str());
+            println(ss);
         }
     }
-*/
 
     void vote() {
         /*

@@ -7092,7 +7092,11 @@ bool dispatchAssignInit(parse::Tree& tree, parse::Node& s, widen::TypeRef clsTyp
     // the very object the chain lowering exists to avoid, and dispatching op= on the spill
     // would copy it a second time. Bail: the statement keeps the raw chain as its source.
     // A chain of a DIFFERENT class still routes through the funnel — that IS a conversion.
-    if (idx < static_cast<int>(s.children.size()) && s.children[idx]
+    // Only a WHOLE-VALUE transfer (op= / op<--) replaces the target; a COMPOUND operator
+    // (`s += String + a + b`) reads the target, so its chain is an ordinary ARGUMENT —
+    // desugar lifts it into ONE statement-scoped accumulator and the operator runs once.
+    bool transfer = opname == "op=" || opname == "op<--";
+    if (transfer && idx < static_cast<int>(s.children.size()) && s.children[idx]
         && s.children[idx]->class_op_chain
         && widen::deepStrip(s.children[idx]->inferred_type) == widen::deepStrip(clsType))
         return false;

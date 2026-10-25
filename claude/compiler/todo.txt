@@ -139,6 +139,17 @@ UNBLOCKED FEATURES
       them. Pinned by evaluate.sl block N (class Buf); the buffers are correctly
       statement-scoped, so this is efficiency only.
 
+  * COMPOUND-ASSIGN CHAIN FUSING — `s += a + b + c` as `s += a; s += b; s += c`.
+    today the chain builds into ONE statement-scoped accumulator and the compound operator
+    runs once on it (safe: evaluate.sl block CA). fusing straight into the target would drop
+    that temp, but only when:
+    - the chain's operator is the SAME family as the compound one (`+` under `+=`).
+    - the chain never names the target (`s += a + s` must read s's OLD value).
+    - the user's operator may be assumed ASSOCIATIVE — a language rule, like canon's
+      "x + y is x; x += y". `s -= a - b` is s - a + b; fused it would be s - a - b.
+    - decide the SEED: `s += String + " " + x` — drop a bare default-constructed seed
+      (assumes it is an identity) or append it.
+
   * SWAP-INIT ON A PRIMITIVE IS REJECTED. `int b <--> a;` errors "Swap-initialization
     requires a class type". Swap-init default-constructs the target and then re-dispatches
     as an ordinary swap statement, and only the construct half is class-only.

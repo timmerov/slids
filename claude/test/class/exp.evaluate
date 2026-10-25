@@ -744,5 +744,45 @@ Cvt:dtor: 20
 Cvt:dtor: 15
 Cvt:dtor: 3
 Cvt:dtor: 10
+CA: compound assign from a chain
+Acc:ctor: 1
+Acc:ctor: 2
+Acc:ctor: 3
+Acc:ctor: 100
+CA1: kt += ka + kb + kc
+Acc:ctor: 0
+Acc:dtor: 6
+CA1 end kt=106
+CA2: kt -= ka + kb
+Acc:ctor: 0
+Acc:dtor: 3
+CA2 end kt=103
+CA3: kt += ka + kt
+Acc:ctor: 0
+Acc:dtor: 104
+CA3 end kt=207
+CA4: kbox.a_ += ka + kb
+Acc:ctor: 10
+Acc:ctor: 0
+Acc:dtor: 3
+CA4 end kbox.a_=13
+CA5: ks += sa + sb + sc
+Str:ctor: 1
+Str:ctor: 2
+Str:ctor: 3
+Str:ctor: 50
+Str:ctor: 0
+Str:dtor: 6
+CA5 end ks=56
+CA end (locals dtor next)
+Str:dtor: 56
+Str:dtor: 3
+Str:dtor: 2
+Str:dtor: 1
+Acc:dtor: 13
+Acc:dtor: 207
+Acc:dtor: 3
+Acc:dtor: 2
+Acc:dtor: 1
 Class:dtor: 9
 Acc:dtor: 13
