@@ -255,7 +255,7 @@ star - range plus automatic runoff of the top two.
 cumulative voting - split 1.0 votes among candidates.
 */
 
-import algorithm;
+import+ algorithm;
 import dump;
 import electorate;
 import guthrie;
@@ -578,7 +578,7 @@ GuthrieVoting(
         show_header();
 
         /* run many trials. */
-        for (int trial : 1..<=ntrials_) {
+        for (trial : 1..<=ntrials_) {
             if (ntrials_ > 1) {
                 println(String);
                 println(String + "Trial: " + trial);
@@ -736,12 +736,13 @@ GuthrieVoting(
         */
         println(String + "Selecting candidates from the electorate.");
         pick_candidates_from_electorate();
-/* ==tsc== */
-/*
         disperse_candidates();
         /* sort them. */
         quicksort(candidates_);
         single_transferable_vote_primary();
+println(##line);
+/* ==tsc== */
+/*
         name_candidates();
         if (kShowVoterBlocs) {
             show_bloc_map();
@@ -757,7 +758,7 @@ GuthrieVoting(
         if (canddiate_method_ == kCandidatesSingleTransferableVote) {
             /* use the cube root of the numbe of voters. */
             float64 cube_root = math:pow((float64=electorate_.nvoters_), kPrimaryPower);
-            n = (int=math:round(cube_root));
+            n int = math:round(cube_root);
 
             /* maybe increase it. */
             n = math:max(n, ncandidates_);
@@ -795,8 +796,6 @@ GuthrieVoting(
         }
     }
 
-/* ==tsc== */
-/*
     /*
     move candidates closer to the political center.
     */
@@ -809,17 +808,17 @@ GuthrieVoting(
         int naxes = electorate_.naxes_;
         Position pos;
         pos.axis_.resize(naxes);
-        for (int i = 0; i < naxes; ++i) {
+        for (i : 0..naxes) {
             pos.axis_[i] = 0.0;
         }
-        for (auto&& voter : electorate_.voters_) {
-            for (int i = 0; i < naxes; ++i) {
-                pos.axis_[i] += voter.position_.axis_[i];
+        for (voter : electorate_.voters_) {
+            for (i : 0..naxes) {
+                pos.axis_[i] += voter^.position_.axis_[i];
             }
         }
-        float64 nvoters = float64(electorate_.nvoters_);
-        float64 denom = 1.0 / float64(nvoters);
-        for (int i = 0; i < naxes; ++i) {
+        nvoters float64 = electorate_.nvoters_;
+        float64 denom = 1.0 / nvoters;
+        for (i : 0..naxes) {
             pos.axis_[i] *= denom;
         }
 
@@ -829,16 +828,16 @@ GuthrieVoting(
         but that would make the code less clear.
         */
         float64 factor = 1.0 - dispersion_;
-        for (int i = 0; i < naxes; ++i) {
+        for (i : 0..naxes) {
             pos.axis_[i] *= factor;
         }
 
         /* move all candidates towards the center. */
-        for (auto&& candidate : candidates_) {
-            for (int i = 0; i < naxes; ++i) {
-                float64 cpos = candidate.position_.axis_[i];
+        for (candidate : candidates_) {
+            for (i : 0..naxes) {
+                float64 cpos = candidate^.position_.axis_[i];
                 float64 apos = pos.axis_[i];
-                candidate.position_.axis_[i] = dispersion_ * cpos + apos;
+                candidate^.position_.axis_[i] = dispersion_ * cpos + apos;
             }
         }
     }
@@ -855,22 +854,22 @@ GuthrieVoting(
         remove the ones with the lowest vote counts.
         we don't care about ties.
         */
-        for(;;) {
-            int n = candidates_.size();
+        while() {
+            n int = candidates_.size();
             if (n <= ncandidates_) {
                 break;
             }
             vote();
             int worst = 0;
             int worst_support = 0x7FFFFFFF;
-            for (int i = 0; i < n; ++i) {
-                auto& candidate = candidates_[i];
-                if (candidate.support_ < worst_support) {
+            for (i : 0..n) {
+                candidate = ^candidates_[i];
+                if (candidate^.support_ < worst_support) {
                     worst = i;
-                    worst_support = candidate.support_;
+                    worst_support = candidate^.support_;
                 }
             }
-            candidates_.erase(candidates_.begin() + worst);
+            candidates_.remove(worst);
             reduce_blocs(worst);
         }
 
@@ -878,6 +877,8 @@ GuthrieVoting(
         create_blocs();
     }
 
+/* ==tsc== */
+/*
     void name_candidates() {
         /* name them in sorted normalized order */
         for (int i = 0; i < ncandidates_; ++i) {
@@ -1038,8 +1039,6 @@ GuthrieVoting(
             + last_utility + " " + average_utility + " " + (median_utility-worst_utility));
     }
 
-/* ==tsc== */
-/*
     /*
     divide the electorate up into blocks.
     computing the distance between voters and candidates is expensive.
@@ -1054,10 +1053,10 @@ GuthrieVoting(
         Rankings rankings;
         Utilities utilities;
         Approvals approvals;
-        int n = candidates_.size();
+        n int = candidates_.size();
         int total_support = 0;
 
-        for (auto&& voter : electorate_.voters_) {
+        for (voter : electorate_.voters_) {
             rankings.reserve(n);
             utilities.reserve(n);
             approvals.reserve(n);
@@ -1066,28 +1065,28 @@ GuthrieVoting(
             approvals.resize(n);
 
             /* create the rankings and the utility. */
-            for (int i = 0; i < n; ++i) {
-                auto& candidate = candidates_[i];
-                float64 utility = voter.position_.utility(candidate.position_);
+            for (i : 0..n) {
+                candidate = ^candidates_[i];
+                float64 utility = voter^.position_.utility(candidate^.position_);
                 int k = 0;
-                for (; k < i; ++k) {
+                for (k : 0..i) {
                     if (utility > utilities[k]) {
                         break;
                     }
                 }
-                rankings.insert(rankings.begin() + k, i);
-                utilities.insert(utilities.begin() + k, utility);
+                rankings.insert(k, i);
+                utilities.insert(k, utility);
             }
 
             /* approve of above average candidates. */
             float64 sum = 0.0;
             int napprovals = 0;
-            for (int i = 0; i < n; ++i) {
+            for (i : 0..n) {
                 approvals[i] = 0;
                 sum += utilities[i];
             }
-            float64 avg = sum / float64(n);
-            for (int i = 0; i < n; ++i) {
+            float64 avg = sum / (float64=n);
+            for (i : 0..n) {
                 if (utilities[i] < avg) {
                     break;
                 }
@@ -1097,32 +1096,32 @@ GuthrieVoting(
             total_support += napprovals;
 
             /* find the key. */
-            auto it = bloc_map_.find(rankings);
+            /* ==tsc== this won't work. */
+            it = bloc_map_.find(rankings);
             if (it == bloc_map_.end()) {
                 /* add new bloc. */
                 Bloc bloc;
                 bloc.size_ = 1;
-                bloc.utilities_ = std::move(utilities);
+                bloc.utilities_ <-- utilities;
                 bloc.napprovals_ = napprovals;
-                bloc.approvals_ = std::move(approvals);
-                bloc_map_.insert({std::move(rankings), std::move(bloc)});
+                bloc.approvals_ <-- approvals;
+                bloc_map_.insert(rankings, bloc);
             } else {
                 /* add to the existing bloc. */
-                auto& found = it->second;
-                found.size_ += 1;
-                found.napprovals_ += napprovals;
-                for (int i = 0; i < n; ++i) {
-                    found.utilities_[i] += utilities[i];
-                    found.approvals_[i] += approvals[i];
+                it^.bloc_.size_ += 1;
+                it^.bloc_.napprovals_ += napprovals;
+                for (i : 0..n) {
+                    it^.bloc_.utilities_[i] += utilities[i];
+                    it^.bloc_.approvals_[i] += approvals[i];
                 }
             }
         }
 
         /* save the total support for find winner. */
-        if (kUseApprovalVotes == false) {
+        if (kUseApprovalVotes == false) { void;
             /* voters vote for a single candidate. */
             total_support_ = electorate_.nvoters_;
-        } else {
+        } else { void;
             /* voters may approve multiple candidates. */
             total_support_ = total_support;
         }
@@ -1143,12 +1142,9 @@ GuthrieVoting(
         Approvals new_approvals;
         BlocMap new_bloc_map;
 
-        int n = candidates_.size();
+        n int = candidates_.size();
 
-        for (auto&& it : bloc_map_) {
-            auto& rankings = it.first;
-            auto& bloc = it.second;
-
+        for (it : bloc_map_) {
             new_rankings.reserve(n);
             new_utilities.reserve(n);
             new_approvals.reserve(n);
@@ -1164,54 +1160,56 @@ GuthrieVoting(
             the original block map has keys of size n+1.
             hence the less than or equal.
             */
-            for (int i = 0; i <= n; ++i) {
-                int r = rankings[i];
+            for (i : 0..<=n) {
+                int r = it^.rankings_[i];
                 if (r == k) {
                     /* skip the removed candidate. */
                     continue;
                 }
-                float64 u = bloc.utilities_[i];
+                float64 u = it^.bloc_.utilities_[i];
                 int new_r = r;
                 if (new_r > k) {
                     /* later candidates change index. */
                     --new_r;
                 }
-                new_rankings.push_back(new_r);
-                new_utilities.push_back(u);
+                new_rankings.append(new_r);
+                new_utilities.append(u);
             }
 
             /* find the new rankings in the map. */
-            auto rit = new_bloc_map.find(new_rankings);
+            /* ==tsc== this won't work. */
+            rit = new_bloc_map.find(new_rankings);
             if (rit == new_bloc_map.end()) {
                 /* must have approvals. */
-                new_approvals[0] = bloc.size_;
-                for (int i = 1; i < n; ++i) {
+                new_approvals[0] = it^.bloc_.size_;
+                for (i : 1..n) {
                     new_approvals[i] = 0;
                 }
 
                 /* add a new bloc. */
                 Bloc new_bloc;
-                new_bloc.size_ = bloc.size_;
-                new_bloc.utilities_ = std::move(new_utilities);
-                new_bloc.napprovals_ = bloc.size_;
-                new_bloc.approvals_ = std::move(new_approvals);
-                new_bloc_map.insert({std::move(new_rankings), std::move(new_bloc)});
+                new_bloc.size_ = it^.bloc_.size_;
+                new_bloc.utilities_ <-- new_utilities;
+                new_bloc.napprovals_ = it^.bloc_.size_;
+                new_bloc.approvals_ <-- new_approvals;
+                new_bloc_map.insert(new_rankings, new_bloc);
             } else {
                 /* accumulate into an existing bloc. */
-                auto& found = rit->second;
-                found.size_ += bloc.size_;
-                found.napprovals_ += bloc.size_;
-                for (int i = 0; i < n; ++i) {
-                    found.utilities_[i] += new_utilities[i];
+                rit^.bloc_.size_ += it^.bloc_.size_;
+                rit^.bloc_.napprovals_ += it^.bloc_.size_;
+                for (i : 0..n) {
+                    rit^.bloc_.utilities_[i] += new_utilities[i];
                 }
-                found.approvals_[0] += bloc.size_;
+                rit^.bloc_.approvals_[0] += it^.bloc_.size_;
             }
         }
 
         /* blow away the old bloc. */
-        bloc_map_ = std::move(new_bloc_map);
+        bloc_map_ <-- new_bloc_map;
     }
 
+/* ==tsc== */
+/*
     void show_bloc_map() {
         int n = bloc_map_.size();
         LOG("Voter blocs ("<<n<<"):");

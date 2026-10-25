@@ -41,7 +41,7 @@ Map<Key, Value>(
 ) {
     _() { }
     ~() {
-        root_^.destroy();
+        clear();
     }
 
     intptr size() {
@@ -58,6 +58,18 @@ Map<Key, Value>(
 
     MapIter next(MapIter it) {
         return <MapIter> it^.next();
+    }
+
+    void clear() {
+        root_^.destroy();
+        size_ = 0;
+        root_ = nullptr;
+        first_ = nullptr;
+        last_ = nullptr;
+    }
+
+    MapIter find(Key key) {
+        return end();
     }
 
     void insert(Key key, Value value) {

@@ -30,6 +30,8 @@ Map<Key, Value>(...) {
     MapIter end();
     MapIter next(MapIter it);
 
+    void clear();
+    MapIter find(Key key );
     void insert(Key key, Value value);
 }
 
