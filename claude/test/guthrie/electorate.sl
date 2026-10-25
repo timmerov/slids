@@ -36,7 +36,7 @@ Position() {
     float64 utility(
         Position^ other
     ) {
-        int naxes = (int=axis_.size());
+        naxes int = axis_.size();
         if (naxes == 1) {
             float64 utility = 1.0 - math:fabs(axis_[0] - other^.axis_[0]);
             return utility;

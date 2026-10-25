@@ -69,7 +69,19 @@ Map<Key, Value>(
     }
 
     MapIter find(Key key) {
-        return end();
+        MapIter it = root_;
+        while () {
+            if (it == nullptr) {
+                return end();
+            }
+            if (key < it^.key_) {
+                it = <MapIter> it^.left_;
+            } else if (it^.key_ < key) {
+                it = <MapIter> it^.right_;
+            } else {
+                return it;
+            }
+        }
     }
 
     void insert(Key key, Value value) {

@@ -739,11 +739,13 @@ GuthrieVoting(
         disperse_candidates();
         /* sort them. */
         quicksort(candidates_);
+println(##line);
         single_transferable_vote_primary();
+println(##line);
+        name_candidates();
 println(##line);
 /* ==tsc== */
 /*
-        name_candidates();
         if (kShowVoterBlocs) {
             show_bloc_map();
         }
@@ -874,19 +876,21 @@ println(##line);
         }
 
         /* repeat for correct approvals. sigh. */
+println(##line);
         create_blocs();
+println(##line);
+    }
+
+    void name_candidates() {
+        /* name them in sorted normalized order */
+        for (i : 0..ncandidates_) {
+            candidate = ^candidates_[i];
+            candidate^.name_ = 'A' + (char=i);
+        }
     }
 
 /* ==tsc== */
 /*
-    void name_candidates() {
-        /* name them in sorted normalized order */
-        for (int i = 0; i < ncandidates_; ++i) {
-            auto& candidate = candidates_[i];
-            candidate.name_ = 'A' + i;
-        }
-    }
-
     void show_candidate_positions() {
         LOG("Candidate positions:");
         for (auto&& candidate : candidates_ ) {
@@ -1067,7 +1071,10 @@ println(##line);
             /* create the rankings and the utility. */
             for (i : 0..n) {
                 candidate = ^candidates_[i];
-                float64 utility = voter^.position_.utility(candidate^.position_);
+                tsc_voter_pos = ^voter^.position_;
+                tsc_candidate_pos = ^candidate^.position_;
+                float64 utility = tsc_voter_pos^.utility(tsc_candidate_pos);
+                //float64 utility = voter^.position_.utility(candidate^.position_);
                 int k = 0;
                 for (k : 0..i) {
                     if (utility > utilities[k]) {
@@ -1096,7 +1103,6 @@ println(##line);
             total_support += napprovals;
 
             /* find the key. */
-            /* ==tsc== this won't work. */
             it = bloc_map_.find(rankings);
             if (it == bloc_map_.end()) {
                 /* add new bloc. */
@@ -1177,7 +1183,6 @@ println(##line);
             }
 
             /* find the new rankings in the map. */
-            /* ==tsc== this won't work. */
             rit = new_bloc_map.find(new_rankings);
             if (rit == new_bloc_map.end()) {
                 /* must have approvals. */

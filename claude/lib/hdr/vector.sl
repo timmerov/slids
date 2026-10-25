@@ -319,7 +319,7 @@ Vector<T>(
     ) {
         for (
             intptr i = begin,
-            T[] ptr = <T[]> storage_ + 1
+            T[] ptr = <T[]> storage_ + begin
         ) (i < end) {
             ++i; ++ptr;
         } {
