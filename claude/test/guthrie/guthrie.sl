@@ -1062,10 +1062,7 @@ println(##line);
             /* create the rankings and the utility. */
             for (i : 0..n) {
                 candidate = ^candidates_[i];
-                tsc_voter_pos = ^voter^.position_;
-                tsc_candidate_pos = ^candidate^.position_;
-                float64 utility = tsc_voter_pos^.utility(tsc_candidate_pos);
-                //float64 utility = voter^.position_.utility(candidate^.position_);
+                float64 utility = voter^.position_.utility(candidate^.position_);
                 int k = 0;
                 for (k : 0..i) {
                     if (utility > utilities[k]) {
@@ -1834,42 +1831,36 @@ ElectoralMethod : GuthrieMethod() {
     }
 }
 
-/* ==tsc== */
-/*
-class HeadToHead {
-public:
-    HeadToHead() = default;
-    ~HeadToHead() = default;
-
-    int winner_ = 0;
-    int loser_ = 0;
-    int winner_votes_ = 0;
-    int loser_votes_ = 0;
+HeadToHead(
+    int winner_ = 0,
+    int loser_ = 0,
+    int winner_votes_ = 0,
+    int loser_votes_ = 0
+) {
+    _() {}
+    ~() {}
 
     /* find the winner in a head to head election. */
     void resolve(
         int a,
         int b
     ) {
-        auto& bloc_map = g_guthrie.bloc_map_;
+        bloc_map = ^g_guthrie.bloc_map_;
 
         /* init vote counts. */
         int avotes = 0;
         int bvotes = 0;
 
         /* for each voter bloc. */
-        for (auto&& it : bloc_map) {
-            auto& rankings = it.first;
-            auto& bloc = it.second;
-
+        for (it : bloc_map^) {
             /* give the votes to whichever is first. */
-            for (auto&& which : rankings) {
+            for (which : it^.rankings_) {
                 if (which == a) {
-                    avotes += bloc.size_;
+                    avotes += it^.bloc_.size_;
                     break;
                 }
                 if (which == b) {
-                    bvotes += bloc.size_;
+                    bvotes += it^.bloc_.size_;
                     break;
                 }
             }
@@ -1892,8 +1883,10 @@ public:
             loser_votes_ = avotes;
         }
     }
-};
+}
 
+/* ==tsc== */
+/*
 /*
 find the two round approval winner where the top two have a runoff.
 use the approvals stored when the bloc was created.
@@ -2841,22 +2834,6 @@ template<> void ElectoralMethod<CandidateMethod>::find_winner(
     if (winner_ == g_guthrie.guthrie_.winner_) {
         ++is_winner_;
     }
-}
-
-} // anonymous namespace
-
-GuthrieVoting::GuthrieVoting() {
-    impl_ = (void *) new GuthrieImpl;
-}
-
-GuthrieVoting::~GuthrieVoting() {
-    auto impl = (GuthrieImpl *) impl_;
-    delete impl;
-}
-
-void GuthrieVoting::run() {
-    auto impl = (GuthrieImpl *) impl_;
-    impl->run();
 }
 */
 /* ==tsc== */
