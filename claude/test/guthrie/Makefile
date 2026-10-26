@@ -54,7 +54,7 @@ $(BIN_DIR)/guthrie: $(SL_OBJS) \
 
 # random.cc is a native C++ TU (the RNG wrapper). Only this one .cc builds; the
 # other .cc files are the C++ originals the .sl ports came from.
-$(BUILD_DIR)/random.o: random.cc random.h
+$(BUILD_DIR)/random.o: random.cc
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 

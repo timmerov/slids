@@ -20,6 +20,7 @@ C. clustered - voters are normally distributed around one of several points.
 how many clusters? how much spread? to be determined.
 */
 
+import+ algorithm;
 import dump;
 import electorate;
 import math;
@@ -92,9 +93,6 @@ Position() {
         }
         return s;
     }
-
-    /* for sorting */
-    /*bool operator < (const Position& other) const;*/
 }
 
 Cluster(
@@ -200,8 +198,7 @@ Electorate() {
                 cluster^.position_.axis_[i] = rng:generate_float64();
             }
         }
-        // ==tsc== skipped
-        //std::sort(clusters.begin(), clusters.end());
+        quicksort(clusters);
 
         for (int i : 0..nvoters_) {
             seat_voter(clusters, i);
@@ -245,7 +242,8 @@ Electorate() {
                 ++where;
             }
             if (where >= nclusters) {
-                println(String + "=tsc= " + ##line + ": uh oh! where=" + where + " > " + nclusters + "=" + nclusters);
+                println(String + "=tsc= " + ##line + ": uh oh! where=" + where +
+                    " > " + nclusters + "=" + nclusters);
             }
         }
 
@@ -272,8 +270,7 @@ Electorate() {
             weight *= axis_weight_decay_;
         }
 
-        // ==tsc== skipped
-        //std::sort(voters_.begin(), voters_.end());
+        quicksort(voters_);
     }
 
     /*
@@ -295,9 +292,7 @@ Electorate() {
             float64 pos = voter^.position_.axis_[axis];
             pos -= mn;
             pos *= scale;
-            //pos = std::clamp(pos, 0.0, 1.0);
-                pos = math:fmax(0.0, pos);
-                pos = math:fmin(pos, 1.0);
+            pos = math:clamp<float64>(pos, 0.0, 1.0);
             voter^.position_.axis_[axis] = pos;
         }
     }
@@ -330,12 +325,7 @@ Electorate() {
         for (voter : voters_) {
             float64 position = voter^.position_.axis_[axis];
             i int = math:floor(position * kNBins);
-            //i = std::clamp(i, 0, kNBins - 1);
-                if (i < 0) {
-                    i = 0;
-                } else if (i >= kNBins) {
-                    i = kNBins - 1;
-                }
+            i = math:clamp(i, 0, kNBins - 1);
             ++bins[i];
         }
         nvoters float64 = voters_.size();
