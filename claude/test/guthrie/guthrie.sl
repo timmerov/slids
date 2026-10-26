@@ -523,12 +523,12 @@ GuthrieVoting(
 
     /* analyzed electoral methods. */
     GuthrieMethod guthrie_,
-    /*
-    ==tsc== skipped
     ApprovalRunoffMethod approval_runoff_,
     RangeMethod range_,
     CondorcetMethod condorcet_,
     StarMethod star_,
+    /*
+    ==tsc== skipped
     BordaMethod borda_,
     ApprovalMethod approval_,
     CoombsMethod coombs_,
@@ -1575,7 +1575,7 @@ println(##line);
         if (nwinners == 0) {
             utility = candidates_[guthrie_.winner_].utility_;
         } else {
-            utility = total_utility / float64(nwinners);
+            utility = total_utility / (float=nwinners);
         }
         total_utility_strategic_ += utility;
 
@@ -1587,8 +1587,8 @@ println(##line);
             return;
         }
 
-        float64 denom = float64(ntrials_);
-        float64 non_cycle_trials = float64(ntrials_ - condorcet_cycles_);
+        float64 denom = (float=ntrials_);
+        float64 non_cycle_trials = (float=ntrials_ - condorcet_cycles_);
 
         /* calculates satisfactions from average utilities. */
         accumulated_.best_ /= denom;
@@ -1626,27 +1626,27 @@ println(##line);
         float64 average_utility_ordering = total_utility_ordering_ / non_cycle_trials;
         float64 satisfaction_strategic = calculate_satisfaction(average_utility_strategic, accumulated_);
         float64 satisfaction_ordering = calculate_satisfaction(average_utility_ordering, accumulated_);
-        float64 maximizes_satisfaction = 100.0 * float64(winner_maximizes_satisfaction_) / denom;
-        float64 is_approval_runoff = 100.0 * float64(approval_runoff_.is_winner_) / denom;
-        float64 is_range = 100.0 * float64(range_.is_winner_) / denom;
-        float64 is_condorcet_min = 100.0 * float64(condorcet_.is_winner_) / denom;
-        float64 is_condorcet_max = 100.0 * float64(condorcet_.is_winner_) / non_cycle_trials;
-        float64 is_star = 100.0 * float64(star_.is_winner_) / denom;
-        float64 is_borda = 100.0 * float64(borda_.is_winner_) / denom;
-        float64 is_approval = 100.0 * float64(approval_.is_winner_) / denom;
-        float64 is_coombs = 100.0 * float64(coombs_.is_winner_) / denom;
-        float64 is_bucklin = 100.0 * float64(bucklin_.is_winner_) / denom;
-        float64 is_anti_plurality = 100.0 * float64(anti_plurality_.is_winner_) / denom;
-        float64 is_instant_runoff = 100.0 * float64(instant_runoff_.is_winner_) / denom;
-        float64 is_plurality_runoff = 100.0 * float64(plurality_runoff_.is_winner_) / denom;
-        float64 is_plurality = 100.0 * float64(plurality_.is_winner_) / denom;
-        float64 is_candidate = 100.0 * float64(candidate_.is_winner_) / denom;
-        float64 is_condorcet_loser = 100.0 * float64(condorcet_is_loser_) / denom;
-        float64 independence = 100.0 * float64(independence_) / denom;
-        float64 majority_winners = 100.0 * float64(majority_winners_) / denom;
-        float64 condorcet_cycles = 100.0 * float64(condorcet_cycles_) / denom;
-        float64 candidate_cycles = 100.0 * float64(candidate_cycles_) / denom;
-        float64 irv_is_condorcet = 100.0 * float64(irv_is_condorcet_) / non_cycle_trials;
+        float64 maximizes_satisfaction = 100.0 * (float=winner_maximizes_satisfaction_) / denom;
+        float64 is_approval_runoff = 100.0 * (float=approval_runoff_.is_winner_) / denom;
+        float64 is_range = 100.0 * (float=range_.is_winner_) / denom;
+        float64 is_condorcet_min = 100.0 * (float=condorcet_.is_winner_) / denom;
+        float64 is_condorcet_max = 100.0 * (float=condorcet_.is_winner_) / non_cycle_trials;
+        float64 is_star = 100.0 * (float=star_.is_winner_) / denom;
+        float64 is_borda = 100.0 * (float=borda_.is_winner_) / denom;
+        float64 is_approval = 100.0 * (float=approval_.is_winner_) / denom;
+        float64 is_coombs = 100.0 * (float=coombs_.is_winner_) / denom;
+        float64 is_bucklin = 100.0 * (float=bucklin_.is_winner_) / denom;
+        float64 is_anti_plurality = 100.0 * (float=anti_plurality_.is_winner_) / denom;
+        float64 is_instant_runoff = 100.0 * (float=instant_runoff_.is_winner_) / denom;
+        float64 is_plurality_runoff = 100.0 * (float=plurality_runoff_.is_winner_) / denom;
+        float64 is_plurality = 100.0 * (float=plurality_.is_winner_) / denom;
+        float64 is_candidate = 100.0 * (float=candidate_.is_winner_) / denom;
+        float64 is_condorcet_loser = 100.0 * (float=condorcet_is_loser_) / denom;
+        float64 independence = 100.0 * (float=independence_) / denom;
+        float64 majority_winners = 100.0 * (float=majority_winners_) / denom;
+        float64 condorcet_cycles = 100.0 * (float=condorcet_cycles_) / denom;
+        float64 candidate_cycles = 100.0 * (float=candidate_cycles_) / denom;
+        float64 irv_is_condorcet = 100.0 * (float=irv_is_condorcet_) / non_cycle_trials;
 
         println();
         show_header();
@@ -1885,8 +1885,6 @@ HeadToHead(
     }
 }
 
-/* ==tsc== */
-/*
 /*
 find the two round approval winner where the top two have a runoff.
 use the approvals stored when the bloc was created.
@@ -1908,10 +1906,10 @@ ElectoralMethod : ApprovalRunoffMethod() {
         }
 
         /* for each voter bloc. */
-        for (it : bloc_map) {
+        for (it : bloc_map^) {
             for (i : 0..ncandidates) {
-                int which = rankings[i];
-                approvals[which] += bloc.approvals_[i];
+                int which = it^.rankings_[i];
+                approvals[which] += it^.bloc_.approvals_[i];
             }
         }
 
@@ -1946,8 +1944,8 @@ ElectoralMethod : ApprovalRunoffMethod() {
         winner_ = runoff.winner_;
 
         /* accumulate the utility. */
-        candidate = ^candidates[winner_];
-        total_utility_ += candidate.utility_;
+        candidate = ^candidates^[winner_];
+        total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
         if (winner_ == g_guthrie.guthrie_.winner_) {
@@ -1969,23 +1967,23 @@ ElectoralMethod : RangeMethod() {
         bloc_map = ^g_guthrie.bloc_map_;
 
         /* initialize rating for each candidate. */
-        std::vector<float64> ratings;
+        Vector<float64> ratings;
         ratings.resize(ncandidates);
         for (i : 0..ncandidates) {
             ratings[i] = 0.0;
         }
 
         /* for each voter bloc. */
-        for (it : bloc_map) {
-            float64 first = bloc.utilities_[0];
-            float64 last = bloc.utilities_[ncandidates-1];
+        for (it : bloc_map^) {
+            float64 first = it^.bloc_.utilities_[0];
+            float64 last = it^.bloc_.utilities_[ncandidates-1];
             float64 denom = first - last;
 
             for (i : 0..ncandidates) {
-                float64 utility = bloc.utilities_[i];
+                float64 utility = it^.bloc_.utilities_[i];
                 float64 rating = (utility - last) / denom;
-                int which = rankings[i];
-                ratings[which] += rating * float64(bloc.size_);
+                int which = it^.rankings_[i];
+                ratings[which] += rating * (float=it^.bloc_.size_);
             }
         }
 
@@ -2001,8 +1999,8 @@ ElectoralMethod : RangeMethod() {
         }
 
         /* accumulate the utility. */
-        candidate = ^candidates[winner_];
-        total_utility_ += candidate.utility_;
+        candidate = ^candidates^[winner_];
+        total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
         if (winner_ == g_guthrie.guthrie_.winner_) {
@@ -2035,8 +2033,8 @@ ElectoralMethod : CondorcetMethod() {
             for (k : (i + 1)..ncandidates) {
                 HeadToHead result;
                 result.resolve(i, k);
-                println(String + " " + candidates[result.winner_].name_ + " (" + result.winner_votes_ + ") > "
-                    + candidates[result.loser_].name_ + " (" + result.loser_votes_ + ")");
+                println(String + " " + candidates^[result.winner_].name_ + " (" + result.winner_votes_
+                    + ") > " + candidates^[result.loser_].name_ + " (" + result.loser_votes_ + ")");
                 ++wins[result.winner_];
             }
         }
@@ -2063,11 +2061,11 @@ ElectoralMethod : CondorcetMethod() {
                 winner_ = i;
                 nwinners = 1;
                 max = w;
-                total_utility = 0;
+                total_utility = 0.0;
                 sum_it = true;
             }
             if (sum_it) {
-                total_utility += candidates[i].utility_;
+                total_utility += candidates^[i].utility_;
             }
             if (w == 0) {
                 loser = i;
@@ -2087,15 +2085,15 @@ ElectoralMethod : CondorcetMethod() {
         /* check if there is a condorcet ordering. */
         if (nwinners == 1) {
             println("Condorcet ordering exists.");
-            candidate = ^candidates[winner_];
-            g_guthrie.total_utility_ordering_ += candidate.utility_;
+            candidate = ^candidates^[winner_];
+            g_guthrie.total_utility_ordering_ += candidate^.utility_;
         }
 
         /*
         average the utility for all candidates in the cycle if any.
         accumulate for the summary.
         */
-        float64 utility = total_utility / float64(nwinners);
+        float64 utility = total_utility / (float=nwinners);
         total_utility_ += utility;
 
         /* accumulate correlations. */
@@ -2128,18 +2126,18 @@ ElectoralMethod : StarMethod() {
         }
 
         /* for each voter bloc. */
-        for (it : bloc_map) {
-            float64 first = bloc.utilities_[0];
-            float64 last = bloc.utilities_[ncandidates-1];
+        for (it : bloc_map^) {
+            float64 first = it^.bloc_.utilities_[0];
+            float64 last = it^.bloc_.utilities_[ncandidates-1];
             float64 denom = first - last;
 
             for (i : 0..ncandidates) {
-                float64 utility = bloc.utilities_[i];
+                float64 utility = it^.bloc_.utilities_[i];
                 float64 rating = (utility - last) / denom;
-                int score = std::floor(6.0 * rating);
-                score = std::clamp(score, 0, 5);
-                int which = rankings[i];
-                ratings[which] += score * bloc.size_;
+                score int = math:floor(6.0 * rating);
+                score = math:clamp(score, 0, 5);
+                int which = it^.rankings_[i];
+                ratings[which] += score * it^.bloc_.size_;
             }
         }
 
@@ -2171,9 +2169,9 @@ ElectoralMethod : StarMethod() {
         /* find which is ranked higher most often. */
         int counta = 0;
         int countb = 0;
-        for (it : bloc_map) {
-            float64 first = bloc.utilities_[0];
-            float64 last = bloc.utilities_[ncandidates-1];
+        for (it : bloc_map^) {
+            float64 first = it^.bloc_.utilities_[0];
+            float64 last = it^.bloc_.utilities_[ncandidates-1];
             float64 denom = first - last;
 
             int scorea = -1;
@@ -2181,24 +2179,24 @@ ElectoralMethod : StarMethod() {
             for (i : 0..ncandidates) {
                 float64 utility = 0.0;
                 float64 rating = 0.0;
-                int which = rankings[i];
+                int which = it^.rankings_[i];
                 if (which == a) {
-                    utility = bloc.utilities_[i];
+                    utility = it^.bloc_.utilities_[i];
                     rating = (utility - last) / denom;
-                    scorea = std::floor(6.0 * rating);
-                    scorea = std::clamp(scorea, 0, 5);
+                    scorea = (int=math:floor(6.0 * rating));
+                    scorea = (int=math:clamp(scorea, 0, 5));
                 } else if (which == b) {
-                    utility = bloc.utilities_[i];
+                    utility = it^.bloc_.utilities_[i];
                     rating = (utility - last) / denom;
-                    scoreb = std::floor(6.0 * rating);
-                    scoreb = std::clamp(scoreb, 0, 5);
+                    scoreb = (int=math:floor(6.0 * rating));
+                    scoreb = (int=math:clamp(scoreb, 0, 5));
                 }
             }
 
             if (scorea > scoreb) {
-                counta += bloc.size_;
+                counta += it^.bloc_.size_;
             } else if (scoreb > scorea) {
-                countb += bloc.size_;
+                countb += it^.bloc_.size_;
             }
         }
         if (counta >= countb) {
@@ -2208,8 +2206,8 @@ ElectoralMethod : StarMethod() {
         }
 
         /* accumulate the utility. */
-        candidate = ^candidates[winner_];
-        total_utility_ += candidate.utility_;
+        candidate = ^candidates^[winner_];
+        total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
         if (winner_ == g_guthrie.guthrie_.winner_) {
@@ -2218,6 +2216,8 @@ ElectoralMethod : StarMethod() {
     }
 }
 
+/* ==tsc== */
+/*
 /*
 borda count 0 for first, 1 for second, ...
 lowest total wins.
@@ -2334,7 +2334,7 @@ public:
     Rankings rankings_;
     int size_;
 };
-typedef std::vector<RankedChoice> RankedChoices;
+typedef Vector<RankedChoice> RankedChoices;
 
 /*
 find the coombs winner.

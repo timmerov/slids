@@ -101,4 +101,15 @@ T max<T>(T a, T b) {
     return b;
 }
 
+/* clamp template */
+T clamp<T>(T x, T lo, T hi) {
+    if (x < lo) {
+        return lo;
+    }
+    if (hi < x) {
+        return hi;
+    }
+    return x;
+}
+
 } /* math */
