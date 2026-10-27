@@ -245,6 +245,16 @@ UNBLOCKED FEATURES
       ("A specialization constraint applies to a single-parameter template list"); a class
       list takes one per parameter.
 
+  * FUNCTION POINTERS — not in the language (plan.txt lists them "out of scope", no design).
+    motivation: a comparator for quicksort, e.g. sorting Vector<ElectoralMethod^> by
+    satisfaction in guthrie sort_methods without a wrapper class or a cast.
+    - spelling: bool less^(E a, E b) as a parameter type.
+    - a paren-less function name is a compile error today; passing one by name needs a rule.
+    - a capturing nested function can't be pointed to: its captures are frame addresses the
+      call site supplies, and a pointer could be called from elsewhere. reject, or define closures.
+    - alternatives discussed: a self-less method (bool !self less(..)) called as Less:less(..),
+      or a namespace as a template argument (quicksort<T, Less> calling Less:less(a, b)).
+
 
 BLOCKED FEATURES
 

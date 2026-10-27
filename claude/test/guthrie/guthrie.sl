@@ -1702,15 +1702,44 @@ void sort_methods(
         }
     }
 
+    /* dangerous cast to avoid copying pointers. */
+    /* ha ha! no. */
+    /*
+    danger = <Vector<SortableMethod>^> <void^> vec;
+    quicksort(danger^);
+    */
+
+    /*
+    function pointers not yet implemented.
+    */
+    /*
+    bool less(ElectoralMethod^ a, ElectoralMethod^ b) {
+        if (a^.satisfaction_ > b^.satisfaction_) {
+            return true;
+        }
+        if (a^.satisfaction_ < b^.satisfaction_) {
+            return false;
+        }
+        if (a^.name_ < b^.name_) {
+            return true;
+        }
+        return false;
+    }
+    quicksort(vec^, less);
+    */
+
+    /*
+    copy method pointers to local vector.
+    sort them.
+    copy them back.
+    */
     n = vec^.size();
     Vector<SortableMethod> sortable;
     sortable.resize(n);
     for (i : 0..n) {
         sortable[i].method_ = vec^[i];
     }
-
     quicksort(sortable);
-
     for (i : 0..n) {
         vec^[i] = sortable[i].method_;
     }
