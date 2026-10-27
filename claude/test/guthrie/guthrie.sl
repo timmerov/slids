@@ -518,6 +518,7 @@ ElectoralMethod(
         println(String + fmt*str + ": " + correlation_ + "%");
     }
 }
+alias ElectoralMethods = Vector<ElectoralMethod^>;
 
 /* define the global object. */
 global GuthrieVoting g_guthrie;
@@ -1617,7 +1618,7 @@ GuthrieVoting(
         guthrie_.total_utility_ = total_utility_;
 
         /* collect methods into a Vector. */
-        Vector<ElectoralMethod^> methods;
+        ElectoralMethods methods;
         methods.reserve(ElectoralMethod:g_nmethods);
         methods.append(^anti_plurality_);
         methods.append(^approval_);
@@ -1638,6 +1639,9 @@ GuthrieVoting(
         for (method : methods) {
             method^.calculate_results();
         }
+
+        /* sort methods by satisfaction. */
+        sort_methods(^methods);
 
         /* miscellaneous calculations. */
         float64 maximizes_satisfaction = 100.0 * (float64=winner_maximizes_satisfaction_) / denom;
@@ -1673,6 +1677,42 @@ GuthrieVoting(
         println(String + fmt*" Condorcet cycles" + ": " + condorcet_cycles + "%");
         println(String + fmt*" candidate cycles" + ": " + candidate_cycles + "%");
         println(String + fmt*" instant runoff is Condorcet" + ": " + irv_is_condorcet + "%");
+    }
+}
+
+void sort_methods(
+    mutable ElectoralMethods^ vec
+) {
+    /* helper class to sort methods by satisfaction. */
+    SortableMethod(ElectoralMethod^ method_) {
+        bool op<(SortableMethod^ rhs) {
+            /* sort descending. */
+            a = method_;
+            b = rhs^.method_;
+            if (a^.satisfaction_ > b^.satisfaction_) {
+                return true;
+            }
+            if (a^.satisfaction_ < b^.satisfaction_) {
+                return false;
+            }
+            if (a^.name_ < b^.name_) {
+                return true;
+            }
+            return false;
+        }
+    }
+
+    n = vec^.size();
+    Vector<SortableMethod> sortable;
+    sortable.resize(n);
+    for (i : 0..n) {
+        sortable[i].method_ = vec^[i];
+    }
+
+    quicksort(sortable);
+
+    for (i : 0..n) {
+        vec^[i] = sortable[i].method_;
     }
 }
 

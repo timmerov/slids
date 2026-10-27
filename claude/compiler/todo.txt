@@ -94,6 +94,10 @@ BUGS
     import by the raw path string, not the canonical path (./b.slh vs ../../lib/hdr/b.slh).
     found by reading the code. not reproduced yet.
 
+  * a const Vector can be written through op[]: void f(Vector<int>^ v) { v^[0] = 1; } compiles.
+    vector.slh declares T^ const op[] (const method, mutable result); the body's <T[]> storage_
+    cast drops the const. begin/end/next have the same shape. found in guthrie sort_methods.
+
 UNBLOCKED FEATURES
 
   * Vector<(const Ranked)^> cv; cv.append(cr); ((const Ranked)^ cr) is rejected:

@@ -1,26 +1,8 @@
 make: Entering directory '/home/timmer/Documents/code/slids/claude/test/guthrie'
-mkdir -p ../../build/test/guthrie
-../../bin/slidsc guthrie.sl --scan-deps ../../build/test/guthrie/guthrie.deps.mk -I ../../lib/hdr
-mkdir -p ../../build/test/guthrie
-../../bin/slidsc guthrie.sl -o ../../build/test/guthrie/guthrie.ll -MF ../../build/test/guthrie/guthrie.d -I ../../lib/hdr
-llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/guthrie.ll -o ../../build/test/guthrie/guthrie.o
-mkdir -p ../../build/test/guthrie
-../../bin/slidsc ../../lib/hdr/algorithm.sl -o ../../build/test/guthrie/algorithm.ll -MF ../../build/test/guthrie/algorithm.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
-llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/algorithm.ll -o ../../build/test/guthrie/algorithm.o
-mkdir -p ../../build/test/guthrie
-../../bin/slidsc ../../lib/hdr/vector.sl -o ../../build/test/guthrie/vector.ll -MF ../../build/test/guthrie/vector.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
-mkdir -p ../../build/test/guthrie
-../../bin/slidsc ../../lib/hdr/dump.sl -o ../../build/test/guthrie/dump.ll -MF ../../build/test/guthrie/dump.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
-llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/dump.ll -o ../../build/test/guthrie/dump.o
-mkdir -p ../../build/test/guthrie
-../../bin/slidsc ../../lib/hdr/map.sl -o ../../build/test/guthrie/map.ll -MF ../../build/test/guthrie/map.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
-llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/map.ll -o ../../build/test/guthrie/map.o
-llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/vector.ll -o ../../build/test/guthrie/vector.o
 make -C ../../lib
 make[1]: Entering directory '/home/timmer/Documents/code/slids/claude/lib'
 make[1]: Nothing to be done for 'all'.
 make[1]: Leaving directory '/home/timmer/Documents/code/slids/claude/lib'
-g++ ../../build/test/guthrie/electorate.o ../../build/test/guthrie/guthrie.o ../../build/test/guthrie/main.o ../../build/test/guthrie/algorithm.o ../../build/test/guthrie/dump.o ../../build/test/guthrie/map.o ../../build/test/guthrie/vector.o ../../build/test/guthrie/random.o ../../build/lib/libslids.o -o ../../bin/guthrie
 make: Leaving directory '/home/timmer/Documents/code/slids/claude/test/guthrie'
 Guthrie voting analysis:
 Configuration:
@@ -662,34 +644,34 @@ Issue axes       : 2 (0.4)
 Dispersion       : 0.7
 
 Summary:
-Voter satisfactions by method:
- anti-plurality               : 0.759648
- approval                     : 0.953263
- approval runoff              : 0.983845
+Voter satisfactions by method :
  Borda                        : 1
- Bucklin                      : 0.945526
  Condorcet (winner exists)    : 0.983845 (0.983845)
  Coombs                       : 0.983845
- Guthrie (strategic)          : 0.96326 (0.984595)
- instant runoff               : 0.868233
- plurality                    : 0.572376
- plurality runoff             : 0.788605
- range                        : 0.862324
+ approval runoff              : 0.983845
  star                         : 0.964717
+ Guthrie (strategic)          : 0.96326 (0.984595)
+ approval                     : 0.953263
+ Bucklin                      : 0.945526
+ instant runoff               : 0.868233
+ range                        : 0.862324
+ plurality runoff             : 0.788605
+ anti-plurality               : 0.759648
+ plurality                    : 0.572376
 Guthrie correlations by method:
- anti-plurality               : 30%
- approval                     : 50%
- approval runoff              : 90%
  Borda                        : 80%
- Bucklin                      : 70%
  Condorcet (winner exists)    : 90% (90%)
  Coombs                       : 90%
- instant runoff               : 50%
- plurality                    : 30%
- plurality runoff             : 50%
- range                        : 40%
+ approval runoff              : 90%
  star                         : 70%
-Miscellaneous                :
+ approval                     : 50%
+ Bucklin                      : 70%
+ instant runoff               : 50%
+ range                        : 40%
+ plurality runoff             : 50%
+ anti-plurality               : 30%
+ plurality                    : 30%
+Miscellaneous                 :
  candidate satisfaction       : 0.859766
  maxes candidate satisfaction : 40%
  maxes voter satisfaction     : 80%
