@@ -1,0 +1,701 @@
+make: Entering directory '/home/timmer/Documents/code/slids/claude/test/guthrie'
+mkdir -p ../../build/test/guthrie
+../../bin/slidsc guthrie.sl --scan-deps ../../build/test/guthrie/guthrie.deps.mk -I ../../lib/hdr
+mkdir -p ../../build/test/guthrie
+../../bin/slidsc guthrie.sl -o ../../build/test/guthrie/guthrie.ll -MF ../../build/test/guthrie/guthrie.d -I ../../lib/hdr
+llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/guthrie.ll -o ../../build/test/guthrie/guthrie.o
+mkdir -p ../../build/test/guthrie
+../../bin/slidsc ../../lib/hdr/algorithm.sl -o ../../build/test/guthrie/algorithm.ll -MF ../../build/test/guthrie/algorithm.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
+llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/algorithm.ll -o ../../build/test/guthrie/algorithm.o
+mkdir -p ../../build/test/guthrie
+../../bin/slidsc ../../lib/hdr/vector.sl -o ../../build/test/guthrie/vector.ll -MF ../../build/test/guthrie/vector.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
+mkdir -p ../../build/test/guthrie
+../../bin/slidsc ../../lib/hdr/dump.sl -o ../../build/test/guthrie/dump.ll -MF ../../build/test/guthrie/dump.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
+llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/dump.ll -o ../../build/test/guthrie/dump.o
+mkdir -p ../../build/test/guthrie
+../../bin/slidsc ../../lib/hdr/map.sl -o ../../build/test/guthrie/map.ll -MF ../../build/test/guthrie/map.d -I ../../lib/hdr -I . --instantiate ../../build/test/guthrie
+llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/map.ll -o ../../build/test/guthrie/map.o
+llc --filetype=obj --relocation-model=pic ../../build/test/guthrie/vector.ll -o ../../build/test/guthrie/vector.o
+make -C ../../lib
+make[1]: Entering directory '/home/timmer/Documents/code/slids/claude/lib'
+make[1]: Nothing to be done for 'all'.
+make[1]: Leaving directory '/home/timmer/Documents/code/slids/claude/lib'
+g++ ../../build/test/guthrie/electorate.o ../../build/test/guthrie/guthrie.o ../../build/test/guthrie/main.o ../../build/test/guthrie/algorithm.o ../../build/test/guthrie/dump.o ../../build/test/guthrie/map.o ../../build/test/guthrie/vector.o ../../build/test/guthrie/random.o ../../build/lib/libslids.o -o ../../bin/guthrie
+make: Leaving directory '/home/timmer/Documents/code/slids/claude/test/guthrie'
+Guthrie voting analysis:
+Configuration:
+Number trials    : 10
+Number voters    : 1000
+Number candidates: 4
+Fixed seed       : 1753391226898898129
+Electorate       : clusters (8)
+Issue axes       : 2 (0.4)
+Dispersion       : 0.7
+
+Trial: 1
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (12):
+ ABCD size: 234 utilities: 196.28 135.195 119.102 114.064 n: 288 approvals: 234 52 2 0
+ ABDC size: 197 utilities: 180.691 106.28 82.4127 81.16 n: 213 approvals: 197 16 0 0
+ ACBD size: 10 utilities: 6.83142 6.50539 6.42592 5.97885 n: 22 approvals: 10 9 3 0
+ BADC size: 10 utilities: 8.03274 7.33535 6.72978 6.41892 n: 18 approvals: 10 8 0 0
+ BCAD size: 7 utilities: 4.98786 4.95453 4.80745 4.64022 n: 16 approvals: 7 7 2 0
+ BCDA size: 7 utilities: 5.98666 5.68788 5.59301 4.40182 n: 19 approvals: 7 7 5 0
+ BDAC size: 5 utilities: 4.199 3.54046 3.47033 3.35342 n: 5 approvals: 5 0 0 0
+ BDCA size: 170 utilities: 160.269 143.56 135.061 97.724 n: 427 approvals: 170 161 96 0
+ CBDA size: 16 utilities: 12.8999 12.4811 12.1468 9.69513 n: 43 approvals: 16 16 11 0
+ CDBA size: 163 utilities: 152.742 142.685 128.343 71.2216 n: 489 approvals: 163 163 163 0
+ DBCA size: 50 utilities: 44.915 42.3189 40.6763 20.4804 n: 150 approvals: 50 50 50 0
+ DCBA size: 131 utilities: 114.031 106.351 99.641 42.7802 n: 393 approvals: 131 131 131 0
+Candidate positions:
+ A: {0.185625, 0.265882}
+ B: {0.626598, 0.291004}
+ C: {0.722759, 0.127497}
+ D: {0.740228, 0.219867}
+Candidate rankings of other candidates:
+ A: B (0.558312) > C (0.445325) > D (0.443491)
+ B: D (0.865939) > C (0.810312) > A (0.558312)
+ C: D (0.905993) > B (0.810312) > A (0.445325)
+ D: C (0.905993) > B (0.865939) > A (0.443491)
+
+Voter satisfaction (utility):
+ A: -0.934031 (-33.0535)
+ B: 1 (35.388)
+ C: -0.10907 (-3.85979)
+ D: 0.0431012 (1.52527)
+
+Checking voting criteria.
+Condorcet results:
+ B (559) > A (441)
+ C (544) > A (456)
+ D (542) > A (458)
+ B (680) > C (320)
+ B (656) > D (344)
+ D (563) > C (437)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+
+Voting criteria results:
+Guthrie winner              : B
+Maximizes voter satisfaction: B pass
+Approval runoff winner      : B pass
+Range winner                : B pass
+Condorcet winner            : B pass
+Star winner                 : B pass
+Borda winner                : B pass
+Approval winner             : B pass
+Coombs winner               : B pass
+Bucklin winner              : B pass
+Anti-plurality winner       : B pass
+Instant runoff winner       : D =FAIL=
+Plurality runoff winner     : B pass
+Plurality winner            : A =FAIL=
+Maximizes candidate utility : B pass
+Condorcet loser             : A pass
+Independence                : B pass
+
+Trial: 2
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (16):
+ ABCD size: 363 utilities: 335.349 311.761 256.327 194.23 n: 774 approvals: 363 363 48 0
+ ACBD size: 18 utilities: 15.5164 15.0952 14.7565 11.704 n: 54 approvals: 18 18 18 0
+ BACD size: 199 utilities: 179.168 167.276 130.717 110.31 n: 398 approvals: 199 195 4 0
+ BADC size: 1 utilities: 0.770371 0.681808 0.641704 0.639003 n: 1 approvals: 1 0 0 0
+ BCAD size: 10 utilities: 8.30671 7.92728 7.7465 7.33185 n: 20 approvals: 10 7 3 0
+ BCDA size: 3 utilities: 2.37042 2.3107 2.27592 2.17468 n: 8 approvals: 3 3 2 0
+ BDCA size: 7 utilities: 5.36373 5.17887 5.08817 4.85005 n: 13 approvals: 7 5 1 0
+ CABD size: 44 utilities: 39.46 35.6473 34.6532 31.1447 n: 86 approvals: 44 26 16 0
+ CADB size: 5 utilities: 4.74127 3.76215 3.72246 3.6658 n: 5 approvals: 5 0 0 0
+ CBAD size: 4 utilities: 3.57854 3.21973 3.17259 3.01393 n: 5 approvals: 4 1 0 0
+ CBDA size: 6 utilities: 4.93266 4.73136 4.66764 4.44287 n: 15 approvals: 6 5 4 0
+ CDAB size: 126 utilities: 117.502 102.307 83.1675 82.4129 n: 217 approvals: 126 91 0 0
+ CDBA size: 49 utilities: 45.2388 41.3955 32.4542 32.2249 n: 96 approvals: 49 46 1 0
+ DBCA size: 1 utilities: 0.765038 0.717704 0.712972 0.646035 n: 3 approvals: 1 1 1 0
+ DCAB size: 15 utilities: 12.0657 11.5376 7.23453 7.20671 n: 30 approvals: 15 15 0 0
+ DCBA size: 149 utilities: 129.419 111.067 85.5501 79.9719 n: 299 approvals: 149 149 1 0
+Candidate positions:
+ A: {0.31887, 0.312764}
+ B: {0.325356, 0.221379}
+ C: {0.605926, 0.310929}
+ D: {0.737994, 0.151632}
+Candidate rankings of other candidates:
+ A: B (0.908384) > C (0.712938) > D (0.55097)
+ B: A (0.908384) > C (0.705486) > D (0.581509)
+ C: D (0.793076) > A (0.712938) > B (0.705486)
+ D: C (0.793076) > B (0.581509) > A (0.55097)
+
+Voter satisfaction (utility):
+ A: 1 (39.3596)
+ B: 0.828334 (32.6028)
+ C: 0.31428 (12.3699)
+ D: -2.14261 (-84.3323)
+
+Checking voting criteria.
+Condorcet results:
+ A (571) > B (429)
+ A (581) > C (419)
+ A (644) > D (356)
+ B (584) > C (416)
+ B (655) > D (345)
+ C (827) > D (173)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+B wins if C doesn't run.
+
+Voting criteria results:
+Guthrie winner              : A
+Maximizes voter satisfaction: A pass
+Approval runoff winner      : A pass
+Range winner                : C =FAIL=
+Condorcet winner            : A pass
+Star winner                 : A pass
+Borda winner                : A pass
+Approval winner             : B =FAIL=
+Coombs winner               : A pass
+Bucklin winner              : A pass
+Anti-plurality winner       : C =FAIL=
+Instant runoff winner       : A pass
+Plurality runoff winner     : A pass
+Plurality winner            : A pass
+Maximizes candidate utility : C =FAIL=
+Condorcet loser             : D pass
+Independence                : C =FAIL=
+
+Trial: 3
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (8):
+ ABCD size: 199 utilities: 174.648 127.618 107.25 102.602 n: 273 approvals: 199 74 0 0
+ BACD size: 29 utilities: 25.5635 23.943 22.5319 21.8888 n: 51 approvals: 29 22 0 0
+ BCAD size: 5 utilities: 4.57548 4.0404 3.97568 3.93352 n: 5 approvals: 5 0 0 0
+ BCDA size: 199 utilities: 189.945 176.1 172.133 142.656 n: 496 approvals: 199 176 121 0
+ CBDA size: 29 utilities: 27.146 26.7341 26.4281 19.4743 n: 87 approvals: 29 29 29 0
+ CDBA size: 180 utilities: 174.178 170.833 160.679 113.054 n: 540 approvals: 180 180 180 0
+ DBCA size: 1 utilities: 0.754027 0.74398 0.737829 0.503604 n: 3 approvals: 1 1 1 0
+ DCBA size: 358 utilities: 323.956 316.789 284.987 186.697 n: 1074 approvals: 358 358 358 0
+Candidate positions:
+ A: {0.261265, 0.15231}
+ B: {0.545906, 0.147774}
+ C: {0.638675, 0.0836903}
+ D: {0.665352, 0.0926912}
+Candidate rankings of other candidates:
+ A: B (0.715323) > C (0.616402) > D (0.591538)
+ B: C (0.887248) > D (0.868465) > A (0.715323)
+ C: D (0.971846) > B (0.887248) > A (0.616402)
+ D: C (0.971846) > B (0.868465) > A (0.591538)
+
+Voter satisfaction (utility):
+ A: -2.68155 (-119.323)
+ B: 0.821864 (36.5712)
+ C: 1 (44.4979)
+ D: 0.859684 (38.2541)
+
+Checking voting criteria.
+Condorcet results:
+ B (801) > A (199)
+ C (772) > A (228)
+ D (767) > A (233)
+ C (567) > B (433)
+ D (539) > B (461)
+ C (641) > D (359)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+
+Voting criteria results:
+Guthrie winner              : C
+Maximizes voter satisfaction: C pass
+Approval runoff winner      : C pass
+Range winner                : B =FAIL=
+Condorcet winner            : C pass
+Star winner                 : C pass
+Borda winner                : C pass
+Approval winner             : B =FAIL=
+Coombs winner               : C pass
+Bucklin winner              : C pass
+Anti-plurality winner       : C pass
+Instant runoff winner       : D =FAIL=
+Plurality runoff winner     : D =FAIL=
+Plurality winner            : D =FAIL=
+Maximizes candidate utility : C pass
+Condorcet loser             : A pass
+Independence                : C pass
+
+Trial: 4
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (7):
+ ABCD size: 238 utilities: 215.007 129.658 112.614 95.7429 n: 259 approvals: 238 21 0 0
+ BACD size: 7 utilities: 5.6698 5.20315 4.94009 4.44987 n: 14 approvals: 7 7 0 0
+ BCAD size: 27 utilities: 23.068 20.217 19.142 18.354 n: 43 approvals: 27 16 0 0
+ BCDA size: 328 utilities: 306.184 277.651 256.767 203.721 n: 754 approvals: 328 328 98 0
+ CBDA size: 46 utilities: 43.7633 42.3118 40.9588 25.4972 n: 138 approvals: 46 46 46 0
+ CDBA size: 107 utilities: 103.926 100.131 94.167 55.1982 n: 321 approvals: 107 107 107 0
+ DCBA size: 247 utilities: 229.975 216.023 191.278 102.358 n: 741 approvals: 247 247 247 0
+Candidate positions:
+ A: {0.233488, 0.123094}
+ B: {0.600891, 0.268203}
+ C: {0.693262, 0.208982}
+ D: {0.766172, 0.207761}
+Candidate rankings of other candidates:
+ A: B (0.604979) > C (0.532273) > D (0.460629)
+ B: C (0.890275) > D (0.824014) > A (0.604979)
+ C: D (0.927079) > B (0.890275) > A (0.532273)
+ D: C (0.927079) > B (0.824014) > A (0.460629)
+
+Voter satisfaction (utility):
+ A: -1.94998 (-109.868)
+ B: 1 (56.3429)
+ C: 0.76569 (43.1412)
+ D: 0.184293 (10.3836)
+
+Checking voting criteria.
+Condorcet results:
+ B (762) > A (238)
+ C (755) > A (245)
+ D (728) > A (272)
+ B (600) > C (400)
+ B (646) > D (354)
+ C (753) > D (247)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+
+Voting criteria results:
+Guthrie winner              : B
+Maximizes voter satisfaction: B pass
+Approval runoff winner      : B pass
+Range winner                : B pass
+Condorcet winner            : B pass
+Star winner                 : B pass
+Borda winner                : B pass
+Approval winner             : B pass
+Coombs winner               : B pass
+Bucklin winner              : C =FAIL=
+Anti-plurality winner       : C =FAIL=
+Instant runoff winner       : B pass
+Plurality runoff winner     : B pass
+Plurality winner            : B pass
+Maximizes candidate utility : C =FAIL=
+Condorcet loser             : A pass
+Independence                : B pass
+
+Trial: 5
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (7):
+ ABCD size: 332 utilities: 311.077 303.458 210.387 116.524 n: 664 approvals: 332 332 0 0
+ BACD size: 178 utilities: 167.935 164.104 122.731 71.5236 n: 375 approvals: 178 178 19 0
+ BCAD size: 6 utilities: 4.73021 4.6767 4.5469 3.08278 n: 18 approvals: 6 6 6 0
+ CBAD size: 151 utilities: 133.712 111.163 107.85 94.1464 n: 248 approvals: 151 66 31 0
+ CBDA size: 15 utilities: 13.4632 10.2211 10.0409 9.86388 n: 15 approvals: 15 0 0 0
+ CDBA size: 119 utilities: 107.27 85.1298 75.793 73.3527 n: 171 approvals: 119 52 0 0
+ DCBA size: 199 utilities: 182.283 128.15 66.7424 64.4634 n: 398 approvals: 199 199 0 0
+Candidate positions:
+ A: {0.177681, 0.15875}
+ B: {0.194317, 0.192925}
+ C: {0.503523, 0.160006}
+ D: {0.784453, 0.0907948}
+Candidate rankings of other candidates:
+ A: B (0.961991) > C (0.674155) > D (0.389434)
+ B: A (0.961991) > C (0.689047) > D (0.401092)
+ C: D (0.71067) > B (0.689047) > A (0.674155)
+ D: C (0.71067) > B (0.401092) > A (0.389434)
+
+Voter satisfaction (utility):
+ A: 0.905131 (45.6524)
+ B: 1 (50.4374)
+ C: 0.610355 (30.7847)
+ D: -2.51549 (-126.875)
+
+Checking voting criteria.
+Condorcet results:
+ B (668) > A (332)
+ A (510) > C (490)
+ A (667) > D (333)
+ B (516) > C (484)
+ B (682) > D (318)
+ C (801) > D (199)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+
+Voting criteria results:
+Guthrie winner              : B
+Maximizes voter satisfaction: B pass
+Approval runoff winner      : B pass
+Range winner                : C =FAIL=
+Condorcet winner            : B pass
+Star winner                 : A =FAIL=
+Borda winner                : B pass
+Approval winner             : B pass
+Coombs winner               : B pass
+Bucklin winner              : B pass
+Anti-plurality winner       : C =FAIL=
+Instant runoff winner       : A =FAIL=
+Plurality runoff winner     : A =FAIL=
+Plurality winner            : A =FAIL=
+Maximizes candidate utility : C =FAIL=
+Condorcet loser             : D pass
+Independence                : B pass
+
+Trial: 6
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (8):
+ ABCD size: 177 utilities: 158.126 119.229 109.278 83.9365 n: 284 approvals: 177 104 3 0
+ BACD size: 13 utilities: 11.0635 10.7051 10.328 8.58975 n: 37 approvals: 13 13 11 0
+ BCAD size: 84 utilities: 76.4486 72.154 64.856 61.1294 n: 174 approvals: 84 84 6 0
+ BCDA size: 260 utilities: 239.422 230.473 204.623 181.642 n: 565 approvals: 260 260 45 0
+ CBAD size: 1 utilities: 0.877444 0.875316 0.747877 0.741357 n: 2 approvals: 1 1 0 0
+ CBDA size: 195 utilities: 187.494 179.776 165.644 130.615 n: 480 approvals: 195 195 90 0
+ CDBA size: 52 utilities: 48.623 46.8472 45.7162 32.0492 n: 156 approvals: 52 52 52 0
+ DCBA size: 218 utilities: 187.884 161.438 149.797 91.2963 n: 654 approvals: 218 218 218 0
+Candidate positions:
+ A: {0.241844, 0.226211}
+ B: {0.51368, 0.201044}
+ C: {0.560265, 0.153506}
+ D: {0.708264, 0.142413}
+Candidate rankings of other candidates:
+ A: B (0.727002) > C (0.673384) > D (0.526112)
+ B: C (0.933442) > D (0.796775) > A (0.727002)
+ C: B (0.933442) > D (0.851586) > A (0.673384)
+ D: C (0.851586) > B (0.796775) > A (0.526112)
+
+Voter satisfaction (utility):
+ A: -1.80869 (-98.0685)
+ B: 1 (54.2209)
+ C: 0.969348 (52.5589)
+ D: -0.160663 (-8.71126)
+
+Checking voting criteria.
+Condorcet results:
+ B (823) > A (177)
+ C (810) > A (190)
+ D (725) > A (275)
+ B (534) > C (466)
+ B (730) > D (270)
+ C (782) > D (218)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+
+Voting criteria results:
+Guthrie winner              : B
+Maximizes voter satisfaction: B pass
+Approval runoff winner      : B pass
+Range winner                : B pass
+Condorcet winner            : B pass
+Star winner                 : C =FAIL=
+Borda winner                : B pass
+Approval winner             : B pass
+Coombs winner               : B pass
+Bucklin winner              : C =FAIL=
+Anti-plurality winner       : C =FAIL=
+Instant runoff winner       : B pass
+Plurality runoff winner     : B pass
+Plurality winner            : B pass
+Maximizes candidate utility : C =FAIL=
+Condorcet loser             : A pass
+Independence                : B pass
+
+Trial: 7
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (11):
+ ABCD size: 316 utilities: 285.289 173.706 171.637 128.232 n: 319 approvals: 316 2 1 0
+ ACBD size: 112 utilities: 98.973 61.3434 60.3999 46.2359 n: 112 approvals: 112 0 0 0
+ BCAD size: 17 utilities: 14.5666 13.6474 12.5994 11.6437 n: 39 approvals: 17 17 5 0
+ BCDA size: 149 utilities: 141.221 135.054 123.362 94.1296 n: 371 approvals: 149 149 73 0
+ BDCA size: 5 utilities: 4.54711 4.4907 4.46011 2.7541 n: 15 approvals: 5 5 5 0
+ CABD size: 7 utilities: 5.5096 5.29986 5.14566 4.7031 n: 15 approvals: 7 6 2 0
+ CBAD size: 12 utilities: 9.83129 9.14062 8.8294 8.47294 n: 24 approvals: 12 11 1 0
+ CBDA size: 106 utilities: 96.7311 91.9485 87.2745 68.0536 n: 274 approvals: 106 103 65 0
+ CDBA size: 32 utilities: 28.5885 27.5897 26.8549 18.877 n: 96 approvals: 32 32 32 0
+ DBCA size: 20 utilities: 18.1933 17.5561 17.3854 10.4136 n: 60 approvals: 20 20 20 0
+ DCBA size: 224 utilities: 193.236 170.727 162.742 91.5738 n: 672 approvals: 224 224 224 0
+Candidate positions:
+ A: {0.252233, 0.205535}
+ B: {0.601046, 0.106981}
+ C: {0.617504, 0.189785}
+ D: {0.755086, 0.19032}
+Candidate rankings of other candidates:
+ A: B (0.637532) > C (0.63439) > D (0.496917)
+ B: C (0.915577) > D (0.82486) > A (0.637532)
+ C: B (0.915577) > D (0.862417) > A (0.63439)
+ D: C (0.862417) > B (0.82486) > A (0.496917)
+
+Voter satisfaction (utility):
+ A: 0.163796 (3.54982)
+ B: 0.673053 (14.5865)
+ C: 1 (21.6722)
+ D: -1.83685 (-39.8086)
+
+Checking voting criteria.
+Condorcet results:
+ B (565) > A (435)
+ C (572) > A (428)
+ D (536) > A (464)
+ B (507) > C (493)
+ B (724) > D (276)
+ C (751) > D (249)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+C wins if A doesn't run.
+
+Voting criteria results:
+Guthrie winner              : B
+Maximizes voter satisfaction: C =FAIL=
+Approval runoff winner      : B pass
+Range winner                : C =FAIL=
+Condorcet winner            : B pass
+Star winner                 : C =FAIL=
+Borda winner                : C =FAIL=
+Approval winner             : C =FAIL=
+Coombs winner               : B pass
+Bucklin winner              : C =FAIL=
+Anti-plurality winner       : C =FAIL=
+Instant runoff winner       : B pass
+Plurality runoff winner     : D =FAIL=
+Plurality winner            : A =FAIL=
+Maximizes candidate utility : C =FAIL=
+Condorcet loser             : A pass
+Independence                : A =FAIL=
+
+Trial: 8
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (9):
+ ABCD size: 301 utilities: 273.4 224.807 171.89 123.774 n: 606 approvals: 301 301 4 0
+ BACD size: 181 utilities: 169.476 145.387 129.597 110.078 n: 326 approvals: 181 141 4 0
+ BCAD size: 62 utilities: 57.915 48.7178 46.2104 42.2978 n: 94 approvals: 62 30 2 0
+ BCDA size: 38 utilities: 34.1156 29.8396 27.7942 25.9773 n: 53 approvals: 38 15 0 0
+ BDCA size: 4 utilities: 3.38794 2.996 2.91515 2.49301 n: 8 approvals: 4 3 1 0
+ CBAD size: 3 utilities: 2.7003 2.26541 2.04514 2.01508 n: 5 approvals: 3 2 0 0
+ CBDA size: 35 utilities: 32.6486 25.8556 24.8291 22.3943 n: 39 approvals: 35 3 1 0
+ CDBA size: 121 utilities: 112.399 94.9699 84.0156 67.3952 n: 227 approvals: 121 100 6 0
+ DCBA size: 255 utilities: 238.013 189.578 162.358 109.14 n: 513 approvals: 255 255 3 0
+Candidate positions:
+ A: {0.206547, 0.123441}
+ B: {0.428269, 0.0818901}
+ C: {0.549921, 0.30412}
+ D: {0.757435, 0.204061}
+Candidate rankings of other candidates:
+ A: B (0.774418) > C (0.611991) > D (0.443244)
+ B: A (0.774418) > C (0.746652) > D (0.648893)
+ C: D (0.769623) > B (0.746652) > A (0.611991)
+ D: C (0.769623) > B (0.648893) > A (0.443244)
+
+Voter satisfaction (utility):
+ A: -0.321767 (-16.9807)
+ B: 1 (52.7733)
+ C: 0.167926 (8.86199)
+ D: -0.846159 (-44.6546)
+
+Checking voting criteria.
+Condorcet results:
+ B (699) > A (301)
+ C (518) > A (482)
+ A (547) > D (453)
+ B (586) > C (414)
+ B (624) > D (376)
+ C (741) > D (259)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+
+Voting criteria results:
+Guthrie winner              : B
+Maximizes voter satisfaction: B pass
+Approval runoff winner      : B pass
+Range winner                : B pass
+Condorcet winner            : B pass
+Star winner                 : B pass
+Borda winner                : B pass
+Approval winner             : B pass
+Coombs winner               : B pass
+Bucklin winner              : B pass
+Anti-plurality winner       : C =FAIL=
+Instant runoff winner       : B pass
+Plurality runoff winner     : B pass
+Plurality winner            : A =FAIL=
+Maximizes candidate utility : B pass
+Condorcet loser             : D pass
+Independence                : B pass
+
+Trial: 9
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (7):
+ ABCD size: 259 utilities: 220.28 141.216 122.093 101.766 n: 297 approvals: 259 38 0 0
+ BACD size: 2 utilities: 1.65794 1.58603 1.51311 1.35664 n: 4 approvals: 2 2 0 0
+ BCAD size: 1 utilities: 0.859526 0.78256 0.74253 0.698632 n: 2 approvals: 1 1 0 0
+ BCDA size: 214 utilities: 196.351 186.947 170.762 129.245 n: 535 approvals: 214 214 107 0
+ CBDA size: 98 utilities: 92.3156 89.4118 85.6596 53.8754 n: 294 approvals: 98 98 98 0
+ CDBA size: 61 utilities: 58.2218 56.6155 54.1007 31.9057 n: 183 approvals: 61 61 61 0
+ DCBA size: 365 utilities: 344.882 320.074 292.535 161.338 n: 1095 approvals: 365 365 365 0
+Candidate positions:
+ A: {0.271962, 0.074905}
+ B: {0.631211, 0.185006}
+ C: {0.707245, 0.173063}
+ D: {0.787409, 0.145237}
+Candidate rankings of other candidates:
+ A: B (0.624258) > C (0.553787) > D (0.479777)
+ B: C (0.923033) > D (0.838819) > A (0.624258)
+ C: B (0.923033) > D (0.915144) > A (0.553787)
+ D: C (0.915144) > B (0.838819) > A (0.479777)
+
+Voter satisfaction (utility):
+ A: -2.50196 (-130.726)
+ B: 0.888703 (46.4342)
+ C: 1 (52.2494)
+ D: 0.613257 (32.0423)
+
+Checking voting criteria.
+Condorcet results:
+ B (741) > A (259)
+ C (739) > A (261)
+ D (738) > A (262)
+ C (524) > B (476)
+ B (574) > D (426)
+ C (635) > D (365)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+
+Voting criteria results:
+Guthrie winner              : C
+Maximizes voter satisfaction: C pass
+Approval runoff winner      : C pass
+Range winner                : B =FAIL=
+Condorcet winner            : C pass
+Star winner                 : C pass
+Borda winner                : C pass
+Approval winner             : B =FAIL=
+Coombs winner               : C pass
+Bucklin winner              : C pass
+Anti-plurality winner       : C pass
+Instant runoff winner       : B =FAIL=
+Plurality runoff winner     : D =FAIL=
+Plurality winner            : D =FAIL=
+Maximizes candidate utility : C pass
+Condorcet loser             : A pass
+Independence                : C pass
+
+Trial: 10
+Electorate is clustered.
+Selecting candidates from the electorate.
+Reducing the number of candidates from 16 to 4.
+Voter blocs (12):
+ ABDC size: 164 utilities: 147.282 130.533 107.628 99.3941 n: 328 approvals: 164 164 0 0
+ BADC size: 135 utilities: 129.709 120.393 112.099 102.627 n: 251 approvals: 135 114 2 0
+ BCAD size: 2 utilities: 1.6677 1.65118 1.57857 1.50263 n: 4 approvals: 2 2 0 0
+ BCDA size: 1 utilities: 0.878591 0.87363 0.822525 0.790653 n: 2 approvals: 1 1 0 0
+ BDAC size: 143 utilities: 136.555 126.993 119.725 112.199 n: 261 approvals: 143 115 3 0
+ BDCA size: 31 utilities: 28.8095 27.6987 26.2015 25.0094 n: 67 approvals: 31 29 7 0
+ CBAD size: 2 utilities: 1.67683 1.60501 1.50364 1.47144 n: 4 approvals: 2 2 0 0
+ CBDA size: 24 utilities: 21.8898 19.0949 18.6943 16.9884 n: 33 approvals: 24 7 2 0
+ CDBA size: 265 utilities: 227.224 200.45 180.047 148.717 n: 477 approvals: 265 210 2 0
+ DBAC size: 22 utilities: 20.3762 19.7408 17.278 16.9129 n: 44 approvals: 22 22 0 0
+ DBCA size: 139 utilities: 132.935 120.637 113.248 103.268 n: 273 approvals: 139 128 6 0
+ DCBA size: 72 utilities: 61.1573 55.3135 51.5807 42.383 n: 142 approvals: 72 64 6 0
+Candidate positions:
+ A: {0.261389, 0.308293}
+ B: {0.38165, 0.260476}
+ C: {0.490799, 0.0704832}
+ D: {0.52412, 0.2489}
+Candidate rankings of other candidates:
+ A: B (0.870581) > D (0.730639) > C (0.669572)
+ B: A (0.870581) > D (0.85706) > C (0.780886)
+ C: D (0.818498) > B (0.780886) > A (0.669572)
+ D: B (0.85706) > C (0.818498) > A (0.730639)
+
+Voter satisfaction (utility):
+ A: -1.39911 (-44.2867)
+ B: 1 (31.6536)
+ C: -0.315673 (-9.99218)
+ D: 0.71478 (22.6253)
+
+Checking voting criteria.
+Condorcet results:
+ B (836) > A (164)
+ C (536) > A (464)
+ D (697) > A (303)
+ B (637) > C (363)
+ B (502) > D (498)
+ D (706) > C (294)
+Condorcet ordering exists.
+Candidate rankings form a cycle.
+B wins if C doesn't run.
+
+Voting criteria results:
+Guthrie winner              : D
+Maximizes voter satisfaction: B =FAIL=
+Approval runoff winner      : B =FAIL=
+Range winner                : B =FAIL=
+Condorcet winner            : B =FAIL=
+Star winner                 : D pass
+Borda winner                : B =FAIL=
+Approval winner             : B =FAIL=
+Coombs winner               : B =FAIL=
+Bucklin winner              : D pass
+Anti-plurality winner       : B =FAIL=
+Instant runoff winner       : B =FAIL=
+Plurality runoff winner     : B =FAIL=
+Plurality winner            : B =FAIL=
+Maximizes candidate utility : B =FAIL=
+Condorcet loser             : A pass
+Independence                : C =FAIL=
+
+Configuration:
+Number trials    : 10
+Number voters    : 1000
+Number candidates: 4
+Fixed seed       : 1753391226898898129
+Electorate       : clusters (8)
+Issue axes       : 2 (0.4)
+Dispersion       : 0.7
+
+Summary:
+Voter satisfactions by method:
+ anti-plurality               : 0.759648
+ approval                     : 0.953263
+ approval runoff              : 0.983845
+ Borda                        : 1
+ Bucklin                      : 0.945526
+ Condorcet (winner exists)    : 0.983845 (0.983845)
+ Coombs                       : 0.983845
+ Guthrie (strategic)          : 0.96326 (0.984595)
+ instant runoff               : 0.868233
+ plurality                    : 0.572376
+ plurality runoff             : 0.788605
+ range                        : 0.862324
+ star                         : 0.964717
+Guthrie correlations by method:
+ anti-plurality               : 30%
+ approval                     : 50%
+ approval runoff              : 90%
+ Borda                        : 80%
+ Bucklin                      : 70%
+ Condorcet (winner exists)    : 90% (90%)
+ Coombs                       : 90%
+ instant runoff               : 50%
+ plurality                    : 30%
+ plurality runoff             : 50%
+ range                        : 40%
+ star                         : 70%
+Miscellaneous                :
+ candidate satisfaction       : 0.859766
+ maxes candidate satisfaction : 40%
+ maxes voter satisfaction     : 80%
+ independence                 : 70%
+ won by majority              : 0%
+ Condorcet loser wins         : 0%
+ Condorcet cycles             : 0%
+ candidate cycles             : 100%
+ instant runoff is Condorcet  : 60%
