@@ -19,15 +19,19 @@ the container class must implement all of begin/end/next
 or both of size/op[].
 begin/end/next must return the exact same type.
 begin/end/next must have arity 0/0/1.
-the loop variable type is inferred to a primitive type when possible.
+the loop variable type is inferred to a scalar (primitive or pointer) type
+when possible.
 the loop variable type is inferred to a reference when:
-the contained type is not primitive or when:
+the contained type is not scalar or when:
 infer-as-reference syntax is used (see below).
-if the loop variable is the contained primitive type then size/op[] is used.
-if the loop variable is a reference to the contained type then
-begin/end/next is used.
+if there is a choice between size/op[] and begin/end/next then:
+ -- if the loop variable is the contained scalar type then size/op[] is used.
+ -- if the loop variable is a reference to the contained type then
+    begin/end/next is used.
 the loop functions are not rejected if they are malformed.
 they just cannot be used with for-class.
+the by-value criteria is the contained type can be trivially copied -
+specifically bool, char, ints, floats, and pointers.
 
 for-class desugars to:
 
@@ -292,6 +296,43 @@ BothPair(Pair p_ = (5, 6), Pair q_ = (7, 8)) {
     Pair^ next(Pair^ prev) {
         Pair[] p = <Pair[]> <mutable> prev;
         return p + 1;
+    }
+}
+
+// POINTER elements — a pointer is SCALAR, so it binds BY VALUE like a primitive
+// (inferred, or spelled `Pair^`); `ref^` or `Pair^^` binds a reference to the
+// slot. BOTH protocols: size/op[] spans both slots, begin/end/next the FIRST
+// only, making the selection observable.
+PtrBoth(Pair^ p_ = nullptr, Pair^ q_ = nullptr) {
+    int size() {
+        return 2;
+    }
+    Pair^^ op[](int i) {
+        if (i == 0) { return ^p_; }
+        return ^q_;
+    }
+    Pair^^ begin() {
+        return ^p_;
+    }
+    Pair^^ end() {
+        (Pair^)[] p = <(Pair^)[]> <mutable> ^p_;
+        return p + 1;
+    }
+    Pair^^ next(Pair^^ prev) {
+        (Pair^)[] p = <(Pair^)[]> <mutable> prev;
+        return p + 1;
+    }
+}
+
+// POINTER elements through size/op[] ONLY — the explicit `Pair^^` head is the
+// by-reference shape and writes through to the slot.
+PtrVec(Pair^ p_ = nullptr, Pair^ q_ = nullptr) {
+    int size() {
+        return 2;
+    }
+    Pair^^ op[](int i) {
+        if (i == 0) { return ^p_; }
+        return ^q_;
     }
 }
 
@@ -681,6 +722,38 @@ int32 main() {
     int cre = 0;
     for (cre : nv) { cre; }
     println(String + "class head reuse: " + cre);              // 0
+
+    // ---- POINTER elements are scalar: by value unless spelled as a
+    //      reference. Both protocols: by value = size/op[] (both slots),
+    //      by reference = begin/end/next (first slot only). ----
+    Pair pa = (1, 2);
+    Pair pb = (3, 4);
+    Pair pc = (5, 6);
+    PtrBoth pt = (^pa, ^pb);
+    int ps = 0;
+    for (p : pt) { ps += p^.x_; }
+    println(String + "pointer inferred: " + ps);               // 4
+    ps = 0;
+    for (Pair^ p : pt) { ps += p^.x_; }
+    println(String + "pointer explicit: " + ps);               // 4
+    ps = 0;
+    for (p^ : pt) { ps += p^^.x_; }
+    println(String + "pointer infer-ref: " + ps);              // 1
+    ps = 0;
+    for (Pair^^ p : pt) { ps += p^^.x_; }
+    println(String + "pointer explicit ref: " + ps);           // 1
+    for (Pair^^ p : pt) { p^ = ^pc; }
+    ps = 0;
+    for (p : pt) { ps += p^.x_; }
+    println(String + "pointer ref write: " + ps);              // 8
+
+    // ---- size/op[] only: the reference shape writes through, the value
+    //      shape reads the pointer. ----
+    PtrVec ptv = (^pa, ^pb);
+    for (Pair^^ p : ptv) { p^ = ^pc; }
+    ps = 0;
+    for (Pair^ p : ptv) { ps += p^.x_; }
+    println(String + "pointer size/op[] ref write: " + ps);    // 10
     return 0;
 }
 
@@ -700,7 +773,7 @@ int32 main() {
 //}
 
 // A by-value CLASS loop var is rejected — the loop variable must be a
-// primitive or a reference (size/op[] side).
+// scalar or a reference (size/op[] side).
 //-EXPECT-ERROR: must be a reference
 //int neg_class_by_value() {
 //    PairVec npv;

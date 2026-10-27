@@ -15,7 +15,7 @@ rotations, and the inner-child (case 2) rotations; the nested block runs two
 maps' destructors at different scope exits.
 */
 
-import map;
+import+ map;
 import string;
 alias slids;
 
@@ -59,6 +59,9 @@ Map<String, String> : CapitalMap() {
         }
     }
 }
+
+/* a pointee for the pointer-valued map. */
+Capital(int pop_ = 0) { }
 
 int32 main() {
     println(String + "---countries---");
@@ -152,6 +155,34 @@ int32 main() {
         outer.print();
     }
     println(String + "outer gone");
+
+    println(String + "---pointer values---");
+    {
+        /* insert takes `mutable Key` / `mutable Value`: a POINTER value is
+           stored as given (not munged to point-to-const), so the map's
+           pointers write through to the pointees. */
+        Capital ottawa(1);
+        Capital lima(10);
+        Map<int, Capital^> pm;
+        pm.insert(2, ^lima);
+        pm.insert(1, ^ottawa);
+        for (it : pm) {
+            it^.value_^.pop_ += 100;
+        }
+        for (it : pm) {
+            println(String + it^.key_ + " - " + it^.value_^.pop_);
+        }
+        println(String + "ottawa = " + ottawa.pop_);
+    }
+
+    /* compile error: a const pointer cannot be stored as a value of mutable
+       pointers — the value type says the pointee is writable. */
+    //-EXPECT-ERROR: Cannot pass a const value to a 'mutable' parameter
+    //Capital nc(5);
+    //(const Capital)^ ncp = ^nc;
+    //Map<int, Capital^> npm;
+    //npm.insert(1, ncp);
+    //println(String + "inserted");
 
     return 0;
 }

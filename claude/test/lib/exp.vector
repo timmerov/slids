@@ -1,0 +1,48 @@
+---Vector<int>---
+resize(3)
+ctor/dtor count = 0
+---Vector<Value>---
+resize(3)
+reserve(5)
+Value::move
+Value::move
+Value::move
+resize(7)
+Value::move
+Value::move
+Value::move
+resize(5)
+ctor/dtor count = 0
+---copy/move---
+resize(3)
+copy
+move
+a.size() = 0
+b.size() = 3
+c.size() = 3
+ctor/dtor count = 0
+---index---
+resize(3)
+vec (by ref) = [ 10 20 40 ]
+ctor/dtor count = 0
+---insert/append---
+Value::move
+Value::move
+Value::move
+Value::move
+Value::move
+Value::move
+vec = [ 100 200 300 400 ]
+ctor/dtor count = 0
+---remove---
+Value::move
+Value::move
+vec = [ 0 1 5 6 ]
+ctor/dtor count = 0
+---compare---
+int: == false < true > false
+Ranked: == false < false > true
+---pointer elements---
+pv = [ 10 2 3 ]
+r1 = 10
+----------

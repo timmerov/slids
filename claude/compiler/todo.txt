@@ -96,6 +96,12 @@ BUGS
 
 UNBLOCKED FEATURES
 
+  * Vector<(const Ranked)^> cv; cv.append(cr); ((const Ranked)^ cr) is rejected:
+    "Cannot pass a const value to a 'mutable' parameter". append/insert take mutable T,
+    and mutable still demands a writable pointee even when T itself is const T^.
+    decide what mutable T means when T already has a const pointee. same for Map insert.
+    deferred case in test/lib/vector.sl.
+
   * slids { qsort(); } is a namespace.
     alias sl = slids; should be an alias to the namespace allowing:
     sl:qsort();

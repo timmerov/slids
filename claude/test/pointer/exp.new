@@ -32,6 +32,7 @@ splaced= 21
 Simple:dtor: 21
 dtor 21 before
 pseudo= 5
+pseudo ptr= 9
 plain single: 1 2
 plain array: 9 8
 default ctor after

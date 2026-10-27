@@ -4507,7 +4507,7 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
                 && tree.classes.count(pt) > 0) {
                 diagnostic::report(diag, {vfile, vtok,
                     "'" + var_decl.name + "' is a class variable; the for-loop "
-                    "variable must be a primitive or a reference.", {}});
+                    "variable must be a scalar or a reference.", {}});
                 return Completion::Normal;
             }
         }
@@ -4535,8 +4535,26 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
         return Completion::Normal;
     }
 
-    auto isPrim = [](widen::TypeRef t) {
-        return widen::form(widen::strip(t)) == widen::Type::Form::kPrimitive; };
+    // SCALAR = trivially copied: a primitive (bool/char/ints/floats, an enum
+    // strips to one) or a pointer / iterator. A scalar element binds by value.
+    auto isScalar = [](widen::TypeRef t) {
+        widen::Type::Form f = widen::form(widen::strip(t));
+        return f == widen::Type::Form::kPrimitive
+            || f == widen::Type::Form::kPointer
+            || f == widen::Type::Form::kIterator; };
+    // Reference levels (`T^`) on a type — the declared loop var is a reference
+    // exactly when it has MORE levels than the element, so over a `Pair^`
+    // element `Pair^ v` is by value and `Pair^^ v` is by reference (the
+    // spelling's trailing `^` alone can't tell them apart).
+    auto refDepth = [](widen::TypeRef t) {
+        int n = 0;
+        for (t = widen::strip(t); widen::form(t) == widen::Type::Form::kPointer;
+             t = widen::strip(widen::get(t).pointee))
+            ++n;
+        return n;
+    };
+    auto declByRef = [&](widen::TypeRef elem) {
+        return has_type && refDepth(var_decl.return_type) > refDepth(elem); };
     // The ELEMENT a good protocol yields: the pointee of the reference it
     // hands back, or the value itself for a value-returning begin/end/next.
     auto elemOf = [](ForClassProto const& p) -> widen::TypeRef {
@@ -4546,7 +4564,7 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
         return p.ret;
     };
     // The canon rule behind every arm below: the loop VARIABLE must be a
-    // primitive or a reference — a class element binds by reference, never
+    // scalar or a reference — a class element binds by reference, never
     // by value (a by-value class loop var would be a whole-class copy per
     // iteration).
     auto rejectClassByValue = [&](widen::TypeRef elem) {
@@ -4558,17 +4576,18 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
 
     // Select the protocol (option D): when both are defined the loop var's
     // SHAPE picks — a value picks size/op[], a reference picks begin/end/next.
-    // An INFERRED head defaults by value (a bare var is the contained primitive);
+    // An INFERRED head defaults by value (a bare var is the contained scalar);
     // the author spells `ref^` — or the element is a class, whose one legal
     // shape is a reference — to select begin/end/next. (The old "both sets need
-    // an explicit type" rejection is repealed by the `ref^` spelling.)
+    // an explicit type" rejection is repealed by the `ref^` spelling.) An
+    // explicit type is a reference when it is deeper than the size/op[] element.
     bool use_bnn;
     if (bnnGood && soiGood) {
         if (!has_type) {
             use_bnn = var_decl.infer_ref
-                   || (!isPrim(elemOf(bnn)) && !isPrim(elemOf(soi)));
+                   || (!isScalar(elemOf(bnn)) && !isScalar(elemOf(soi)));
         } else {
-            use_bnn = lv_is_ref;
+            use_bnn = declByRef(elemOf(soi));
         }
     } else {
         use_bnn = bnnGood;
@@ -4587,15 +4606,16 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
         if (isReferenceType(iter)) {
             widen::TypeRef elem = widen::get(widen::strip(iter)).pointee;
             if (!has_type) {
-                bool as_ref = var_decl.infer_ref || !isPrim(elem);
+                bool as_ref = var_decl.infer_ref || !isScalar(elem);
                 shape = as_ref ? 3 : 2;
                 var_decl.return_type = as_ref ? iter : elem;
             } else {
-                if (!lv_is_ref && !isPrim(elem)) {
+                bool by_ref = declByRef(elem);
+                if (!by_ref && !isScalar(elem)) {
                     rejectClassByValue(elem);
                     return Completion::Normal;
                 }
-                shape = lv_is_ref ? 3 : 2;
+                shape = by_ref ? 3 : 2;
             }
         } else {
             if (lv_is_ref || var_decl.infer_ref) {
@@ -4614,15 +4634,16 @@ Completion understandForClass(parse::Tree& tree, parse::Node& s,
         count_ty = tree.entries[op_id].param_types[1];
         widen::TypeRef elem = widen::get(widen::strip(soi.ret)).pointee;
         if (!has_type) {
-            bool as_ref = var_decl.infer_ref || !isPrim(elem);
+            bool as_ref = var_decl.infer_ref || !isScalar(elem);
             shape = as_ref ? 5 : 4;
             var_decl.return_type = as_ref ? widen::internPointer(elem) : elem;
         } else {
-            if (!lv_is_ref && !isPrim(elem)) {
+            bool by_ref = declByRef(elem);
+            if (!by_ref && !isScalar(elem)) {
                 rejectClassByValue(elem);
                 return Completion::Normal;
             }
-            shape = lv_is_ref ? 5 : 4;
+            shape = by_ref ? 5 : 4;
         }
     }
 

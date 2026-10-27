@@ -806,10 +806,17 @@ FOR-CLASS — ITERATING A CLASS BY ITS PROTOCOL (landed; resolve understandForCl
     REPEALED: the author spells `ref^` to get a reference, so bare = by value.) A
     CLASS element has ONE legal shape — reference — so it is inferred either way.
     Exactly one defined → it is used. Neither → "not iterable". A typeless loop var is
-    inferred: a primitive element binds by value (or by `ref^`), a class element by
+    inferred: a SCALAR element binds by value (or by `ref^`), a class element by
     reference. `ref^` over a VALUE-returning begin/end/next rejects exactly like an
     explicit `int^` ("return a value; ... cannot be a reference").
-  * THE LOOP VARIABLE IS A PRIMITIVE OR A REFERENCE — never a class by value (that
+  * SCALAR (2026-10-26, canon "trivially copied — bool, char, ints, floats, and
+    pointers"): isScalar = kPrimitive (an enum strips to one) | kPointer | kIterator.
+    An EXPLICIT loop var is a reference iff its `^`-depth EXCEEDS the element's
+    (refDepth / declByRef), not iff its spelling ends in `^` — over a `Pair^` element
+    `Pair^ v` is by value and `Pair^^ v` by reference (the old spelling test made the
+    by-value head of a pointer element impossible: guthrie's Vector<ElectoralMethod^>).
+    With both protocols the depth is judged against the size/op[] element.
+  * THE LOOP VARIABLE IS A SCALAR OR A REFERENCE — never a class by value (that
     would be a whole-class copy per iteration). Enforced three ways: an explicit
     non-reference loop var over a class element rejects ("must be a reference
     ('T^')") on BOTH protocol sides; a typeless head naming an EXISTING local CLASS
@@ -923,11 +930,13 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     emitDestructHooks on the receiver's address with NO free / no null (placement
     cleanup; the buffer is reclaimed separately). classify requires the POINTER
     form (`ptr^.~()` — a named object is scope-managed; an explicit `.~()` on it
-    would double-destruct) and a CLASS or PRIMITIVE receiver: a PRIMITIVE
-    pointee's `.~()` is a NO-OP (neutralized to an empty block) — the
-    PSEUDO-DESTRUCTOR rule (v1's too): a generic destroy path spells
-    `ptr^.~()` for EVERY element type, so the primitive flavors of a container
-    template must compile and do nothing. Anything else ("int^^") rejects, the
+    would double-destruct) and a CLASS or SCALAR receiver: a SCALAR (primitive,
+    or pointer / iterator since 2026-10-26) pointee's `.~()` is a NO-OP
+    (neutralized to an empty block) — the PSEUDO-DESTRUCTOR rule (v1's too): a
+    generic destroy path spells `ptr^.~()` for EVERY element type, so the
+    primitive and pointer flavors of a container template (Vector<T^>) must
+    compile and do nothing. Accepted footgun: `pp^.~()` meant as `pp^^.~()` is
+    silent. Anything else (a tuple pointee) rejects, the
     alias operand spelled label=target.
   * FIELD ACCESS through deref / iterator — `.field` lowers to a slot kIndexExpr;
     emitElementAddr's per-segment walk roots on a variable's alloca OR a deref `ptr^`

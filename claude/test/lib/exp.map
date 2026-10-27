@@ -51,3 +51,7 @@ innermost - third
 inner gone
 outer - first
 outer gone
+---pointer values---
+1 - 101
+2 - 110
+ottawa = 101

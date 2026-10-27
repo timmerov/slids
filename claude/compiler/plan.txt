@@ -4338,6 +4338,24 @@ A CHAIN AS THE RHS OF A COMPOUND OPERATOR — SAFE CHAINING (LANDED 2026-10-25)
   Coverage: CA1 same family, CA2 different compound op, CA3 target in chain, CA4 field target,
   CA5 only-op+= class (seed decompose) — one `ctor: 0` accumulator each, dead before "CAn end".
 
+SCALAR ELEMENTS: POINTERS ITERATE AND DESTRUCT LIKE PRIMITIVES (LANDED 2026-10-26)
+  Driver: guthrie's Vector<ElectoralMethod^>. Canon test/flow/forclass.sl header: by-value
+  when the contained type is trivially copied — bool, char, ints, floats, and pointers.
+  - FOR-CLASS: isScalar (primitive | pointer | iterator) replaces the primitive test; an
+    explicit loop var is a reference iff it has MORE `^` levels than the element. Over a
+    `Pair^` element `Pair^ v` is by value, `Pair^^ v` / `v^` by reference. Coverage:
+    forclass.sl PtrBoth (both protocols, selection observable) + PtrVec (size/op[] only).
+  - PSEUDO-DESTRUCTOR: `ptr^.~()` on a pointer / iterator pointee is a no-op like a
+    primitive's (Vector<T^>'s destroy path). User: a silent `pp^.~()` meant as `pp^^.~()`
+    is acceptable — anyone calling a dtor directly is playing with fire. Coverage:
+    pointer/new.sl "pseudo ptr"; its `int^^` negative moved to a tuple pointee.
+  - LIBRARY (user): Vector append/insert and Map insert take `mutable T` / `mutable Key` /
+    `mutable Value` — a store-in param keeps a pointer element as given instead of
+    munging its pointee const. Coverage: test/lib vector.sl "pointer elements", map.sl
+    "pointer values", plus a const-pointer negative in each. OPEN (todo): a const-pointee
+    element (Vector<(const X)^>) still rejects const args at the mutable param.
+  - test/lib/Makefile runs negatives and positives over ALL samples (vector was left out).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

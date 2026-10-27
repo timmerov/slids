@@ -8467,7 +8467,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             widen::TypeRef rs = widen::strip(recv.inferred_type);
             bool dtor_is_class = widen::form(rs) == widen::Type::Form::kSlid
                               && tree.classes.count(rs) > 0;
-            bool dtor_is_prim = widen::form(rs) == widen::Type::Form::kPrimitive;
+            // A SCALAR pointee (primitive or pointer) has no destructor.
+            bool dtor_is_prim = widen::form(rs) == widen::Type::Form::kPrimitive
+                             || isPtrLikeType(rs);
             if (recv.inferred_type != widen::kNoType
                 && !dtor_is_class && !dtor_is_prim) {
                 diagnostic::report(diag, {s.file_id, s.tok,
@@ -8481,10 +8483,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     "('ptr^.~()'); an automatically-managed object is destroyed "
                     "at scope exit.", {}});
             } else if (dtor_is_prim) {
-                // A PRIMITIVE pointee has no destructor: the call is a NO-OP —
+                // A SCALAR pointee has no destructor: the call is a NO-OP —
                 // the pseudo-destructor rule generic code needs (a container's
                 // destroy path spells `ptr^.~()` for EVERY element type; the
-                // primitive flavors must compile). Neutralize the statement.
+                // primitive and pointer flavors must compile). Neutralize the
+                // statement.
                 s.kind = parse::Kind::kBlockStmt;
                 s.children.clear();
             }

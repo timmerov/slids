@@ -183,6 +183,15 @@ int32 main() {
     println(String + "pseudo= " + iview^);
     delete rawi;
 
+    /* a POINTER pointee is scalar too: its `.~()` is the same NO-OP (a
+       Vector<T^> destroy path), and the pointee it points at is untouched. */
+    int pz = 9;
+    int^^ pview = new int^;
+    pview^ = ^pz;
+    pview^.~();
+    println(String + "pseudo ptr= " + pview^^);
+    delete pview;
+
     /* a TRIVIAL class: field-init only (no ctor/dtor output), plain free. */
     pl = new Plain(1, 2);                              // multi-field construct
     println(String + "plain single: " + pl^.a_ + " " + pl^.b_);   // 1 2
@@ -369,9 +378,9 @@ int32 main() {
     //int32 ni = 0;
     //ni.~();
 
-    /* a non-class, non-primitive receiver has no destructor spelling at all. */
+    /* a non-class, non-scalar receiver has no destructor spelling at all. */
     //-EXPECT-ERROR: A destructor call '.~()' requires a class object
-    //int^^ npp = nullptr;
+    //(int, int)^ npp = nullptr;
     //npp^.~();
 
     /* a TUPLE element must be statically sized: a slot that is a class (runtime-sized

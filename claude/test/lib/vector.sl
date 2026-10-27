@@ -164,7 +164,50 @@ int32 main() {
         println(String + "Ranked: == " + (ra == rb) + " < " + (ra < rb)
             + " > " + (ra > rb));
     }
+    println(String + "---pointer elements---");
+    {
+        /* append/insert take `mutable T`: a POINTER element is stored as
+           given (not munged to point-to-const), so the vector's pointers
+           write through to the pointees. destroying the vector is a no-op on
+           each pointer — the pointees are untouched. */
+        Ranked r1;
+        r1.r_ = 1;
+        Ranked r2;
+        r2.r_ = 2;
+        Ranked r3;
+        r3.r_ = 3;
+        Vector<Ranked^> pv;
+        pv.append(^r1);
+        pv.append(^r3);
+        pv.insert(1, ^r2);
+        pv[0]^.r_ = 10;
+        print(String + "pv = [");
+        for (Ranked^ p : pv) {
+            print(String + " " + p^.r_);
+        }
+        println(String + " ]");
+        println(String + "r1 = " + r1.r_);
+    }
     println(String + "----------");
+
+    /* OPEN: a const-pointee vector should take const pointers, but
+       `mutable T` with T = `(const Ranked)^` still rejects a const argument
+       ("Cannot pass a const value to a 'mutable' parameter"). */
+    //-EXPECT-ERROR-DEFERRED: mutable T over a const-pointee T rejects const args
+    //Ranked cr3;
+    //(const Ranked)^ cr = ^cr3;
+    //Vector<(const Ranked)^> cv;
+    //cv.append(cr);
+    //println(String + "cv = [ " + cv[0]^.r_ + " ]");
+
+    /* compile error: a const pointer cannot be stored in a vector of mutable
+       pointers — the element type says the pointee is writable. */
+    //-EXPECT-ERROR: Cannot pass a const value to a 'mutable' parameter
+    //Ranked nr;
+    //(const Ranked)^ ncr = ^nr;
+    //Vector<Ranked^> npv;
+    //npv.append(ncr);
+    //println(String + "npv = " + npv.size());
 
     /* compile error: comparing vectors whose element class has no op< builds
        Vector<Value>'s comparison methods, which need it. */

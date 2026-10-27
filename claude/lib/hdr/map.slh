@@ -32,7 +32,7 @@ Map<Key, Value>(...) {
 
     void clear();
     MapIter find(Key key );
-    void insert(Key key, Value value);
+    void insert(mutable Key key, mutable Value value);
 }
 
 } /* slids */

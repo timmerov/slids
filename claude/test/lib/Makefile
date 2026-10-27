@@ -36,10 +36,10 @@ SAMPLES = \
 all: $(SAMPLES)
 
 negatives:
-	@../run_negatives.sh algorithm.sl
+	@../run_negatives.sh $(addsuffix .sl,$(SAMPLES))
 
 positives: all
-	@../run_positives.sh $(DIR) algorithm string map tree
+	@../run_positives.sh $(DIR) $(SAMPLES)
 
 # A test shares its STEM with the library it exercises, and a template
 # library's instantiation lands in this same build directory under the

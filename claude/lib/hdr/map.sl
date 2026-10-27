@@ -84,7 +84,7 @@ Map<Key, Value>(
         }
     }
 
-    void insert(Key key, Value value) {
+    void insert(mutable Key key, mutable Value value) {
 
         /* create a new red node. */
         child = new MapNode<Key, Value>;
