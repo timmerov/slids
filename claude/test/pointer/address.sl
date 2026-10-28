@@ -26,9 +26,11 @@ claude says:
     * a DEREF (`p^`) — its storage is the pointee, which the pointer already
       reaches, so there is an address to hand back.
   an rvalue root has no storage: a call result, a literal, and an arithmetic
-  result live in no addressable slot. a name that is not storage at all — a
-  function (code), a `const` (substituted at compile time) — is rejected with its
-  own message, since the operand IS a variable spelling but names the wrong thing.
+  result live in no addressable slot. a `const` (substituted at compile time) is
+  not storage at all and is rejected with its own message, since the operand IS a
+  variable spelling but names the wrong thing. a FUNCTION name is not storage
+  either, but `^fn` is legal: it yields a FUNCTION POINTER (`int()^` for `five`),
+  which is not a data reference — see test/function/pointer_fn.sl.
 - THE DEREF ROOT LANDED 2026-07-29. Before it, everything reached through a
   pointer (`^p^`, `^p^.f`, `^p^[i]`) was refused in resolve even though the rest
   of the pipeline already handled it: classify's address-of is operand-driven
@@ -164,9 +166,9 @@ negatives — the operand must have storage.
 //    println(String + r^);
 //}
 
-/* a FUNCTION name is code, not storage. The operand IS a variable spelling, so
-   the chain walk accepts it and the entry-kind check rejects it by name. */
-//-EXPECT-ERROR: Cannot take the address of 'five'
+/* a FUNCTION name is code, not storage: `^five` is a function pointer
+   (`int()^`), which does not convert to a data reference. */
+//-EXPECT-ERROR: Cannot implicitly cast 'int()^' to 'int^'
 //void neg_function() {
 //    int^ r = ^five;
 //    println(String + r^);

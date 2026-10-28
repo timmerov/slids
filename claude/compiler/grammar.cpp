@@ -426,7 +426,13 @@ struct Parser {
         bool in_run = false;
         auto closeRun = [&]() { in_run = false; };
         while (true) {
-            if (peek().kind == token::Kind::kLBracket
+            if (top_dim != TopDim::StopBeforeSized && fnSigClose(0) >= 0) {
+                // A FUNCTION SIGNATURE `R(params)` — the `^` that must follow is the
+                // next link of this chain (`bool(int, int)^`).
+                if (!parseFnSig(type)) return "";
+                outermost_sized = false;
+                closeRun();
+            } else if (peek().kind == token::Kind::kLBracket
                 && peekKind(1) == token::Kind::kRBracket) {
                 advance(); advance();   // `[` `]`
                 type += "[]";           // iterator
@@ -614,6 +620,20 @@ struct Parser {
                 && !parseNameDims(d.type, d.dim_exprs, d.any_dim_expr)) {
                 return false;
             }
+            // The NAMED function-pointer form — `bool fn(int, int)^`: the signature
+            // follows the name and the declared type is `bool(int, int)^`. A leading
+            // `const` keeps qualifying the whole pointer.
+            if (!d.typeless && fnSigClose(0) >= 0) {
+                bool lead_const = d.type.compare(0, 6, "const ") == 0;
+                std::string t = lead_const ? d.type.substr(6) : d.type;
+                if (!parseFnSig(t)) return false;
+                while (peek().kind == token::Kind::kBitXor
+                       || peek().kind == token::Kind::kXorXor) {
+                    t += peek().kind == token::Kind::kXorXor ? "^^" : "^";
+                    advance();
+                }
+                d.type = (lead_const ? "const " : "") + t;
+            }
         } else if (policy == NamePolicy::Required) {
             error(missing_name_error);
             return false;
@@ -669,6 +689,10 @@ struct Parser {
                 o++;
                 continue;
             }
+            if (int close = fnSigClose(o); close >= 0) {     // a signature `(...)^`
+                o = close + 1;
+                continue;
+            }
             if (peekKind(o) == token::Kind::kLBracket) {    // [] / [N] / [a,b]
                 int depth = 1;
                 o++;
@@ -685,6 +709,71 @@ struct Parser {
             break;
         }
         return o;
+    }
+
+    // A FUNCTION SIGNATURE in a type position — the `(params)` of `R(params)^`. From a
+    // `(` at offset `o`: the offset of its matching `)` when that is immediately
+    // followed by `^` / `^^` (a signature is only ever pointed to), else -1. A call /
+    // construction / grouping never puts a pointer suffix right after its `)` in a
+    // type position, so the `^` is the discriminator. Consumes nothing.
+    int fnSigClose(int o) const {
+        if (peekKind(o) != token::Kind::kLParen) return -1;
+        int depth = 0;
+        for (int i = o; ; i++) {
+            token::Kind k = peekKind(i);
+            if (k == token::Kind::kEndOfFile || k == token::Kind::kEndOfInput
+                || k == token::Kind::kError || k == token::Kind::kSemicolon
+                || k == token::Kind::kLBrace || k == token::Kind::kRBrace) return -1;
+            if (k == token::Kind::kLParen) depth++;
+            else if (k == token::Kind::kRParen && --depth == 0) {
+                token::Kind after = peekKind(i + 1);
+                return (after == token::Kind::kBitXor || after == token::Kind::kXorXor)
+                    ? i : -1;
+            }
+        }
+    }
+
+    // Parse a function SIGNATURE's parameter list — positioned at its `(` — and append
+    // it to `type` (the return type so far): `R` -> `R(P0, P1)`. Each param is a type,
+    // optionally led by `mutable` and optionally followed by an (ignored) name; a
+    // default value is rejected (a pointer type cannot carry one). A const-led return
+    // spelling is parenthesized so a leading `const` keeps meaning the pointer.
+    bool parseFnSig(std::string& type) {
+        advance();   // (
+        std::string ret = type;
+        if (ret.compare(0, 6, "const ") == 0) ret = "(" + ret + ")";
+        std::string params;
+        while (peek().kind != token::Kind::kRParen) {
+            bool is_mutable = false;
+            if (peek().kind == token::Kind::kMutable) {
+                is_mutable = true;
+                advance();   // mutable
+            }
+            std::string pt = parseType(nullptr, TopDim::Consume, nullptr);
+            if (pt.empty()) return false;
+            if (peek().kind == token::Kind::kIdentifier) advance();   // a param name
+            if (peek().kind == token::Kind::kEquals) {
+                error("Function pointers may not have default parameter values.");
+                return false;
+            }
+            if (!params.empty()) params += ", ";
+            params += (is_mutable ? "mutable " : "") + pt;
+            if (peek().kind == token::Kind::kComma) {
+                advance();   // ,
+                if (peek().kind == token::Kind::kRParen) {
+                    error("Expected a parameter after ','.");
+                    return false;
+                }
+                continue;
+            }
+            if (peek().kind != token::Kind::kRParen) {
+                error("Expected ',' or ')' in parameter list.");
+                return false;
+            }
+        }
+        if (!expect(token::Kind::kRParen, ")")) return false;
+        type = ret + "(" + params + ")";
+        return true;
     }
 
     // Skip the type-suffix run then require the declared name. The TRAILING IDENTIFIER is
@@ -1511,6 +1600,23 @@ struct Parser {
                 node->name = peek().text;
                 node->name_tok = pos;
                 advance();   // field name
+                base = std::move(node);
+                continue;
+            }
+            // `fp^(args)` — a call THROUGH a function pointer. A postfix `^` directly
+            // followed by `(` is the deref-and-call, so a PARENTHESIZED right operand
+            // of XOR (`a ^ (b)`) now reads as a call too — classify rejects a callee
+            // that is not a function pointer; drop the parens or commute the operands
+            // (`(b) ^ a`) for XOR.
+            if (peek().kind == token::Kind::kBitXor
+                && peekKind(1) == token::Kind::kLParen) {
+                int op_file = peek().file_id;
+                int op_tok = pos;
+                advance();   // ^
+                advance();   // (
+                auto node = newNodeAt(parse::Kind::kIndirectCallExpr, op_file, op_tok);
+                node->children.push_back(std::move(base));   // the pointer value
+                if (!parseCallArgs(*node)) return nullptr;   // args -> [1..]
                 base = std::move(node);
                 continue;
             }
@@ -2348,6 +2454,19 @@ struct Parser {
                     inc->children.push_back(std::move(lhs));
                     lhs = std::move(inc);
                     had_bump = true;
+                } else if (peek().kind == token::Kind::kBitXor
+                           && peekKind(1) == token::Kind::kLParen) {
+                    // `fp^(args)` — a call through a function pointer (parsePostfix's
+                    // twin); the chain may continue off its result.
+                    int op_file = peek().file_id;
+                    int op_tok = pos;
+                    advance();   // ^
+                    advance();   // (
+                    auto call = newNodeAt(parse::Kind::kIndirectCallExpr,
+                                          op_file, op_tok);
+                    call->children.push_back(std::move(lhs));
+                    if (!parseCallArgs(*call)) return nullptr;
+                    lhs = std::move(call);
                 } else {
                     // `^` is one deref, `^^` (one logical-xor token) is two.
                     int levels = peek().kind == token::Kind::kXorXor ? 2 : 1;
@@ -2367,6 +2486,15 @@ struct Parser {
             if (lhs->kind == parse::Kind::kMethodCallStmt) {
                 if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
                 return lhs;
+            }
+            // The chain ended in a call through a function pointer (`fp^(args);`) —
+            // evaluated for effect, its value discarded.
+            if (lhs->kind == parse::Kind::kIndirectCallExpr
+                && peek().kind == token::Kind::kSemicolon) {
+                advance();   // ;
+                auto node = newNodeAt(parse::Kind::kExprStmt, stmt_file, stmt_tok);
+                node->children.push_back(std::move(lhs));
+                return node;
             }
             if (peek().kind == token::Kind::kArrowLeft
                 || peek().kind == token::Kind::kArrowBoth) {
@@ -4326,7 +4454,9 @@ struct Parser {
             }
             // A pointer/iterator return-type suffix: `T^` / `T^^` (reference) or
             // `T[]` (iterator). Without this a method/function returning a pointer
-            // (`Self^ me()`) is not recognized as a function def.
+            // (`Self^ me()`) is not recognized as a function def. A FUNCTION-POINTER
+            // return type (`bool(int, int)^ pick(...)`) skips its signature first.
+            if (int close = fnSigClose(o); close >= 0) o = close + 1;
             if (peekKind(o) == token::Kind::kBitXor
                 || peekKind(o) == token::Kind::kXorXor) o++;
             else if (peekKind(o) == token::Kind::kLBracket

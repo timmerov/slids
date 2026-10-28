@@ -343,3 +343,37 @@ sizeof(int64)           // 8
 sizeof("abc")           // 4
 ##type(x)  ##name(x)  ##func  ##file  ##line
 ```
+
+---
+
+## More information
+
+The rules live in the comment at the top of each test file. That comment is the
+spec; the code under it is the test.
+
+- Function pointers: `bool cmp(int, int)^ = ^less;`
+- Const correctness and `mutable`
+- Casting: `<int^> p`
+- Declaration with type conversion: `x int = y;`
+- Pointer casting: `p Node^ = q;`
+- Primitive temporaries: `int32(v)`
+- String literals are `const char[N]`
+- Field initialization vs assignment: `Point p(1, 2);` vs `Point p = (1, 2);`
+- Empty init slots: `Point p(, 2);`
+- Unnamed classes: `Point(1, 2);`
+- Field aliases: `alias x = pos.x;` in a field list
+- Expression optimization: temporaries, chains, when they die
+- Overloads: functions, methods, operators
+- Operators: `op+`, `op=`, `op<--`, `op[]`, template operators
+- Class iteration: `for (x : container)` via `size`/`op[]` or `begin`/`end`/`next`
+- Template parameter conventions, specialization and type sets
+- Re-opening classes, incomplete classes, refinements
+- Nested functions
+- Globals and lazy global groups
+- Enum context: bare members against an enum target
+- The `void;` reachability marker
+- Macros: `#x`, `##line`
+- `import` vs `import+`
+- Pre-link stage: template instantiation, `slidsc --instantiate`
+- Makefile support: `slidsc --scan-deps`
+- Origin story

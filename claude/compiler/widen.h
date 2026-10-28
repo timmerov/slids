@@ -64,6 +64,13 @@ struct Type {
                       // (`const T` / `(const T)^`). Binds loosest: an OUTER kConst is
                       // deep (`const T^` = const pointer to const data); const on a
                       // pointee (`(const T)^`) is the shallow form.
+        kFunction,    // a function SIGNATURE `R(P0, P1, ...)` — `elem` = the return
+                      // type, `slots` = the parameter types AFTER the parameter munge
+                      // (internFunction). Only ever the pointee of a function pointer
+                      // `R(P...)^`; it has no storage and no size. `dims` carries one
+                      // flag per param: 1 = spelled `mutable` on a param whose type
+                      // is not yet resolved (an alias leaf), so resolve can apply the
+                      // munge once it is; 0 everywhere once the signature is known.
     };
     Form form = Form::kNone;
     Category cat = Category::kSignedInt;   // kPrimitive
@@ -185,6 +192,33 @@ TypeRef internAlias(std::string const& name, TypeRef underlying);
 // `(const T)^` (shallow — a mutable pointer to const data). The param-munge
 // builds the shallow form for a non-`mutable` reference parameter.
 TypeRef internConst(TypeRef underlying);
+
+// The PARAMETER MUNGE of one function-signature parameter (the default contract:
+// a call is not permission to modify the caller's data). A reference / iterator
+// param's pointee becomes `internConst(deepConst(pointee))`, and a sized array
+// becomes a pointer to its const-element array — unless `is_mutable`, an outer
+// const already sits on the param, or the pointee is a FUNCTION (code is never
+// written, so const on it means nothing). Any other type passes through.
+// Idempotent. resolve's mungeParamType applies the same rule to a definition's
+// params; internFunction applies it to a function-pointer signature.
+TypeRef mungeParam(TypeRef param, bool is_mutable);
+
+// A function SIGNATURE type `ret(params...)` (Form::kFunction). Each param is
+// munged (mungeParam) with its `mutable` flag; a param whose type is not yet
+// resolved (an alias / class-name leaf) keeps its flag in the type until resolve
+// re-interns it with the resolved leaf. `mutables` may be empty (none mutable).
+TypeRef internFunction(TypeRef ret, std::vector<TypeRef> const& params,
+                       std::vector<bool> const& mutables);
+
+// Rebuild signature `fn` with a new return and new params (a walk that resolved /
+// substituted / re-qualified its children). A param that was an UNRESOLVED leaf in
+// `fn` is munged now, with its carried `mutable` flag; every other param is taken
+// as given — it was munged when `fn` was built, and munging again would const a
+// `mutable` one.
+TypeRef rebuildFunction(TypeRef fn, TypeRef ret, std::vector<TypeRef> const& params);
+
+// Is `t` (aliases / const peeled) a pointer whose pointee is a function signature?
+bool isFunctionPointer(TypeRef t);
 
 // A named class/slid type carrying its field-slot types. `def_id` is the scope
 // disambiguator (a LOCAL class's defining frame id; -1 for file-scope) — part of

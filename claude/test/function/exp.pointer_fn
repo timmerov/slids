@@ -1,0 +1,51 @@
+fn^(1, 2)= false
+fn^(2, 1)= true
+##type(fn)= bool(int, int)^
+##type(fn2)= bool(int, int)^
+fn2^(1, 2)= true
+##type(ptr_fn)= int((const int)^)^
+ptr_fn^(^v)= 41
+##type(mut_fn)= void(mutable int^)^
+v= 42
+!none_fn= true
+!fn= false
+none_fn == nullptr= true
+fn == fn2= false
+fn != fn2= true
+fn == ^less= true
+fn && none_fn= false
+fn || none_fn= true
+fn ^^ none_fn= true
+fn is set
+none_fn is null
+##type(const_fn)= const bool(int, int)^
+const_fn^(3, 3)= true
+const_gn^(0)= zero
+const_gn^(1)= other
+v= 43
+fn_array[0]^(1, 2)= false
+fn_array[1]^(1, 2)= true
+pair= 2,1
+pair= 1,2
+apply1(^twice, 4)= 8
+pick(true)^(3, 4)= false
+pick(false)^(3, 4)= true
+tw_i^(3)= 6
+tw_f^(1.5)= 3
+ident(7)= 7
+##type(cof)= int((const Counter)^)^
+cof^(c)= 2
+h.op_^(2, 3)= 5
+h.apply(4, 5)= 9
+ad.op_^(6, 7)= 13
+apply2(2, 3)= 5
+g_cmp^(1, 2)= true
+sq^(5)= 25
+af^(-3)= 3
+af == af2= true
+!vfn= true
+vp == vp2= true
+fn3^(2, 1)= true
+fn4 == fn= true
+mut_peek^(^v)= 43
+v= 44

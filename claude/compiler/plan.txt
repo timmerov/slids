@@ -280,7 +280,8 @@ Phase 3 — functions
     functions only, so a nested body was NEVER lowered and a bare `i++` there asserted.
     See [[project_nested_fn_desugar]].
   * method dispatch (`.method()`)                                  out of scope (Phase 4/5)
-  * function pointers                                              out of scope
+  * function pointers                                              LANDED 2026-10-27 — see
+    FUNCTION POINTERS below
   * function aliases (`alias sin = sinf`)                          LANDED — see FOREIGN C
     IMPORTS + FUNCTION ALIASES below
   * ##type-of-function, templates                                  out of scope
@@ -293,7 +294,8 @@ Phase 4 — types beyond primitives
     then it's XOR], type-suffix=reference. `^^` lexes as ONE kXorXor token but is
     read as TWO carets in every caret-wanting position (type-suffix `int^^`,
     postfix/store deref `p^^`, prefix addr-of `^^x`, the decl lookaheads); only a
-    kXorXor LEADING an operand stays logical-xor. `^^x` (double addr-of) errors
+    kXorXor LEADING an operand stays logical-xor. Since 2026-10-27 a postfix `^`
+    followed by `(` is a call through a function pointer, never xor. `^^x` (double addr-of) errors
     identically to `^^^x`; a 3+ caret run already lexes as single `^` tokens.
     kStoreStmt is the general lvalue-
     expression store [`ref^ = v`]. Compare-only `== !=` [v1 rule]; ordering and
@@ -4355,6 +4357,32 @@ SCALAR ELEMENTS: POINTERS ITERATE AND DESTRUCT LIKE PRIMITIVES (LANDED 2026-10-2
     "pointer values", plus a const-pointer negative in each. OPEN (todo): a const-pointee
     element (Vector<(const X)^>) still rejects const args at the mutable param.
   - test/lib/Makefile runs negatives and positives over ALL samples (vector was left out).
+
+FUNCTION POINTERS (LANDED 2026-10-27)
+  Canon test/function/pointer_fn.sl header. Driver: a comparator for quicksort (guthrie's
+  sort_methods over Vector<ElectoralMethod^>). Per-stage notes: readme.txt FUNCTION POINTERS.
+  - SPELLING: the pointer type is the declaration with `^` after the param list —
+    `bool cmp(int a, int b)^` (named) or `bool(int, int)^` (nameless). `^fn` takes an address;
+    `cmp^(args)` calls. A bare function name stays an error, like `x.m()` on a `Class x^`.
+  - PARAM RULES = FUNCTION RULES: the signature's params are munged exactly like a real
+    function's, so a pointer's type and the function it points to always agree; `mutable`
+    opts out. Otherwise normal pointer rules: nullptr, arrays of pointers, `!`/`&&`/`||`/
+    `^^`, casts to and from `void^`. A leading `const` makes the POINTER const
+    (`const void cfn(int)^`); its params may still be `mutable`.
+  - EXACT MATCH: the declared pointer type picks the overload; no conversion between
+    signatures. No default parameter values in a signature.
+  - REJECTED: templates, methods, capturing nested functions; ordering comparisons;
+    an uncalled `fp^`.
+  - `^fn` IS DATA (isConstantInit): global initializer, field default, param default.
+  - GRAMMAR CHANGE: `a ^ (b)` is a call, no longer xor (nothing in test/ or lib/ spelled it).
+  OPEN (todo): `fp^^(args)` (FUNCTION POINTER DOUBLE DEREF); reach goal AMBIGUOUS PARSES
+  DECIDED BY TYPE. Known gaps: a class-name-led nameless signature at statement start;
+  `^overloaded` as an argument to an overloaded callee ("cannot infer"); a qualified
+  function-alias target (`alias x = ns:f;`, pre-existing); PPID inside the callee.
+  Coverage: pointer_fn.sl (named/nameless/alias spellings, overload pick, template caller,
+  global + field + param defaults, method holding a pointer, foreign import + alias, void
+  call, mutable param) + 17 negatives. test/pointer/address.sl's function negative now
+  expects the cast error (`^five` is `int()^`, not an `int^`).
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

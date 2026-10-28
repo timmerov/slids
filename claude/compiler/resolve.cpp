@@ -236,6 +236,14 @@ bool leafIsKnownClass(parse::Tree const& tree, widen::TypeRef t) {
                 if (!widen::isKnownType(s) && !leafIsKnownClass(tree, s)) return false;
             return true;
         }
+        if (ty.form == F::kFunction) {
+            // A signature is known iff its return and every param are.
+            std::vector<widen::TypeRef> parts = ty.slots;
+            parts.push_back(ty.elem);
+            for (widen::TypeRef s : parts)
+                if (!widen::isKnownType(s) && !leafIsKnownClass(tree, s)) return false;
+            return true;
+        }
         if (ty.form == F::kSlid) {
             // A template TYPE-PARAMETER marker is "known" in a template's pattern
             // signature — the instance resolves the real type.
@@ -401,6 +409,11 @@ bool reachesListlessFlavor(parse::Tree const& tree, widen::TypeRef t) {
             for (auto s : ty.slots)
                 if (reachesListlessFlavor(tree, s)) return true;
             return false;
+        case F::kFunction:
+            if (reachesListlessFlavor(tree, ty.elem)) return true;
+            for (auto s : ty.slots)
+                if (reachesListlessFlavor(tree, s)) return true;
+            return false;
         case F::kSlid: {
             int cid = parse::classEntryForType(tree, t);
             return cid >= 0 && tree.entries[cid].listless;
@@ -441,6 +454,17 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
             for (auto& s : slots)
                 s = resolveTypeRef(tree, s, visiting, reported, file_id, tok, diag);
             return widen::internTuple(slots);
+        }
+        case F::kFunction: {
+            // A function-pointer SIGNATURE: resolve the return and each param, then
+            // re-intern — which munges a param whose leaf only now resolved (an alias
+            // naming a pointer), honoring the `mutable` flag the spelling carried.
+            widen::TypeRef r = widen::get(t).elem;
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            r = resolveTypeRef(tree, r, visiting, reported, file_id, tok, diag);
+            for (auto& s : slots)
+                s = resolveTypeRef(tree, s, visiting, reported, file_id, tok, diag);
+            return widen::rebuildFunction(t, r, slots);
         }
         case F::kConst: {
             widen::TypeRef u = widen::get(t).underlying;
@@ -726,6 +750,14 @@ widen::TypeRef materializeDeepConst(widen::TypeRef t) {
             for (auto& s : slots) s = materializeDeepConst(s);
             return widen::internTuple(slots);
         }
+        case F::kFunction: {
+            // A signature's return and params materialize like any declared type,
+            // so a pointer's spelled signature and a definition's agree exactly.
+            widen::TypeRef r = materializeDeepConst(widen::get(t).elem);
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            for (auto& s : slots) s = materializeDeepConst(s);
+            return widen::rebuildFunction(t, r, slots);
+        }
         case F::kSlid:
         case F::kPrimitive:
         case F::kVoid:
@@ -740,6 +772,58 @@ widen::TypeRef materializeDeepConst(widen::TypeRef t) {
 // Resolve a declared type IN PLACE to its structured form (alias leaves become
 // transparent kAlias), then require the result to be a known type. A cycle was
 // already reported, so skip the redundant "Unknown type" the broken chain emits.
+// A FUNCTION-POINTER signature obeys a definition's parameter rules: a parameter is a
+// primitive (by value), a pointer, or an array (by pointer) — never a class / tuple
+// VALUE, never `void`. Walks every signature the type reaches (a pointer to one, an
+// array of them, a signature returning another). Reports once.
+bool checkSignatureParams(widen::TypeRef t, int file_id, int tok,
+                          diagnostic::Sink& diag) {
+    using F = widen::Type::Form;
+    if (t == widen::kNoType) return true;
+    widen::Type const& ty = widen::get(t);
+    switch (ty.form) {
+        case F::kAlias:
+        case F::kConst:    return checkSignatureParams(ty.underlying, file_id, tok, diag);
+        case F::kPointer:
+        case F::kIterator: return checkSignatureParams(ty.pointee, file_id, tok, diag);
+        case F::kArray:    return checkSignatureParams(ty.elem, file_id, tok, diag);
+        case F::kTuple: {
+            std::vector<widen::TypeRef> slots = ty.slots;
+            for (widen::TypeRef s : slots)
+                if (!checkSignatureParams(s, file_id, tok, diag)) return false;
+            return true;
+        }
+        case F::kFunction: {
+            std::vector<widen::TypeRef> params = ty.slots;
+            widen::TypeRef ret = ty.elem;
+            for (widen::TypeRef p : params) {
+                F pf = widen::form(widen::strip(p));
+                if (pf == F::kVoid) {
+                    diagnostic::report(diag, {file_id, tok,
+                        "A parameter cannot be 'void'; an empty list is '()'.", {}});
+                    return false;
+                }
+                if (pf == F::kSlid || pf == F::kTuple) {
+                    diagnostic::report(diag, {file_id, tok,
+                        "A non-primitive parameter must be a pointer (reference / "
+                        "iterator) or an array; got '" + widen::spell(p) + "'.", {}});
+                    return false;
+                }
+                if (!checkSignatureParams(p, file_id, tok, diag)) return false;
+            }
+            return checkSignatureParams(ret, file_id, tok, diag);
+        }
+        case F::kSlid:
+        case F::kPrimitive:
+        case F::kVoid:
+        case F::kAnyptr:
+        case F::kNone:
+        case F::kTmplUse:
+            return true;
+    }
+    return true;
+}
+
 void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
                      int file_id, int tok, diagnostic::Sink& diag,
                      std::vector<int> const* seg_toks = nullptr) {
@@ -758,6 +842,7 @@ void resolveDeclType(parse::Tree& tree, widen::TypeRef& type_ref,
     // are the same type. The shallow `(const T)^` is a const LEAF —
     // deepConst adds no depth to it — so that idiom is untouched.
     type_ref = materializeDeepConst(type_ref);
+    if (!reported) checkSignatureParams(type_ref, file_id, tok, diag);
     // A LISTLESS flavor (`TClass<>`) is a qualifier, not a type — it never
     // declares storage (no field, no local, no parameter, no pointee).
     if (!reported && reachesListlessFlavor(tree, type_ref)) {
@@ -1612,6 +1697,11 @@ std::string findUnknownLeafNamed(widen::TypeRef t,
         case F::kArray:    return findUnknownLeafNamed(ty.elem, names);
         case F::kAlias:
         case F::kConst:    return findUnknownLeafNamed(ty.underlying, names);
+        case F::kFunction: {
+            std::string r = findUnknownLeafNamed(ty.elem, names);
+            if (!r.empty()) return r;
+        }
+            [[fallthrough]];
         case F::kTuple:
         case F::kTmplUse:
             for (auto s : ty.slots) {
@@ -3090,6 +3180,12 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
             resolveUserCall(tree, e, diag);
             return;
         }
+        case parse::Kind::kIndirectCallExpr:
+            // `fp^(args)` — the pointer value and each argument are ordinary reads;
+            // classify checks the callee is a function pointer and types the call.
+            for (auto& ch : e.children)
+                if (ch) resolveExpr(tree, *ch, diag, unevaluated);
+            return;
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr: {
             // Operand must be an assignable lvalue. A complex lvalue (field /
@@ -3238,6 +3334,27 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                 return;
             }
             parse::Entry const& entry = tree.entries[id];
+            // `^fn` — a FUNCTION POINTER. Only the bare (possibly qualified) name: a
+            // subscript / field chain never reaches a function. Which overload is
+            // meant is classify's call (the target type picks it); here the name only
+            // has to be a pointable function — not a template, not a method.
+            if (entry.kind == parse::EntryKind::kFunction && base == e.children[0].get()) {
+                if (entry.is_template) {
+                    diagnostic::report(diag, {base->file_id, base->tok,
+                        "Pointers to template functions are not supported.",
+                        {{entry.file_id, entry.tok, "template declared here"}}});
+                    return;
+                }
+                if (!entry.is_foreign
+                    && parse::classEntryForFrame(tree, entry.owner_ns_frame) >= 0) {
+                    diagnostic::report(diag, {base->file_id, base->tok,
+                        "Pointers to methods are not supported.",
+                        {{entry.file_id, entry.tok, "method declared here"}}});
+                    return;
+                }
+                base->resolved_entry_id = id;
+                return;
+            }
             // Addressable = a storage-backed variable: a local (stack alloca; params
             // and the address-aliased receiver are kLocalVar too) or a global (static
             // `@`-storage). The rest of EntryKind has no runtime slot to point at —
@@ -3614,6 +3731,12 @@ bool resolveCallTarget(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
     }
     if (entry.kind != parse::EntryKind::kFunction) {
         std::string what = entryKindNoun(entry);
+        if (widen::isFunctionPointer(entry.slids_type)) {
+            diagnostic::report(diag, {s.file_id, s.name_tok,
+                "'" + s.name + "' is a function pointer; call it as '" + s.name
+                + "^(args)'.", {{entry.file_id, entry.tok, what + " declared here"}}});
+            return false;
+        }
         diagnostic::report(diag, {s.file_id, s.name_tok,
             "'" + s.name + "' is a " + what + ", not a function.",
             {{entry.file_id, entry.tok, what + " declared here"}}});
@@ -4201,6 +4324,7 @@ widen::TypeRef peekSpelledType(parse::Tree& tree, widen::TypeRef t, int depth = 
         case F::kAlias:
         case F::kTuple:
         case F::kTmplUse:
+        case F::kFunction:
         case F::kNone:
         case F::kPrimitive:
         case F::kVoid:
@@ -6183,6 +6307,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
+        case parse::Kind::kIndirectCallExpr:
         case parse::Kind::kCaseClause:
         case parse::Kind::kParam:
             assert(false && "resolveStmt: not a statement kind");
@@ -8350,7 +8475,7 @@ void collectByValueClasses(widen::TypeRef ft, std::vector<widen::TypeRef>& out) 
         // unresolved template-alias use never survives resolve to reach here.
         case F::kPointer: case F::kIterator: case F::kPrimitive:
         case F::kVoid: case F::kAnyptr: case F::kAlias: case F::kConst: case F::kNone:
-        case F::kTmplUse:
+        case F::kTmplUse: case F::kFunction:
             break;   // kConst can't reach here — strip() peeled it above
     }
 }
@@ -8609,8 +8734,11 @@ void mungeParamType(parse::Tree& /*tree*/, parse::Node& p, diagnostic::Sink& dia
             "an array; got '" + widen::spellOrEmpty(p.return_type) + "'.", {}});
         return;
     }
+    // A FUNCTION-POINTER param keeps its pointee: code is never written, so the
+    // default contract has nothing to const (widen::mungeParam's same rule).
     if ((f == F::kPointer || f == F::kIterator)
-        && !p.is_mutable && !already_const && !is_recv) {
+        && !p.is_mutable && !already_const && !is_recv
+        && widen::form(widen::strip(widen::get(st).pointee)) != F::kFunction) {
         // Const the POINTEE (the caller's data), leaving the pointer itself
         // writable: `T^` -> `(const T)^`, `T[]` -> `(const T)[]`. DEEP —
         // const is the RECURSIVE promise (canon): a tuple pointee's pointer

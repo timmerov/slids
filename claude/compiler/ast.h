@@ -73,6 +73,8 @@ enum class Kind {
                     // full conversion grid (widen::convertExplicit) or a pointer
                     // lowering (ptr->intptr / ptr->bool non-null test).
 
+    kFuncAddrExpr,  // `^fn` — a function's address; name = its symbol. A constant
+                    // (`@sym`), never an lvalue.
     kSeqExpr,       // synthesized by desugar: children evaluated in order; value_index
                     // names the result child, the rest are bumps run for effect
     kBumpExpr,      // synthesized by desugar: resolved_entry_id + inferred_type + text
@@ -149,6 +151,10 @@ struct Node {
     std::vector<widen::TypeRef> capture_types;   // nested fn: each capture's slids type
     int self_entry_id = -1;                      // method/ctor/dtor: the `self` local
                                                  // (address = `_$recv^`); -1 otherwise
+    bool indirect = false;                       // kCallExpr: a call THROUGH a function
+                                                 // pointer — params[0] is the pointer
+                                                 // VALUE (kept out of children so every
+                                                 // arg walk sees args only); name is empty.
     int vtable_slot = -1;                        // kCallExpr: >=0 means a VIRTUAL dispatch
                                                  // call — codegen loads the vptr at
                                                  // offset 0 of children[0] (the receiver),

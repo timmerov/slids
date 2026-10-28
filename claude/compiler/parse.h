@@ -44,6 +44,11 @@ enum class Kind {
                      // lvalue, children[1..] = args. Desugar lowers to a normal
                      // call of the lifted <Class>__method with `^receiver` prepended.
     kCallExpr,     // value-producing call; name = callee, children = args
+    kIndirectCallExpr, // a call THROUGH a function pointer, `fp^(args)`: children[0] =
+                   // the function-pointer VALUE (`fp`, not the deref), children[1..] =
+                   // the args. classify types it from the pointer's signature (the
+                   // param_types / return_type it stamps); desugar lowers it to an
+                   // ast kCallExpr flagged `indirect`.
     kExprStmt,     // expression evaluated for effect, value discarded; children[0] = expr
     kAliasDecl,    // alias Name = Type; name = alias, return_type = target spelling
                    // bare `alias Ns;` (no `=`): name = last segment, qualifier =
@@ -415,6 +420,9 @@ struct Node {
                                  // `_$cinit` temp — children = [spill decl, the per-slot
                                  // tuple that indexes the temp]. desugar hoists the spill
                                  // decl and yields the tuple (like a construction lift).
+    bool value_discarded = false; // kIndirectCallExpr: the whole expression of a
+                                 // `fp^(args);` statement — its value is dropped, so a
+                                 // `void` signature is legal here (classify stamps it).
     bool is_mutable = false;     // kParam: declared with leading `mutable` — opts OUT
                                  // of the default const-pointee munge (mungeParamType)
     bool tmpl_value_param = false;  // The convention of convenience, three roles:

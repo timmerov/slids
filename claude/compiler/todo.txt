@@ -98,6 +98,9 @@ BUGS
     vector.slh declares T^ const op[] (const method, mutable result); the body's <T[]> storage_
     cast drops the const. begin/end/next have the same shape. found in guthrie sort_methods.
 
+  * swapping const values compiles: void swap(int a[2]) { a[0] <--> a[1]; } (a is a const
+    array param). the const-lvalue wall skips swap (classify.cpp says swap is deferred).
+
 UNBLOCKED FEATURES
 
   * Vector<(const Ranked)^> cv; cv.append(cr); ((const Ranked)^ cr) is rejected:
@@ -245,15 +248,20 @@ UNBLOCKED FEATURES
       ("A specialization constraint applies to a single-parameter template list"); a class
       list takes one per parameter.
 
-  * FUNCTION POINTERS — not in the language (plan.txt lists them "out of scope", no design).
-    motivation: a comparator for quicksort, e.g. sorting Vector<ElectoralMethod^> by
-    satisfaction in guthrie sort_methods without a wrapper class or a cast.
-    - spelling: bool less^(E a, E b) as a parameter type.
-    - a paren-less function name is a compile error today; passing one by name needs a rule.
-    - a capturing nested function can't be pointed to: its captures are frame addresses the
-      call site supplies, and a pointer could be called from elsewhere. reject, or define closures.
-    - alternatives discussed: a self-less method (bool !self less(..)) called as Less:less(..),
-      or a namespace as a template argument (quicksort<T, Less> calling Less:less(a, b)).
+  * FUNCTION POINTER GAPS — canon test/function/pointer_fn.sl.
+    - a CLASS-name-led nameless signature at statement start (`Counter(int)^ x;`) parses as
+      a call; the named form (`Counter mk(int)^`) or an alias works.
+    - `^overloaded` passed to an OVERLOADED callee: the context-free ranking pass errors
+      "Cannot infer a pointer to overloaded function" before the parameter type can pick.
+    - the PPID pass does not visit an indirect call's callee (desugar params[0]).
+    - a capturing nested function can't be pointed to (rejected); closures would lift it.
+    - sized-array params spell oddly in a signature ("mutable (const int)[2]^").
+
+  * FUNCTION POINTER DOUBLE DEREF — `fn_hdl^^(args)` parses as `fn_hdl ^^ (args)` (logical
+    xor): `^^` is one token, and the postfix split into two derefs only fires when the next
+    token can't start an operand. `h^^.field` works; `fn_hdl^^(args)` doesn't. rare.
+    - workaround: `fn_hdl^ ^(args)`.
+    - making `^^(` a call breaks `x ^^ (y)` xor (test/flow/while.sl:342 spells it).
 
 
 BLOCKED FEATURES
@@ -604,3 +612,21 @@ ASPIRATIONAL FEATURES (someday; low priority, may never land)
     things not implemented: tuple.size(), access to a tuple slot by a runtime index (a slot
     index must be a compile-time constant). Operator templates and type-set-constrained
     template types exist now.
+
+  * AMBIGUOUS PARSES DECIDED BY TYPE — `a^(b) + c` is either a call through a function
+    pointer, `(a^(b)) + c`, or xor, `a ^ ((b) + c)`. the grammar builds both trees under an
+    ambiguity node; classify CHOOSES the shape from the type of the shared head `a`
+    (function pointer -> call, else xor; pointer to a function pointer for `^^(`). limited
+    to this one site, where only a value's TYPE can decide.
+    - today `^(` is always a call (`a ^ (b)` xor is gone) and `^^(` is always xor
+      (`fn_hdl^^(args)` needs `fn_hdl^ ^(args)`). this would give back both.
+    - invariant: the alternatives have the same leaves in the same order, so resolve
+      (names, read/write marks, captures, unused sweep) gives one answer for both.
+    - decide by the head's type, never by which tree classifies without errors; the
+      discarded tree's errors are never reported. no ambiguity node survives classify.
+    - span: the node covers the enclosing expression where both readings close; cap at
+      one ambiguity per expression (more -> "parenthesize") rather than a packed forest.
+    - every pass from grammar to classify sees the node (resolve rewrites, constfold):
+      apply to both alternatives or skip.
+    - template bodies: a head of type T chooses per flavor, so one text could be a call
+      in one instance and xor in another. accept, or reject a dependent head.

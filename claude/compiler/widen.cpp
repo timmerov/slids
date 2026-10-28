@@ -715,6 +715,11 @@ bool isKnownType(TypeRef ref) {
             for (TypeRef slot : t.slots) if (!isKnownType(slot)) return false;
             return true;
         }
+        case Type::Form::kFunction: {
+            if (!isKnownType(t.elem)) return false;
+            for (TypeRef slot : t.slots) if (!isKnownType(slot)) return false;
+            return true;
+        }
         case Type::Form::kNone:      return false;   // no type
         case Type::Form::kTmplUse:   return false;   // unresolved use
     }
@@ -737,6 +742,7 @@ bool hasInPlaceClass(TypeRef ref) {
         case Type::Form::kAnyptr:
         case Type::Form::kPointer:                 // a reference leaf may be null
         case Type::Form::kIterator:
+        case Type::Form::kFunction:                // code, not storage
         case Type::Form::kNone:
         case Type::Form::kTmplUse:                 // unresolved use
             return false;
@@ -780,6 +786,7 @@ static long long typeByteAlign(TypeRef ref) {
             return typeByteAlign(t.underlying);   // see through
         case Type::Form::kVoid:
         case Type::Form::kSlid:
+        case Type::Form::kFunction:
         case Type::Form::kNone:
         case Type::Form::kTmplUse:
             return -1;
@@ -824,6 +831,7 @@ long long typeByteSize(TypeRef ref) {
             return typeByteSize(t.underlying);   // see through
         case Type::Form::kVoid:
         case Type::Form::kSlid:
+        case Type::Form::kFunction:
         case Type::Form::kNone:
         case Type::Form::kTmplUse:
             return -1;
@@ -898,8 +906,68 @@ std::string structKey(Type const& t) {
             for (TypeRef s : t.slots) k += std::to_string(s) + ",";
             return k;
         }
+        case F::kFunction: {
+            std::string k = "f" + std::to_string(t.elem) + "(";
+            for (std::size_t i = 0; i < t.slots.size(); i++) {
+                k += std::to_string(t.slots[i]);
+                if (i < t.dims.size() && t.dims[i]) k += "m";
+                k += ",";
+            }
+            return k + ")";
+        }
     }
     return "";
+}
+
+TypeRef internStruct(Type&& t);
+
+// Build + intern a function signature from already-munged params (no munge here).
+TypeRef internFunctionRaw(TypeRef ret, std::vector<TypeRef> const& params,
+                          std::vector<int> const& flags) {
+    Type t;
+    t.form = Type::Form::kFunction;
+    t.elem = ret;
+    t.slots = params;
+    t.dims = flags;
+    bool any = false;
+    for (int f : t.dims) any = any || f != 0;
+    if (!any) t.dims.clear();   // the canonical (resolved) form carries no flags
+    return internStruct(std::move(t));
+}
+
+// The index of the `(` matching a spelling's FINAL `)`, or npos. A function
+// signature spelling `R(P...)` has a non-empty return prefix before it; a tuple
+// spelling `(T, U)` matches at 0.
+std::size_t finalParenOpen(std::string const& s) {
+    if (s.empty() || s.back() != ')') return std::string::npos;
+    int depth = 0;
+    for (std::size_t i = s.size(); i-- > 0; ) {
+        if (s[i] == ')') depth++;
+        else if (s[i] == '(') {
+            if (--depth == 0) return i;
+        }
+    }
+    return std::string::npos;
+}
+
+// Split a parameter-list interior on top-level commas (parens / angles shield).
+std::vector<std::string> splitTopLevel(std::string const& inner) {
+    std::vector<std::string> out;
+    if (inner.empty()) return out;
+    int depth = 0;
+    std::size_t start = 0;
+    auto push = [&](std::size_t b, std::size_t e) {
+        while (b < e && inner[b] == ' ') b++;
+        out.push_back(inner.substr(b, e - b));
+    };
+    for (std::size_t i = 0; i < inner.size(); i++) {
+        char c = inner[i];
+        if (c == '(' || c == '<') depth++;
+        else if (c == ')' || c == '>') depth--;
+        else if (c == ',' && depth == 0) { push(start, i); start = i + 1; }
+    }
+    push(start, inner.size());
+    return out;
 }
 
 // Intern a fully-built Type by its structure. The one mint point for the arena.
@@ -1010,6 +1078,25 @@ TypeRef intern(std::string const& s) {
     Type t;
     std::string array_base;
     std::vector<int> array_dims;
+    std::size_t fn_open = finalParenOpen(s);
+    if (fn_open != std::string::npos && fn_open > 0) {
+        // A FUNCTION SIGNATURE `R(P0, P1)`: the final paren group has a return-type
+        // prefix (a tuple's group starts the spelling). A param may lead with
+        // `mutable` (opting out of the munge, as on a definition's param).
+        TypeRef ret = intern(s.substr(0, fn_open));
+        std::vector<TypeRef> params;
+        std::vector<bool> mutables;
+        for (std::string p : splitTopLevel(s.substr(fn_open + 1,
+                                                    s.size() - fn_open - 2))) {
+            bool m = p.compare(0, 8, "mutable ") == 0;
+            if (m) p = p.substr(8);
+            params.push_back(intern(p));
+            mutables.push_back(m);
+        }
+        TypeRef ref = internFunction(ret, params, mutables);
+        a.by_spelling.emplace(s, ref);
+        return ref;
+    }
     if (s.size() >= 2 && s.compare(s.size() - 2, 2, "[]") == 0) {
         t.form = Type::Form::kIterator;
         t.pointee = intern(s.substr(0, s.size() - 2));
@@ -1094,6 +1181,74 @@ TypeRef internConst(TypeRef underlying) {
     t.form = Type::Form::kConst;
     t.underlying = underlying;
     return internStruct(std::move(t));
+}
+
+TypeRef mungeParam(TypeRef param, bool is_mutable) {
+    if (param == kNoType) return param;
+    TypeRef st = strip(param);
+    Type::Form f = form(st);
+    bool already_const = form(param) == Type::Form::kConst;
+    if (f == Type::Form::kArray) {
+        TypeRef arr = param;
+        if (!is_mutable && !already_const) arr = deepConst(arr);
+        return internPointer(arr);
+    }
+    if ((f == Type::Form::kPointer || f == Type::Form::kIterator)
+        && !is_mutable && !already_const) {
+        TypeRef pointee = get(st).pointee;
+        if (form(strip(pointee)) == Type::Form::kFunction) return param;
+        TypeRef cp = internConst(deepConst(pointee));
+        return f == Type::Form::kPointer ? internPointer(cp) : internIterator(cp);
+    }
+    return param;
+}
+
+TypeRef internFunction(TypeRef ret, std::vector<TypeRef> const& params,
+                       std::vector<bool> const& mutables) {
+    std::vector<TypeRef> munged;
+    std::vector<int> flags;
+    for (std::size_t i = 0; i < params.size(); i++) {
+        bool m = i < mutables.size() && mutables[i];
+        Type::Form f = form(strip(params[i]));
+        // A leaf that is not resolved yet (an alias / class NAME) cannot be munged
+        // now: keep the param and its `mutable` flag for resolve's re-intern.
+        if (f == Type::Form::kSlid || f == Type::Form::kTmplUse) {
+            munged.push_back(params[i]);
+            flags.push_back(m ? 1 : 0);
+            continue;
+        }
+        munged.push_back(mungeParam(params[i], m));
+        flags.push_back(0);
+    }
+    return internFunctionRaw(ret, munged, flags);
+}
+
+TypeRef rebuildFunction(TypeRef fn, TypeRef ret, std::vector<TypeRef> const& params) {
+    std::vector<TypeRef> old = get(fn).slots;
+    std::vector<int> flags = get(fn).dims;
+    std::vector<TypeRef> out;
+    std::vector<int> out_flags;
+    for (std::size_t i = 0; i < params.size(); i++) {
+        bool was_leaf = i < old.size()
+            && (form(strip(old[i])) == Type::Form::kSlid
+                || form(strip(old[i])) == Type::Form::kTmplUse);
+        bool m = i < flags.size() && flags[i];
+        Type::Form f = form(strip(params[i]));
+        if (was_leaf && f != Type::Form::kSlid && f != Type::Form::kTmplUse) {
+            out.push_back(mungeParam(params[i], m));   // resolved just now
+            out_flags.push_back(0);
+        } else {
+            out.push_back(params[i]);
+            out_flags.push_back(was_leaf && m ? 1 : 0);
+        }
+    }
+    return internFunctionRaw(ret, out, out_flags);
+}
+
+bool isFunctionPointer(TypeRef t) {
+    TypeRef s = strip(t);
+    if (form(s) != Type::Form::kPointer) return false;
+    return form(strip(get(s).pointee)) == Type::Form::kFunction;
 }
 
 // A named class/slid type, carrying its field-slot types (the named-tuple half
@@ -1398,6 +1553,8 @@ TypeRef removeConst(TypeRef ref) {
         case Type::Form::kVoid:
         case Type::Form::kAnyptr:
         case Type::Form::kSlid:
+        case Type::Form::kFunction:   // a signature is not stored data — its param
+                                      // consts are part of its identity
         case Type::Form::kNone:
         case Type::Form::kTmplUse:
             return ref;
@@ -1437,6 +1594,7 @@ TypeRef deepConst(TypeRef ref) {
             return internConst(ref);
         case Type::Form::kVoid:
         case Type::Form::kAnyptr:
+        case Type::Form::kFunction:   // code is never written — the promise stops here
         case Type::Form::kNone:
         case Type::Form::kTmplUse:
             return ref;
@@ -1467,6 +1625,9 @@ TypeRef deepStrip(TypeRef ref) {
             for (TypeRef& x : s) x = deepStrip(x);
             return internTuple(s);
         }
+        // A signature compares EXACTLY, aliases aside: its munged param consts and its
+        // return type's const are the contract, so they survive (deepAliasStrip).
+        case Type::Form::kFunction: return deepAliasStrip(ref);
         case Type::Form::kPrimitive:
         case Type::Form::kVoid:
         case Type::Form::kAnyptr:
@@ -1494,6 +1655,13 @@ TypeRef deepAliasStrip(TypeRef ref) {
             std::vector<TypeRef> s = t.slots;
             for (TypeRef& x : s) x = deepAliasStrip(x);
             return internTuple(s);
+        }
+        case Type::Form::kFunction: {
+            TypeRef r = deepAliasStrip(t.elem);
+            std::vector<TypeRef> s = get(ref).slots;
+            std::vector<int> fl = get(ref).dims;
+            for (TypeRef& x : s) x = deepAliasStrip(x);
+            return internFunctionRaw(r, s, fl);
         }
         case Type::Form::kPrimitive:
         case Type::Form::kVoid:
@@ -1560,6 +1728,24 @@ std::string spell(TypeRef ref) {
             }
             return s + ">";
         }
+        case Type::Form::kFunction: {
+            // `R(P0, P1)`. A const return parenthesizes (a leading `const` would bind
+            // the whole pointer). A param the munge would still change was spelled
+            // `mutable` (or carries the not-yet-resolved flag) — say so, so the
+            // spelling re-interns to the same signature.
+            std::string r = spell(t.elem);
+            if (form(t.elem) == Type::Form::kConst) r = "(" + r + ")";
+            std::vector<TypeRef> slots = t.slots;   // copy: mungeParam may intern
+            std::vector<int> flags = t.dims;
+            std::string s = r + "(";
+            for (std::size_t i = 0; i < slots.size(); i++) {
+                if (i) s += ", ";
+                bool flag = i < flags.size() && flags[i];
+                if (flag || mungeParam(slots[i], false) != slots[i]) s += "mutable ";
+                s += spell(slots[i]);
+            }
+            return s + ")";
+        }
     }
     return "";
 }
@@ -1614,6 +1800,12 @@ TypeRef substituteTypeParams(TypeRef ref, std::vector<std::string> const& names,
             n.name = nm;
             n.slots = std::move(s);
             return internStruct(std::move(n));
+        }
+        case Type::Form::kFunction: {
+            TypeRef r = substituteTypeParams(t.elem, names, args);
+            std::vector<TypeRef> s = get(ref).slots;
+            for (TypeRef& x : s) x = substituteTypeParams(x, names, args);
+            return rebuildFunction(ref, r, s);
         }
         case Type::Form::kNone:
         case Type::Form::kPrimitive:
@@ -1676,6 +1868,11 @@ bool typeSelfTest(std::ostream& out) {
         // tuple slot, multi-arg (the angle group shields its comma).
         "Ref<int>", "Ref<int>^", "Deep:RT<int>", "Pair2<int, float>",
         "(Pair2<int, float>, int)", "Ref<int[3]>",
+        // function pointers: the munged spelling, a mutable param, no params, a
+        // const return, a deep-const pointer, a pointer-returning signature.
+        "bool(int, int)^", "int((const int)^)^", "void(mutable int^)^", "void()^",
+        "(const char)[](int)^", "(const int)(int)^", "const bool(int, int)^", "bool(int)^(char)^",
+        "bool(int, int)^[2]",
     };
     bool ok = true;
     int n = 0;

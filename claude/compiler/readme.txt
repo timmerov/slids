@@ -46,8 +46,10 @@ TYPE REPRESENTATION (the carrier; not a stage)
   * Types are STRUCTURED, never strings. A type is a widen::TypeRef — a handle
     into a process-lifetime interned arena (widen::intern / widen::spell). A
     widen::Type carries a Form (kNone / kPrimitive / kVoid / kAnyptr / kPointer /
-    kIterator / kArray / kSlid / kTuple / kAlias / kConst) plus its payload (cat+
-    bits, pointee, elem+dims, slots, underlying). spell(intern(s)) == s exactly
+    kIterator / kArray / kSlid / kTuple / kAlias / kConst / kFunction) plus its
+    payload (cat+bits, pointee, elem+dims, slots, underlying). kFunction is a
+    signature (elem = return, slots = params); it only ever sits behind a `^` —
+    see FUNCTION POINTERS. spell(intern(s)) == s exactly
     (bar kAlias, which is minted not parsed), guarded by `slidsc --type-selftest`.
   * Dedup is STRUCTURAL (by_struct, keyed on form + child handles), NOT by
     spelling — int / int32 / intptr still stay DISTINCT (their spellings differ)
@@ -948,7 +950,8 @@ GLOBALS (single-TU; the guiding principle: globals FALL OUT of the scope machine
   A GLOBAL'S INITIALIZER IS DATA, AND DATA IS CONSTANT (classify's `isConstantInit`, asked
   at the TOP of the kVarDeclStmt arm, of EVERY global, whatever its type and whatever scope
   it is declared in — file / namespace / class / function-internal / group member). A
-  literal, `nullptr`, or a tuple literal of those. constfold has already run, so folded
+  literal, `nullptr`, a function's address `^fn` (a link-time constant), or a tuple
+  literal of those. constfold has already run, so folded
   arithmetic, a substituted const and an enum member ARE literals by now.
     * NOT a CONSTRUCTION EXPRESSION: `global Widget w = Widget(5);` is an error, though the
       identical LOCAL is fine. Its arguments are constant, but a construction is exactly the
@@ -2073,6 +2076,56 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   class.sl + complete.sl + nested_tmpl.sl; cross-TU canon
   test/import/tmpl_test.sl +
   tmpl_test2.sl + tmpl_lib.slh/.sl + tmpl_lib2.slh/.sl.
+
+
+FUNCTION POINTERS (canon test/function/pointer_fn.sl header)
+
+  * TYPE. widen Form::kFunction: elem = return type, slots = params, dims = a per-param
+    flag (1 = spelled `mutable` on a still-unresolved leaf). Spelled `R(P0, P1)`; a const
+    return is parenthesized `(const int)(int)`. It is not a value type: it only appears
+    under a pointer (`bool(int, int)^`), and llvmForRef refuses it bare.
+      - Params go through the SAME munge as a function's (widen::mungeParam): a non-
+        `mutable` pointer param's pointee becomes deep const, so `int(int^)^` is
+        `int((const int)^)^`; spell prints `mutable ` where the munge would have changed
+        the slot. internFunction munges; a re-intern (resolveTypeRef, substitute, refresh)
+        goes through rebuildFunction, which munges only the leaves that were unresolved —
+        re-munging a `mutable` param would make it const.
+      - Signature consts are EXACT: deepStrip of a kFunction is deepAliasStrip (aliases
+        peel, const stays); removeConst / deepConst leave it alone. Two pointer types
+        relate only if they match modulo aliases — no widening of returns or params.
+      - Mangled `F<ret><params>E` (const kept).
+  * GRAMMAR. A `(`...`)` group followed by `^`/`^^` is a signature (fnSigClose). The named
+    form `bool cmp(int, int)^` and the nameless `bool(int, int)^ cmp` both parse; params
+    may be named (names ignored), may lead with `mutable`, may not have defaults. A
+    CLASS-name-led nameless signature at statement start (`Counter(int)^ x;`) still reads
+    as a call — the named form or an alias is the workaround.
+      - `fp^(args)` is kIndirectCallExpr (parsePostfix + finishLvalueChain; a chain ending
+        in one before `;` is a kExprStmt). `^` followed by `(` is ALWAYS this call, so
+        `a ^ (b)` is no longer xor. `^^(` stays logical xor: `fp^ ^(args)` double-derefs
+        (todo: FUNCTION POINTER DOUBLE DEREF; reach goal: AMBIGUOUS PARSES DECIDED BY TYPE).
+  * RESOLVE. `^fn` on a function name is admitted (kAddrOfExpr). Rejected: a template
+    ("Pointers to template functions are not supported."), a method ("Pointers to methods
+    are not supported."; a foreign class-scope import is a plain function and passes).
+    Calling a pointer variable without the caret: "'fn' is a function pointer; call it as
+    'fn^(args)'." checkSignatureParams applies the parameter rules (non-primitive by value,
+    `void` param).
+  * CLASSIFY. classifyFunctionAddress builds the overload set (same name / owner / parent
+    frame, visible, no templates, deduped by signature). With a function-pointer context
+    the exact deepStrip match wins ("No overload of 'X' matches 'T'."); without one a lone
+    candidate passes through, several error ("Cannot infer a pointer to overloaded
+    function 'X'; declare the pointer's type."). A capturing nested function is rejected
+    — its captures are frame addresses only the direct call site supplies.
+      - kIndirectCallExpr: the callee must be a function pointer, arity exact, each arg
+        through checkArgAssign (with the one-level class-coercion retry); a void return
+        is an error unless the value is discarded (kExprStmt sets value_discarded).
+      - `fp^` not called is an error; only == and != compare function pointers.
+      - isConstantInit accepts `^fn`, so it is a legal global initializer, field default
+        and param default.
+  * DESUGAR / CODEGEN. `^fn` lowers to ast kFuncAddrExpr (the function's symbol), emitted
+    as `@sym`. kIndirectCallExpr lowers to kCallExpr with `indirect` set and the callee in
+    params[0]; emitCall evaluates it first and calls through it. A kExprStmt of a call
+    goes straight to emitCall, so a void indirect call works. GAP: the PPID pass does not
+    visit params[0].
 
 
 STAGE FILES (.h / .cpp pairs)

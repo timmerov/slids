@@ -172,6 +172,7 @@ std::string llvmForRef(widen::TypeRef ref) {
             return llvmForRef(t.underlying);   // const is erased at the IR level
         case widen::Type::Form::kNone:
         case widen::Type::Form::kTmplUse:   // expanded at resolve; never lowers
+        case widen::Type::Form::kFunction:  // only ever a POINTEE (the pointer is `ptr`)
             break;   // not lowerable (kNone = no type reached codegen)
     }
     assert(false && "llvmForRef: classify let through an unknown type");
@@ -732,6 +733,14 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     }
     assert(call.children.size() == call.param_types.size()
         && "emitCall: arity should have been verified by classify");
+    // A call THROUGH a function pointer: evaluate the pointer value first (left to
+    // right), then the args; the callee is that value instead of `@<name>`.
+    std::string indirect_callee;
+    if (call.indirect) {
+        assert(!call.params.empty() && call.params[0] && "indirect call lost its callee");
+        indirect_callee = emitExpr(*call.params[0], syms, pool, out, diag,
+                                   call.params[0]->inferred_type);
+    }
     // Passing a non-primitive VALUE to a by-pointer param is the convenience
     // syntax (`f(s)` == `f(^s)`, spec: plan-declarator.txt PASSING). Two arms:
     //   LVALUE arg (named local / index / deref) — pass its address directly,
@@ -832,7 +841,7 @@ std::string emitCall(ast::Node const& call, SymTab const& syms,
     // VIRTUAL DISPATCH: load the vtable pointer at offset 0 of the receiver (arg 0),
     // index the method's slot, load the function pointer, and call THROUGH it. Otherwise
     // the callee is the static symbol `@<name>`.
-    std::string callee = "@" + call.name;
+    std::string callee = call.indirect ? indirect_callee : "@" + call.name;
     if (call.vtable_slot >= 0 && !arg_vals.empty()) {
         std::string self = arg_vals[0].second;   // the receiver address (a ptr)
         std::string vp = newTmp("vptr");
@@ -2022,6 +2031,10 @@ std::string emitExpr(ast::Node const& expr, SymTab const& syms,
             return widen::convert(r, expr.return_type, dest_type,
                                   expr.file_id, expr.tok, out, diag);
         }
+        case ast::Kind::kFuncAddrExpr:
+            // A function's address is its symbol — a `ptr` constant.
+            return widen::convert("@" + expr.name, expr.inferred_type, dest_type,
+                                  expr.file_id, expr.tok, out, diag);
         case ast::Kind::kSeqExpr: {
             // Children emit in order. The value_index child is the result
             // (widened into dest_type); the rest run for effect — bumps, or a
@@ -3181,7 +3194,12 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
             return;
         }
         case ast::Kind::kExprStmt: {
-            // Evaluate the expression for its side effects; discard the value.
+            // Evaluate the expression for its side effects; discard the value. A CALL
+            // (a `fp^(args);` statement) emits as a call statement — it may be void.
+            if (stmt.children[0]->kind == ast::Kind::kCallExpr) {
+                emitCall(*stmt.children[0], syms, pool, out, diag);
+                return;
+            }
             emitExpr(*stmt.children[0], syms, pool, out, diag, widen::kNoType);
             return;
         }
@@ -3572,6 +3590,7 @@ void emitStmt(ast::Node const& stmt, SymTab& syms,
         case ast::Kind::kCastExpr:
         case ast::Kind::kConvertExpr:
         case ast::Kind::kNewExpr:
+        case ast::Kind::kFuncAddrExpr:
         case ast::Kind::kSeqExpr:
         case ast::Kind::kBumpExpr:
         case ast::Kind::kPreIncExpr:

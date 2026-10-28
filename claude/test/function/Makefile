@@ -23,6 +23,7 @@ SAMPLES = \
 	nested_fn \
 	overload_fn \
 	param \
+	pointer_fn \
 	return_fn
 
 .PHONY: all clean negatives positives $(SAMPLES)

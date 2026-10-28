@@ -46,7 +46,7 @@ bool isLiteralKind(parse::Kind k) {
 // Rejecting a non-constant initializer is not a soundness fix (the gate orders
 // cross-global reads correctly); it is language policy. An initializer that quietly
 // reads another global looks like data and behaves like code.
-bool isConstantInit(parse::Node const& e) {
+bool isConstantInit(parse::Tree const& tree, parse::Node const& e) {
     if (isLiteralKind(e.kind)) return true;
     if (e.kind == parse::Kind::kNullptrLiteral) return true;
     // A string literal IS a constant (canon 2026-07-24: `A(char[] a = "a")` is
@@ -54,9 +54,16 @@ bool isConstantInit(parse::Node const& e) {
     // spellings (`const char[]`, `(const char)[]`) revisit with const
     // enforcement (Phase 6).
     if (e.kind == parse::Kind::kStringLiteral) return true;
+    // A FUNCTION's address `^fn` is a link-time constant — the symbol itself; no
+    // code runs and nothing is read.
+    if (e.kind == parse::Kind::kAddrOfExpr && !e.children.empty() && e.children[0]
+        && e.children[0]->kind == parse::Kind::kIdentExpr
+        && e.children[0]->resolved_entry_id >= 0
+        && tree.entries[e.children[0]->resolved_entry_id].kind
+               == parse::EntryKind::kFunction) return true;
     if (e.kind != parse::Kind::kTupleExpr) return false;
     for (auto const& c : e.children) {
-        if (c && !isConstantInit(*c)) return false;
+        if (c && !isConstantInit(tree, *c)) return false;
     }
     return true;
 }
@@ -95,6 +102,7 @@ bool constInStoredValue(widen::TypeRef t) {
         case F::kAnyptr:
         case F::kNone:
         case F::kTmplUse:
+        case F::kFunction:
             return false;
     }
     return false;
@@ -199,6 +207,7 @@ widen::TypeRef constAwareLvalueType(parse::Tree& tree, parse::Node const& n) {
                 case F::kAnyptr:
                 case F::kNone:
                 case F::kTmplUse:
+                case F::kFunction:
                     return widen::kNoType;
             }
             if (out != widen::kNoType && frozen) out = widen::internConst(out);
@@ -279,6 +288,7 @@ bool constWriteLayerOk(widen::TypeRef dest, widen::TypeRef src) {
         case F::kAnyptr:
         case F::kNone:
         case F::kTmplUse:
+        case F::kFunction:   // a signature matches EXACTLY (the relation owns it)
             return true;
     }
     return true;
@@ -314,6 +324,7 @@ bool constCopyLayerOk(widen::TypeRef dest, widen::TypeRef src) {
         case F::kAnyptr:
         case F::kNone:
         case F::kTmplUse:
+        case F::kFunction:
             return true;
     }
     return true;
@@ -1218,6 +1229,7 @@ widen::TypeRef defaultLiteralType(parse::Node const& n) {
         case parse::Kind::kCallStmt:
         case parse::Kind::kMethodCallStmt:
         case parse::Kind::kCallExpr:
+        case parse::Kind::kIndirectCallExpr:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
@@ -1352,6 +1364,8 @@ widen::TypeRef peelAliases(widen::TypeRef t) {
             for (auto& sl : slots) sl = peelAliases(sl);
             return widen::internTuple(slots);
         }
+        case F::kFunction:
+            return widen::deepAliasStrip(t);
         case F::kSlid:
         case F::kPrimitive:
         case F::kVoid:
@@ -1571,7 +1585,7 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
             // after constfold folded defaults, so a constant EXPRESSION
             // spelling (`BASE+5`, a named const) has already become a literal.
             if (!p->children.empty() && p->children[0]
-                && !isConstantInit(*p->children[0])) {
+                && !isConstantInit(tree, *p->children[0])) {
                 diagnostic::report(diag, {p->file_id, p->name_tok,
                     "Default for field '" + p->name + "' is not a constant "
                     "expression; a field default is data — construct the field "
@@ -2008,6 +2022,77 @@ void checkArgAssign(parse::Tree& tree, widen::TypeRef param, parse::Node& arg,
     checkValueAssign(tree, byref, arg, diag);
 }
 
+// The FUNCTION-POINTER type of a function entry: `R(P...)^` over its (already munged)
+// parameter types — each passed as `mutable` so the munge does not run twice.
+widen::TypeRef functionPointerTypeOf(parse::Tree const& tree, int id) {
+    parse::Entry const& f = tree.entries[id];
+    std::vector<bool> as_is(f.param_types.size(), true);
+    return widen::internPointer(
+        widen::internFunction(f.slids_type, f.param_types, as_is));
+}
+
+// `^fn` — pick the function a pointer names. The overload set is the anchor's
+// same-scope same-name plain functions (templates and instances never join); the
+// TARGET type picks among them: a function-pointer context selects the overload whose
+// signature it spells (aliases aside, consts exact). With no such context only a
+// lone function can be inferred. A nested function that CAPTURES host locals cannot
+// be pointed to — its captures are frame addresses only a direct call can supply.
+void classifyFunctionAddress(parse::Tree& tree, parse::Node& e,
+                             widen::TypeRef context, diagnostic::Sink& diag) {
+    parse::Node& operand = *e.children[0];
+    int anchor = operand.resolved_entry_id;
+    std::string name = tree.entries[anchor].name;
+    int own = tree.entries[anchor].owner_ns_frame;
+    int pf = tree.entries[anchor].parent_frame_id;
+    std::vector<int> cands;
+    for (std::size_t id = 0; id < tree.entries.size(); id++) {
+        parse::Entry const& f = tree.entries[id];
+        if (f.kind != parse::EntryKind::kFunction || f.name != name) continue;
+        if (f.is_template || !f.tmpl_args.empty()) continue;
+        if (f.owner_ns_frame != own) continue;
+        if (own < 0 && f.parent_frame_id != pf) continue;
+        if (!parse::declVisibleAt(tree, f.file_id, operand.file_id)) continue;
+        // A declaration and its definition are one function: keep one of each
+        // signature (the overload pickers dedup the same way).
+        bool dup = false;
+        for (int c : cands)
+            if (functionPointerTypeOf(tree, c)
+                == functionPointerTypeOf(tree, (int)id)) dup = true;
+        if (!dup) cands.push_back((int)id);
+    }
+    if (cands.empty()) cands.push_back(anchor);
+    int pick = -1;
+    if (widen::isFunctionPointer(context)) {
+        widen::TypeRef want = widen::deepStrip(context);
+        for (int c : cands)
+            if (widen::deepStrip(functionPointerTypeOf(tree, c)) == want) pick = c;
+        if (pick < 0 && cands.size() == 1) pick = cands[0];   // the relation reports
+        if (pick < 0) {
+            diagnostic::report(diag, {operand.file_id, operand.tok,
+                "No overload of '" + name + "' matches '"
+                + widen::spell(peelAliases(context)) + "'.", {}});
+            return;
+        }
+    } else if (cands.size() == 1) {
+        pick = cands[0];
+    } else {
+        diagnostic::report(diag, {operand.file_id, operand.tok,
+            "Cannot infer a pointer to overloaded function '" + name
+            + "'; declare the pointer's type.", {}});
+        return;
+    }
+    parse::Entry const& f = tree.entries[pick];
+    if (!f.captures.empty()) {
+        diagnostic::report(diag, {operand.file_id, operand.tok,
+            "'" + name + "' captures local variables and cannot be pointed to.",
+            {{f.file_id, f.tok, "function declared here"}}});
+        return;
+    }
+    operand.resolved_entry_id = pick;
+    e.inferred_type = functionPointerTypeOf(tree, pick);
+    operand.inferred_type = widen::get(e.inferred_type).pointee;
+}
+
 void inferExpr(parse::Tree& tree, parse::Node& e,
                widen::TypeRef context, diagnostic::Sink& diag) {
     switch (e.kind) {
@@ -2076,6 +2161,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // array element yields an iterator (`T[]`).
             assert(e.children.size() == 1 && "kAddrOfExpr needs 1 operand");
             parse::Node& operand = *e.children[0];
+            // `^fn` — a FUNCTION POINTER (resolve admitted the name).
+            if (operand.kind == parse::Kind::kIdentExpr
+                && operand.resolved_entry_id >= 0
+                && tree.entries[operand.resolved_entry_id].kind
+                       == parse::EntryKind::kFunction) {
+                classifyFunctionAddress(tree, e, context, diag);
+                return;
+            }
             inferExpr(tree, operand, widen::kNoType, diag);
             // `^X^` CANCELS: the address of a deref IS the pointer value.
             // The class-index sugar leans on this — inferExpr just rewrote a
@@ -2344,6 +2437,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 e.children.clear();
                 e.children.push_back(std::move(call));
                 e.inferred_type = pointeeType(refT);
+                return;
+            }
+            // A FUNCTION is code, not a value: its pointer is only ever called
+            // (`fp^(args)` — a kIndirectCallExpr, never this node).
+            if (widen::isFunctionPointer(operand.inferred_type)) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "A dereferenced function pointer must be called: write "
+                    "'fp^(args)'.", {}});
                 return;
             }
             std::string ot = widen::spellOrEmpty(operand.inferred_type);
@@ -2921,6 +3022,57 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             e.inferred_type = e.return_type;
             return;
         }
+        case parse::Kind::kIndirectCallExpr: {
+            // `fp^(args)` — a call through a function pointer. The SIGNATURE is the
+            // whole contract: exact arity (a pointer type carries no defaults), each
+            // argument judged by the ordinary arg funnel against its param (with the
+            // same one-level class-coercion retry a direct call gets).
+            if (e.return_type != widen::kNoType) return;   // already typed (re-entry)
+            parse::Node& callee = *e.children[0];
+            inferExpr(tree, callee, widen::kNoType, diag);
+            if (callee.inferred_type == widen::kNoType) return;   // reported upstream
+            if (!widen::isFunctionPointer(callee.inferred_type)) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "The called value is not a function pointer; got '"
+                    + widen::spell(peelAliases(callee.inferred_type)) + "'.", {}});
+                return;
+            }
+            widen::TypeRef sig = widen::strip(
+                widen::get(widen::strip(callee.inferred_type)).pointee);
+            std::vector<widen::TypeRef> params = widen::get(sig).slots;
+            widen::TypeRef ret = widen::get(sig).elem;
+            std::size_t nargs = e.children.size() - 1;
+            if (nargs != params.size()) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "Wrong number of arguments to a function pointer: expected "
+                    + std::to_string(params.size()) + ", got "
+                    + std::to_string(nargs) + ".", {}});
+                return;
+            }
+            if (widen::form(ret) == widen::Type::Form::kVoid && !e.value_discarded) {
+                diagnostic::report(diag, {e.file_id, e.tok,
+                    "The function pointer returns no value and cannot be used as an "
+                    "expression.", {}});
+                return;
+            }
+            for (std::size_t i = 0; i < params.size(); i++) {
+                parse::Node& arg = *e.children[i + 1];
+                inferExpr(tree, arg, params[i], diag);
+                std::size_t before = diag.records.size();
+                checkArgAssign(tree, params[i], arg, diag);
+                if (diag.records.size() != before) {
+                    diag.records.resize(before);
+                    widen::TypeRef want = classParamTarget(params[i]);
+                    if (want != widen::kNoType)
+                        coerceOperandToClass(tree, want, arg, diag);
+                    checkArgAssign(tree, params[i], arg, diag);
+                }
+            }
+            e.param_types = params;
+            e.return_type = ret;
+            e.inferred_type = ret;
+            return;
+        }
         case parse::Kind::kPreIncExpr:
         case parse::Kind::kPostIncExpr: {
             // An inc/dec yields its operand's type. Phase 1: int-class (not
@@ -3192,6 +3344,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (isPtrLikeType(lref) || isPtrLikeType(rref)) {
                 bool is_cmp = (op == "==" || op == "!=" || op == "<"
                             || op == "<=" || op == ">" || op == ">=");
+                // A function pointer is semantically a reference to code: equality
+                // only — there is no order among functions.
+                if (is_cmp && op != "==" && op != "!="
+                    && (widen::isFunctionPointer(lref)
+                        || widen::isFunctionPointer(rref))) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Operator '" + op + "' is not defined on function "
+                        "pointers.", {}});
+                    return;
+                }
                 if (!is_cmp) {
                     // References admit no arithmetic at all.
                     if (isReference(lref) || isReference(rref)) {
@@ -3542,6 +3704,9 @@ bool patternHasTypeParam(widen::TypeRef t) {
         case F::kPointer:
         case F::kIterator: return patternHasTypeParam(ty.pointee);
         case F::kArray:    return patternHasTypeParam(ty.elem);
+        case F::kFunction:
+            if (patternHasTypeParam(ty.elem)) return true;
+            [[fallthrough]];
         case F::kTuple: {
             std::vector<widen::TypeRef> slots = ty.slots;
             for (widen::TypeRef s : slots)
@@ -3636,6 +3801,21 @@ bool unifyTypePattern(widen::TypeRef pat, widen::TypeRef arg,
                 std::vector<widen::TypeRef> ps = widen::get(pat).slots;
                 std::vector<widen::TypeRef> as = widen::get(arg).slots;
                 if (ps.size() != as.size()) return false;
+                for (std::size_t i = 0; i < ps.size(); i++) {
+                    if (!unifyTypePattern(ps[i], as[i], names, bound, conflict_name))
+                        return false;
+                }
+                return true;
+            }
+            case F::kFunction: {
+                // A signature binds its return and params position by position.
+                std::vector<widen::TypeRef> ps = widen::get(pat).slots;
+                std::vector<widen::TypeRef> as = widen::get(arg).slots;
+                widen::TypeRef pr = widen::get(pat).elem;
+                widen::TypeRef ar = widen::get(arg).elem;
+                if (ps.size() != as.size()) return false;
+                if (!unifyTypePattern(pr, ar, names, bound, conflict_name))
+                    return false;
                 for (std::size_t i = 0; i < ps.size(); i++) {
                     if (!unifyTypePattern(ps[i], as[i], names, bound, conflict_name))
                         return false;
@@ -7708,7 +7888,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // constant aggregate, both of which BUILD IN PLACE, so no copy exists to
             // mis-order.
             if (s.is_global && !s.children.empty() && s.children[0]
-                && !isConstantInit(*s.children[0])) {
+                && !isConstantInit(tree, *s.children[0])) {
                 diagnostic::report(diag, {s.file_id, s.name_tok,
                     "Initializer for '" + s.name
                     + "' is not a constant expression.", {}});
@@ -8624,7 +8804,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kExprStmt: {
             // value discarded — infer for its checks (lvalue / numeric) only.
             for (auto& ch : s.children) {
-                if (ch) inferExpr(tree, *ch, widen::kNoType, diag);
+                if (!ch) continue;
+                if (ch->kind == parse::Kind::kIndirectCallExpr) ch->value_discarded = true;
+                inferExpr(tree, *ch, widen::kNoType, diag);
             }
             return;
         }
@@ -9236,6 +9418,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
         case parse::Kind::kSizeofExpr:
         case parse::Kind::kStringifyType:
         case parse::Kind::kCallExpr:
+        case parse::Kind::kIndirectCallExpr:
         case parse::Kind::kParam:
             assert(false && "classifyStmt: not a statement kind");
             return;
@@ -9375,7 +9558,7 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
         // (constfold already folded a constant EXPRESSION spelling); a
         // construction or a call is code in the fill path and is rejected.
         // The slot stays null — a rejected default never fills.
-        if (!isConstantInit(def)) {
+        if (!isConstantInit(tree, def)) {
             diagnostic::report(diag, {def.file_id, def.tok,
                 "Default for parameter '" + p.name + "' is not a constant "
                 "expression; a parameter default is data — pass the value at "

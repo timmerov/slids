@@ -29,6 +29,7 @@ ast::Kind toAstKind(parse::Kind k) {
         case parse::Kind::kDtorCallStmt:  return ast::Kind::kDtorCallStmt;
         case parse::Kind::kCallStmt:      return ast::Kind::kCallStmt;
         case parse::Kind::kCallExpr:      return ast::Kind::kCallExpr;
+        case parse::Kind::kIndirectCallExpr: return ast::Kind::kCallExpr;   // `indirect`
         case parse::Kind::kExprStmt:      return ast::Kind::kExprStmt;
         case parse::Kind::kAliasDecl:
             // Consumed by resolve (types substituted); never copied to the ast.
@@ -247,6 +248,7 @@ std::unique_ptr<ast::Node> tryDesugarAugAssign(ast::Node& node, int& next_id) {
 // demangler prints verbatim: lossy but readable, as the user accepted for `^`/`[]`->`*`.
 std::string sanitizeSymbolName(std::string const& name);   // defined below
 std::string mangleType(widen::TypeRef ref);
+std::string mangleTmplArg(widen::TypeRef ref);
 
 // Make a type SPELLING legal in an unquoted LLVM identifier: alnum / `_` / `$` / `.`
 // pass; anything else — a qualified alias's `:` (`Maker:Widget`), a space — becomes
@@ -287,6 +289,7 @@ std::string tupleSlotToken(widen::TypeRef ref) {
         case widen::Type::Form::kAlias:
         case widen::Type::Form::kConst:
         case widen::Type::Form::kTmplUse:   // expanded at resolve; never reaches desugar
+        case widen::Type::Form::kFunction:  // a signature spells injectively
             return symbolSafe(widen::spell(ref));
     }
     return symbolSafe(widen::spell(ref));   // unreachable; every Form is handled above
@@ -325,6 +328,16 @@ std::string mangleType(widen::TypeRef ref) {
         case widen::Type::Form::kTuple: {
             std::string tn = tupleSlotToken(ref);
             return "u" + std::to_string(tn.size()) + tn;
+        }
+        // A function SIGNATURE (the pointee of a function pointer): Itanium
+        // `F <ret> <params> E`. Its contents keep CONST (mangleTmplArg's `K`): the
+        // munged param consts are the signature's contract, so two pointer types
+        // differing only there are distinct overloads and must mint distinct symbols.
+        case widen::Type::Form::kFunction: {
+            std::string s = "F" + mangleTmplArg(t.elem);
+            if (t.slots.empty()) s += "v";
+            for (widen::TypeRef p : t.slots) s += mangleTmplArg(p);
+            return s + "E";
         }
         // A LEAF — primitive or alias: `u<len><spelling>`, a vendor source-name that is
         // injective (int vs int32, int32 vs an Integer alias) and demangler-readable.
@@ -413,6 +426,7 @@ std::string mangleTmplArg(widen::TypeRef ref) {
         case widen::Type::Form::kAnyptr:
         case widen::Type::Form::kNone:
         case widen::Type::Form::kTmplUse:
+        case widen::Type::Form::kFunction:
             return mangleType(ref);
     }
     return mangleType(ref);
@@ -695,6 +709,38 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     // the receiver's address prepended as `self`.
     if (p.kind == parse::Kind::kMethodCallStmt) {
         return lowerMethodCall(p, tree, next_id);
+    }
+    // `^fn` — a FUNCTION's address: its symbol, a link-time constant. (A function
+    // ALIAS and a foreign C function resolve to their target / bare C symbol.)
+    if (p.kind == parse::Kind::kAddrOfExpr && !p.children.empty() && p.children[0]
+        && p.children[0]->kind == parse::Kind::kIdentExpr
+        && p.children[0]->resolved_entry_id >= 0
+        && tree.entries[p.children[0]->resolved_entry_id].kind
+               == parse::EntryKind::kFunction) {
+        auto fa = std::make_unique<ast::Node>();
+        fa->kind = ast::Kind::kFuncAddrExpr;
+        fa->name = functionSymbol(*p.children[0], tree);
+        fa->inferred_type = p.inferred_type;
+        fa->file_id = p.file_id;
+        fa->tok = p.tok;
+        return fa;
+    }
+    // `fp^(args)` — a call THROUGH a function pointer: an ordinary call node whose
+    // callee is a VALUE. The pointer rides params[0], so every arg-oriented pass
+    // (sret lift, statement temps) sees exactly the args in children.
+    if (p.kind == parse::Kind::kIndirectCallExpr) {
+        auto call = std::make_unique<ast::Node>();
+        call->kind = ast::Kind::kCallExpr;
+        call->indirect = true;
+        call->return_type = p.return_type;
+        call->inferred_type = p.inferred_type;
+        call->param_types = p.param_types;
+        call->file_id = p.file_id;
+        call->tok = p.tok;
+        call->params.push_back(copyNode(*p.children[0], tree, next_id));
+        for (std::size_t i = 1; i < p.children.size(); i++)
+            call->children.push_back(copyNode(*p.children[i], tree, next_id));
+        return call;
     }
     // Statement-form `Class(args);` (a discarded construction kCallStmt) becomes an
     // UNNAMED scope-lifetime local: a synthetic kVarDeclStmt initialized from the
@@ -1825,6 +1871,7 @@ void lowerStatementPPID(ast::Node& stmt,
         case ast::Kind::kNewExpr:
         case ast::Kind::kCastExpr:
         case ast::Kind::kConvertExpr:
+        case ast::Kind::kFuncAddrExpr:
         case ast::Kind::kSeqExpr:
         case ast::Kind::kBumpExpr:
         case ast::Kind::kParam:
@@ -3501,6 +3548,7 @@ std::string stableGroupBase(parse::Tree const& in, int ns_frame_id) {
 // `text` and a tuple/array init is a literal tree.
 bool sameInitConst(ast::Node const& a, ast::Node const& b) {
     if (a.kind != b.kind || a.text != b.text) return false;
+    if (a.kind == ast::Kind::kFuncAddrExpr && a.name != b.name) return false;
     if (a.children.size() != b.children.size()) return false;
     for (std::size_t i = 0; i < a.children.size(); i++) {
         if ((bool)a.children[i] != (bool)b.children[i]) return false;

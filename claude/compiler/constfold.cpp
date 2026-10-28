@@ -139,6 +139,7 @@ void assignNominal(parse::Node& n) {
         case parse::Kind::kCallStmt:
         case parse::Kind::kMethodCallStmt:
         case parse::Kind::kCallExpr:
+        case parse::Kind::kIndirectCallExpr:
         case parse::Kind::kExprStmt:
         case parse::Kind::kAliasDecl:
         case parse::Kind::kNamespaceDecl:
@@ -1487,6 +1488,12 @@ widen::TypeRef refreshAliasType(widen::TypeRef t, std::vector<AliasRefresh> cons
         }
         case F::kConst:
             return widen::internConst(refreshAliasType(widen::get(t).underlying, rs));
+        case F::kFunction: {
+            widen::TypeRef r = refreshAliasType(widen::get(t).elem, rs);
+            std::vector<widen::TypeRef> slots = widen::get(t).slots;
+            for (auto& s : slots) s = refreshAliasType(s, rs);
+            return widen::rebuildFunction(t, r, slots);
+        }
         case F::kPrimitive: case F::kVoid: case F::kAnyptr:
         case F::kSlid: case F::kNone:
         case F::kTmplUse:   // an unresolved use lives only in a pristine template body
@@ -1563,6 +1570,7 @@ widen::TypeRef bakeDimsWalk(widen::TypeRef t,
         case F::kPrimitive: case F::kVoid: case F::kAnyptr:
         case F::kSlid: case F::kNone:
         case F::kTmplUse:
+        case F::kFunction:   // a signature's param dims are literal-only (no sink)
             return t;   // no dims here
     }
     return t;
