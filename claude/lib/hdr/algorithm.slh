@@ -45,6 +45,18 @@ ie a contained class must implement op<.
 */
 void quicksort<T>(mutable T container);
 
+/*
+quicksort an array or a container class.
+a container class must be index-able.
+ie it must implement the index operator: op[].
+the contained type must be compatible with the
+parameters to the less-than function.
+*/
+void quicksort<T,S>(
+    mutable T container,
+    bool less(S a, S b)^
+);
+
 } /* slids */
 
 /*

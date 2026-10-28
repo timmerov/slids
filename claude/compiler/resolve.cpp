@@ -797,7 +797,12 @@ bool checkSignatureParams(widen::TypeRef t, int file_id, int tok,
             std::vector<widen::TypeRef> params = ty.slots;
             widen::TypeRef ret = ty.elem;
             for (widen::TypeRef p : params) {
-                F pf = widen::form(widen::strip(p));
+                widen::TypeRef sp = widen::strip(p);
+                F pf = widen::form(sp);
+                // A template TYPE-PARAMETER marker passes in the pattern
+                // signature — the instance checks the bound type.
+                if (pf == F::kSlid && widen::get(sp).def_id == widen::kTmplParamDefId)
+                    continue;
                 if (pf == F::kVoid) {
                     diagnostic::report(diag, {file_id, tok,
                         "A parameter cannot be 'void'; an empty list is '()'.", {}});
@@ -3345,7 +3350,9 @@ void resolveExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& diag,
                         {{entry.file_id, entry.tok, "template declared here"}}});
                     return;
                 }
-                if (!entry.is_foreign
+                // owner_ns_frame -1 = a non-member; a frameless class entry
+                // also carries -1, so never look it up.
+                if (!entry.is_foreign && entry.owner_ns_frame >= 0
                     && parse::classEntryForFrame(tree, entry.owner_ns_frame) >= 0) {
                     diagnostic::report(diag, {base->file_id, base->tok,
                         "Pointers to methods are not supported.",

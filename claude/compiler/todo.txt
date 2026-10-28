@@ -256,7 +256,6 @@ UNBLOCKED FEATURES
     - the PPID pass does not visit an indirect call's callee (desugar params[0]).
     - a capturing nested function can't be pointed to (rejected); closures would lift it.
     - sized-array params spell oddly in a signature ("mutable (const int)[2]^").
-
   * FUNCTION POINTER DOUBLE DEREF — `fn_hdl^^(args)` parses as `fn_hdl ^^ (args)` (logical
     xor): `^^` is one token, and the postfix split into two derefs only fires when the next
     token can't start an operand. `h^^.field` works; `fn_hdl^^(args)` doesn't. rare.

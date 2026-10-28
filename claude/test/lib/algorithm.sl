@@ -11,7 +11,11 @@ claude says:
 covers countof (arrays, a tuple array, Vector, String) and quicksort (order
 shapes, 1 and 2 elements, float64 / char / int8 / uint64 above 2^63,
 Vector<int>, Vector<String>, an empty Vector, arrays of classes with op<,
-and Tracked, whose live count must be unchanged by the sort).
+and Tracked, whose live count must be unchanged by the sort), and
+quicksort(container, ^less) with a function pointer comparator: S deduces
+from less's signature (int by value, Item^ / Tracked^ as a pointer to a
+class). every comparator sorts DESCENDING, so the output proves the pointer,
+not op<, did the ordering.
 an array of a TU-local class (Item, Tracked) instantiates HERE, not in the
 library, which could not spell it. a const container is rejected: here for a
 local element type, in the library's --instantiate build for a header-visible
@@ -43,6 +47,19 @@ Tracked(int key_ = 0) {
     bool const op<(Tracked^ rhs) {
         return key_ < rhs^.key_;
     }
+}
+
+/* descending comparators for quicksort(container, ^less). */
+bool int_desc(int a, int b) {
+    return b < a;
+}
+
+bool item_desc(Item^ a, Item^ b) {
+    return b^.key_ < a^.key_;
+}
+
+bool tracked_desc(Tracked^ a, Tracked^ b) {
+    return b^.key_ < a^.key_;
 }
 
 void show_int5(int a[5]) {
@@ -164,6 +181,36 @@ int32 main() {
         println(String + "Tracked: " + tr[0].key_ + " " + tr[1].key_ + " "
             + tr[2].key_ + " " + tr[3].key_ + " " + tr[4].key_);
     }
+
+    println(String + "---quicksort less---");
+    {
+        int r[5] = (3, 5, 1, 4, 2);
+        quicksort(r, ^int_desc);
+        show_int5(r);
+        Vector<int> vi;
+        vi.resize(5);
+        vi[0] = 3; vi[1] = 1; vi[2] = 4; vi[3] = 1; vi[4] = 5;
+        quicksort(vi, ^int_desc);
+        String s = "Vector<int>:";
+        for (x : vi) {
+            s = s + " " + x;
+        }
+        println(s);
+        Item items[4];
+        items[0].key_ = 30; items[1].key_ = 10; items[2].key_ = 40; items[3].key_ = 20;
+        quicksort(items, ^item_desc);
+        println(String + "Item: " + items[0].key_ + " " + items[1].key_ + " "
+            + items[2].key_ + " " + items[3].key_);
+    }
+    {
+        Tracked tr[5];
+        tr[0].key_ = 5; tr[1].key_ = 2; tr[2].key_ = 4; tr[3].key_ = 1; tr[4].key_ = 3;
+        println(String + "live before: " + g_live);
+        quicksort(tr, ^tracked_desc);
+        println(String + "live after: " + g_live);
+        println(String + "Tracked: " + tr[0].key_ + " " + tr[1].key_ + " "
+            + tr[2].key_ + " " + tr[3].key_ + " " + tr[4].key_);
+    }
     println(String + "live at end: " + g_live);
 
     return 0;
@@ -199,4 +246,11 @@ int32 main() {
 //void neg_sort_const() {
 //    const Item arr[2] = ((2), (1));
 //    quicksort(arr);
+//}
+
+/* the comparator's parameters must accept the elements. */
+//-EXPECT-ERROR: Cannot implicitly cast 'int' to '(const Item)^'
+//void neg_sort_less_mismatch() {
+//    int arr[2] = (2, 1);
+//    quicksort(arr, ^item_desc);
 //}

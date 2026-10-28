@@ -163,6 +163,7 @@ int classEntryForType(Tree const& t, widen::TypeRef classType) {
 }
 
 int classEntryForFrame(Tree const& t, int ns_frame) {
+    if (ns_frame < 0) return -1;   // -1 = no frame; a frameless class carries it too
     for (std::size_t id = 0; id < t.entries.size(); ++id) {
         Entry const& e = t.entries[id];
         if (e.kind == EntryKind::kClass && e.ns_frame_id == ns_frame)

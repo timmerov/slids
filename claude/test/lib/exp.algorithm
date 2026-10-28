@@ -28,4 +28,11 @@ Item: 10 20 30 40
 live before: 5
 live after: 5
 Tracked: 1 2 3 4 5
+---quicksort less---
+ 5 4 3 2 1
+Vector<int>: 5 4 3 1 1
+Item: 40 30 20 10
+live before: 5
+live after: 5
+Tracked: 5 4 3 2 1
 live at end: 0

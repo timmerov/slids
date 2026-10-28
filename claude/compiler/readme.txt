@@ -2105,10 +2105,14 @@ FUNCTION POINTERS (canon test/function/pointer_fn.sl header)
         (todo: FUNCTION POINTER DOUBLE DEREF; reach goal: AMBIGUOUS PARSES DECIDED BY TYPE).
   * RESOLVE. `^fn` on a function name is admitted (kAddrOfExpr). Rejected: a template
     ("Pointers to template functions are not supported."), a method ("Pointers to methods
-    are not supported."; a foreign class-scope import is a plain function and passes).
+    are not supported."; a foreign class-scope import is a plain function and passes). A
+    non-member's owner_ns_frame is -1, and a frameless class entry carries ns_frame_id -1
+    too, so classEntryForFrame returns -1 for any negative frame rather than match it.
     Calling a pointer variable without the caret: "'fn' is a function pointer; call it as
     'fn^(args)'." checkSignatureParams applies the parameter rules (non-primitive by value,
-    `void` param).
+    `void` param). A template TYPE-PARAMETER marker slot (kSlid, kTmplParamDefId) passes in
+    a pattern signature — `bool less(S a, S b)^` — and the instance checks the bound type.
+    Deduction binds S through the kFunction arm of the classify binder.
   * CLASSIFY. classifyFunctionAddress builds the overload set (same name / owner / parent
     frame, visible, no templates, deduped by signature). With a function-pointer context
     the exact deepStrip match wins ("No overload of 'X' matches 'T'."); without one a lone

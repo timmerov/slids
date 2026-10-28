@@ -80,6 +80,60 @@ void quicksort<T>(mutable T container) {
     }
 }
 
+/*
+quicksort an array or a container class.
+a container class must be index-able.
+ie it must implement the index operator: op[].
+the contained type must be compatible with the
+parameters to the less-than function.
+*/
+void quicksort<T,S>(
+    mutable T container,
+    bool less(S a, S b)^
+) {
+    /*
+    the countof template works for arrays and classes
+    that implement a size() method.
+    */
+    sz = countof<T>(container);
+    subsort(0, sz-1);
+
+    void subsort(intptr first, intptr last) {
+        /* done */
+        if (first >= last) {
+            return;
+        }
+
+        /* grab the pivot. */
+        pivot = container[first];
+
+        /* loop. */
+        limit = first;
+        scan = last;
+        while {
+            /*
+            small values stay in place.
+            big values move to the end.
+            */
+            value = container[scan];
+            if (less^(pivot, value)) {
+                --scan;
+            } else {
+                container[limit] = value;
+                ++limit;
+                container[scan] = container[limit];
+            }
+        } (limit < scan);
+
+        /* place the pivot at the correct place. */
+        container[scan] = pivot;
+
+        /* recurse. */
+        subsort(first, scan-1);
+        subsort(scan+1, last);
+    }
+}
+
 } /* slids */
 
 /* math namespace */

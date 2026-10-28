@@ -4383,6 +4383,18 @@ FUNCTION POINTERS (LANDED 2026-10-27)
   global + field + param defaults, method holding a pointer, foreign import + alias, void
   call, mutable param) + 17 negatives. test/pointer/address.sl's function negative now
   expects the cast error (`^five` is `int()^`, not an `int^`).
+  ADDENDUM 2026-10-28 — FUNCTION POINTERS AS TEMPLATE PARAMETERS. `quicksort<T,S>(mutable T
+  container, bool less(S a, S b)^)` in lib/hdr/algorithm.slh: S deduces from the argument's
+  signature (`^item_desc` with `Item^` params binds S = `(const Item)^`, the munged form).
+  Two fixes: checkSignatureParams rejected the template-parameter marker in the PATTERN as a
+  class value — it now skips the marker and the instance checks the bound type (a bare S
+  slot gets no convention of convenience: a class binding is a class value, rejected);
+  `^fn` on a free function after `import vector;` errored "Pointers to methods" because
+  classEntryForFrame(-1) matched a frameless class entry — classEntryForFrame now returns
+  -1 for a negative frame, which closes the same hazard for every caller passing a
+  non-member's owner_ns_frame (full suite unchanged). Coverage: test/lib/algorithm.sl `---quicksort less---` (int[5],
+  Vector<int>, Item[4], Tracked[5] live count, all descending) + a mismatched-comparator
+  negative.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

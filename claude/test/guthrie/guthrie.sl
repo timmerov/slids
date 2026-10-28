@@ -1680,40 +1680,20 @@ GuthrieVoting(
     }
 }
 
+/*
+sort electoral methods by decreasing satisfaction.
+*/
 void sort_methods(
-    mutable ElectoralMethods^ vec
+    mutable ElectoralMethods^ methods
 ) {
-    /* helper class to sort methods by satisfaction. */
-    SortableMethod(ElectoralMethod^ method_) {
-        bool op<(SortableMethod^ rhs) {
-            /* sort descending. */
-            a = method_;
-            b = rhs^.method_;
-            if (a^.satisfaction_ > b^.satisfaction_) {
-                return true;
-            }
-            if (a^.satisfaction_ < b^.satisfaction_) {
-                return false;
-            }
-            if (a^.name_ < b^.name_) {
-                return true;
-            }
-            return false;
-        }
-    }
-
-    /* dangerous cast to avoid copying pointers. */
-    /* ha ha! no. */
     /*
-    danger = <Vector<SortableMethod>^> <void^> vec;
-    quicksort(danger^);
+    quicksort using inline less-than function.
+    sort by names in case of ties.
     */
-
-    /*
-    function pointers not yet implemented.
-    */
-    /*
-    bool less(ElectoralMethod^ a, ElectoralMethod^ b) {
+    bool decreasing_satisfaction(
+        ElectoralMethod^ a,
+        ElectoralMethod^ b
+    ) {
         if (a^.satisfaction_ > b^.satisfaction_) {
             return true;
         }
@@ -1725,24 +1705,7 @@ void sort_methods(
         }
         return false;
     }
-    quicksort(vec^, less);
-    */
-
-    /*
-    copy method pointers to local vector.
-    sort them.
-    copy them back.
-    */
-    n = vec^.size();
-    Vector<SortableMethod> sortable;
-    sortable.resize(n);
-    for (i : 0..n) {
-        sortable[i].method_ = vec^[i];
-    }
-    quicksort(sortable);
-    for (i : 0..n) {
-        vec^[i] = sortable[i].method_;
-    }
+    quicksort(methods^, ^decreasing_satisfaction);
 }
 
 RankedChoice(
