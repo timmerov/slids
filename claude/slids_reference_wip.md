@@ -226,7 +226,7 @@ Vec c = a + b;
 c[1] = 99;
 ```
 
-The result is `self`, except for comparisons (primitive), `[]` and `^` (reference). Copy, move and swap are generated field by field when not defined.
+The result is stored in `self`, except for comparisons (primitive), `[]` and `^` (reference). Copy, move and swap are generated field by field when not defined.
 
 ---
 
