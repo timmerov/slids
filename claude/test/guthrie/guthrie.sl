@@ -272,8 +272,9 @@ stdc import {
 
 /* number of trials. */
 //const int kNTrials = 1;
-const int kNTrials = 10;
+//const int kNTrials = 10;
 //const int kNTrials = 30;
+const int kNTrials = 100;
 //const int kNTrials = 300;
 //const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
@@ -497,7 +498,18 @@ ElectoralMethod(
     }
     virtual ~() {}
 
-    //void find_winner(bool quiet = kQuiet);
+    /* find the winner. */
+    virtual void find_winner(bool quiet = kQuiet) = delete;
+
+    /* pretty print the winner. */
+    virtual void print_winner() {
+        Format fmt;
+        fmt.min_width_ = kWidth;
+        str = String + " " + name_;
+        result = result_to_string(g_guthrie.guthrie_.winner_, winner_);
+        winner_name = g_guthrie.candidates_[winner_].name_;
+        println(String + fmt*str + ": " + winner_name + " " + result);
+    }
 
     /* calculate satisfaction and correlation. */
     void calculate_results();
@@ -556,6 +568,7 @@ GuthrieVoting(
     PluralityRunoffMethod plurality_runoff_,
     RangeMethod range_,
     StarMethod star_,
+    ElectoralMethods methods_,
 
     /* summary */
     float64 total_utility_ = 0.0,
@@ -591,6 +604,7 @@ GuthrieVoting(
         sanity_checks();
 
         /* name the methods. */
+        init_methods();
         set_method_names();
 
         /* hello, world. */
@@ -617,7 +631,7 @@ GuthrieVoting(
             accumulated_.best_ += actual_.best_;
             accumulated_.average_ += actual_.average_;
             vote();
-            guthrie_.find_winner();
+            find_winners();
             show_satisfaction();
             check_criteria();
         }
@@ -649,6 +663,30 @@ GuthrieVoting(
                 electorate_.naxes_ = 1;
             }
         }
+    }
+
+    /*
+    collect methods into a Vector.
+    guthrie first.
+    the rest in alphabetical order.
+    the list will be sorted for the summary.
+    */
+    void init_methods() {
+        methods_.reserve(ElectoralMethod:g_nmethods);
+        methods_.append(^guthrie_);
+        methods_.append(^anti_plurality_);
+        methods_.append(^approval_);
+        methods_.append(^approval_runoff_);
+        methods_.append(^borda_);
+        methods_.append(^bucklin_);
+        methods_.append(^candidate_);
+        methods_.append(^condorcet_);
+        methods_.append(^coombs_);
+        methods_.append(^instant_runoff_);
+        methods_.append(^plurality_);
+        methods_.append(^plurality_runoff_);
+        methods_.append(^range_);
+        methods_.append(^star_);
     }
 
     /* name the methods. */
@@ -1284,6 +1322,15 @@ GuthrieVoting(
     }
 
     /*
+    find all winners.
+    */
+    void find_winners() {
+        for (ElectoralMethod^ method : methods_) {
+            method^.find_winner();
+        }
+    }
+
+    /*
     voter satisfaction is a function of the utility of a candidate.
     the best candidate has satisfaction 1.0.
     the average candidate has a satisfaction of 0.0.
@@ -1333,19 +1380,6 @@ GuthrieVoting(
         println();
         println("Checking voting criteria.");
         int max_satisfaction = find_max_satisfaction_candidate();
-        approval_runoff_.find_winner();
-        range_.find_winner();
-        condorcet_.find_winner();
-        star_.find_winner();
-        borda_.find_winner();
-        approval_.find_winner();
-        coombs_.find_winner();
-        bucklin_.find_winner();
-        anti_plurality_.find_winner();
-        instant_runoff_.find_winner();
-        plurality_runoff_.find_winner();
-        plurality_.find_winner();
-        candidate_.find_winner();
 
         /* check for candidate rankings for cycle. */
         int candidate_cycle = check_candidate_rankings_for_cycles();
@@ -1361,11 +1395,6 @@ GuthrieVoting(
         }
         if (guthrie_.winner_ == independence) {
             ++independence_;
-        }
-
-        char condorcet_winner_name = '?';
-        if (condorcet_.winner_ >= 0) {
-            condorcet_winner_name = candidates_[condorcet_.winner_].name_;
         }
 
         char condorcet_loser_name = '?';
@@ -1404,52 +1433,28 @@ GuthrieVoting(
             }
         }
 
-        println();
-        println("Voting criteria results:");
-        (const char)[] result = nullptr;
-        println(String + "Guthrie winner              : " + candidates_[guthrie_.winner_].name_);
-        result = result_to_string(guthrie_.winner_, max_satisfaction);
-        println(String + "Maximizes voter satisfaction: " + candidates_[max_satisfaction].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, approval_runoff_.winner_);
-        println(String + "Approval runoff winner      : " + candidates_[approval_runoff_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, range_.winner_);
-        println(String + "Range winner                : " + candidates_[range_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, condorcet_.winner_);
-        println(String + "Condorcet winner            : " + condorcet_winner_name + " " + result);
-        result = result_to_string(guthrie_.winner_, star_.winner_);
-        println(String + "Star winner                 : " + candidates_[star_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, borda_.winner_);
-        println(String + "Borda winner                : " + candidates_[borda_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, approval_.winner_);
-        println(String + "Approval winner             : " + candidates_[approval_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, coombs_.winner_);
-        println(String + "Coombs winner               : " + candidates_[coombs_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, bucklin_.winner_);
-        println(String + "Bucklin winner              : " + candidates_[bucklin_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, anti_plurality_.winner_);
-        println(String + "Anti-plurality winner       : " + candidates_[anti_plurality_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, instant_runoff_.winner_);
-        println(String + "Instant runoff winner       : " + candidates_[instant_runoff_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, plurality_runoff_.winner_);
-        println(String + "Plurality runoff winner     : " + candidates_[plurality_runoff_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, plurality_.winner_);
-        println(String + "Plurality winner            : " + candidates_[plurality_.winner_].name_ + " " + result);
-        result = result_to_string(guthrie_.winner_, candidate_.winner_);
-        println(String + "Maximizes candidate utility : " + candidates_[candidate_.winner_].name_ + " " + result);
-        result = result_to_string(loser, condorcet_loser_);
-        println(String + "Condorcet loser             : " + condorcet_loser_name + " " + result);
-        result = result_to_string(guthrie_.winner_, independence);
-        println(String + "Independence                : " + candidates_[independence].name_ + " " + result);
-    }
+        Format fmt;
+        fmt.min_width_ = ElectoralMethod:kWidth;
 
-    (const char)[] result_to_string(int winner, int expected) {
-        if (expected < 0) {
-            return "n/a";
+        println();
+        println(fmt*"Voting criteria results" + ":");
+
+        /* guthrie, then max satisfaction, then everyone else. */
+        (const char)[] result = nullptr;
+        println(String + fmt*" Guthrie winner" + ": " + candidates_[guthrie_.winner_].name_);
+        result = result_to_string(guthrie_.winner_, max_satisfaction);
+        println(String + fmt*" Maximizes voter satisfaction" + ": " + candidates_[max_satisfaction].name_ + " " + result);
+        for (ElectoralMethod^ method : methods_) {
+            method^.print_winner();
         }
-        if (winner == expected) {
-            return "pass";
-        }
-        return "=FAIL=";
+
+        /* more data dump. */
+        result = result_to_string(guthrie_.winner_, candidate_.winner_);
+        println(String + fmt*" maximizes candidate utility" + ": " + candidates_[candidate_.winner_].name_ + " " + result);
+        result = result_to_string(loser, condorcet_loser_);
+        println(String + fmt*" Condorcet loser" + ": " + condorcet_loser_name + " " + result);
+        result = result_to_string(guthrie_.winner_, independence);
+        println(String + fmt*" independence" + ": " + candidates_[independence].name_ + " " + result);
     }
 
     int find_max_satisfaction_candidate() {
@@ -1617,31 +1622,13 @@ GuthrieVoting(
         /* cause guthrie is special. */
         guthrie_.total_utility_ = total_utility_;
 
-        /* collect methods into a Vector. */
-        ElectoralMethods methods;
-        methods.reserve(ElectoralMethod:g_nmethods);
-        methods.append(^anti_plurality_);
-        methods.append(^approval_);
-        methods.append(^approval_runoff_);
-        methods.append(^borda_);
-        methods.append(^bucklin_);
-        methods.append(^candidate_);
-        methods.append(^condorcet_);
-        methods.append(^coombs_);
-        methods.append(^guthrie_);
-        methods.append(^instant_runoff_);
-        methods.append(^plurality_);
-        methods.append(^plurality_runoff_);
-        methods.append(^range_);
-        methods.append(^star_);
-
         /* calculate results for all methods. */
-        for (method : methods) {
+        for (method : methods_) {
             method^.calculate_results();
         }
 
         /* sort methods by satisfaction. */
-        sort_methods(^methods);
+        sort_methods();
 
         /* miscellaneous calculations. */
         float64 maximizes_satisfaction = 100.0 * (float64=winner_maximizes_satisfaction_) / denom;
@@ -1660,11 +1647,11 @@ GuthrieVoting(
         println();
         println("Summary:");
         println(fmt*"Voter satisfactions by method" + ":");
-        for (method : methods) {
+        for (method : methods_) {
             method^.print_satisfaction();
         }
         println(fmt*"Guthrie correlations by method" + ":");
-        for (method : methods) {
+        for (method : methods_) {
             method^.print_correlation();
         }
         println(fmt*"Miscellaneous" + ":");
@@ -1678,34 +1665,42 @@ GuthrieVoting(
         println(String + fmt*" candidate cycles" + ": " + candidate_cycles + "%");
         println(String + fmt*" instant runoff is Condorcet" + ": " + irv_is_condorcet + "%");
     }
-}
 
-/*
-sort electoral methods by decreasing satisfaction.
-*/
-void sort_methods(
-    mutable ElectoralMethods^ methods
-) {
     /*
-    quicksort using inline less-than function.
-    sort by names in case of ties.
+    sort electoral methods by decreasing satisfaction.
     */
-    bool decreasing_satisfaction(
-        ElectoralMethod^ a,
-        ElectoralMethod^ b
-    ) {
-        if (a^.satisfaction_ > b^.satisfaction_) {
-            return true;
-        }
-        if (a^.satisfaction_ < b^.satisfaction_) {
+    void sort_methods() {
+        /*
+        quicksort using inline less-than function.
+        sort by names in case of ties.
+        */
+        bool decreasing_satisfaction(
+            ElectoralMethod^ a,
+            ElectoralMethod^ b
+        ) {
+            if (a^.satisfaction_ > b^.satisfaction_) {
+                return true;
+            }
+            if (a^.satisfaction_ < b^.satisfaction_) {
+                return false;
+            }
+            if (a^.name_ < b^.name_) {
+                return true;
+            }
             return false;
         }
-        if (a^.name_ < b^.name_) {
-            return true;
-        }
-        return false;
+        quicksort(methods_, ^decreasing_satisfaction);
     }
-    quicksort(methods^, ^decreasing_satisfaction);
+}
+
+(const char)[] result_to_string(int winner, int expected) {
+    if (expected < 0) {
+        return "n/a";
+    }
+    if (winner == expected) {
+        return "pass";
+    }
+    return "=FAIL=";
 }
 
 RankedChoice(
@@ -1784,7 +1779,7 @@ void ElectoralMethod:calculate_results(
 find the anti-plurality winner.
 */
 ElectoralMethod : AntiPluralityMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -1827,11 +1822,6 @@ ElectoralMethod : AntiPluralityMethod() {
             ++is_winner_;
         }
     }
-
-    virtual void print_correlation() {
-        /* pretty print the line. */
-        println(String + " anti-plurality               : " + correlation_ + "%");
-    }
 }
 
 /*
@@ -1839,7 +1829,7 @@ find the approval winner.
 use the approvals stored when the bloc was created.
 */
 ElectoralMethod : ApprovalMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -1901,7 +1891,7 @@ find the two round approval winner where the top two have a runoff.
 use the approvals stored when the bloc was created.
 */
 ElectoralMethod : ApprovalRunoffMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -1970,7 +1960,7 @@ borda count 0 for first, 1 for second, ...
 lowest total wins.
 */
 ElectoralMethod : BordaMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2020,7 +2010,7 @@ bucklin voting.
 while no greatest majority winner, accumulate the next choices.
 */
 ElectoralMethod : BucklinMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2081,7 +2071,7 @@ satisfaction of all candidates.
 not voters.
 */
 ElectoralMethod : CandidateMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2116,6 +2106,10 @@ ElectoralMethod : CandidateMethod() {
         }
     }
 
+    virtual void print_winner() {
+        /* nothing to print. */
+    }
+
     virtual void print_satisfaction() {
         /* nothing to print. */
     }
@@ -2129,7 +2123,7 @@ ElectoralMethod : CandidateMethod() {
 condorcet wins the most head to head races.
 */
 ElectoralMethod : CondorcetMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2221,6 +2215,20 @@ ElectoralMethod : CondorcetMethod() {
         g_guthrie.condorcet_loser_ = loser;
     }
 
+    /* pretty print the winner. */
+    virtual void print_winner() {
+        Format fmt;
+        fmt.min_width_ = kWidth;
+        str = String + " " + name_;
+        result = result_to_string(g_guthrie.guthrie_.winner_, winner_);
+
+        winner_name = '?';
+        if (winner_ >= 0) {
+            winner_name = g_guthrie.candidates_[winner_].name_;
+        }
+        println(String + fmt*str + ": " + winner_name + " " + result);
+    }
+
     virtual void print_satisfaction() {
         ntrials float64 = g_guthrie.ntrials_;
         condorcet_cycles float64 = g_guthrie.condorcet_cycles_;
@@ -2229,7 +2237,10 @@ ElectoralMethod : CondorcetMethod() {
         float64 satisfaction_ordering = g_guthrie.calculate_satisfaction(average_utility_ordering, g_guthrie.accumulated_);
 
         /* pretty print the line. */
-        println(String + " Condorcet (winner exists)    : " + satisfaction_ + " (" + satisfaction_ordering + ")");
+        Format fmt;
+        fmt.min_width_ = kWidth;
+        str = String + " " + name_ + " (winner exists)";
+        println(String + fmt*str + ": " + satisfaction_ + " (" + satisfaction_ordering + ")");
     }
 
     virtual void print_correlation() {
@@ -2237,7 +2248,10 @@ ElectoralMethod : CondorcetMethod() {
         float64 correlation_max = 100.0 * (float64=is_winner_) / non_cycle_trials;
 
         /* pretty print the line. */
-        println(String + " Condorcet (winner exists)    : " + correlation_ + "% (" + correlation_max + "%)");
+        Format fmt;
+        fmt.min_width_ = kWidth;
+        str = String + " " + name_ + " (winner exists)";
+        println(String + fmt*str + ": " + correlation_ + "% (" + correlation_max + "%)");
     }
 }
 
@@ -2245,7 +2259,7 @@ ElectoralMethod : CondorcetMethod() {
 find the coombs winner.
 */
 ElectoralMethod : CoombsMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2344,7 +2358,7 @@ ElectoralMethod : CoombsMethod() {
 find the guthrie winner.
 */
 ElectoralMethod : GuthrieMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         bool show_everything = !quiet;
@@ -2477,6 +2491,10 @@ ElectoralMethod : GuthrieMethod() {
         }
     }
 
+    virtual void print_winner() {
+        /* already printed. */
+    }
+
     virtual void print_satisfaction() {
         /* calculate strategic voting total utility. */
         ntrials float64 = g_guthrie.ntrials_;
@@ -2484,7 +2502,10 @@ ElectoralMethod : GuthrieMethod() {
         float64 satisfaction_strategic = g_guthrie.calculate_satisfaction(average_utility_strategic, g_guthrie.accumulated_);
 
         /* pretty print the line. */
-        println(String + " Guthrie (strategic)          : " + satisfaction_ + " (" + satisfaction_strategic + ")");
+        Format fmt;
+        fmt.min_width_ = kWidth;
+        str = String + " " + name_ + " (strategic)";
+        println(String + fmt*str + ": " + satisfaction_ + " (" + satisfaction_strategic + ")");
     }
 
     virtual void print_correlation() {
@@ -2499,7 +2520,7 @@ ElectoralMethod : GuthrieMethod() {
 instant runoff voting.
 */
 ElectoralMethod : InstantRunoffMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2612,7 +2633,7 @@ ElectoralMethod : InstantRunoffMethod() {
 find the plurality winner.
 */
 ElectoralMethod : PluralityMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2667,7 +2688,7 @@ find the plurality runoff winner.
 if there is no majority, then the top two go head to head.
 */
 ElectoralMethod : PluralityRunoffMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2741,7 +2762,7 @@ find the range (score) voting winner.
 assign a range based on utilities for each block.
 */
 ElectoralMethod : RangeMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
@@ -2796,7 +2817,7 @@ find the star winner.
 assign a score from 0 to 5 based on utilities for each block.
 */
 ElectoralMethod : StarMethod() {
-    void find_winner(
+    virtual void find_winner(
         bool quiet = kQuiet
     ) {
         int ncandidates = g_guthrie.ncandidates_;
