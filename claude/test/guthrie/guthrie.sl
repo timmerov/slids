@@ -271,10 +271,10 @@ stdc import {
 }
 
 /* number of trials. */
-//const int kNTrials = 1;
+const int kNTrials = 1;
 //const int kNTrials = 10;
 //const int kNTrials = 30;
-const int kNTrials = 100;
+//const int kNTrials = 100;
 //const int kNTrials = 300;
 //const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
@@ -358,8 +358,8 @@ const float64 kDispersion = 0.7;
 //const float64 kDispersion = 0.3;
 
 /* option to use a fixed seed for testing. */
-//const uint64 kSeedChoice = 0;
-const uint64 kSeedChoice = 1753391226898898129;
+const uint64 kSeedChoice = 0;
+//const uint64 kSeedChoice = 1753391226898898129;
 
 /*
 option to use approval votes to find guthrie winner.
