@@ -271,10 +271,10 @@ stdc import {
 }
 
 /* number of trials. */
-const int kNTrials = 1;
+//const int kNTrials = 1;
 //const int kNTrials = 10;
 //const int kNTrials = 30;
-//const int kNTrials = 100;
+const int kNTrials = 100;
 //const int kNTrials = 300;
 //const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
@@ -532,6 +532,36 @@ ElectoralMethod(
 }
 alias ElectoralMethods = Vector<ElectoralMethod^>;
 
+/*
+correlation class.
+*/
+Correlation(
+    int n_,
+    Vector<int> counts_
+) {
+    /* allocate and initialize to 0. */
+    void init() {
+        n_ = ElectoralMethod:g_nmethods;
+        size = n_ * n_;
+        counts_.resize(size);
+        for (i : 0..size) {
+            counts_[i] = 0;
+        }
+    }
+
+    /* increment count for pair a,b. */
+    void increment(int a, int b) {
+        idx = a * n_ + b;
+        ++counts_[idx];
+    }
+
+    /* get count for pair a,b. */
+    int count(int a, int b) {
+        idx = a * n_ + b;
+        return counts_[idx];
+    }
+}
+
 /* define the global object. */
 global GuthrieVoting g_guthrie;
 
@@ -569,6 +599,7 @@ GuthrieVoting(
     RangeMethod range_,
     StarMethod star_,
     ElectoralMethods methods_,
+    ElectoralMethods methods_sorted_,
 
     /* summary */
     float64 total_utility_ = 0.0,
@@ -581,7 +612,8 @@ GuthrieVoting(
     int condorcet_cycles_ = 0,
     int candidate_cycles_ = 0,
     int independence_ = 0,
-    int irv_is_condorcet_ = 0
+    int irv_is_condorcet_ = 0,
+    Correlation correlation_
 ) {
     _() {} ~() {}
 
@@ -606,6 +638,9 @@ GuthrieVoting(
         /* name the methods. */
         init_methods();
         set_method_names();
+
+        /* initialize the correlations */
+        correlation_.init();
 
         /* hello, world. */
         println(String + "Guthrie voting analysis:");
@@ -632,6 +667,7 @@ GuthrieVoting(
             accumulated_.average_ += actual_.average_;
             vote();
             find_winners();
+            save_correlations();
             show_satisfaction();
             check_criteria();
         }
@@ -687,6 +723,8 @@ GuthrieVoting(
         methods_.append(^plurality_runoff_);
         methods_.append(^range_);
         methods_.append(^star_);
+
+        methods_sorted_ = methods_;
     }
 
     /* name the methods. */
@@ -1321,12 +1359,28 @@ GuthrieVoting(
         }
     }
 
-    /*
-    find all winners.
-    */
+    /* find all winners. */
     void find_winners() {
         for (ElectoralMethod^ method : methods_) {
             method^.find_winner();
+        }
+    }
+
+    /* save correlations. */
+    void save_correlations() {
+        nmethods = ElectoralMethod:g_nmethods;
+        for (a : 0..nmethods) {
+            wina = methods_[a]^.winner_;
+            for (b : 0..nmethods) {
+                if (a == b) {
+                    continue;
+                }
+                winb = methods_[b]^.winner_;
+                if (wina != winb) {
+                    continue;
+                }
+                correlation_.increment(a, b);
+            }
         }
     }
 
@@ -1647,11 +1701,11 @@ GuthrieVoting(
         println();
         println("Summary:");
         println(fmt*"Voter satisfactions by method" + ":");
-        for (method : methods_) {
+        for (method : methods_sorted_) {
             method^.print_satisfaction();
         }
         println(fmt*"Guthrie correlations by method" + ":");
-        for (method : methods_) {
+        for (method : methods_sorted_) {
             method^.print_correlation();
         }
         println(fmt*"Miscellaneous" + ":");
@@ -1664,6 +1718,8 @@ GuthrieVoting(
         println(String + fmt*" Condorcet cycles" + ": " + condorcet_cycles + "%");
         println(String + fmt*" candidate cycles" + ": " + candidate_cycles + "%");
         println(String + fmt*" instant runoff is Condorcet" + ": " + irv_is_condorcet + "%");
+
+        print_correlations();
     }
 
     /*
@@ -1689,7 +1745,53 @@ GuthrieVoting(
             }
             return false;
         }
-        quicksort(methods_, ^decreasing_satisfaction);
+        quicksort(methods_sorted_, ^decreasing_satisfaction);
+    }
+
+    /* print all correlations */
+    void print_correlations() {
+        n = correlation_.n_;
+
+        maxlen = 0;
+        for (ElectoralMethod^ method : methods_) {
+            len int = method^.name_.size();
+            if (maxlen < len) {
+                maxlen = len;
+            }
+        }
+        Format sfmt;
+        sfmt.min_width_ = maxlen;
+
+        Format nfmt;
+        nfmt.justify_ = kRightJustify;
+        nfmt.float_style_ = kFixedPoint;
+        nfmt.min_width_ = 6; // _100.0
+        nfmt.max_width_ = 6;
+        nfmt.precision_ = 1;
+
+        ntrials float = ntrials_;
+
+        println();
+        println("Correlations by method:");
+        for (a : 0..(n-1)) {
+            metha = methods_[a];
+            s = String + " " + sfmt*metha^.name_ + ":";
+            for (b : (n-1)..>a -1) {
+                count float = correlation_.count(a, b);
+                pct = 100.0 * count / ntrials;
+                s += nfmt*pct + "%";
+            }
+            if (a != 0) {
+                methb = methods_[a];
+                s += "   ^-";
+                s += methb^.name_;
+            }
+            println(s);
+        }
+
+        meth = methods_[1];
+        s = sfmt*"" + "     ^-" + meth^.name_;
+        println(s);
     }
 }
 

@@ -1,0 +1,19 @@
+
+i would like to incorporate strategic voting.
+but it's kinda hard:
+either i need to develop and code the strategy for every voting method.
+or i have to figure out how to automate it.
+which seems like it will be rather expensive.
+on the other hand, the strategy for every voting method is trivial:
+vote for the condorcet winner.
+
+plurality voting.
+assume vote total order: ABCD.
+cases:
+- A is condorcet winner: no strategy.
+- B is condorcet winner: C,D voters should vote A,B.
+- C (or D) is condorcet winner:
+B,D should vote A,C.
+but that seems implausible.
+even if B,C are clones ie close in vote totals and close in head to head.
+and impossible if B is way ahead of C in vote totals.
