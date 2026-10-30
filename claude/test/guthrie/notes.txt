@@ -7,6 +7,26 @@ which seems like it will be rather expensive.
 on the other hand, the strategy for every voting method is trivial:
 vote for the condorcet winner.
 
+i believe the criteria for what counts as "strategic voting".
+assume A wins.
+change all B>A voters so they boost B and bury A.
+if B now wins, record it as successful strategy.
+now change all A>B voters so they boost A and bury B.
+if B still wins, record it as defended strategy.
+check all other candidates CD.
+if there are multiple coalitions with weak/strong success,
+record it as weak/strong strategy deadlock.
+if C wins, mark it as a chaos (backfire) result.
+
+complexifications (thanks claude):
+remove the common voters from the BC coalitions. redo.
+assume voters in multiple successful coalitions are paralyzed with indecision.
+as opposed to randomly picking one.
+boost might mean move to 2nd position, not 1st.
+test if C is better or worse for the strategists.
+some strategies require boosting C instead of B.
+some strategies require some but not all of the coalition to vote strategically.
+
 plurality voting.
 assume vote total order: ABCD.
 cases:
