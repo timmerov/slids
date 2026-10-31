@@ -103,6 +103,9 @@ BUGS
 
 UNBLOCKED FEATURES
 
+  * support multidimensional containers.
+    allow op[]() to take >1 arguments.
+
   * Vector<(const Ranked)^> cv; cv.append(cr); ((const Ranked)^ cr) is rejected:
     "Cannot pass a const value to a 'mutable' parameter". append/insert take mutable T,
     and mutable still demands a writable pointee even when T itself is const T^.

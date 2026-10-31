@@ -271,10 +271,10 @@ stdc import {
 }
 
 /* number of trials. */
-//const int kNTrials = 1;
+const int kNTrials = 1;
 //const int kNTrials = 10;
 //const int kNTrials = 30;
-const int kNTrials = 100;
+//const int kNTrials = 100;
 //const int kNTrials = 300;
 //const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
@@ -359,7 +359,7 @@ const float64 kDispersion = 0.7;
 
 /* option to use a fixed seed for testing. */
 const uint64 kSeedChoice = 0;
-//const uint64 kSeedChoice = 1753391226898898129;
+//const uint64 kSeedChoice = 1793407968632400750;
 
 /*
 option to use approval votes to find guthrie winner.
@@ -529,6 +529,11 @@ ElectoralMethod(
         str = String + " " + name_;
         println(String + fmt*str + ": " + correlation_ + "%");
     }
+
+    /* strategic voting. */
+    virtual void strategic_voting() {
+        /* do nothing. */
+    }
 }
 alias ElectoralMethods = Vector<ElectoralMethod^>;
 
@@ -559,6 +564,128 @@ Correlation(
     int count(int a, int b) {
         idx = a * n_ + b;
         return counts_[idx];
+    }
+}
+
+RankedChoice(
+    Rankings rankings_,
+    int size_
+) {
+}
+alias RankedChoices = Vector<RankedChoice>;
+
+HeadToHead(
+    int winner_ = 0,
+    int loser_ = 0,
+    int winner_votes_ = 0,
+    int loser_votes_ = 0
+) {
+    _() {}
+    ~() {}
+
+    /* find the winner in a head to head election. */
+    void resolve(
+        int a,
+        int b
+    ) {
+        bloc_map = ^g_guthrie.bloc_map_;
+
+        /* init vote counts. */
+        int avotes = 0;
+        int bvotes = 0;
+
+        /* for each voter bloc. */
+        for (it : bloc_map^) {
+            /* give the votes to whichever is first. */
+            for (which : it^.rankings_) {
+                if (which == a) {
+                    avotes += it^.bloc_.size_;
+                    break;
+                }
+                if (which == b) {
+                    bvotes += it^.bloc_.size_;
+                    break;
+                }
+            }
+        }
+
+        /*
+        we assume that a comes before b in the candidate list.
+        and that we're looking for a winner.
+        in which case, by the rules, a wins ties.
+        */
+        if (avotes >= bvotes) {
+            winner_ = a;
+            loser_ = b;
+            winner_votes_ = avotes;
+            loser_votes_ = bvotes;
+        } else {
+            winner_ = b;
+            loser_ = a;
+            winner_votes_ = bvotes;
+            loser_votes_ = avotes;
+        }
+    }
+}
+
+/*
+store the results of head to head matchups between all candidates.
+the vote totals are stored: winner is positive, loser is negative.
+*/
+PairwiseCounts(
+    int n_,
+    Vector<int> counts_
+) {
+    void init() {
+        n_ = g_guthrie.ncandidates_;
+        size = n_ * n_;
+        counts_.resize(size);
+        for (i : 0..size) {
+            counts_[i] = 0;
+        }
+    }
+
+    /* find all pairwise winners. */
+    void find_winners() {
+        HeadToHead matchup;
+        for (a : 0..n_) {
+            for (b : (a+1)..n_) {
+                matchup.resolve(a, b);
+                set_count(
+                    matchup.winner_,
+                    matchup.loser_,
+                    matchup.winner_votes_
+                );
+                set_count(
+                    matchup.loser_,
+                    matchup.winner_,
+                    - matchup.loser_votes_
+                );
+            }
+        }
+    }
+
+    /* return positive vote count for a versus b. */
+    int count(int a, int b) {
+        idx = a * n_ + b;
+        votes = counts_[idx];
+        if (votes < 0) {
+            votes = - votes;
+        }
+        return votes;
+    }
+
+    /* set count for a versus b. */
+    void set_count(int a, int b, int count) {
+        idx = a * n_ + b;
+        counts_[idx] = count;
+    }
+
+    /* return true if a beats b. */
+    bool is_winner(int a, int b) {
+        idx = a * n_ + b;
+        votes = counts_[idx];
+        return (votes > 0);
     }
 }
 
@@ -613,7 +740,8 @@ GuthrieVoting(
     int candidate_cycles_ = 0,
     int independence_ = 0,
     int irv_is_condorcet_ = 0,
-    Correlation correlation_
+    Correlation correlation_,
+    PairwiseCounts pairwise_
 ) {
     _() {} ~() {}
 
@@ -639,8 +767,9 @@ GuthrieVoting(
         init_methods();
         set_method_names();
 
-        /* initialize the correlations */
+        /* initialize the correlations and pairwise counts. */
         correlation_.init();
+        pairwise_.init();
 
         /* hello, world. */
         println(String + "Guthrie voting analysis:");
@@ -670,6 +799,7 @@ GuthrieVoting(
             save_correlations();
             show_satisfaction();
             check_criteria();
+            strategic_voting();
         }
 
         /* log the results. */
@@ -1361,8 +1491,19 @@ GuthrieVoting(
 
     /* find all winners. */
     void find_winners() {
+        /* some voting methods use pairwise results. */
+        pairwise_.find_winners();
+
+        /* find winner for each method. */
         for (ElectoralMethod^ method : methods_) {
             method^.find_winner();
+        }
+    }
+
+    /* analyze strategic voting. */
+    void strategic_voting() {
+        for (ElectoralMethod^ method : methods_) {
+            method^.strategic_voting();
         }
     }
 
@@ -1805,67 +1946,6 @@ GuthrieVoting(
     return "=FAIL=";
 }
 
-RankedChoice(
-    Rankings rankings_,
-    int size_
-) {
-}
-alias RankedChoices = Vector<RankedChoice>;
-
-HeadToHead(
-    int winner_ = 0,
-    int loser_ = 0,
-    int winner_votes_ = 0,
-    int loser_votes_ = 0
-) {
-    _() {}
-    ~() {}
-
-    /* find the winner in a head to head election. */
-    void resolve(
-        int a,
-        int b
-    ) {
-        bloc_map = ^g_guthrie.bloc_map_;
-
-        /* init vote counts. */
-        int avotes = 0;
-        int bvotes = 0;
-
-        /* for each voter bloc. */
-        for (it : bloc_map^) {
-            /* give the votes to whichever is first. */
-            for (which : it^.rankings_) {
-                if (which == a) {
-                    avotes += it^.bloc_.size_;
-                    break;
-                }
-                if (which == b) {
-                    bvotes += it^.bloc_.size_;
-                    break;
-                }
-            }
-        }
-
-        /*
-        we assume that a comes before b in the candidate list.
-        and that we're looking for a winner.
-        in which case, by the rules, a wins ties.
-        */
-        if (avotes >= bvotes) {
-            winner_ = a;
-            loser_ = b;
-            winner_votes_ = avotes;
-            loser_votes_ = bvotes;
-        } else {
-            winner_ = b;
-            loser_ = a;
-            winner_votes_ = bvotes;
-            loser_votes_ = avotes;
-        }
-    }
-}
-
 void ElectoralMethod:calculate_results(
 ) {
     /* calculate satisfaction. */
@@ -2040,11 +2120,12 @@ ElectoralMethod : ApprovalRunoffMethod() {
         }
 
         /* find the head to head winner. */
-        HeadToHead runoff;
-        runoff.resolve(winner_, second);
+        upset = g_guthrie.pairwise_.is_winner(second, winner_);
 
         /* overwrite the winner. */
-        winner_ = runoff.winner_;
+        if (upset) {
+            winner_ = second;
+        }
 
         /* accumulate the utility. */
         candidate = ^candidates^[winner_];
@@ -2243,11 +2324,18 @@ ElectoralMethod : CondorcetMethod() {
         /* count head to head victories. */
         for (i : 0..ncandidates) {
             for (k : (i + 1)..ncandidates) {
-                HeadToHead result;
-                result.resolve(i, k);
-                println(String + " " + candidates^[result.winner_].name_ + " (" + result.winner_votes_
-                    + ") > " + candidates^[result.loser_].name_ + " (" + result.loser_votes_ + ")");
-                ++wins[result.winner_];
+                a = i;
+                b = k;
+                avotes = g_guthrie.pairwise_.count(a, b);
+                bvotes = g_guthrie.pairwise_.count(b, a);
+                bwins = g_guthrie.pairwise_.is_winner(b, a);
+                if (bwins) {
+                    a <--> b;
+                    avotes <--> bvotes;
+                }
+                println(String + " " + candidates^[a].name_ + " (" + avotes
+                    + ") > " + candidates^[b].name_ + " (" + bvotes + ")");
+                ++wins[a];
             }
         }
 
@@ -2783,6 +2871,30 @@ ElectoralMethod : PluralityMethod() {
             ++is_winner_;
         }
     }
+
+    virtual void strategic_voting() {
+        int ncandidates = g_guthrie.ncandidates_;
+        candidates = ^g_guthrie.candidates_;
+
+        int nupsets = 0;
+        for (underdog : 0..ncandidates) {
+            if (underdog == winner_) {
+                continue;
+            }
+
+            upset = g_guthrie.pairwise_.is_winner(underdog, winner_);
+            if (upset) {
+                ++nupsets;
+                println(String + "Plurality strategy: vote " +
+                    candidates^[underdog].name_ + ".");
+            }
+        }
+        if (nupsets == 0) {
+            println("Plurality strategy: none.");
+        } if (nupsets > 1) {
+            println("Plurality strategy: multiple.");
+        }
+    }
 }
 
 /*
@@ -2841,11 +2953,12 @@ ElectoralMethod : PluralityRunoffMethod() {
             }
 
             /* find the head to head winner. */
-            HeadToHead runoff;
-            runoff.resolve(winner_, second);
+            upset = g_guthrie.pairwise_.is_winner(second, winner_);
 
             /* overwrite the winner. */
-            winner_ = runoff.winner_;
+            if (upset) {
+                winner_ = second;
+            }
         }
 
         /* accumulate the utility. */
