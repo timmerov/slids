@@ -2745,14 +2745,6 @@ ElectoralMethod : GuthrieMethod() {
         fmt.float_style_ = kFixedPoint;
         fmt.precision_ = 1;
 
-        /*
-        ==tsc== this is somewhat wrong.
-        independence means a losing candidate A can change the winner from B to C by dropping out.
-        so if there are many ABC voters then they should betray A for B.
-        but the ACB voters should also betray A for C.
-        which is the same as A dropping out when there are 3 candidates.
-        but it's not clear what happens when there are 4 or more candidates.
-        */
         ntrials float64 = g_guthrie.ntrials_;
         nstrategic float64 = g_guthrie.ntrials_ - g_guthrie.independence_;
         wins = 100.0 * nstrategic / ntrials;
@@ -2760,6 +2752,7 @@ ElectoralMethod : GuthrieMethod() {
         println(String + "Guthrie: favorite betrayal: " + fmt*wins + "%");
         if (kExplainStrategies) { void;
             println("  You prefer A>B>C. C wins because candidate A prefers C>B. Vote B.");
+            println("  You prefer A>C>B. You should vote C to counter ABC strategy.");
         }
     }
 }
