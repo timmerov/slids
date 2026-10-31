@@ -271,11 +271,11 @@ stdc import {
 }
 
 /* number of trials. */
-const int kNTrials = 1;
+//const int kNTrials = 1;
 //const int kNTrials = 10;
 //const int kNTrials = 30;
 //const int kNTrials = 100;
-//const int kNTrials = 300;
+const int kNTrials = 300;
 //const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
 //const int kNTrials = 30*1000;
@@ -407,6 +407,13 @@ this is a bit spammy.
 //const bool kShowCoombsRounds = true;
 const bool kShowCoombsRounds = false;
 
+/*
+option to explain voter strategies for each method
+in the summary.
+*/
+//const bool kExplainStrategies = false;
+const bool kExplainStrategies = true;
+
 
 /* some functions should sometimes be quiet. */
 const bool kQuiet = true;
@@ -532,6 +539,10 @@ ElectoralMethod(
 
     /* strategic voting. */
     virtual void strategic_voting() {
+        /* do nothing. */
+    }
+
+    virtual void print_strategic_results() {
         /* do nothing. */
     }
 }
@@ -1582,9 +1593,8 @@ GuthrieVoting(
             ++candidate_cycles_;
         }
 
-        /* caution: this destroys the bloc map. */
+        /* check guthrie for independence of irrelevant candidates. */
         int independence = check_independence();
-
         if (guthrie_.winner_ == max_satisfaction) {
             ++winner_maximizes_satisfaction_;
         }
@@ -1731,6 +1741,11 @@ GuthrieVoting(
         /* assume we pass. */
         int independence = guthrie_.winner_;
 
+        /* save the block map */
+        /* ==tsc== Map doesn't support <-- yet. */
+        BlocMap org_bloc_map;
+        org_bloc_map <--> bloc_map_;
+
         /* save the original winner */
         int original_winner = guthrie_.winner_;
 
@@ -1799,6 +1814,10 @@ GuthrieVoting(
         }
         total_utility_strategic_ += utility;
 
+        /* restore the bloc map. */
+        /* ==tsc== Map doesn't support <-- yet. */
+        bloc_map_ <--> org_bloc_map;
+
         return independence;
     }
 
@@ -1839,16 +1858,21 @@ GuthrieVoting(
 
         println();
         show_header();
+
         println();
         println("Summary:");
         println(fmt*"Voter satisfactions by method" + ":");
         for (method : methods_sorted_) {
             method^.print_satisfaction();
         }
+
+        println();
         println(fmt*"Guthrie correlations by method" + ":");
         for (method : methods_sorted_) {
             method^.print_correlation();
         }
+
+        println();
         println(fmt*"Miscellaneous" + ":");
         println(String + fmt*" candidate satisfaction" + ": " + candidate_.satisfaction_);
         println(String + fmt*" maxes candidate satisfaction" + ": " + candidate_.correlation_ + "%");
@@ -1860,7 +1884,11 @@ GuthrieVoting(
         println(String + fmt*" candidate cycles" + ": " + candidate_cycles + "%");
         println(String + fmt*" instant runoff is Condorcet" + ": " + irv_is_condorcet + "%");
 
+        println();
         print_correlations();
+
+        println();
+        print_strategic_results();
     }
 
     /*
@@ -1912,7 +1940,6 @@ GuthrieVoting(
 
         ntrials float = ntrials_;
 
-        println();
         println("Correlations by method:");
         for (a : 0..(n-1)) {
             metha = methods_[a];
@@ -1933,6 +1960,14 @@ GuthrieVoting(
         meth = methods_[1];
         s = sfmt*"" + "     ^-" + meth^.name_;
         println(s);
+    }
+
+    /* print all strategic results. */
+    void print_strategic_results() {
+        println("Strategic voting results:");
+        for (ElectoralMethod^ method : methods_) {
+            method^.print_strategic_results();
+        }
     }
 }
 
@@ -2704,6 +2739,29 @@ ElectoralMethod : GuthrieMethod() {
         guthrie correlates with itself 100% of the time.
         */
     }
+
+    virtual void print_strategic_results() {
+        Format fmt;
+        fmt.float_style_ = kFixedPoint;
+        fmt.precision_ = 1;
+
+        /*
+        ==tsc== this is somewhat wrong.
+        independence means a losing candidate A can change the winner from B to C by dropping out.
+        so if there are many ABC voters then they should betray A for B.
+        but the ACB voters should also betray A for C.
+        which is the same as A dropping out when there are 3 candidates.
+        but it's not clear what happens when there are 4 or more candidates.
+        */
+        ntrials float64 = g_guthrie.ntrials_;
+        nstrategic float64 = g_guthrie.ntrials_ - g_guthrie.independence_;
+        wins = 100.0 * nstrategic / ntrials;
+
+        println(String + "Guthrie: favorite betrayal: " + fmt*wins + "%");
+        if (kExplainStrategies) { void;
+            println("  You prefer A>B>C. C wins because candidate A prefers C>B. Vote B.");
+        }
+    }
 }
 
 /*
@@ -2822,7 +2880,10 @@ ElectoralMethod : InstantRunoffMethod() {
 /*
 find the plurality winner.
 */
-ElectoralMethod : PluralityMethod() {
+ElectoralMethod : PluralityMethod(
+    int nstrategy_wins_ = 0,
+    int nstrategy_could_win_ = 0
+) {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
@@ -2891,8 +2952,28 @@ ElectoralMethod : PluralityMethod() {
         }
         if (nupsets == 0) {
             println("Plurality strategy: none.");
+        } if (nupsets == 1) {
+            ++nstrategy_wins_;
         } if (nupsets > 1) {
             println("Plurality strategy: multiple.");
+            ++nstrategy_could_win_;
+        }
+    }
+
+    virtual void print_strategic_results() {
+        Format fmt;
+        fmt.float_style_ = kFixedPoint;
+        fmt.precision_ = 1;
+
+        ntrials float64 = g_guthrie.ntrials_;
+        wins = 100.0 * nstrategy_wins_ / ntrials;
+        maybes = 100.0 * nstrategy_could_win_ / ntrials;
+
+        println(String + "Plurality: clear winning strategy: " + fmt*wins + "%"
+            ": ambiguous strategy: " +  fmt*maybes + "%");
+        if (kExplainStrategies) { void;
+            println("  Pairwise A>B>C. B wins by plurality. C votes A.");
+            println("  No clear strategy when C wins by plurality.");
         }
     }
 }

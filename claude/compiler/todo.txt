@@ -103,6 +103,12 @@ BUGS
 
 UNBLOCKED FEATURES
 
+  * allow construction with move operator.
+    allow assignment/move with placement new.
+    save_container <-- container;
+    new(ptr) Container = container;
+    new(ptr) Container <-- container;
+
   * support multidimensional containers.
     allow op[]() to take >1 arguments.
 

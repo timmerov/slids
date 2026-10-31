@@ -172,7 +172,14 @@ Vector<T>(
         ) (i < size_) {
             ++i; ++src; ++dst;
         } {
+            /*
+            default construct a new object in dst.
+            move from src to dst.
+            destruct src.
+            */
+            new(<void^> dst) T;
             dst^ <-- src^;
+            src^.~();
         }
 
         /* free old storage. */
