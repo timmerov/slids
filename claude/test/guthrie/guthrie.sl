@@ -2905,7 +2905,7 @@ ElectoralMethod : GuthrieMethod() {
         println(String + "Guthrie: favorite betrayal: " + fmt*wins + "%");
         if (kExplainStrategies) { void;
             println("  You prefer A>B>C. C wins because candidate A prefers C>B. Vote B.");
-            println("  You prefer A>C>B. You should vote C to counter ABC strategy.");
+            println("  You prefer A>C>B. Vote C to counter ABC strategy.");
         }
     }
 }
