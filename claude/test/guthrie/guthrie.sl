@@ -1,3 +1,4 @@
+
 /*
 Copyright (C) 2012-2026 tim cotter. All rights reserved.
 */
@@ -2583,6 +2584,157 @@ ElectoralMethod : CoombsMethod() {
 find the guthrie winner.
 */
 ElectoralMethod : GuthrieMethod() {
+
+    /*
+    find winner by condorcet method.
+    resolve cycles by coombs.
+    use candidate rankings - not voter rankings.
+    */
+    virtual void find_winner(
+        bool quiet = kQuiet
+    ) {
+        int ncandidates = g_guthrie.ncandidates_;
+        candidates = ^g_guthrie.candidates_;
+        int total_support = g_guthrie.total_support_;
+
+        /* initialize the number of wins. */
+        Vector<int> wins;
+        wins.resize(ncandidates);
+        for (i : 0..ncandidates) {
+            wins[i] = 0;
+        }
+
+        /* for every pair of candidates. */
+        for (a : 0..ncandidates) {
+            for (b : (a+1)..ncandidates) {
+                /* count the votes. */
+                avotes = 0;
+                bvotes = 0;
+                for (candidate : candidates^) {
+                    for (which : candidate^.rankings_) {
+                        if (which == a) {
+                            avotes += candidate^.support_;
+                            break;
+                        }
+                        if (which == b) {
+                            bvotes += candidate^.support_;
+                            break;
+                        }
+                    }
+                }
+                /* record the winner. */
+                if (avotes >= bvotes) {
+                    ++wins[a];
+                } else {
+                    ++wins[b];
+                }
+            }
+        }
+
+        /*
+        find the smith set.
+        technically, this is the copeland leaders - thanks claude.
+        good enough.
+        */
+        Vector<int> smithset;
+        smithset.reserve(ncandidates);
+        max_wins = -1;
+        for (i : 0..ncandidates) {
+            test = wins[i];
+            if (test > max_wins) {
+                smithset.resize(0);
+            }
+            if (test >= max_wins) {
+                smithset.append(i);
+                max_wins = test;
+            }
+        }
+
+        /* create a bitmap of elligible candidates. */
+        uint64 elligible = 0;
+        for (which : smithset) {
+            elligible |= (uint64=1) << which;
+        }
+
+        /* allocate support and anti-support vectors. */
+        Vector<int> support;
+        Vector<int> anti_support;
+        support.resize(ncandidates);
+        anti_support.resize(ncandidates);
+
+        /* eliminate the worst. */
+        while () {
+            smithsize int = smithset.size();
+            if (smithsize <= 1) {
+                break;
+            }
+
+            /* init support and anti-support. */
+            for (i : 0..ncandidates) {
+                support[i] = 0;
+                anti_support[i] = 0;
+            }
+
+            /* sum support and anti-support. */
+            for (candidate : candidates^) {
+                /* search forwards. */
+                for (i : 0..ncandidates) {
+                    which = candidate^.rankings_[i];
+                    bit = (uint64=1) << which;
+                    if (elligible & bit) {
+                        support[which] += candidate^.support_;
+                        break;
+                    }
+                }
+                /* search backwards. */
+                for (i : (ncandidates-1)..>=0 -1) {
+                    which = candidate^.rankings_[i];
+                    bit = (uint64=1) << which;
+                    if (elligible & bit) {
+                        anti_support[which] += candidate^.support_;
+                        break;
+                    }
+                }
+            }
+
+            /* find a candidate with majority support. */
+            for (i : smithset) {
+                votes = support[i];
+                if (2*votes > total_support) {
+                    smithset.resize(1);
+                    smithset[0] = i;
+                    break elimination_loop;
+                }
+            }
+
+            /* find the candidate with the most anti-support. */
+            max_anti_support = -1;
+            index_to_remove = -1;
+            for (i : 0..smithsize) {
+                which = smithset[i];
+                test = anti_support[which];
+                if (test >= max_anti_support) {
+                    max_anti_support = test;
+                    index_to_remove = i;
+                }
+            }
+
+            /* remove them. */
+            which = smithset[index_to_remove];
+            bit = (uint64=1) << which;
+            elligible &= ~bit;
+            smithset.remove(index_to_remove);
+        } : elimination_loop;
+
+        /* save the winner. */
+        winner_ = smithset[0];
+    }
+
+    /*
+    find winner by coombs method.
+    coombs is not a condorcet method.
+    */
+    /*
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
@@ -2715,6 +2867,7 @@ ElectoralMethod : GuthrieMethod() {
             }
         }
     }
+    */
 
     virtual void print_winner() {
         /* already printed. */
