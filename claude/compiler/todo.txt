@@ -240,11 +240,6 @@ UNBLOCKED FEATURES
         alias slids; MapNode<.>(..)     alias slids; TreeNode:MapNode<.>(..)
       open: `Ns:X(non-empty)` is still INHERITANCE from Ns, silent; a 3+ segment head with
       a non-empty list is "Expected function name"; `Ns { X<.>(alias ..) }` is untested.
-    - a consumer re-open of a header template may add METHODS in some cases (user,
-      2026-10-24: deferred); today aliases only. user/linpro votedata.sl needs it:
-      `alias BlocMap = slids:Map<Rankings, int>; BlocMap() { void insert(char[], int) { .. } }`.
-      proposal, not ruled on: non-virtual, all parameters pinned, emitted internal to the TU
-      (tu_local_instance), visible only where the opening is.
     - checkTemplateAliasRoots skips a base that doesn't resolve (a namespace base); make it
       an error.
     - lookup precedence: under `alias Ns;` a FIELD-bearing file-scope `X(..)` (not re-open-

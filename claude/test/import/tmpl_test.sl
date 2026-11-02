@@ -73,6 +73,16 @@ Spec<T=<int8|bool>>(alias first_ = a_) { }
 /* a re-open through an alias: the same filter, pinned to the alias's flavor. */
 alias SpecB = Spec<bool>;
 SpecB(alias sb_ = a_) { }
+
+/* A CONSUMER'S METHODS on a header template: any filter, with a body, internal to this
+   TU. `who` is also defined by tmpl_test2.sl with a different answer: the flavor is
+   shared and the two link. `mine` is a NEW name the demand pool must not see. The
+   two-argument `pick` overloads the header's, and calls it. */
+SpecB() { int who() { return 1; } }
+Spec<T=<int8|bool>>() {
+    int mine() { return pick() + 1; }
+    int pick(int x, int y) { return pick() + x + y; }
+}
 Part<T>(alias pp_ = pub_, ...) { }
 Hybrid(alias ha_ = a, ...) { }
 
@@ -452,6 +462,8 @@ int32 main() {
     Part<int> ppa(6);
     println(String + "part alias = " + ppa.pp_ + " hybrid alias = " + hyba.ha_);
     println(String + "alias re-open = " + spb.sb_);                                  // true
+    println(String + "consumer methods = " + spb.who() + " " + spb.mine() + " "
+        + sp8.mine() + " " + spb.pick(1, 2));                                       // 1 9 9 11
 
     return 0;
 }
@@ -460,9 +472,39 @@ int32 main() {
 //-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
 //Spec<T=float32>(float32 f_) { }
 
-/* ...nor a filter with a member. */
+/* ...nor a filter's method without a body: nothing would define it. */
 //-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
-//Spec<T=<int8|bool>>() { int mine() { return 1; } }
+//Spec<T=<int8|bool>>() { int nobody(); }
+
+/* ...nor a virtual: the source owns the vtable. */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T=bool>() { virtual int nv() { return 1; } }
+
+/* ...nor a hook: every TU has to agree on them. */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T=bool>() { _() { } ~() { } }
+
+/* ...nor a transfer operator. */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T=bool>() { op=(Spec<bool>^ s) { } }
+
+/* ...nor a member that is not a method. */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T=bool>() { const int kn = 1; }
+
+/* ...nor a template method. */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T=bool>() { U tm<U>(U u) { return u; } }
+
+/* a plain unconstrained re-open still may not add a method. */
+//-EXPECT-ERROR: defined by its module's source file; 'Spec' cannot be re-opened here
+//Spec<T>() { int plainm() { return 1; } }
+
+/* a consumer's method reaches the public interface only: the source's fields are
+   private to it. */
+//-EXPECT-ERROR: sec_
+//Part<T=int>() { int peek() { return sec_; } }
+//int32 use_peek() { Part<int> p(1); return p.peek(); }
 
 /* an alias opening without `...` would COMPLETE the incomplete header template here. */
 //-EXPECT-ERROR: This opening completes 'Part', which its module defines; add a trailing '...' to keep it open.

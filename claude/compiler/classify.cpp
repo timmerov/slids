@@ -10122,7 +10122,9 @@ void buildLazyMethods(parse::Tree& tree, diagnostic::Sink& diag) {
             int cid = parse::classEntryForFrame(tree, e.owner_ns_frame);
             if (cid < 0 || tree.entries[cid].name.find('<') == std::string::npos)
                 continue;
-            if (widen::slidLinkage(widen::strip(tree.entries[cid].slids_type))
+            // A consumer's own filter method is defined here, not by the source.
+            if (!e.tu_local_instance
+                && widen::slidLinkage(widen::strip(tree.entries[cid].slids_type))
                 == widen::Type::Linkage::kDeclare)
                 tree.demanded_methods[cid].insert(e.name);
         }

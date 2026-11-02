@@ -23,6 +23,10 @@ alias slids;
 
 alias Integer2 = int;
 
+/* tmpl_test.sl defines this method of the same flavor with a different answer: each is
+   internal to its TU. */
+Spec<T=bool>() { int who() { return 2; } }
+
 /* a consumer may not define a header template... */
 //-EXPECT-ERROR: defined by its module's source
 //T tsum<T>(T a, T b) { return a; }
@@ -198,6 +202,9 @@ int32 main() {
     println(String + "u2 = " + uc.un());
     Ucp<Lok> ud = uc;
     println(String + "u3 = " + ud.un());
+
+    Spec<bool> spw(true);
+    println(String + "consumer method = " + spw.who());    // 2
 
     /* a source-side member NOT declared in the header is not part of a
        consumer's interface. */

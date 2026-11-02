@@ -4410,8 +4410,17 @@ A RE-OPEN THROUGH AN ALIAS (LANDED 2026-11-02)
     out-of-reach negatives); reopen_tmpl.sl (local flavor, qualified target, header template bare
     and qualified + other flavor, header method, two-namespace negatives); tmpl_test.sl (SpecB
     field alias on a header template + PrivW private-alias negative; tmpl_lib2.slh declares PrivW).
-  OPEN (todo): consumer METHODS on a header template, which user/linpro votedata.sl needs; two bare
-  re-opens through `alias Ns;`.
+  OPEN (todo): two bare re-opens through `alias Ns;`.
+  ADDENDUM: CONSUMER METHODS ON A HEADER TEMPLATE (user: "any filter"). A consumer's source-file
+  FILTER (any constrained field-less opening, so every alias opening of a template use) may add
+  field aliases and non-virtual methods with bodies. consumerFilterOpening rejects a bodyless
+  method, a virtual, the implicit five, a template method, any non-method member. The flavor clone
+  keeps those bodies, each method's entry is stamped tu_local_instance (liftMember: `define
+  internal`; buildLazyMethods: no .sli demand), so layout and flavor symbols are unchanged and two
+  TUs may define the same method differently. A plain unconstrained consumer re-open still adds
+  nothing. Tightened: a filter in ANOTHER header is aliases only; its member would have reached
+  every importer undefined. Coverage: tmpl_test.sl (who/mine/pick overload + negatives),
+  tmpl_test2.sl (who, the link proof), reopen_tmpl.sl (twice through an alias).
   ADDENDUM: a namespace aliased TWICE (`alias slids; alias slids;`, in one file or across imports)
   false-errored a bare re-open as "in more than one aliased namespace". aliasedNamespacePaths now
   returns DISTINCT paths, so both re-open passes count one. Coverage: reopen_cls.sl Dbx/Dq,

@@ -36,7 +36,9 @@ arguments, positionally, and obeys every rule that filter does. reopen_cls.sl ow
 plain-class half; tmpl_test.sl owns the field-alias and private-import cases.
 
 A HEADER TEMPLATE is defined by its module's source file: a consumer re-open is rejected
-in every spelling — qualified and through `alias slids;` alike.
+in every spelling — qualified and through `alias slids;` alike. The exception is a FILTER,
+which may add field aliases and non-virtual methods with bodies, internal to the TU;
+tmpl_test.sl owns those rules.
 
 NOT HERE: a non-empty re-open list (`Ns:Box<T>(alias ..)`, `(...)`) still parses as
 inheritance from Ns — it belongs to the field-alias re-open work.
@@ -119,7 +121,7 @@ Qi() { int five() { return 5; } }
 alias Av = Vector<int>;
 Av() { }
 alias AvQ = slids:Vector<int>;
-AvQ() { }
+AvQ() { intptr twice() { return size() * 2; } }
 
 int32 main() {
     Tq:Qbox<int> q = (7);
@@ -155,7 +157,7 @@ int32 main() {
     println(String + "qbox five = " + q.five());                                     // 5
     Av av;
     av.append(9);
-    println(String + "av = " + av[0]);                                               // 9
+    println(String + "av = " + av[0] + " " + av.twice());                            // 9 2
     return 0;
 }
 
@@ -212,9 +214,9 @@ int32 main() {
 //-EXPECT-ERROR: Class 'Afl<int8>' has no method 'twice'
 //int32 use_twice() { Afl<int8> c = (1); return c.twice(); }
 
-/* a consumer's method on a HEADER template is rejected through an alias too. */
+/* a consumer's bodyless method on a HEADER template is rejected through an alias too. */
 //-EXPECT-ERROR: defined by its module's source file; 'Vector' cannot be re-opened here
-//AvQ() { int extra() { return 1; } }
+//AvQ() { int extra(); }
 
 /* an alias in two aliased namespaces: the bare re-open must be qualified. */
 //-EXPECT-ERROR: 'Yt' names more than one member of the aliased namespaces

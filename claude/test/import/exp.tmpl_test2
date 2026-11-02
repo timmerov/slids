@@ -44,5 +44,6 @@ zd = 0
 vv = 5
 u2 = 1
 u3 = 0
+consumer method = 2
 Bird:dtor: 3 4
 Bird:dtor: 1 2

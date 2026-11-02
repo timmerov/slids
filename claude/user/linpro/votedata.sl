@@ -3,6 +3,53 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 */
 
 /*
+provide voter bloc data.
+
+data from guthrie voting simulated electorates at end of file.
+*/
+
+import map;
+import vector;
+import votedata;
+alias slids;
+
+BlocMap() {
+    void insert(char[] list, int size) {
+        Vector<int> rankings;
+        while() {
+            ch = list++^;
+            if (ch == 0) {
+                break;
+            }
+            rankings.append(ch - 'A');
+        }
+        insert(rankings, size);
+    }
+}
+
+/* return a bloc map of the voter data. */
+BlocMap get_voter_data() {
+
+    /* data set #1 */
+    BlocMap bloc_map;
+    bloc_map.insert("ABCD", 216);
+    bloc_map.insert("ABCD", 216);
+    bloc_map.insert("ABCD", 216);
+    bloc_map.insert("BACD", 170);
+    bloc_map.insert("BCAD", 22);
+    bloc_map.insert("BCDA", 17);
+    bloc_map.insert("CBAD", 8);
+    bloc_map.insert("CBDA", 19);
+    bloc_map.insert("CDBA", 232);
+    bloc_map.insert("DCBA", 316);
+
+    return bloc_map;
+}
+
+
+/*
+data produced by guthrie voting test harness.
+
 Voter blocs (8):
  ABCD size: 216 utilities: 195.609 163.855 124.604 89.4898 n: 432 approvals: 216 216 0 0
  BACD size: 170 utilities: 154.763 138.645 109.374 89.4801 n: 338 approvals: 170 168 0 0
@@ -126,41 +173,3 @@ Voter blocs (9):
  CDBA size: 17 utilities: 12.8408 12.2676 11.7092 11.3002 n: 32 approvals: 17 15 0 0
  DCBA size: 323 utilities: 293.413 174.803 153.399 139.645 n: 350 approvals: 323 27 0 0
 */
-
-import map;
-import vector;
-import votedata;
-alias slids;
-
-BlocMap() {
-    void insert(char[] list, int size) {
-        Vector<int> rankings;
-        while() {
-            ch = list^++;
-            if (ch == 0) {
-                break;
-            }
-            rankings.append(ch - 'A');
-        }
-        insert(rankings, size);
-    }
-}
-
-/* return a bloc map of the voter data. */
-BlocMap get_voter_data() {
-
-    /* data set #1 */
-    BlocMap bloc_map;
-    bloc_map.insert("ABCD", 216);
-    bloc_map.insert("ABCD", 216);
-    bloc_map.insert("ABCD", 216);
-    bloc_map.insert("BACD", 170);
-    bloc_map.insert("BCAD", 22);
-    bloc_map.insert("BCDA", 17);
-    bloc_map.insert("CBAD", 8);
-    bloc_map.insert("CBDA", 19);
-    bloc_map.insert("CDBA", 232);
-    bloc_map.insert("DCBA", 316);
-
-    return bloc_map;
-}

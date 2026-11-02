@@ -7321,6 +7321,23 @@ bool aliasesOnlyOpening(parse::Node const& n) {
     return true;
 }
 
+// A consumer's FILTER may add what stays inside its own TU: field aliases and methods
+// with bodies, emitted internal (Entry.tu_local_instance), so the flavor's layout and
+// symbols are the same in every TU. Excluded: a bodyless method (nothing would define
+// it), a virtual (the template source owns the vtable), the implicitly-invoked members
+// (every TU must agree on them), a template method, and any non-method member.
+bool consumerFilterOpening(parse::Node const& n) {
+    for (auto const& p : n.params)
+        if (p && p->name != "_$vptr") return false;
+    for (auto const& m : n.children) {
+        if (!m) continue;
+        if (m->kind != parse::Kind::kFunctionDef || m->is_virtual
+            || !m->type_params.empty() || parse::isImplicitMember(m->name))
+            return false;
+    }
+    return true;
+}
+
 // The opening would COMPLETE `def`'s incomplete header template outside its module
 // (no trailing `...`): that file is not the template's to close.
 void reportForeignCompletion(diagnostic::Sink& diag, parse::Node const& node,
@@ -7426,12 +7443,20 @@ void addClassTemplateFilter(parse::Tree& tree, parse::Node& node, int head,
                             diagnostic::Sink& diag) {
     parse::Node const* hdef = tree.templates.at(head).def;
     // A header template's filters: its header declares them (the members every TU
-    // sees), its template source defines their bodies; a CONSUMER may add a filter of
-    // field aliases only (the plain consumer re-open's rule).
-    if (fileIsImported(tree, hdef->file_id) && !fileIsImported(tree, node.file_id)) {
-        bool consumer = !fileIsTemplateSource(tree, node.file_id)
-                     && !fileIsSibling(tree, hdef->file_id);
-        if (consumer && !aliasesOnlyOpening(node)) {
+    // sees), its template source defines their bodies. A CONSUMER's source file may add
+    // a filter of field aliases and TU-internal methods; ANOTHER header, aliases only,
+    // since a member declared there would reach every importer with nothing defining it.
+    if (fileIsImported(tree, hdef->file_id)) {
+        bool rejected = false;
+        if (!fileIsImported(tree, node.file_id)) {
+            rejected = !fileIsTemplateSource(tree, node.file_id)
+                    && !fileIsSibling(tree, hdef->file_id)
+                    && !consumerFilterOpening(node);
+        } else if (node.file_id != hdef->file_id) {
+            rejected = !fileIsTemplateSource(tree, node.file_id)
+                    && !aliasesOnlyOpening(node);
+        }
+        if (rejected) {
             diagnostic::report(diag, {node.file_id, node.name_tok,
                 "A template declared in a header is defined by its module's source "
                 "file; '" + node.name + "' cannot be re-opened here.",
@@ -11309,7 +11334,9 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                 || (fileIsImported(tree, o->file_id) && o->file_id >= 0
                     && o->file_id < static_cast<int>(tree.file_template_source.size())
                     && !tree.file_template_source[o->file_id]);
-            if (declare_only) {
+            // An opening in the file being compiled is a consumer's filter: its methods
+            // keep their bodies, internal to this TU (stamped below).
+            if (declare_only && fileIsImported(tree, o->file_id)) {
                 if (header_opening) {
                     for (auto& m : c->children) {
                         if (m && m->kind == parse::Kind::kFunctionDef) {
@@ -11406,6 +11433,16 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
         if (clones[i]->resolved_entry_id >= 0)
             registerScopeNames(tree, *clones[i], tree.entries[iid].ns_frame_id,
                                classes, diag);
+    }
+    // A consumer's filter methods on a declare-only flavor: liftMember emits them
+    // `define internal` under the kDeclare owner, and they are no demand on the source.
+    if (declare_only) {
+        for (auto& c : clones) {
+            if (fileIsImported(tree, c->file_id)) continue;
+            for (auto& m : c->children)
+                if (m && m->kind == parse::Kind::kFunctionDef && m->resolved_entry_id >= 0)
+                    tree.entries[m->resolved_entry_id].tu_local_instance = true;
+        }
     }
     // The instance LIVES where its template does (the symbol's scope path).
     // Stamped only NOW: findInFrame skips owner-bearing entries (a namespace
