@@ -33,8 +33,6 @@ BlocMap get_voter_data() {
     /* data set #1 */
     BlocMap bloc_map;
     bloc_map.insert("ABCD", 216);
-    bloc_map.insert("ABCD", 216);
-    bloc_map.insert("ABCD", 216);
     bloc_map.insert("BACD", 170);
     bloc_map.insert("BCAD", 22);
     bloc_map.insert("BCDA", 17);

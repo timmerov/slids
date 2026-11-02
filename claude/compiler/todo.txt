@@ -110,6 +110,8 @@ BUGS
 
 UNBLOCKED FEATURES
 
+  * revisit the decision that makes this an error: char ch = 0;
+
   * allow construction with move operator.
     allow assignment/move with placement new.
     save_container <-- container;
