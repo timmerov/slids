@@ -4412,6 +4412,10 @@ A RE-OPEN THROUGH AN ALIAS (LANDED 2026-11-02)
     field alias on a header template + PrivW private-alias negative; tmpl_lib2.slh declares PrivW).
   OPEN (todo): consumer METHODS on a header template, which user/linpro votedata.sl needs; two bare
   re-opens through `alias Ns;`.
+  ADDENDUM: a namespace aliased TWICE (`alias slids; alias slids;`, in one file or across imports)
+  false-errored a bare re-open as "in more than one aliased namespace". aliasedNamespacePaths now
+  returns DISTINCT paths, so both re-open passes count one. Coverage: reopen_cls.sl Dbx/Dq,
+  reopen_tmpl.sl Dnode.
 
 test/ + user/ SPLIT (user, 2026-11-02)
   test/guthrie, test/puzzles and test/progress moved out of the regression suite to user/guthrie,

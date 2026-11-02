@@ -101,12 +101,6 @@ BUGS
   * swapping const values compiles: void swap(int a[2]) { a[0] <--> a[1]; } (a is a const
     array param). the const-lvalue wall skips swap (classify.cpp says swap is deferred).
 
-  * aliasing the same namespace twice false-errors a bare re-open:
-    alias slids; alias slids; MapNode<Key=int, Value=int>(alias v_ = value_) { }
-    "'MapNode' is a class in more than one aliased namespace; qualify the re-open."
-    qualifyAliasedReopens (resolve.cpp) counts one hit per alias entry, not per distinct
-    namespace. dedupe the paths. also fires across files: candidate.slh + guthrie.sl.
-
   * two bare re-opens of a class through `alias Ns;` silently make a new local class:
     Al { Abox(int v_) { } } alias Al;
     Abox() { int one() { return v_ + 1; } } Abox() { int two() { return v_ + 2; } }

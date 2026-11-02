@@ -395,6 +395,14 @@ Al { Abox(int v_) { } }
 alias Al;
 Abox() { int inc() { return v_ + 1; } }
 
+/* the same namespace aliased TWICE is one namespace, for a bare opening and through an
+   alias. */
+Dal { Dbx(int v_) { } alias Dq = Dbx; }
+alias Dal;
+alias Dal;
+Dbx() { int d1() { return v_ + 1; } }
+Dq() { int d2() { return v_ + 2; } }
+
 /* A RE-OPEN THROUGH AN ALIAS: the opening is the target's, through a chain, a qualified
    path, and `alias Ns;`. */
 Rplain(int v_) { }
@@ -604,6 +612,8 @@ int32 main() {
     println(String + "tb.twice = " + tb.twice());      // 42   (qualified template re-open)
     Abox ab = (6);
     println(String + "ab.inc = " + ab.inc());          // 7    (re-open via alias Ns)
+    Dbx dbx = (1);
+    println(String + "dbx = " + dbx.d1() + " " + dbx.d2());  // 2 3  (namespace aliased twice)
     Rplain rp = (5);
     println(String + "rp = " + rp.one() + " " + rp.two());  // 6 7  (through an alias, a chain)
     Rn:Rin rin = (4);

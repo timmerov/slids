@@ -7,6 +7,7 @@ cbox<int> = 1 5 6 7
 cbox<int8> = 0 7 8 4
 cbox<bool> = 8 true true
 gnode = 5 true
+dnode = 6
 vbox = 51 60
 qbox four = 4
 afl = 42 5

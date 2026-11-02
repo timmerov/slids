@@ -9283,7 +9283,8 @@ bool openingDerivesFrom(parse::Node const* n, std::string const& base) {
     return b == base;
 }
 
-// Every namespace import path (`alias Ns;`, `alias A:B;`) among `children`.
+// Every DISTINCT namespace import path (`alias Ns;`, `alias A:B;`) among `children`:
+// a namespace aliased twice, in one file or across imports, is one namespace.
 std::vector<std::vector<std::string>> aliasedNamespacePaths(
         std::vector<std::unique_ptr<parse::Node>>& children) {
     std::vector<std::vector<std::string>> paths;
@@ -9293,7 +9294,8 @@ std::vector<std::vector<std::string>> aliasedNamespacePaths(
             && !ch->global_qualified) {
             std::vector<std::string> p = ch->qualifier;
             p.push_back(ch->name);
-            paths.push_back(std::move(p));
+            if (std::find(paths.begin(), paths.end(), p) == paths.end())
+                paths.push_back(std::move(p));
         }
     return paths;
 }
@@ -9416,8 +9418,7 @@ void rewriteAliasReopens(parse::Tree& tree,
             if (!path.empty()) continue;
             std::vector<std::vector<std::string>> hits;
             for (auto const& p : ns_paths)
-                if (classIn(p, name) && std::find(hits.begin(), hits.end(), p) == hits.end())
-                    hits.push_back(p);
+                if (classIn(p, name)) hits.push_back(p);
             if (hits.empty()) continue;
             if (hits.size() > 1) {
                 diagnostic::report(diag, {ch->file_id, ch->name_tok,

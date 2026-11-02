@@ -94,6 +94,12 @@ Gm { Gnode<Key, Value>(Key key_, Value value_) { } }
 alias Gm;
 Gnode<Key=int, Value=bool>(alias rank_ = key_, alias flag_ = value_) { }
 
+/* the same namespace aliased TWICE is one namespace. */
+Dgm { Dnode<Key, Value>(Key key_, Value value_) { } }
+alias Dgm;
+alias Dgm;
+Dnode<Key=int, Value=int>(alias val_ = value_) { }
+
 /* a filter may implement a virtual the arm declared. */
 Vbox<T>(T a_) { virtual int v(); }
 Vbox<T=int>() { virtual int v() { return 50 + a_; } }
@@ -137,6 +143,8 @@ int32 main() {
     println(String + "cbox<bool> = " + cb.pick() + " " + cb.first + " " + (cb == 1));  // 8 true true
     Gnode<int, bool> g = (5, true);
     println(String + "gnode = " + g.rank_ + " " + g.flag_);                          // 5 true
+    Dnode<int, int> dn = (1, 6);
+    println(String + "dnode = " + dn.val_);                                          // 6
     Vbox<int> vi = (1);
     Vbox<bool> vb = (false);
     println(String + "vbox = " + vi.v() + " " + vb.v());                             // 51 60
