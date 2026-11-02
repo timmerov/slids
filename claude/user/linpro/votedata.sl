@@ -27,6 +27,17 @@ BlocMap() {
     }
 }
 
+slids:String to_string(
+    Rankings^ rankings
+) {
+    String s;
+    for (i : rankings^) {
+        ch char = 'A' + i;
+        s += ch;
+    }
+    return s;
+}
+
 /* return a bloc map of the voter data. */
 BlocMap get_voter_data() {
 

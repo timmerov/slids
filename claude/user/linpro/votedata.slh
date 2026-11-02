@@ -7,6 +7,7 @@ blocs of voter data.
 */
 
 import map;
+import string;
 import vector;
 
 /* candidate rankings. */
@@ -21,6 +22,9 @@ MapNode<Key=Rankings, Value=int>(
     alias size_ = value_
 ) {
 }
+
+/* return the key as a string. */
+slids:String to_string(Rankings^ rankings);
 
 /* return a bloc map of the voter data. */
 BlocMap get_voter_data();

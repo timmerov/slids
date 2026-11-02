@@ -44,7 +44,8 @@ LinPro(
     int ncandidates_ = 0,
     BlocMap bloc_map_,
     Candidates candidates_,
-    Candidates sorted_
+    Candidates sorted_,
+    int winner_ = 0
 ) {
     void run() {
         init();
@@ -55,9 +56,12 @@ LinPro(
         print_bloc_map();
         count_votes();
         sort_candidates();
+        winner_ = sorted_[0].number_;
         print_votes(candidates_);
         print_votes(sorted_);
         print_pairwise();
+
+        find_all_strategies();
     }
 
     void init() {
@@ -83,12 +87,8 @@ LinPro(
     void print_bloc_map() {
         println("Voting blocs:");
         for (it : bloc_map_) {
-            String s = " ";
-            for (i : it^.rankings_) {
-                ch char = 'A' + i;
-                s += ch;
-            }
-            println(s + ": " + it^.size_);
+            s = to_string(it^.rankings_);
+            println(String + " " + s + ": " + it^.size_);
         }
     }
 
@@ -166,6 +166,63 @@ LinPro(
             name = candidates_[i].name_;
             println(String + " " + name + ": " + wins[i]);
         }
+    }
+
+    void find_all_strategies() {
+        for (a : 0..ncandidates_) {
+            if (a == winner_) {
+                continue;
+            }
+            find_strategy(a);
+        }
+    }
+
+    void find_strategy(int a) {
+        namea char = candidates_[a].name_;
+        namew char = candidates_[winner_].name_;
+        println(String + "Looking for strategy for " + namea + ">" + namew + ":");
+
+        votesa = 0;
+        votesw = 0;
+        coalition_size = 0;
+        for (it : bloc_map_) {
+            choice = it^.rankings_[0];
+            bloc_name = to_string(it^.rankings_);
+            bloc_name = bloc_name + " (" + it^.size_ + ")";
+
+            /* voters for the winner do not vote strategically. */
+            if (choice == winner_) {
+                println(String + " " + bloc_name + " won.");
+                votesw += it^.size_;
+                continue;
+            }
+
+            /* A voters have no other strategy. */
+            if (choice == a) {
+                println(String + " " + bloc_name + " voted for " + namea + ".");
+                votesa += it^.size_;
+                continue;
+            }
+
+            /* find voters who prefer A>winner. */
+            for (preference : it^.rankings_) {
+                if (preference == winner_) {
+                    println(String + " " + bloc_name + " prefer " + namew + ">" + namea + ".");
+                    continue next_bloc;
+                }
+                if (preference == a) {
+                    println(String + " " + bloc_name + " should vote strategically.");
+                    break;
+                }
+            }
+
+            /* add to the coalition. */
+            coalition_size += it^.size_;
+        } : next_bloc;
+
+        println(String + " votes winner     " + namew + ": " + votesw);
+        println(String + " votes challenger " + namea + ": " + votesa);
+        println(String + " coalition size    : " + coalition_size);
     }
 }
 
