@@ -10,7 +10,7 @@ CXXFLAGS  = -std=c++17 -O2 -Wall
 
 BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
-BUILD_DIR = ../../build/test/$(DIR)
+BUILD_DIR = ../../build/user/$(DIR)
 
 # The library headers (lib/hdr) are on every compile's import path; the binary
 # links the merged library object build/lib/libslids.o.
@@ -27,7 +27,7 @@ SL_OBJS = $(addprefix $(BUILD_DIR)/,$(SL_SRCS:.sl=.o))
 .PHONY: all clean guthrie
 
 # The .ll files are chained-pattern intermediates; without this make deletes
-# them after the build. Keep them for inspection, as the other test dirs do.
+# them after the build. Keep them for inspection.
 .SECONDARY: $(SL_OBJS:.o=.ll)
 
 all: guthrie

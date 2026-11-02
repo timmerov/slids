@@ -1642,7 +1642,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   Canon: test/template complete.sl (`import+ vector` for Vector<Pt>;
   negatives: missing `import+ map`, unneeded `import+ map`, both ways);
   test/import (`import+ tmpl_lib` in tmpl_test/tmpl_test2/bird; the `.slh`
-  negative in tmpl_lib.slh); test/guthrie electorate.sl (the chaining case:
+  negative in tmpl_lib.slh); user/guthrie electorate.sl (the chaining case:
   `import+ vector;` beside `import electorate;`).
 
   SOURCE-PRIVATE FIELDS (canon 2026-08-17): everything a header declares is

@@ -6,14 +6,11 @@ SUBDIRS = \
 	expression \
 	flow \
 	function \
-	guthrie \
 	import \
 	lex \
 	lib \
 	misc \
 	pointer \
-	progress \
-	puzzles \
 	template \
 	tuple
 

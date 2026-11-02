@@ -4396,6 +4396,29 @@ FUNCTION POINTERS (LANDED 2026-10-27)
   Vector<int>, Item[4], Tracked[5] live count, all descending) + a mismatched-comparator
   negative.
 
+A RE-OPEN THROUGH AN ALIAS (LANDED 2026-11-02)
+  User: "BlocMap is an alias to a template. we can reopen templates. ergo we should be able to
+  reopen a template using its alias." `BlocMap() {` was "Duplicate declaration": registerClassName
+  merges only with a class entry and never looked through an alias.
+  - rewriteAliasReopens (resolve.cpp, relocation, right after qualifyAliasedReopens) rewrites the
+    opening to its target's spelling: a plain class, or the filter pinning a template use's
+    arguments. No new semantics; design in readme-classes.txt RE-OPENING CLASSES.
+  - qualifyAliasedReopens no longer counts a QUALIFIED sibling as a same-scope class. Two alias
+    openings of one target tripped it ("A constrained re-open needs the class template 'Vector'
+    declared before it"); the tests caught it. aliasedNamespacePaths + scopeListsAt factored out.
+  - Coverage: reopen_cls.sl (plain, chain, qualified, alias Ns + primitive, field-bearing,
+    out-of-reach negatives); reopen_tmpl.sl (local flavor, qualified target, header template bare
+    and qualified + other flavor, header method, two-namespace negatives); tmpl_test.sl (SpecB
+    field alias on a header template + PrivW private-alias negative; tmpl_lib2.slh declares PrivW).
+  OPEN (todo): consumer METHODS on a header template, which user/linpro votedata.sl needs; two bare
+  re-opens through `alias Ns;`.
+
+test/ + user/ SPLIT (user, 2026-11-02)
+  test/guthrie, test/puzzles and test/progress moved out of the regression suite to user/guthrie,
+  user/puzzles, user/galaxy and user/linpro; make.sh builds test/ then user/. user/ programs have
+  no tests: the Makefiles lost negatives/positives and build into build/user/<dir>. Older entries
+  in this file keep the paths of their day.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

@@ -18,6 +18,9 @@ echo "running type-arena self-test..."
 echo "building test code..."
 make ${OPTS} -C test/ || { echo "test build FAILED"; exit 1; }
 
+echo "building user code..."
+make ${OPTS} -C test/ || { echo "user build FAILED"; exit 1; }
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

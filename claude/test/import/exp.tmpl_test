@@ -63,3 +63,4 @@ hybpriv = 102
 spec = 1 12 0 8 8 0
 spec aliases = 3 4 true
 part alias = 6 hybrid alias = 1
+alias re-open = true

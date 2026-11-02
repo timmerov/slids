@@ -1496,6 +1496,26 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   re-open-shaped and stays a separate file-scope class — which a bare name never reaches,
   because the open-namespace chain (alias imports included) is searched before file scope.
 
+  A RE-OPEN THROUGH AN ALIAS (2026-11-02, user). A re-open-shaped opening whose name is an alias
+  is the opening of the alias's target. rewriteAliasReopens runs in relocation right after
+  qualifyAliasedReopens, reads the SYNTAX, and rewrites the node to the spelling the author could
+  have written, so every rule of that spelling applies: `alias P = Plain; P() { }` is
+  `Plain() { }`; `alias B = Ns:Box<int>; B() { }` is the FILTER `Ns:Box<_$a0=int>() { }` (readme
+  CLASS-TEMPLATE ARMS), its parameters pinned positionally to the use's arguments, so only that
+  flavor gets the members. The alias is found beside the opening, at a qualified path
+  (`Ns:Q() { }`), or in an aliased namespace, follows chains, and must be visible from the
+  opening's file (declVisibleAt). The target spells its path relative to the alias's scope, and
+  must be a class in reach of THIS scope: an unqualified target found only through `alias Ns;` is
+  qualified here (two openings of one target must not read as local siblings). A QUALIFIED
+  sibling is headed elsewhere, so it is no local class to either pass. Anything else leaves the
+  opening alone and it collides ("Duplicate declaration"): an alias to a non-class, an alias
+  template, a field-bearing opening, a target out of reach (a bare constrained opening of a
+  merely-visible template would mint a new template), a private alias, and every RUN-TIME scope
+  (a re-open there is a refinement). An alias in two aliased namespaces: "'X' names more than one
+  member of the aliased namespaces; qualify the re-open." A header template stays consumer-
+  aliases-only through an alias (the error names the target). Canon test/class/reopen_cls.sl,
+  test/template/reopen_tmpl.sl, test/import/tmpl_test.sl (SpecB, PrivW).
+
   SAME-SCOPE for classes; namespaces open anywhere. A CLASS re-open is same-scope: the target
   must be a local sibling opening in THIS `children`. Re-opening a class merely VISIBLE from an
   enclosing scope fails the local walk — and what happens then depends on the SCOPE KIND
@@ -1557,7 +1577,7 @@ FIELD ALIASES (landed 2026-10-23; spans grammar / resolve / constfold / classify
     with field aliases ONLY (aliasesOnlyOpening: no field, no member of any kind) — aliases
     expand in its own classify, so no flavor symbol changes; anything else is still "defined
     by its module's source file". Plain re-opens and constrained ones (filters, readme.txt
-    CLASS-TEMPLATE ARMS) alike — guthrie 471's `MapNode<Key=Rankings, Value=Bloc>(alias ..)`
+    CLASS-TEMPLATE ARMS) alike — user/guthrie's `MapNode<Key=Rankings, Value=Bloc>(alias ..)`
     under `alias slids;`. COMPLETENESS IS THE HEADER'S: such an opening carries a trailing
     `...` exactly when the header declares the class incomplete, and changes nothing — a TU
     that side-loads the template source (`import+`) has seen the completion, one that does

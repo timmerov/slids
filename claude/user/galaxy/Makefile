@@ -9,14 +9,13 @@ LLCFLAGS  = --filetype=obj --relocation-model=pic
 
 BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
-BUILD_DIR = ../../build/test/$(DIR)
+BUILD_DIR = ../../build/user/$(DIR)
 
 # The library: string.slh / math.slh / dump.slh / vector.slh live in lib/hdr, and a
 # TEMPLATE library's source sits BESIDE its header there (dump.sl, vector.sl — the
 # lexer loads the template source next to an imported header). The merged libslids.o
-# lands in build/lib (lib's Makefile owns it — make.sh builds lib/ before test/).
+# lands in build/lib (lib's Makefile owns it — make.sh builds lib/ before user/).
 # Consumers here compile with -I so `import string;` / `import vector;` resolve.
-# The library's own tests live in test/lib.
 LIB       = ../../lib
 LIB_HDR   = $(LIB)/hdr
 LIB_BUILD = ../../build/lib
@@ -27,15 +26,9 @@ IFLAGS    = -I $(LIB_HDR)
 SAMPLES = \
 	galaxy
 
-.PHONY: all clean negatives positives $(SAMPLES)
+.PHONY: all clean $(SAMPLES)
 
 all: $(SAMPLES)
-
-negatives:
-
-# No golden here. `galaxy` is work in progress — its output changes freely, so
-# pinning it would just be churn.
-positives: all
 
 # THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
 # its template-library instantiation stage — the libraries it pulls in, their

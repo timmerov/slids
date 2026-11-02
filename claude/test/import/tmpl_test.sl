@@ -70,6 +70,9 @@ Twin(int t_ = 3) {
    incomplete Part / Hybrid, kept open with a trailing `...`. */
 Spec<T=int>(alias zed_ = z_) { }
 Spec<T=<int8|bool>>(alias first_ = a_) { }
+/* a re-open through an alias: the same filter, pinned to the alias's flavor. */
+alias SpecB = Spec<bool>;
+SpecB(alias sb_ = a_) { }
 Part<T>(alias pp_ = pub_, ...) { }
 Hybrid(alias ha_ = a, ...) { }
 
@@ -448,6 +451,7 @@ int32 main() {
     println(String + "spec aliases = " + spi.zed_ + " " + sp8.first_ + " " + spb.first_);
     Part<int> ppa(6);
     println(String + "part alias = " + ppa.pp_ + " hybrid alias = " + hyba.ha_);
+    println(String + "alias re-open = " + spb.sb_);                                  // true
 
     return 0;
 }
@@ -467,3 +471,8 @@ int32 main() {
 /* ...and the incomplete header CLASS. */
 //-EXPECT-ERROR: This opening completes 'Hybrid', which its module defines; add a trailing '...' to keep it open.
 //Hybrid(alias hb_ = a) { }
+
+/* THE VISIBILITY RULE: an alias reached only through tmpl_lib.sl's own import is private,
+   so an opening cannot re-open through it. */
+//-EXPECT-ERROR: Duplicate declaration of 'PrivW'
+//PrivW() { }

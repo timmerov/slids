@@ -1,0 +1,26 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+blocs of voter data.
+*/
+
+import map;
+import vector;
+
+/* candidate rankings. */
+alias Rankings = slids:Vector<int>;
+
+/* map the rankings to the size of the bloc */
+alias BlocMap = slids:Map<Rankings, int>;
+
+/* alias the key and value to rankings and size. */
+MapNode<Key=Rankings, Value=int>(
+    alias rankings_ = key_,
+    alias size_ = value_
+) {
+}
+
+/* return a bloc map of the voter data. */
+BlocMap get_voter_data();

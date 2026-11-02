@@ -107,6 +107,13 @@ BUGS
     qualifyAliasedReopens (resolve.cpp) counts one hit per alias entry, not per distinct
     namespace. dedupe the paths. also fires across files: candidate.slh + guthrie.sl.
 
+  * two bare re-opens of a class through `alias Ns;` silently make a new local class:
+    Al { Abox(int v_) { } } alias Al;
+    Abox() { int one() { return v_ + 1; } } Abox() { int two() { return v_ + 2; } }
+    use: "Class 'Abox' has no method 'one'." qualifyAliasedReopens reads the second opening
+    as a same-scope class, so neither reaches Al. an alias re-open of a class that also has
+    bare re-opens in the file meets the same local class.
+
 UNBLOCKED FEATURES
 
   * allow construction with move operator.
@@ -232,8 +239,7 @@ UNBLOCKED FEATURES
       root it at the receiver).
 
   * FIELD ALIAS REOPENS — reaching a class from other scopes, to add aliases (user, 2026-10-23).
-    canon: test/misc/alias_msc.sl; real use: test/guthrie guthrie.sl 471 + 594 (the use
-    block at 594 is commented out — unexercised).
+    canon: test/misc/alias_msc.sl; real use: user/guthrie runner.sl:309.
     - the explicit forms with a NON-EMPTY (alias) list must reopen slids:MapNode:
         slids:MapNode<.>(..)            slids:TreeNode:MapNode<.>(..)
         slids { MapNode<.>(..) }        slids { TreeNode:MapNode<.>(..) }
@@ -241,7 +247,10 @@ UNBLOCKED FEATURES
       open: `Ns:X(non-empty)` is still INHERITANCE from Ns, silent; a 3+ segment head with
       a non-empty list is "Expected function name"; `Ns { X<.>(alias ..) }` is untested.
     - a consumer re-open of a header template may add METHODS in some cases (user,
-      2026-10-24: deferred); today aliases only.
+      2026-10-24: deferred); today aliases only. user/linpro votedata.sl needs it:
+      `alias BlocMap = slids:Map<Rankings, int>; BlocMap() { void insert(char[], int) { .. } }`.
+      proposal, not ruled on: non-virtual, all parameters pinned, emitted internal to the TU
+      (tu_local_instance), visible only where the opening is.
     - checkTemplateAliasRoots skips a base that doesn't resolve (a namespace base); make it
       an error.
     - lookup precedence: under `alias Ns;` a FIELD-bearing file-scope `X(..)` (not re-open-

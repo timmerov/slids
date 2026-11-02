@@ -12,4 +12,7 @@ make ${OPTS} -C lib/
 echo "building test code..."
 make ${OPTS} -C test/
 
+echo "building user code..."
+make ${OPTS} -C user/
+
 echo "done!"

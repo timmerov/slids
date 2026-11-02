@@ -9283,15 +9283,9 @@ bool openingDerivesFrom(parse::Node const* n, std::string const& base) {
     return b == base;
 }
 
-// `alias Ns;` puts Ns in the SAME scope: a bare re-open-shaped class opening (no
-// fields, no base) whose name is no local sibling's but IS a class in an aliased
-// namespace re-opens that class — rewritten to the explicit `Ns:X() { }` form, so
-// the relocation below (and every rule the explicit form obeys) handles it. Runs
-// before registration, so it reads the SYNTAX: the alias siblings' paths and the
-// namespace openings in this `children`. A class in two aliased namespaces is an
-// error — the re-open must be qualified.
-void qualifyAliasedReopens(std::vector<std::unique_ptr<parse::Node>>& children,
-                           diagnostic::Sink& diag) {
+// Every namespace import path (`alias Ns;`, `alias A:B;`) among `children`.
+std::vector<std::vector<std::string>> aliasedNamespacePaths(
+        std::vector<std::unique_ptr<parse::Node>>& children) {
     std::vector<std::vector<std::string>> paths;
     for (auto& ch : children)
         if (ch && ch->kind == parse::Kind::kAliasDecl
@@ -9301,6 +9295,169 @@ void qualifyAliasedReopens(std::vector<std::unique_ptr<parse::Node>>& children,
             p.push_back(ch->name);
             paths.push_back(std::move(p));
         }
+    return paths;
+}
+
+// The child lists of every opening at `path`, walked from `children`. Empty when a
+// segment names nothing.
+std::vector<std::vector<std::unique_ptr<parse::Node>>*> scopeListsAt(
+        std::vector<std::unique_ptr<parse::Node>>& children,
+        std::vector<std::string> const& path) {
+    std::vector<std::vector<std::unique_ptr<parse::Node>>*> lists{&children};
+    for (std::string const& seg : path) {
+        std::vector<parse::Node*> openings;
+        for (auto* list : lists) collectScopeOpenings(*list, seg, openings);
+        lists.clear();
+        for (parse::Node* n : openings) lists.push_back(&n->children);
+    }
+    return lists;
+}
+
+// A re-open THROUGH AN ALIAS: `alias X = Plain; X() { }` is `Plain() { }`, and
+// `alias X = Ns:Box<int>; X() { }` is the FILTER `Ns:Box<_$a0=int>() { }` — the
+// spelling the author could have written, so it obeys every rule that spelling does.
+// Only an alias naming a class or a class-template use qualifies; a target that is
+// not a class in reach of THIS scope leaves the opening alone (it still collides),
+// since a re-open is a same-scope construct and a bare constrained opening of a
+// merely-visible template would otherwise mint a new one. Runs before registration,
+// so it reads the SYNTAX, like qualifyAliasedReopens, which runs just before it.
+void rewriteAliasReopens(parse::Tree& tree,
+                         std::vector<std::unique_ptr<parse::Node>>& children,
+                         diagnostic::Sink& diag) {
+    using F = widen::Type::Form;
+    std::vector<std::vector<std::string>> const ns_paths = aliasedNamespacePaths(children);
+    auto aliasIn = [&](std::vector<std::string> const& path, std::string const& name,
+                       int access_file) -> parse::Node* {
+        for (auto* list : scopeListsAt(children, path))
+            for (auto& n : *list)
+                if (n && n->kind == parse::Kind::kAliasDecl && n->name == name
+                    && n->qualifier.empty() && n->return_type != widen::kNoType
+                    && !n->type_set && n->type_params.empty()
+                    && parse::declVisibleAt(tree, n->file_id, access_file))
+                    return n.get();
+        return nullptr;
+    };
+    auto classIn = [&](std::vector<std::string> const& path, std::string const& name) {
+        std::vector<parse::Node*> found;
+        for (auto* list : scopeListsAt(children, path))
+            collectScopeOpenings(*list, name, found);
+        for (parse::Node* n : found)   // a QUALIFIED opening is headed elsewhere
+            if (n->kind == parse::Kind::kClassDef && n->qualifier.empty()) return true;
+        return false;
+    };
+    // The alias `name` names at `path`, and the path it sits at: its own scope, then
+    // (for a bare name) the aliased namespaces. `ambiguous`: more than one candidate.
+    auto findAlias = [&](std::vector<std::string>& path, std::string const& name,
+                         int access_file, bool& ambiguous) -> parse::Node* {
+        if (parse::Node* a = aliasIn(path, name, access_file)) return a;
+        if (!path.empty()) return nullptr;
+        parse::Node* hit = nullptr;
+        std::vector<std::string> hit_path;
+        bool class_hit = false;
+        for (auto const& p : ns_paths) {
+            if (classIn(p, name)) class_hit = true;
+            parse::Node* a = aliasIn(p, name, access_file);
+            if (!a || a == hit) continue;
+            if (hit) ambiguous = true;
+            hit = a;
+            hit_path = p;
+        }
+        if (hit && class_hit) ambiguous = true;
+        if (hit) path = std::move(hit_path);
+        return hit;
+    };
+    for (auto& ch : children) {
+        if (!ch || ch->kind != parse::Kind::kClassDef || ch->is_usurper
+            || !ch->type_params.empty()) continue;
+        bool shaped = true;   // a re-open: no fields and no base
+        for (auto& p : ch->params)
+            if (p && p->name != "_$vptr") { shaped = false; break; }
+        if (!shaped) continue;
+        bool instance_qualified = false;
+        for (auto const& q : ch->qualifier)
+            if (q.find('<') != std::string::npos) instance_qualified = true;
+        if (instance_qualified) continue;
+        std::vector<std::string> path = ch->qualifier;
+        std::string name = ch->name;
+        bool ambiguous = false;
+        parse::Node* alias = findAlias(path, name, ch->file_id, ambiguous);
+        if (ambiguous) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "'" + ch->name + "' names more than one member of the aliased "
+                "namespaces; qualify the re-open.", {}});
+            ch.reset();
+            continue;
+        }
+        // Follow the chain to the class. `visited` stops an alias cycle, which
+        // resolve reports at the alias itself.
+        std::vector<parse::Node*> visited;
+        widen::TypeRef target = widen::kNoType;
+        while (alias && std::find(visited.begin(), visited.end(), alias) == visited.end()) {
+            visited.push_back(alias);
+            target = alias->return_type;
+            F form = widen::form(target);
+            if (form != F::kSlid && form != F::kTmplUse) { target = widen::kNoType; break; }
+            // The target spells its path relative to the alias's scope.
+            std::string spelled = widen::get(target).name;
+            std::size_t start = 0, colon;
+            while ((colon = spelled.find(':', start)) != std::string::npos) {
+                path.push_back(spelled.substr(start, colon - start));
+                start = colon + 1;
+            }
+            name = spelled.substr(start);
+            if (form != F::kSlid) break;
+            alias = findAlias(path, name, ch->file_id, ambiguous);
+        }
+        if (target == widen::kNoType || ambiguous) continue;
+        // In reach of this scope? A bare target may also sit in an aliased namespace,
+        // which qualifies it here: two openings of one target must not read as local
+        // siblings of each other.
+        if (!classIn(path, name)) {
+            if (!path.empty()) continue;
+            std::vector<std::vector<std::string>> hits;
+            for (auto const& p : ns_paths)
+                if (classIn(p, name) && std::find(hits.begin(), hits.end(), p) == hits.end())
+                    hits.push_back(p);
+            if (hits.empty()) continue;
+            if (hits.size() > 1) {
+                diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                    "'" + name + "' is a class in more than one aliased namespace; "
+                    "qualify the re-open.", {}});
+                ch.reset();
+                continue;
+            }
+            path = hits[0];
+        }
+        ch->name = name;
+        ch->qualifier = path;
+        ch->qualifier_toks.assign(path.size(), ch->name_tok);
+        if (widen::form(target) == F::kTmplUse) {
+            std::vector<widen::TypeRef> const args = widen::get(target).slots;
+            for (std::size_t i = 0; i < args.size(); i++) {
+                ch->type_params.push_back("_$a" + std::to_string(i));
+                ch->type_param_toks.push_back(ch->name_tok);
+                auto spec = std::make_unique<parse::SpecConstraint>();
+                spec->kind = parse::SpecConstraint::K::kSetName;
+                spec->type_spelling = args[i];
+                spec->name_tok = ch->name_tok;
+                ch->type_param_specs.push_back(std::move(spec));
+            }
+        }
+    }
+    children.erase(std::remove(children.begin(), children.end(), nullptr),
+                   children.end());
+}
+
+// `alias Ns;` puts Ns in the SAME scope: a bare re-open-shaped class opening (no
+// fields, no base) whose name is no local sibling's but IS a class in an aliased
+// namespace re-opens that class — rewritten to the explicit `Ns:X() { }` form, so
+// the relocation below (and every rule the explicit form obeys) handles it. Runs
+// before registration, so it reads the SYNTAX: the alias siblings' paths and the
+// namespace openings in this `children`. A class in two aliased namespaces is an
+// error — the re-open must be qualified.
+void qualifyAliasedReopens(std::vector<std::unique_ptr<parse::Node>>& children,
+                           diagnostic::Sink& diag) {
+    std::vector<std::vector<std::string>> const paths = aliasedNamespacePaths(children);
     if (paths.empty()) return;
     for (auto& ch : children) {
         if (!ch || ch->kind != parse::Kind::kClassDef || !ch->qualifier.empty()
@@ -9311,7 +9468,12 @@ void qualifyAliasedReopens(std::vector<std::unique_ptr<parse::Node>>& children,
         if (!shaped) continue;
         std::vector<parse::Node*> local;
         collectScopeOpenings(children, ch->name, local);
-        if (local.size() > 1) continue;   // a same-scope class wins
+        // A same-scope class wins. A QUALIFIED sibling is headed elsewhere, so it is
+        // not one.
+        std::size_t same_scope = 0;
+        for (parse::Node* n : local)
+            if (n->qualifier.empty()) same_scope++;
+        if (same_scope > 1) continue;
         std::vector<std::vector<std::string> const*> hits;
         for (auto const& path : paths) {
             std::vector<parse::Node*> level;
@@ -9353,7 +9515,12 @@ void relocateOutOfLineMembers(parse::Tree& tree,
     // local sibling. File / namespace / class scopes never refine — there a
     // non-local target still errors per segment.
     if (runtime_scope) mintUsurpers(tree, children);
-    else qualifyAliasedReopens(children, diag);
+    else {
+        // In this order: a bare opening of a class in an aliased namespace is qualified
+        // first, so the alias rewrite does not read it as a local class.
+        qualifyAliasedReopens(children, diag);
+        rewriteAliasReopens(tree, children, diag);
+    }
     bool moved = false;
     for (auto& ch : children) {
         if (!ch) continue;

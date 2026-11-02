@@ -30,6 +30,11 @@ rule); the last segment's base step reaches a template deriving from a plain cla
 name is a class in an aliased namespace becomes the explicit `Ns:X` form before
 relocation (qualifyAliasedReopens); a class in two aliased namespaces must be qualified.
 
+A RE-OPEN THROUGH AN ALIAS is the target's opening (rewriteAliasReopens, just before
+qualifyAliasedReopens): an alias naming a template use becomes the filter pinning its
+arguments, positionally, and obeys every rule that filter does. reopen_cls.sl owns the
+plain-class half; tmpl_test.sl owns the field-alias and private-import cases.
+
 A HEADER TEMPLATE is defined by its module's source file: a consumer re-open is rejected
 in every spelling — qualified and through `alias slids;` alike.
 
@@ -97,6 +102,19 @@ Vbox<T=bool>() { virtual int v() { return 60; } }
 /* the qualified spelling filters too. */
 Tq:Qbox<T=int>() { T four() { return 4; } }
 
+/* A RE-OPEN THROUGH AN ALIAS: the alias names one flavor, so the opening is the FILTER
+   pinning its arguments — local template, qualified target, and a header template
+   (empty here: a consumer adds aliases only), bare under `alias slids;` and qualified. */
+Afl<T>(T v_) { T get() { return v_; } }
+alias AflI = Afl<int>;
+AflI() { int twice() { return v_ * 2; } }
+alias Qi = Tq:Qbox<int>;
+Qi() { int five() { return 5; } }
+alias Av = Vector<int>;
+Av() { }
+alias AvQ = slids:Vector<int>;
+AvQ() { }
+
 int32 main() {
     Tq:Qbox<int> q = (7);
     println(String + "qbox = " + q.twice() + " " + q.thrice() + " " + q.plus1());  // 14 21 8
@@ -123,6 +141,13 @@ int32 main() {
     Vbox<bool> vb = (false);
     println(String + "vbox = " + vi.v() + " " + vb.v());                             // 51 60
     println(String + "qbox four = " + q.four());                                     // 4
+    AflI af = (21);
+    Afl<int8> af8 = (5);
+    println(String + "afl = " + af.twice() + " " + af8.get());                       // 42 5
+    println(String + "qbox five = " + q.five());                                     // 5
+    Av av;
+    av.append(9);
+    println(String + "av = " + av[0]);                                               // 9
     return 0;
 }
 
@@ -174,3 +199,19 @@ int32 main() {
 /* its list must match an arm's COUNT. */
 //-EXPECT-ERROR: A re-open's template list must match class template 'Cbox's.
 //Cbox<T, U=int>() { }
+
+/* a re-open through an alias reaches only the alias's flavor. */
+//-EXPECT-ERROR: Class 'Afl<int8>' has no method 'twice'
+//int32 use_twice() { Afl<int8> c = (1); return c.twice(); }
+
+/* a consumer's method on a HEADER template is rejected through an alias too. */
+//-EXPECT-ERROR: defined by its module's source file; 'Vector' cannot be re-opened here
+//AvQ() { int extra() { return 1; } }
+
+/* an alias in two aliased namespaces: the bare re-open must be qualified. */
+//-EXPECT-ERROR: 'Yt' names more than one member of the aliased namespaces
+//Ya { Yc<T>(T v_) { } alias Yt = Yc<int>; }
+//Yb { Yd<T>(T v_) { } alias Yt = Yd<int>; }
+//alias Ya;
+//alias Yb;
+//Yt() { }

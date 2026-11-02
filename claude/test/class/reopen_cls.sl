@@ -395,6 +395,18 @@ Al { Abox(int v_) { } }
 alias Al;
 Abox() { int inc() { return v_ + 1; } }
 
+/* A RE-OPEN THROUGH AN ALIAS: the opening is the target's, through a chain, a qualified
+   path, and `alias Ns;`. */
+Rplain(int v_) { }
+alias Rp = Rplain;
+alias Rq = Rp;
+Rp() { int one() { return v_ + 1; } }
+Rq() { int two() { return v_ + 2; } }
+Rn { Rin(int v_) { } alias Rai = Rin; }
+Rn:Rai() { int m() { return v_ * 2; } }
+alias Rn;
+Rai() { int k() { return v_ * 3; } }
+
 Forward(int a_) {
     _(); ~();
 }
@@ -592,6 +604,10 @@ int32 main() {
     println(String + "tb.twice = " + tb.twice());      // 42   (qualified template re-open)
     Abox ab = (6);
     println(String + "ab.inc = " + ab.inc());          // 7    (re-open via alias Ns)
+    Rplain rp = (5);
+    println(String + "rp = " + rp.one() + " " + rp.two());  // 6 7  (through an alias, a chain)
+    Rn:Rin rin = (4);
+    println(String + "rin = " + rin.m() + " " + rin.k());   // 8 12 (qualified, alias Ns)
 
     Forward fwd;
     Split sp = (3);                             // hooks defined in two SEPARATE re-opens
@@ -748,3 +764,17 @@ int32 main() {
 //Ha:Hb(int b_) { }
 //Hc(int c_) { Hd(int d_) { } }
 //Ha:Hb:Hc:Hd() { }
+
+/* only an alias naming a class re-opens: an alias to a primitive still collides. */
+//-EXPECT-ERROR: Duplicate declaration of 'Rint'
+//alias Rint = int;
+//Rint() { }
+
+/* a field-bearing opening is no re-open, through an alias or not. */
+//-EXPECT-ERROR: Duplicate declaration of 'Rf'
+//alias Rf = Rplain;
+//Rf(int w_) { }
+
+/* a re-open is same-scope: the alias's target must be in reach of THIS scope. */
+//-EXPECT-ERROR: Duplicate declaration of 'Ro'
+//Rs { alias Ro = Rplain; Ro() { } }
