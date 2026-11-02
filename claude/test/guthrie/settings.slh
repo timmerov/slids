@@ -1,0 +1,154 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+configuration settings.
+*/
+
+/* number of trials. */
+//const int kNTrials = 1;
+//const int kNTrials = 10;
+//const int kNTrials = 30;
+//const int kNTrials = 100;
+const int kNTrials = 300;
+//const int kNTrials = 1000;
+//const int kNTrials = 10*1000;
+//const int kNTrials = 30*1000;
+
+/* number of voters. */
+//const int kNVoters = 20;
+//const int kNVoters = 50;
+//const int kNVoters = 100;
+const int kNVoters = 1000;
+//const int kNVoters = 10*1000;
+
+/* number of candidates */
+//const int kNCandidates = 3;
+const int kNCandidates = 4;
+//const int kNCandidates = 5;
+//const int kNCandidates = 6;
+//const int kNCandidates = 7;
+//const int kNCandidates = 9;
+
+/* options for distributing the electorate. */
+//const int kElectorateMethod = kElectorateUniform;
+//const int kElectorateMethod = kElectorateRandom;
+const int kElectorateMethod = kElectorateClusters;
+
+/* options for clustered method. */
+const int kNClusters = kNCandidates * 2;
+
+/* options for number of issue dimensions (axes). */
+//const int kNAxes = 1;
+const int kNAxes = 2;
+//const int kNAxes = 3;
+
+/*
+option for relative weighting of the axes.
+the major axis has a weight of 1.0.
+successive axes are scaled by this factor.
+should be >0.0 and <=1.0.
+intutition says 0.4 would be reasonable.
+this means most real world issues are reasonably correlated.
+and/or the minor issues are less important than the major one.
+which seems to be the case.
+1.0 means we have many uncorrelated issues.
+and they are all equally important.
+which seems a bit of a stretch.
+*/
+const float64 kAxisWeightDecay = 0.4;
+//const float64 kAxisWeightDecay = 1.0;
+
+/* options for choosing candidates */
+const int kCandidatesRandom = 0;
+const int kCandidatesSingleTransferableVote = 1;
+const int kCandidateMethod = kCandidatesSingleTransferableVote;
+
+/*
+with the single transferable vote primary...
+we choose a number of voters to be candidates.
+intutition says the number should be between the cube root (0.333)
+and the square root (0.5) of the number of voters.
+too few is not a representative statistical distribution of the voters.
+too many takes too long and doesn't help.
+might even hurt.
+default compromise is about 0.4.
+*/
+const float64 kPrimaryPower = 0.4;
+
+/*
+the assumption is voters are more radical than candidates.
+we select candidates at random from the voters.
+then we move them towards the middle.
+a dispersion factor of 1.00 means don't move them at all.
+0.00 means move them to the exact center.
+real world estimates for dispersion range from 0.3 to 0.9.
+with best guess around 0.7.
+low dispersion amplifies errors by the electoral method.
+with dispersion around 0.7, plurality satisfaction is 0.0 or negative.
+interesting.
+*/
+//const float64 kDispersion = 1.0;
+const float64 kDispersion = 0.7;
+//const float64 kDispersion = 0.3;
+
+/* option to use a fixed seed for testing. */
+const uint64 kSeedChoice = 0;
+//const uint64 kSeedChoice = 1793407968632400750;
+
+/*
+option to use approval votes to find guthrie winner.
+this seems like it should work well.
+but it actually increases the opportunities for strategic voting
+that lowers total voter satisfaction.
+this is not recommended.
+*/
+const bool kUseApprovalVotes = false;
+//const bool kUseApprovalVotes = true;
+
+/*
+option to find the theoretical best candidate from the voters.
+this feature is expensive and not used by the art.
+*/
+//const bool kFindTheoreticalBestCandidate = true;
+const bool kFindTheoreticalBestCandidate = false;
+
+/*
+option to use the median voter and a constructed average voter
+for calculating voter satisfaction.
+this is not recommended.
+*/
+//const bool kUseMedianForSatisfaction = true;
+const bool kUseMedianForSatisfaction = false;
+
+/*
+option to show the electorate distribution.
+this is a bit spammy.
+*/
+//const bool kShowElectorateDistribution = true;
+const bool kShowElectorateDistribution = false;
+
+/*
+option to show the voter blocs.
+this is a bit spammy.
+*/
+const bool kShowVoterBlocs = true;
+//const bool kShowVoterBlocs = false;
+
+/*
+option to show details of all coombs rounds.
+this is a bit spammy.
+*/
+//const bool kShowCoombsRounds = true;
+const bool kShowCoombsRounds = false;
+
+/*
+option to explain voter strategies for each method
+in the summary.
+*/
+//const bool kExplainStrategies = false;
+const bool kExplainStrategies = true;
+
+/* some functions should sometimes be quiet. */
+const bool kQuiet = true;

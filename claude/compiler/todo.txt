@@ -101,6 +101,12 @@ BUGS
   * swapping const values compiles: void swap(int a[2]) { a[0] <--> a[1]; } (a is a const
     array param). the const-lvalue wall skips swap (classify.cpp says swap is deferred).
 
+  * aliasing the same namespace twice false-errors a bare re-open:
+    alias slids; alias slids; MapNode<Key=int, Value=int>(alias v_ = value_) { }
+    "'MapNode' is a class in more than one aliased namespace; qualify the re-open."
+    qualifyAliasedReopens (resolve.cpp) counts one hit per alias entry, not per distinct
+    namespace. dedupe the paths. also fires across files: candidate.slh + guthrie.sl.
+
 UNBLOCKED FEATURES
 
   * allow construction with move operator.
@@ -270,6 +276,26 @@ UNBLOCKED FEATURES
     token can't start an operand. `h^^.field` works; `fn_hdl^^(args)` doesn't. rare.
     - workaround: `fn_hdl^ ^(args)`.
     - making `^^(` a call breaks `x ^^ (y)` xor (test/flow/while.sl:342 spells it).
+
+  * THE SCOPE OF A NAMESPACE ALIAS ENDS AT THE FILE. today a file-scope `alias Ns;` applies to
+    the whole TU: candidate.slh's `alias slids;` reaches everything that imports it.
+    - symptom: `alias slids;` in both candidate.slh and guthrie.sl fails guthrie.sl:309 with
+      "'MapNode' is a class in more than one aliased namespace; qualify the re-open."
+    - the same-file duplicate alias false-error is a separate item under BUGS.
+    - rule: a header's alias does not reach its importers. no exception for a .slh/.sl pair:
+      candidate.sl needs its own alias to use Vector bare.
+    - where the scope starts: keep today's behavior, the whole file, even above the alias line.
+      slids_reference.md says "for the rest of the scope".
+    - template bodies use the aliases of the file that defines them, never the consumer's.
+    - aliases in a function or namespace body keep their narrower scope. unchanged.
+    - work: open_ns_frames is one flat list, never popped (resolve.cpp, pass 1a-import). tag
+      each entry with its file and filter lookups on the using file (AccessFileScope tracks
+      it). qualifyAliasedReopens filters on ch->file_id.
+    - unverified: out-of-line members merged from another file. a method body in candidate.sl
+      must use candidate.sl's aliases. check that the file switches per member, not per
+      top-level declaration. template scope snapshots need the same check.
+    - a .sl relying on the leak by accident breaks. candidate.slh is the only .slh under lib
+      and test with a bare alias, but only a suite run shows the .sl side.
 
 
 BLOCKED FEATURES

@@ -1,0 +1,35 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+candidate classes.
+*/
+
+import electorate;
+import vector;
+
+alias Rankings = slids:Vector<int>;
+alias Utilities = slids:Vector<float64>;
+
+Candidate(
+    /* generated name */
+    char name_ = '?',
+
+    /* position along the axis ranges from 0..1 */
+    Position position_,
+
+    /* vote total aka asset */
+    int support_ = 0,
+
+    /* ranking of other candidates. */
+    Rankings rankings_,
+    Utilities utilities_,
+
+    /* utility */
+    float64 utility_ = 0.0
+) {
+    /* for sorting */
+    bool const op<(Candidate^ other);
+}
+alias Candidates = slids:Vector<Candidate>;
