@@ -20,14 +20,32 @@ import string;
 import votedata;
 alias slids;
 
+LinPro(
+    int ncandidates_,
+    BlocMap bloc_map_
+) {
+    void run() {
+        bloc_map_ = get_voter_data();
+        if (bloc_map_.size() == 0) {
+            println("Failed to get voter data.");
+            return;
+        }
+
+        it = bloc_map_.begin();
+        ncandidates_ = (int=it^.rankings_.size());
+        println(String + "ncandidates: " + ncandidates_);
+
+        print_bloc_map();
+    }
+
+    void print_bloc_map() {
+    }
+}
+
 int32 main() {
 
-    println("Hello, World!");
-
-    bloc_map = get_voter_data();
-    println(bloc_map.size());
-
-    println("Goodbye, World!");
+    LinPro linpro;
+    linpro.run();
 
     return 0;
 }

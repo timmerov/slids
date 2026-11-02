@@ -12,6 +12,7 @@ import tree;
 /* slids namespace */
 slids {
 
+/* MapNode adds key and value to a base red/black tree. */
 TreeNode : MapNode<Key, Value>(
     Key key_,
     Value value_
@@ -20,18 +21,46 @@ TreeNode : MapNode<Key, Value>(
     ~();
 }
 
+/* map of key/value pairs. */
 Map<Key, Value>(...) {
+
+    /* iterator */
     alias MapIter = MapNode<Key, Value>^;
 
     _(); ~();
 
+    /*
+    assignment from Map.
+    copy operator.
+    rhs may be self.
+    */
+    op=(Map<Key,Value>^ map);
+
+    /*
+    move operator.
+    rhs may be self.
+    */
+    op<--(mutable Map<Key,Value>^ map);
+
+    /* size of map. */
     intptr size();
+
+    /* first element of map. */
     MapIter begin();
+
+    /* end of the map. */
     MapIter end();
+
+    /* step to the next iterator. */
     MapIter next(MapIter it);
 
+    /* remove all elements from the map. */
     void clear();
+
+    /* find the element with the key. */
     MapIter find(Key key );
+
+    /* insert the key/value pair into the map. */
     void insert(mutable Key key, mutable Value value);
 }
 
