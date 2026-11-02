@@ -3,14 +3,14 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 */
 
 /*
-guthrie voting.
+test harness for comparing guthrie voting to other methods.
 */
 
-import guthrie;
+import runner;
 
 int32 main() {
 
-    g_guthrie.run();
+    g_runner.run();
 
     return 0;
 }

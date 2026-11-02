@@ -259,10 +259,10 @@ import+ algorithm;
 import candidate;
 import dump;
 import electorate;
-import guthrie;
 import math;
 import+ map;
 import random;
+import runner;
 import settings;
 import string;
 import+ vector;
@@ -340,8 +340,8 @@ ElectoralMethod(
         Format fmt;
         fmt.min_width_ = kWidth;
         str = String + " " + name_;
-        result = result_to_string(g_guthrie.guthrie_.winner_, winner_);
-        winner_name = g_guthrie.candidates_[winner_].name_;
+        result = result_to_string(g_runner.guthrie_.winner_, winner_);
+        winner_name = g_runner.candidates_[winner_].name_;
         println(String + fmt*str + ": " + winner_name + " " + result);
     }
 
@@ -426,7 +426,7 @@ HeadToHead(
         int a,
         int b
     ) {
-        bloc_map = ^g_guthrie.bloc_map_;
+        bloc_map = ^g_runner.bloc_map_;
 
         /* init vote counts. */
         int avotes = 0;
@@ -475,7 +475,7 @@ PairwiseCounts(
     Vector<int> counts_
 ) {
     void init() {
-        n_ = g_guthrie.ncandidates_;
+        n_ = g_runner.ncandidates_;
         size = n_ * n_;
         counts_.resize(size);
         for (i : 0..size) {
@@ -528,9 +528,9 @@ PairwiseCounts(
 }
 
 /* define the global object. */
-global GuthrieVoting g_guthrie;
+global TestRunner g_runner;
 
-GuthrieVoting(
+TestRunner(
     /* "constants" */
     int ntrials_ = kNTrials,
     int ncandidates_ = kNCandidates,
@@ -1811,9 +1811,9 @@ GuthrieVoting(
 void ElectoralMethod:calculate_results(
 ) {
     /* calculate satisfaction. */
-    ntrials float64 = g_guthrie.ntrials_;
+    ntrials float64 = g_runner.ntrials_;
     float64 average_utility = total_utility_ / ntrials;
-    satisfaction_ = g_guthrie.calculate_satisfaction(average_utility, g_guthrie.accumulated_);
+    satisfaction_ = g_runner.calculate_satisfaction(average_utility, g_runner.accumulated_);
 
     /* calculate correlation. */
     correlation_ = 100.0 * (float64=is_winner_) / ntrials;
@@ -1826,9 +1826,9 @@ ElectoralMethod : AntiPluralityMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
 
         Vector<int> counts;
         counts.reserve(ncandidates);
@@ -1862,7 +1862,7 @@ ElectoralMethod : AntiPluralityMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -1876,10 +1876,10 @@ ElectoralMethod : ApprovalMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
-        int nvoters = g_guthrie.electorate_.nvoters_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
+        int nvoters = g_runner.electorate_.nvoters_;
 
         /* initialize number of approvals for each candidate. */
         Vector<int> approvals;
@@ -1924,7 +1924,7 @@ ElectoralMethod : ApprovalMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -1938,9 +1938,9 @@ ElectoralMethod : ApprovalRunoffMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
 
         /* initialize number of approvals for each candidate. */
         Vector<int> approvals;
@@ -1982,7 +1982,7 @@ ElectoralMethod : ApprovalRunoffMethod() {
         }
 
         /* find the head to head winner. */
-        upset = g_guthrie.pairwise_.is_winner(second, winner_);
+        upset = g_runner.pairwise_.is_winner(second, winner_);
 
         /* overwrite the winner. */
         if (upset) {
@@ -1994,7 +1994,7 @@ ElectoralMethod : ApprovalRunoffMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -2008,9 +2008,9 @@ ElectoralMethod : BordaMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
 
         /* initialize number of wins for each candidate. */
         Vector<int> counts;
@@ -2044,7 +2044,7 @@ ElectoralMethod : BordaMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -2058,10 +2058,10 @@ ElectoralMethod : BucklinMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
-        int nvoters = g_guthrie.electorate_.nvoters_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
+        int nvoters = g_runner.electorate_.nvoters_;
 
         Vector<int> counts;
         counts.reserve(ncandidates);
@@ -2104,7 +2104,7 @@ ElectoralMethod : BucklinMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -2119,8 +2119,8 @@ ElectoralMethod : CandidateMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
 
         winner_ = -1;
         float64 max = -1e99;
@@ -2146,7 +2146,7 @@ ElectoralMethod : CandidateMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -2171,8 +2171,8 @@ ElectoralMethod : CondorcetMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
 
         /* initialize number of wins for each candidate. */
         Vector<int> wins;
@@ -2188,9 +2188,9 @@ ElectoralMethod : CondorcetMethod() {
             for (k : (i + 1)..ncandidates) {
                 a = i;
                 b = k;
-                avotes = g_guthrie.pairwise_.count(a, b);
-                bvotes = g_guthrie.pairwise_.count(b, a);
-                bwins = g_guthrie.pairwise_.is_winner(b, a);
+                avotes = g_runner.pairwise_.count(a, b);
+                bvotes = g_runner.pairwise_.count(b, a);
+                bwins = g_runner.pairwise_.is_winner(b, a);
                 if (bwins) {
                     a <--> b;
                     avotes <--> bvotes;
@@ -2241,14 +2241,14 @@ ElectoralMethod : CondorcetMethod() {
         if (nwinners > 1) {
             println("Condorcet cycle exists.");
             winner_ = -1;
-            ++g_guthrie.condorcet_cycles_;
+            ++g_runner.condorcet_cycles_;
         }
 
         /* check if there is a condorcet ordering. */
         if (nwinners == 1) {
             println("Condorcet ordering exists.");
             candidate = ^candidates^[winner_];
-            g_guthrie.total_utility_ordering_ += candidate^.utility_;
+            g_runner.total_utility_ordering_ += candidate^.utility_;
         }
 
         /*
@@ -2259,12 +2259,12 @@ ElectoralMethod : CondorcetMethod() {
         total_utility_ += utility;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
 
         /* return results. */
-        g_guthrie.condorcet_loser_ = loser;
+        g_runner.condorcet_loser_ = loser;
     }
 
     /* pretty print the winner. */
@@ -2272,21 +2272,21 @@ ElectoralMethod : CondorcetMethod() {
         Format fmt;
         fmt.min_width_ = kWidth;
         str = String + " " + name_;
-        result = result_to_string(g_guthrie.guthrie_.winner_, winner_);
+        result = result_to_string(g_runner.guthrie_.winner_, winner_);
 
         winner_name = '?';
         if (winner_ >= 0) {
-            winner_name = g_guthrie.candidates_[winner_].name_;
+            winner_name = g_runner.candidates_[winner_].name_;
         }
         println(String + fmt*str + ": " + winner_name + " " + result);
     }
 
     virtual void print_satisfaction() {
-        ntrials float64 = g_guthrie.ntrials_;
-        condorcet_cycles float64 = g_guthrie.condorcet_cycles_;
+        ntrials float64 = g_runner.ntrials_;
+        condorcet_cycles float64 = g_runner.condorcet_cycles_;
         non_cycle_trials float64 = ntrials - condorcet_cycles;
-        float64 average_utility_ordering = g_guthrie.total_utility_ordering_ / non_cycle_trials;
-        float64 satisfaction_ordering = g_guthrie.calculate_satisfaction(average_utility_ordering, g_guthrie.accumulated_);
+        float64 average_utility_ordering = g_runner.total_utility_ordering_ / non_cycle_trials;
+        float64 satisfaction_ordering = g_runner.calculate_satisfaction(average_utility_ordering, g_runner.accumulated_);
 
         /* pretty print the line. */
         Format fmt;
@@ -2296,7 +2296,7 @@ ElectoralMethod : CondorcetMethod() {
     }
 
     virtual void print_correlation() {
-        non_cycle_trials float64 = g_guthrie.ntrials_ - g_guthrie.condorcet_cycles_;
+        non_cycle_trials float64 = g_runner.ntrials_ - g_runner.condorcet_cycles_;
         float64 correlation_max = 100.0 * (float64=is_winner_) / non_cycle_trials;
 
         /* pretty print the line. */
@@ -2314,9 +2314,9 @@ ElectoralMethod : CoombsMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
 
         winner_ = -1;
 
@@ -2400,7 +2400,7 @@ ElectoralMethod : CoombsMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -2419,9 +2419,9 @@ ElectoralMethod : GuthrieMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        int total_support = g_guthrie.total_support_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        int total_support = g_runner.total_support_;
 
         /* initialize the number of wins. */
         Vector<int> wins;
@@ -2570,9 +2570,9 @@ ElectoralMethod : GuthrieMethod() {
         }
         bool show_required = !quiet;
 
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        int total_support = g_guthrie.total_support_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        int total_support = g_runner.total_support_;
 
         Vector<int> counts;
         counts.resize(ncandidates);
@@ -2701,9 +2701,9 @@ ElectoralMethod : GuthrieMethod() {
 
     virtual void print_satisfaction() {
         /* calculate strategic voting total utility. */
-        ntrials float64 = g_guthrie.ntrials_;
-        float64 average_utility_strategic = g_guthrie.total_utility_strategic_ / ntrials;
-        float64 satisfaction_strategic = g_guthrie.calculate_satisfaction(average_utility_strategic, g_guthrie.accumulated_);
+        ntrials float64 = g_runner.ntrials_;
+        float64 average_utility_strategic = g_runner.total_utility_strategic_ / ntrials;
+        float64 satisfaction_strategic = g_runner.calculate_satisfaction(average_utility_strategic, g_runner.accumulated_);
 
         /* pretty print the line. */
         Format fmt;
@@ -2724,8 +2724,8 @@ ElectoralMethod : GuthrieMethod() {
         fmt.float_style_ = kFixedPoint;
         fmt.precision_ = 1;
 
-        ntrials float64 = g_guthrie.ntrials_;
-        nstrategic float64 = g_guthrie.ntrials_ - g_guthrie.independence_;
+        ntrials float64 = g_runner.ntrials_;
+        nstrategic float64 = g_runner.ntrials_ - g_runner.independence_;
         wins = 100.0 * nstrategic / ntrials;
 
         println(String + "Guthrie: favorite betrayal: " + fmt*wins + "%");
@@ -2743,10 +2743,10 @@ ElectoralMethod : InstantRunoffMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
-        int nvoters = g_guthrie.electorate_.nvoters_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
+        int nvoters = g_runner.electorate_.nvoters_;
 
         winner_ = -1;
 
@@ -2843,7 +2843,7 @@ ElectoralMethod : InstantRunoffMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -2859,10 +2859,10 @@ ElectoralMethod : PluralityMethod(
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
-        int nvoters = g_guthrie.electorate_.nvoters_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
+        int nvoters = g_runner.electorate_.nvoters_;
 
         Vector<int> counts;
         counts.reserve(ncandidates);
@@ -2896,18 +2896,18 @@ ElectoralMethod : PluralityMethod(
 
         /* was it a majority? */
         if (2*votes > nvoters) {
-            ++g_guthrie.majority_winners_;
+            ++g_runner.majority_winners_;
         }
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
 
     virtual void strategic_voting() {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
 
         int nupsets = 0;
         for (underdog : 0..ncandidates) {
@@ -2915,7 +2915,7 @@ ElectoralMethod : PluralityMethod(
                 continue;
             }
 
-            upset = g_guthrie.pairwise_.is_winner(underdog, winner_);
+            upset = g_runner.pairwise_.is_winner(underdog, winner_);
             if (upset) {
                 ++nupsets;
                 println(String + "Plurality strategy: vote " +
@@ -2937,7 +2937,7 @@ ElectoralMethod : PluralityMethod(
         fmt.float_style_ = kFixedPoint;
         fmt.precision_ = 1;
 
-        ntrials float64 = g_guthrie.ntrials_;
+        ntrials float64 = g_runner.ntrials_;
         wins = 100.0 * nstrategy_wins_ / ntrials;
         maybes = 100.0 * nstrategy_could_win_ / ntrials;
 
@@ -2958,10 +2958,10 @@ ElectoralMethod : PluralityRunoffMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
-        int nvoters = g_guthrie.electorate_.nvoters_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
+        int nvoters = g_runner.electorate_.nvoters_;
 
         Vector<int> counts;
         counts.reserve(ncandidates);
@@ -3006,7 +3006,7 @@ ElectoralMethod : PluralityRunoffMethod() {
             }
 
             /* find the head to head winner. */
-            upset = g_guthrie.pairwise_.is_winner(second, winner_);
+            upset = g_runner.pairwise_.is_winner(second, winner_);
 
             /* overwrite the winner. */
             if (upset) {
@@ -3019,7 +3019,7 @@ ElectoralMethod : PluralityRunoffMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -3033,9 +3033,9 @@ ElectoralMethod : RangeMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
 
         /* initialize rating for each candidate. */
         Vector<float64> ratings;
@@ -3074,7 +3074,7 @@ ElectoralMethod : RangeMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }
@@ -3088,9 +3088,9 @@ ElectoralMethod : StarMethod() {
     virtual void find_winner(
         bool quiet = kQuiet
     ) {
-        int ncandidates = g_guthrie.ncandidates_;
-        candidates = ^g_guthrie.candidates_;
-        bloc_map = ^g_guthrie.bloc_map_;
+        int ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
 
         /* initialize rating for each candidate. */
         Vector<int> ratings;
@@ -3184,7 +3184,7 @@ ElectoralMethod : StarMethod() {
         total_utility_ += candidate^.utility_;
 
         /* accumulate correlations. */
-        if (winner_ == g_guthrie.guthrie_.winner_) {
+        if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
     }

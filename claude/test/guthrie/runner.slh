@@ -7,9 +7,9 @@ analyze guthrie voting.
 */
 
 /* the class called by main. */
-GuthrieVoting(...) {
+TestRunner(...) {
     void run();
 }
 
 /* declare the global object. */
-global GuthrieVoting g_guthrie;
+global TestRunner g_runner;
