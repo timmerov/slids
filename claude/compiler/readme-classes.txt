@@ -1512,8 +1512,9 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   template, a field-bearing opening, a target out of reach (a bare constrained opening of a
   merely-visible template would mint a new template), a private alias, and every RUN-TIME scope
   (a re-open there is a refinement). An alias in two aliased namespaces: "'X' names more than one
-  member of the aliased namespaces; qualify the re-open." A header template stays consumer-
-  aliases-only through an alias (the error names the target). Canon test/class/reopen_cls.sl,
+  member of the aliased namespaces; qualify the re-open." A header template keeps its consumer
+  member rules through an alias: a filter's non-virtual methods are the TU's own (CONSUMER
+  METHODS below; the error names the target). Canon test/class/reopen_cls.sl,
   test/template/reopen_tmpl.sl, test/import/tmpl_test.sl (SpecB, PrivW).
 
   SAME-SCOPE for classes; namespaces open anywhere. A CLASS re-open is same-scope: the target
@@ -1587,9 +1588,18 @@ FIELD ALIASES (landed 2026-10-23; spans grammar / resolve / constfold / classify
     hooks message when the closing opening adds no fields). Each flavor's clone of such an
     opening is Node::completeness_neutral: the per-flavor merge takes its aliases and never
     touches ClassInfo::is_open. Canon test/import tmpl_test.sl (Spec, Part, Hybrid).
+    An opening in ANOTHER imported header is aliases only, always.
+  - CONSUMER METHODS (2026-11-02, user: "any filter"). A consumer's source-file FILTER (any
+    constrained field-less opening of a header template, so every alias re-open of a template
+    use) may also add non-virtual methods with bodies (consumerFilterOpening: no bodyless
+    method, virtual, implicit five or template method, no other member). The flavor clone keeps
+    the bodies and each method's entry is stamped tu_local_instance: `define internal`
+    (liftMember), no .sli demand (buildLazyMethods). Layout and flavor symbols do not change,
+    and two TUs may define the same method differently. A plain unconstrained consumer re-open
+    still adds aliases only. Canon test/import tmpl_test.sl, tmpl_test2.sl (who, the link
+    proof), test/template/reopen_tmpl.sl (twice).
   - OPEN (todo.txt FIELD ALIAS REOPENS): the explicit qualified spellings with a non-empty
-    list (`Ns:X<.>(alias ..)` is still inheritance from Ns), consumer METHODS on a header
-    template (deferred).
+    list (`Ns:X<.>(alias ..)` is still inheritance from Ns).
 
 
 REFINEMENTS (landed; spans resolve / classify; non-virtual)

@@ -280,6 +280,33 @@ void mix_call(mutable (int,int,int)^ a, (int,int,int)^ b) {
     a^[0] = 5;
 }
 
+/* a qualified class name and the same name reached through `alias Ns;` are ONE type, so
+   they declare one function. a named alias matches its target in a RETURN type only: in
+   a parameter list it is a distinct overload (overload_fn.sl). */
+RedeclNs {
+    Rd(int v_ = 0) { }
+    /* inside a namespace, and in a method whose decl + def are split. */
+    Rd nsmake(int v);
+    Mk(int k_ = 0) {
+        Rd make(int v);
+        int read(Rd^ r);
+    }
+}
+alias RdName = RedeclNs:Rd;
+RedeclNs:Rd RedeclNs:nsmake(int v) { Rd r(v); return r; }
+alias RedeclNs;
+RedeclNs:Rd RedeclNs:Mk:make(int v) { RdName r(v + k_); return r; }
+int RedeclNs:Mk:read(RedeclNs:Rd^ r) { return r^.v_ + k_; }
+
+RedeclNs:Rd rd_ret_ns(int v);
+Rd rd_ret_ns(int v) { Rd r(v); return r; }
+RdName rd_ret_name(int v);
+RedeclNs:Rd rd_ret_name(int v) { RedeclNs:Rd r(v); return r; }
+int rd_param_ns(RedeclNs:Rd^ r);
+int rd_param_ns(Rd^ r) { return r^.v_; }
+int rd_param_rev(Rd^ r);
+int rd_param_rev(RedeclNs:Rd^ r) { return r^.v_ + 1; }
+
 int32 main() {
     helper();              // zero-arg
     add(2, 3);             // two-arg
@@ -435,6 +462,22 @@ int32 main() {
     bare_k;                          // a const value name works the same way
     println(String + "bare = ok");          // reached: the bare reads compiled + ran
 
+    /* a redeclaration matches modulo aliases. */
+    rd1 = rd_ret_ns(1);
+    rd2 = rd_ret_name(2);
+    rd3 = RedeclNs:nsmake(3);
+    Mk rd_mk(10);
+    rd4 = rd_mk.make(4);
+    println(String + "rd_ret= " + rd1.v_ + " " + rd2.v_ + " " + rd3.v_ + " " + rd4.v_);
+    println(String + "rd_param= " + rd_param_ns(^rd1) + " " + rd_param_rev(^rd2)
+        + " " + rd_mk.read(^rd3));
+
+    /* a nested function's decl + def, spelled differently. */
+    Rd rd_nested(int a);
+    RedeclNs:Rd rd_nested(int a) { Rd r(a + 2); return r; }
+    rd5 = rd_nested(1);
+    println(String + "rd_nested= " + rd5.v_);
+
     return 0;
 }
 
@@ -565,6 +608,36 @@ int32 fwd_decl(int32 n) {
 //    neg_class_mismatch_fn(^cm);
 //    return 0;
 //}
+
+/* the qualifier does not make a second function: both of these are `dup_q(Dq^)`. */
+//-EXPECT-ERROR: Duplicate definition of 'dup_q'.
+//DupQ { Dq(int x_ = 0) { } }
+//int dup_q(DupQ:Dq^ a) { return 1; }
+//alias DupQ;
+//int dup_q(Dq^ b) { return 2; }
+
+/* a named alias in a PARAMETER list is a distinct overload, so this definition does
+   not satisfy the declaration. */
+//-EXPECT-ERROR: Function 'par_named' is declared but never defined.
+//alias ParI = int;
+//int par_named(ParI a);
+//int par_named(int a) { return a; }
+
+/* an alias of a DIFFERENT type is still a mismatch, reported in the written spelling. */
+//-EXPECT-ERROR: Return type 'int64' does not match earlier declaration's 'RetI'.
+//alias RetI = int32;
+//RetI ret_alias(int a);
+//int64 ret_alias(int a) { return 0; }
+
+/* const is not an alias: a redeclaration may not drop it from the return type. */
+//-EXPECT-ERROR: does not match earlier declaration's
+//int^ ret_const(int a);
+//(const int)^ ret_const(int a) { return null; }
+
+/* ...nor from a parameter: this definition is a different function. */
+//-EXPECT-ERROR: Function 'par_const' is declared but never defined.
+//int par_const((const int)^ p);
+//int par_const(mutable int^ p) { return p^; }
 
 /* a bare function NAME with no call parens is a call missing its parens, NOT a value.
    As a STATEMENT `helper;` reports the missing parameter list. (A bare VALUE name —

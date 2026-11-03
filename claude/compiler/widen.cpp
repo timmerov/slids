@@ -1674,6 +1674,10 @@ TypeRef deepAliasStrip(TypeRef ref) {
     return ref;
 }
 
+bool sameReturnType(TypeRef a, TypeRef b) {
+    return a == b || deepAliasStrip(a) == deepAliasStrip(b);
+}
+
 // A child type spelled UNDER a `^` / `[]` / `[N]` suffix: a kConst child is
 // parenthesized so the const stays bound to the pointee/element — `(const T)^`
 // (shallow), distinct from the outer-const `const T^` (deep). Any other form

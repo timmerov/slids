@@ -41,3 +41,6 @@ t3 = (40,50,60)
 mix_b= 7 8 9
 mx[0] = 5
 bare = ok
+rd_ret= 1 2 3 14
+rd_param= 1 3 13
+rd_nested= 3

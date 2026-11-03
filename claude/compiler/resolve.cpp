@@ -608,7 +608,11 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                                      seg_toks, &handle);
                 if (handle == widen::kNoType) return t;   // error already reported
                 // Use the HANDLE directly — never re-intern the spelling (a class's
-                // def_id can't survive a spelling round-trip).
+                // def_id can't survive a spelling round-trip). A CLASS is the handle
+                // itself, exactly as its bare name resolves below: `ns:C` and `C`
+                // through `alias ns;` are one type, not an alias and its underlying
+                // (those are distinct overloads).
+                if (widen::get(handle).form == widen::Type::Form::kSlid) return handle;
                 return widen::internAlias(name, handle);
             }
             // SCOPE-AWARE: resolveName (open-ns chain + lexical-with-owner<0), not a
@@ -2362,7 +2366,7 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
 bool mergeFunctionRedecl(parse::Tree& tree, int existing, parse::Node& node,
                          diagnostic::Sink& diag) {
     parse::Entry& prev = tree.entries[existing];
-    if (prev.slids_type != node.return_type) {
+    if (!widen::sameReturnType(prev.slids_type, node.return_type)) {
         diagnostic::report(diag, {node.file_id, node.tok,
             "Return type '" + widen::spellOrEmpty(node.return_type)
             + "' does not match earlier declaration's '"
@@ -6846,7 +6850,7 @@ void registerNestedFunctions(parse::Tree& tree,
         if (existing >= 0) {
             parse::Entry& prev = tree.entries[existing];
             if (prev.kind != parse::EntryKind::kFunction
-                || prev.slids_type != ch->return_type
+                || !widen::sameReturnType(prev.slids_type, ch->return_type)
                 || prev.param_types != ptypes) {
                 diagnostic::report(diag, {ch->file_id, ch->name_tok,
                     "Duplicate declaration of '" + ch->name + "'.",

@@ -7,8 +7,8 @@ configuration settings.
 */
 
 /* number of trials. */
-//const int kNTrials = 1;
-const int kNTrials = 10;
+const int kNTrials = 1;
+//const int kNTrials = 10;
 //const int kNTrials = 30;
 //const int kNTrials = 100;
 //const int kNTrials = 300;
@@ -24,8 +24,8 @@ const int kNVoters = 1000;
 //const int kNVoters = 10*1000;
 
 /* number of candidates */
-//const int kNCandidates = 3;
-const int kNCandidates = 4;
+const int kNCandidates = 3;
+//const int kNCandidates = 4;
 //const int kNCandidates = 5;
 //const int kNCandidates = 6;
 //const int kNCandidates = 7;

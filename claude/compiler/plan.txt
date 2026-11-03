@@ -4426,6 +4426,23 @@ A RE-OPEN THROUGH AN ALIAS (LANDED 2026-11-02)
   returns DISTINCT paths, so both re-open passes count one. Coverage: reopen_cls.sl Dbx/Dq,
   reopen_tmpl.sl Dnode.
 
+A QUALIFIED CLASS NAME IS THE CLASS (2026-11-02, from user/linpro votedata.sl:30)
+  `slids:String f();` then `String f() { }` under `alias slids;` errored "Return type 'String'
+  does not match earlier declaration's 'slids:String'", and the parameter form
+  (`int f(ns:C^);` / `int f(C^) { }`) read as a second overload: "declared but never defined".
+  The qualified path wrapped the handle in an alias labelled with the spelling; the bare path
+  returned the handle. resolveTypeRef's kSlid arm now returns the handle for a class, so raw
+  TypeRef equality, the overload ranker and the mangler all see one type, and a header and source
+  that spell it differently link. A redeclaration's RETURN type also ignores named aliases and
+  keeps const (widen::sameReturnType, mergeFunctionRedecl and the nested-function merge).
+  PARAMETERS still compare exactly: test/function/overload_fn.sl's top comment makes `fn(int)` and
+  `fn(Integer)` distinct overloads. A first cut made parameter matching alias-blind and was
+  backed out for that reason (it also hung constfold: decl and def sharing one entry wrote their
+  spellings over each other in the param_types re-sync, never reaching the fixpoint).
+  Coverage: test/function/call.sl (rd_* spellings, including a namespace function and out-of-line
+  methods, plus negatives dup_q, par_named, ret_alias, ret_const, par_const). OPEN (todo): the same
+  mismatch for a template flavor in a parameter list.
+
 test/ + user/ SPLIT (user, 2026-11-02)
   test/guthrie, test/puzzles and test/progress moved out of the regression suite to user/guthrie,
   user/puzzles, user/galaxy and user/linpro; make.sh builds test/ then user/. user/ programs have

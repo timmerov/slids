@@ -3237,8 +3237,12 @@ STAGE FILES (.h / .cpp pairs)
             exact-match for overloading, so it never distinguishes a symbol), but an ALIAS
             is NOT — a parameter's alias vs its underlying are DISTINCT overloads
             (`aov(int32)` vs `aov(Integer)`), so an alias mangles by its own name. A
+            QUALIFIED CLASS NAME is not an alias: `ns:C` resolves to the class handle,
+            exactly as bare `C` does through `alias ns;`, so the two spellings are one
+            type, one overload and one symbol (resolveTypeRef's kSlid arm, 2026-11-02).
+            A qualified template flavor still carries its label as written (todo). A
             spelling can carry chars illegal in an unquoted LLVM identifier (a qualified
-            alias `Maker:Widget` has a `:`), so `symbolSafe` encodes them (`:`->`$58`).
+            member alias has a `:`), so `symbolSafe` encodes them (`:`->`$58`).
             EXCEPTIONS keep a fixed name: `main` (the C entry
             point), a NESTED function (an entry-id suffix — TU-local by construction,
             nothing outside names it), and the synthesized class canonicals

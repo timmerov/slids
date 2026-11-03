@@ -108,6 +108,21 @@ BUGS
     as a same-scope class, so neither reaches Al. an alias re-open of a class that also has
     bare re-opens in the file meets the same local class.
 
+  * a qualified and a bare template flavor are different parameter types:
+    int rd(slids:Vector<int>^ v);  alias slids;  int rd(Vector<int>^ v) { ... }
+    says "'rd' is declared but never defined". the flavor keeps its label as written.
+    decide the label: always qualified (Vector<int> prints as slids:Vector<int> in errors and
+    ##type, goldens move), or always bare (a:Box<int> and b:Box<int> would share a symbol).
+
+  * a nested function can't be forward declared with a class reference parameter:
+    int nest(Rd^ a);  int nest(Rd^ a) { ... }
+    says "Duplicate declaration of 'nest'." the same pair with an int parameter works.
+
+  * const overloads make a call ambiguous:
+    int f((const int)^ p) { ... }  int f(mutable int^ p) { ... }
+    (const int)^ cp = ^m;  f(cp);  says "Ambiguous call to 'f'; multiple overloads match."
+    the const argument can't go to the mutable parameter, so one overload should win.
+
 UNBLOCKED FEATURES
 
   * revisit the decision that makes this an error: char ch = 0;

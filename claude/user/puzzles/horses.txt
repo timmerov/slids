@@ -1,0 +1,29 @@
+
+25 horses that all run at constant but different speeds.
+you can race 5 horses at a time.
+find the 3 fastest horses.
+
+run 5 races with no repeats.
+eliminate the 2 slowest horse in each race.
+now you have 15 horses.
+A - 5 undefeated horses A1-5.
+B - 5 horses B1-5 where Bn lost to An.
+C - 5 horses C1-5 where Cn lost to An and Bn.
++5
+
+race A.
+drop A4,A5
+drop B3,B4,B5
+drop C2,C3,C4,C5
+keep A1,A2,A3,B1,B2,C1
++1
+
+A1 is fastest horse.
+A2 <A1 >B2
+A3 <A1 <A2
+B1 <A1
+B2 <A1 <A2
+C1 <A1
+race A2,A3,B1,B2,C1
+keep A1 and fastest 2.
++1

@@ -27,7 +27,7 @@ BlocMap() {
     }
 }
 
-slids:String to_string(
+String to_string(
     Rankings^ rankings
 ) {
     String s;

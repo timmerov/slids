@@ -375,6 +375,11 @@ TypeRef deepStrip(TypeRef ref);
 // canonicalize (`add<Integer>` IS `add<int>`).
 TypeRef deepAliasStrip(TypeRef ref);
 
+// A redeclaration's RETURN type agrees modulo aliases, const included (`alias Q = C`:
+// `Q` and `C` match; `int^` and `(const int)^` do not). PARAMETERS compare exactly: an
+// alias and its underlying are distinct overloads.
+bool sameReturnType(TypeRef a, TypeRef b);
+
 // spell(), but kNoType renders as the empty string (the inverse of internOrNone).
 std::string spellOrEmpty(TypeRef ref);
 

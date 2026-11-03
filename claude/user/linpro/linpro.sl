@@ -233,3 +233,33 @@ int32 main() {
 
     return 0;
 }
+
+/*
+okay so this has become a method matrix generator.
+for plurality:
+A wins when:
+    ABC + ACB > BAC + BCA
+    ABC + ACB > CAB + CBA
+B wins when:
+    BAC + BCA > ABC + ACB
+    BAC + BCA > CAB + CBA
+C wins when:
+    CAB + CBA > ABC + ACB
+    CAB + CBA > BAC + BCA
+A wins strategically over B when:
+    BAC + BCA > ABC + ACB
+    BAC + BCA > CAB + CBA
+    ABC + kCAB_ABC + ACB + kCAB_ACB + > BAC + BCA
+    ABC + ACB > CAB - kCAB_ABC - kCAB_ACB + CBA
+    kCAB_ABC + kCAB_ACB <= CAB
+    kCAB_ABC >= 0
+    kCAB_ACB >= 0
+similarly for A>C, B>A, B>C, C>A, C>B. whew.
+maximum of N! blocs.
+maximum of N! * N!-1 manipulation variables kXXX_YYY.
+minimize sum k's.
+
+should we do all X wins matrices?
+and all of the X wins over Y manipulation matrices?
+or should we do one of each and permute the bloc identities?
+*/
