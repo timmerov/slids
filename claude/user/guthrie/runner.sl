@@ -1340,6 +1340,8 @@ TestRunner(
 
     /* analyze strategic voting. */
     void strategic_voting() {
+        println();
+        println("Strategic voting:");
         for (ElectoralMethod^ method : methods_) {
             method^.strategic_voting();
         }
@@ -1569,7 +1571,6 @@ TestRunner(
         int independence = guthrie_.winner_;
 
         /* save the block map */
-        /* ==tsc== Map doesn't support <-- yet. */
         BlocMap org_bloc_map;
         org_bloc_map <--> bloc_map_;
 
@@ -1642,8 +1643,7 @@ TestRunner(
         total_utility_strategic_ += utility;
 
         /* restore the bloc map. */
-        /* ==tsc== Map doesn't support <-- yet. */
-        bloc_map_ <--> org_bloc_map;
+        bloc_map_ <-- org_bloc_map;
 
         return independence;
     }
@@ -2853,8 +2853,8 @@ ElectoralMethod : InstantRunoffMethod() {
 find the plurality winner.
 */
 ElectoralMethod : PluralityMethod(
-    int nstrategy_wins_ = 0,
-    int nstrategy_could_win_ = 0
+    int nmunchkins_ = 0,
+    int total_coalition_ = 0
 ) {
     virtual void find_winner(
         bool quiet = kQuiet
@@ -2908,28 +2908,92 @@ ElectoralMethod : PluralityMethod(
     virtual void strategic_voting() {
         int ncandidates = g_runner.ncandidates_;
         candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
 
-        int nupsets = 0;
-        for (underdog : 0..ncandidates) {
-            if (underdog == winner_) {
+        /*
+        we're looking for the minimum number of strategic
+        voters it would take to replace the honest winner
+        with a min/maxxing munchkin candidate.
+        */
+        munchkin = -1;
+        min_coalition = -1;
+
+        for (a : 0..ncandidates) {
+            if (a == winner_) {
                 continue;
             }
 
-            upset = g_runner.pairwise_.is_winner(underdog, winner_);
-            if (upset) {
-                ++nupsets;
-                println(String + "Plurality strategy: vote " +
-                    candidates^[underdog].name_ + ".");
+            /*
+            if A beats W (the winner) then strategically voting
+            to make A the winner is good strategic voting.
+            we're looking for bad strategic voting.
+            */
+            a_beats_w = g_runner.pairwise_.is_winner(a, winner_);
+            if (a_beats_w) {
+                continue;
+            }
+
+            /*
+            we never change votes for winner.
+            we only add counts to A.
+            so we only need to count A votes and W votes.
+            */
+            votesa = 0;
+            votesw = 0;
+            votesa_strategic = 0;
+            for (it : bloc_map^) {
+                first = it^.rankings_[0];
+                /* A voters keep voting A. */
+                if (first == a) {
+                    votesa += it^.bloc_.size_;
+                    continue;
+                }
+                /* W voters keep voting W. */
+                if (first == winner_) {
+                    votesw += it^.bloc_.size_;
+                    continue;
+                }
+                /* not A not W voters. */
+                for (which : it^.rankings_) {
+                    /* these prefer A>W */
+                    if (which == a) {
+                        votesa_strategic += it^.bloc_.size_;
+                        break;
+                    }
+                    /* these prefer W>A so they keep voting honestly. */
+                    if (which == winner_) {
+                        break;
+                    }
+                }
+            }
+
+            /* handle ties. */
+            required = votesw - votesa;
+            if (a > winner_) {
+                ++required;
+            }
+
+            if (votesa_strategic >= required) {
+                if (min_coalition < 0) {
+                    min_coalition = required;
+                }
+                min_coalition = math:min(min_coalition, required);
+                munchkin = a;
             }
         }
-        if (nupsets == 0) {
-            println("Plurality strategy: none.");
-        } if (nupsets == 1) {
-            ++nstrategy_wins_;
-        } if (nupsets > 1) {
-            println("Plurality strategy: multiple.");
-            ++nstrategy_could_win_;
+
+        /* no strategic winner. */
+        if (munchkin < 0) {
+            return;
         }
+
+        namew = candidates^[winner_].name_;
+        namem = candidates^[munchkin].name_;
+        println(String + " Plurality needs " + min_coalition
+            + " voters to switch from " + namew + " to " + namem + ".");
+
+        ++nmunchkins_;
+        total_coalition_ += min_coalition;
     }
 
     virtual void print_strategic_results() {
@@ -2938,14 +3002,20 @@ ElectoralMethod : PluralityMethod(
         fmt.precision_ = 1;
 
         ntrials float64 = g_runner.ntrials_;
-        wins = 100.0 * nstrategy_wins_ / ntrials;
-        maybes = 100.0 * nstrategy_could_win_ / ntrials;
+        nmunchkins float64 = nmunchkins_;
+        wins = 100.0 * nmunchkins / ntrials;
+        coalition_size float64 = 0.0;
+        coalition_pct float64 = 0.0;
+        if (nmunchkins_ > 0) {
+            nvoters float64 = g_runner.electorate_.nvoters_;
+            coalition_size = total_coalition_ / nmunchkins;
+            coalition_pct = 100.0 * coalition_size / nvoters;
+        }
 
-        println(String + "Plurality: clear winning strategy: " + fmt*wins + "%"
-            ": ambiguous strategy: " +  fmt*maybes + "%");
+        println(String + "Plurality: opportunities: " + nmunchkins_ + " (" + fmt*wins + "%)"
+            + " strategic voters: " +  coalition_size + " (" + fmt*coalition_pct + "%)");
         if (kExplainStrategies) { void;
-            println("  Pairwise A>B>C. B wins by plurality. C votes A.");
-            println("  No clear strategy when C wins by plurality.");
+            println("  W>A pairwise. BC+ voters who prefer A>W switch to A.");
         }
     }
 }
