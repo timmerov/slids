@@ -3174,26 +3174,37 @@ ElectoralMethod : PluralityRunoffMethod() {
                 /*
                 for linear programming we have:
                 X != A,B,W
+                A total must 1st or 2nd.
                 sum A_ + sum XAW_A + B_A - A_B
                     > sum W_
                     > sum X_ - XAW_A - XAW_B
+                B total must 1st or 2nd.
                 sum B_ + sum XAW_B + A_B - B_A
                     > sum W_
                     > sum X_ - XAW_A - XAW_B
+                limit how many votes A,B,X can shift.
+                XAW_A + XAW_B <= XAW
+                A_B <= sum A_
+                B_A <= sum BAW
                 this ensures we have an AB runoff.
                 ignoring +1's for tie breakers.
-                for N candidates we have variables:
-                A_B, B_A, + (N-3) XAW_A, (N-3) XAW_B
-                = 2N - 4
-                the N constants are:
-                sum A_, sum B_, sum W_, (N-3) sum X_
-                there are 2*(N-2) equations.
                 want to minimize:
                 A_B + B_A + sum XAW_A + sum XAW_B
 
                 sum A_ = all A voters. same B,W,X.
                 XAW_A = X voters who prefer A>W.
                 they might switch to A. same XAW_B.
+
+                claude says read gnu's glpk source for simplex method.
+                https://github.com/firedrakeproject/glpk/tree/master/src/simplex
+
+                  XA        - AB + BA > W - A
+                2 XA +   XB - AB + BA > X - A
+                         XB + AB - BA > W - B
+                  XA + 2 XB + AB - BA > X - B
+                  XA +   XB           <= XAW
+                              AB      <= A
+                                   BA <= BAW
                 */
 
                 /* clear the counts. */

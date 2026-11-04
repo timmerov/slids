@@ -5,7 +5,7 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 /*
 linear programming solver.
 
-the test case is strategic plurality voting.
+the test case is strategic plurality runoff voting.
 there are:
 - 4 candidates ABCD.
 - up to 4! voter blocs with honest rankings.
@@ -262,4 +262,89 @@ minimize sum k's.
 should we do all X wins matrices?
 and all of the X wins over Y manipulation matrices?
 or should we do one of each and permute the bloc identities?
+
+the original plan was plurality voting.
+that's too easy.
+there's a simple closed form solution.
+pivot to plurality runoff voting.
+there's also a closed form solution for any given number of candidates.
+the general solution is less than obvious.
+it's complex enough to use tools.
+specifically the dual simplex method of linear programming.
+claude says read gnu's glpk source:
+https://github.com/firedrakeproject/glpk/tree/master/src/simplex
+
+4 candidates: winner W, thief A, stooge B, other X.
+human readable equations:
+
+R1:   XA        − AB + BA > W - A = -K1
+R2: 2 XA +   XB − AB + BA > X - A = -K2
+R3:          XB + AB − BA > W - B = -K3
+R4:   XA + 2 XB + AB − BA > X - B = -K4
+C5:   XA +   XB           < XAW   =  K5
+C6:               AB      < A     =  K6
+C7:                    BA < BAW   =  K7
+Z:    XA +   XB + AB + BA > 0     =  KZ
+
+note: i'm being sloppy about > or >= or < or <=.
+
+R1: A votes > W votes
+R2: A votes > X votes
+R3: B votes > W votes
+R4: B votes > X votes
+C5: X votes shifted to A,B limited by X voters who prefer A>W.
+C6: A votes shifted to B limited by A votes.
+C7: B votes shifted to A limited by B voters who prefer A>W.
+Z: quantity to minimize.
+
+transform equations to normal form:
+
+R1: K1 +   XA        − AB + BA > 0
+R2: K2 + 2 XA +   XB − AB + BA > 0
+R3: K3        +   XB + AB − BA > 0
+R4: K4 +   XA + 2 XB + AB − BA > 0
+C5: K5 -   XA -   XB           > 0
+C6: K6               - AB      > 0
+C7: K7                    - BA > 0
+Z:  KZ +   XA +   XB + AB + BA > 0
+
+every row names a variable.
+every column names a variable.
+initially the rows are slack variables that balance the inequality.
+initially the columns are user variables.
+
+find most negative Kn in row R.
+- KZ is never negative so may be excluded from the search.
+pick one of the columns with a positive coefficient C.
+literature says minimum ratio: ZC/RC
+- or max RC/ZC - caution ZC can be 0.
+if there is no such C then fail - there is no solution.
+solve the row for C producing equation E.
+replace row R with E.
+swap the names of the row and column.
+substitute C into all other rows (including Z).
+
+repeat with next negative Kn.
+when there are no negative Kn left, we're almost done.
+KZ is the optimal solution.
+for rows owned by a user value Un, its value is Kn.
+otherwise Un = 0
+
+some of the Un may be fractional.
+in which case we need to add one of two branches.
+branch 1: Un <= floor Kn
+branch 2: Un >= ceil Kn
+substitute Rn for Un in these equations.
+get a solution for branch 1.
+the newly added row is the first pivot - no need to search.
+recurse if there are more fractional Un.
+eventually you land on a solution or fail.
+backtrack trying the other branches.
+Z only increases as you descend.
+prune paths that are infeasible or worse than the current best.
+- Z can be fractional. so prune when ceil Z >= best.
+
+some nits:
+all of the Z coefficients can't be negative.
+the implementation might want to put Z in row 0.
 */
