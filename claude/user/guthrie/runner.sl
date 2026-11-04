@@ -3171,6 +3171,31 @@ ElectoralMethod : PluralityRunoffMethod() {
                     continue;
                 }
 
+                /*
+                for linear programming we have:
+                X != A,B,W
+                sum A_ + sum XAW_A + B_A - A_B
+                    > sum W_
+                    > sum X_ - XAW_A - XAW_B
+                sum B_ + sum XAW_B + A_B - B_A
+                    > sum W_
+                    > sum X_ - XAW_A - XAW_B
+                this ensures we have an AB runoff.
+                ignoring +1's for tie breakers.
+                for N candidates we have variables:
+                A_B, B_A, + (N-3) XAW_A, (N-3) XAW_B
+                = 2N - 4
+                the N constants are:
+                sum A_, sum B_, sum W_, (N-3) sum X_
+                there are 2*(N-2) equations.
+                want to minimize:
+                A_B + B_A + sum XAW_A + sum XAW_B
+
+                sum A_ = all A voters. same B,W,X.
+                XAW_A = X voters who prefer A>W.
+                they might switch to A. same XAW_B.
+                */
+
                 /* clear the counts. */
                 for (p^ : counts) {
                     p^ = 0;
