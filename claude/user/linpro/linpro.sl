@@ -226,11 +226,193 @@ LinPro(
     }
 }
 
+/*
+linear programming solver.
+*/
+LP(
+    int nuser_vars_,
+    VarList vars_,
+    Columns cols_,
+    Rows rows_
+) {
+    _() {
+        /* add the column for constants. */
+        z = add_var("Z", false);
+
+        /* add the cost row. */
+        Expr expr;
+        expr.constant_ = 0;
+        expr.relation_ = kGTE;
+        add_row(z, expr);
+    }
+    ~() {
+    }
+
+    /* returned to the author. */
+    Var(int idx_) { }
+
+    /* variable's idx name value. */
+    VarInfo(
+        int idx_,
+        int value_,
+        bool user_,
+        String name_
+    ) {
+    }
+    alias VarList = Vector<VarInfo>;
+
+    /* every column is owned by a variable. */
+    Column(
+        int owner_
+    ) {
+    }
+    alias Columns = Vector<Column>;
+
+    /* coefficients are rational numbers. */
+    Rational(
+        int numer_,
+        int denom_
+    ) {
+    }
+
+    /* a term is a variable index and its coefficient. */
+    Term(
+        int var_idx_,
+        Rational coefficient_
+    ) { }
+    alias Terms = Vector<Term>;
+
+    /*
+    every row is owned by a variable, has a constant,
+    and a list of terms.
+    */
+    Row(
+        int owner_,
+        int constant_,
+        Terms terms_
+    ) {
+    }
+    alias Rows = Vector<Row>;
+
+    /* inequality relation classes and enum. */
+    enum Relation (kErr, kLT, kGT, kLTE, kGTE);
+    Comparison(Relation relation_ = kErr) { }
+    Comparison : lt() { _() { relation_ = kLT; } ~() { } }
+    Comparison : gt() { _() { relation_ = kGT; } ~() { } }
+    Comparison : lte() { _() { relation_ = kLTE; } ~() { } }
+    Comparison : gte() { _() { relation_ = kGTE; } ~() { } }
+
+    /* an expression is how we build a row. */
+    Expr(
+        int constant_,
+        Relation relation_ = kErr,
+        Terms terms_
+    ) {
+        op+(Expr^ lhs, Expr^ rhs) { }
+        op+(Expr^ lhs, int rhs) { }
+        op+(Expr^ lhs, Comparison^ rhs) { }
+        op+=(Expr^ rhs) { }
+        op+=(int rhs) { }
+        op+=(Comparison^ rhs) { }
+        op-=(int rhs) { }
+    }
+
+    /* print the matrix. */
+    void dump() {
+        /*
+        ==tsc== you are here.
+        pretty print the matrix.
+        */
+
+        for (it : vars_) {
+            println(String + it^.idx_ + ": " + it^.name_ + " = " + it^.value_);
+        }
+    }
+
+    /* add a user variable. */
+    Var add_var(String^ name) {
+        return add_var(name, true);
+    }
+
+    /* add a user variable. */
+    Var add_var(String^ name, bool user) {
+        idx int = vars_.size();
+        VarInfo vi;
+        vi.idx_ = idx;
+        vi.user_ = user;
+        vi.value_ = 0;
+        vi.name_ = name^;
+        vars_.append(vi);
+
+        if (user) {
+            ++nuser_vars_;
+        }
+
+        /* ==tsc== add user variable to row Z. */
+
+        return Var(idx);
+    }
+
+    /* add a user row. */
+    void add_row(
+        Expr^ expr
+    ) {
+        nrows int = rows_.size();
+        name = String + "R" + nrows;
+        row_var = add_var(name, false);
+        add_row(row_var, expr);
+    }
+
+    /* add a row. */
+    void add_row(
+        Var^ var,
+        Expr^ expr
+    ) {
+        Row row;
+        row.owner_ = var^.idx_;
+        row.constant_ = expr^.constant_;
+        row.terms_.resize(nuser_vars_);
+
+        /*
+        ==tsc==
+        copy the terms from expr to the correct row term.
+
+        munge the row terms.
+        if relation is < or <= then multiply by -1
+        and change to >= or >.
+        if > then subtract 1 from constant.
+        */
+
+        rows_.append(row);
+    }
+
+    /* find a solution. */
+    void solve() {
+    }
+}
+
 int32 main() {
 
+    LP lp;
+    ab = lp.add_var("AB");
+    ba = lp.add_var("BA");
+    xa = lp.add_var("XA");
+    xb = lp.add_var("XB");
+    expr1 = LP:Expr + 1;
+    expr2 = LP:Expr + expr1;
+    expr3 = LP:Expr + 1 + expr2 + 3 + expr1;
+    lp.add_row(expr1);
+    lp.add_row(expr2);
+    lp.add_row(expr3);
+    lp.dump();
+
+    ab; ba; xa; xb;
+    expr1; expr2; expr3;
+
+/*
     LinPro linpro;
     linpro.run();
-
+*/
     return 0;
 }
 
@@ -347,4 +529,27 @@ prune paths that are infeasible or worse than the current best.
 some nits:
 all of the Z coefficients can't be negative.
 the implementation might want to put Z in row 0.
+
+possible syntax:
+
+LinPro lp;
+ab = lp.var("AB");
+ba = lp.var("BA");
+xa = lp.var("XA");
+xb = lp.var["XB");
+row1 = LP:Expr + votesa + xa - ab + ba + LP:gt + votesw;
+row2 = LP:Expr + votesa + xa - ab + ba + LP:gt + votesx - xa - xb;
+lp.append(row1);
+lp.append(row2);
+if (!lp) {
+    println(lp.error_string());
+}
+
+LinPro(Vector<VarInfo> vars, Vector<Terms> rows) { }
+LP:Var(int idx) { }
+LP:Expr(Vector<TermInfo>) {
+    enum ( lt, gt, lte, gte );
+    op+ op- op* op/ () { }
+}
 */
+
