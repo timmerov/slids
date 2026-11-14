@@ -1092,6 +1092,12 @@ bool tryCaptureConst(parse::Node& decl, parse::Tree& tree, diagnostic::Sink& dia
     // capture / codegen isn't built yet — an honest "not yet supported", not a
     // type error.)
     if (rhs.kind == parse::Kind::kStringLiteral) {
+        // A TYPELESS LOCAL const (`const sign = "+";`) is not a folded scalar: it is
+        // a not-mutable `const char[]` variable. Leave slids_type unset so classify's
+        // typeless-const arm infers and routes it. Globals stay here (open in todo).
+        if (decl.return_type == widen::kNoType && !decl.is_global
+            && entry.kind == parse::EntryKind::kConst)
+            return false;
         if (declared == "char[]") {
             diagnostic::report(diag, {decl.file_id, decl.tok,
                 "String constants are not yet supported.", {}});

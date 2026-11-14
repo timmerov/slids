@@ -65,9 +65,9 @@ the variable is a pointer to the original constant characters.
     const char there[6] = "there";
 
 the inferred type of a variable assigned to a string literal is a
-pointer to the original constant characters.
+mutable pointer to the original constant characters.
 
-    hello = "hello"; // const char hello[6] = "hello";
+    hello = "hello"; // (const char) hello[6] = "hello";
 
 note: we may revisit the unary negation decision.
 example:
@@ -91,10 +91,15 @@ claude says:
 - an initializer / destructure whose target is not exactly `char[N]` sees the literal
   as N-1 (no nul) or N (with nul) char literals — a tuple literal — so the ordinary
   tuple -> array / destructure path widens each char (any type char widens into).
-- ALIAS: a LOCAL const char array initialized from a literal (typed, N or N-1, or
-  typeless `x = "lit"`) gets no storage: its address IS the pooled constant
-  (Node::alias_literal; codegen registers the constant's symbol instead of an alloca).
-  The pool dedups equal text, so two aliases of the same text share one address.
+- ALIAS: a LOCAL const char array initialized from a literal (typed, N or N-1) gets
+  no storage: its address IS the pooled constant (Node::alias_literal; codegen
+  registers the constant's symbol instead of an alloca). The pool dedups equal text,
+  so two aliases of the same text share one address.
+- INFERRED: a typeless local `x = "lit"` is an iterator to const, `(const char)[]`,
+  pointing at the pooled constant — it may be re-bound to another literal, never
+  written through. `const x = "lit"` is `const char[]` (prints `const (const char)[]`):
+  neither re-bound nor written through. A typeless FIELD default `Foo(f = "lit")` is
+  `(const char)[]` too. (Globals: open in todo.)
 - for-loops over a literal stop before the nul (test/flow/forarray.sl).
 */
 
@@ -104,6 +109,8 @@ alias slids;
 void fn(const char[] s) {
     println(s);
 }
+
+Labeled(label = "label") { }
 
 int32 main() {
     /* sizeof includes the nul. */
@@ -152,7 +159,7 @@ int32 main() {
     const char alias6[6] = "alias";
     inferred = "alias";
     println(String + "alias= " + alias5[0] + alias6[4] + inferred[1]
-        + " " + ##type(inferred));                              // asl const char[6]
+        + " " + ##type(inferred));                              // asl (const char)[]
     println(String + "same address= " + (^alias5[0] == ^alias6[0])
         + " " + (^alias6[0] == ^inferred[0])
         + " " + (^inferred[0] == ^"alias"[0]));                 // true true true
@@ -161,6 +168,23 @@ int32 main() {
     copy6[0] = 'b';
     println(String + "copy= " + copy6[0] + " "
         + (^copy6[0] == ^"alias"[0]));                          // b false
+
+    /* a typeless local is an iterator to const: re-bindable. */
+    sign = "+";
+    println(String + "sign= " + sign + " " + ##type(sign));     // + (const char)[]
+    sign = "-";
+    println(String + "rebound= " + sign + " "
+        + (^sign[0] == ^"-"[0]));                               // - true
+
+    /* a typeless const is const char[]: fixed. */
+    const fixed = "fixed";
+    println(String + "const= " + fixed + " " + ##type(fixed));  // fixed const (const char)[]
+
+    /* a typeless field default is an iterator to const too. */
+    Labeled lab;
+    println(String + "field= " + lab.label + " " + ##type(lab.label));  // label (const char)[]
+    lab.label = "relabeled";
+    println(String + "field rebound= " + lab.label);            // relabeled
     return 0;
 }
 
@@ -210,3 +234,17 @@ int32 main() {
 /* an alias is read-only. */
 //-EXPECT-ERROR: Cannot write to a const value.
 //int neg_alias_write() { const char x[6] = "hello"; x[0] = 'j'; int r = x[0]; return r; }
+
+/* an inferred local / field points at read-only characters. */
+//-EXPECT-ERROR: Cannot write to a const value.
+//int neg_inferred_write() { x = "hello"; x[0] = 'j'; int r = x[0]; return r; }
+
+//-EXPECT-ERROR: Cannot write to a const value.
+//int neg_field_write() { Labeled l; l.label[0] = 'j'; int r = l.label[0]; return r; }
+
+/* a typeless const can't be re-bound. */
+//-EXPECT-ERROR: Cannot assign to constant 'k'.
+//int neg_const_rebind() { const k = "hello"; k = "world"; int r = k[0]; return r; }
+
+//-EXPECT-ERROR: Cannot assign to 'k'.
+//int neg_const_write() { const k = "hello"; k[0] = 'j'; int r = k[0]; return r; }

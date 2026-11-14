@@ -241,7 +241,8 @@ LP(
 
         /* add the cost row. */
         Expr expr;
-        expr.constant_ = 0;
+        expr.constant_.numer_ = 0;
+        expr.constant_.denom_ = 1;
         expr.relation_ = kGTE;
         add_row(z, expr);
     }
@@ -270,15 +271,15 @@ LP(
 
     /* coefficients are rational numbers. */
     Rational(
-        int numer_,
-        int denom_
+        int numer_ = 0,
+        int denom_ = 1
     ) {
     }
 
     /* a term is a variable index and its coefficient. */
     Term(
         int var_idx_,
-        Rational coefficient_
+        Rational coeff_
     ) { }
     alias Terms = Vector<Term>;
 
@@ -288,7 +289,7 @@ LP(
     */
     Row(
         int owner_,
-        int constant_,
+        Rational constant_,
         Terms terms_
     ) {
     }
@@ -304,26 +305,129 @@ LP(
 
     /* an expression is how we build a row. */
     Expr(
-        int constant_,
+        Rational constant_,
         Relation relation_ = kErr,
         Terms terms_
     ) {
-        op+=(int rhs) { }
-        op-=(int rhs) { }
-        op+=(Var^ rhs) { }
-        op-=(Var^ rhs) { }
-        op+=(Comparison^ rhs) { }
+        op+=(int rhs) {
+            if (relation_ == kErr) {
+                constant_.numer_ += rhs;
+            } else {
+                constant_.numer_ -= rhs;
+            }
+        }
+        op-=(int rhs) {
+            if (relation_ == kErr) {
+                constant_.numer_ -= rhs;
+            } else {
+                constant_.numer_ += rhs;
+            }
+        }
+        op+=(Var^ rhs) {
+            Term term;
+            term.var_idx_ = rhs^.idx_;
+            term.coeff_.numer_ = 1;
+            term.coeff_.denom_ = 1;
+            if (relation_ != kErr) {
+                term.coeff_.numer_ = -1;
+            }
+            terms_.append(term);
+        }
+        op-=(Var^ rhs) {
+            Term term;
+            term.var_idx_ = rhs^.idx_;
+            term.coeff_.numer_ = -1;
+            term.coeff_.denom_ = 1;
+            if (relation_ != kErr) {
+                term.coeff_.numer_ = 1;
+            }
+            terms_.append(term);
+        }
+        op+=(Comparison^ rhs) {
+            if (relation_ != kErr) {
+                println("**Error** expression has multiple comparision operations.");
+            }
+            relation_ = rhs^.relation_;
+        }
     }
 
     /* print the matrix. */
     void dump() {
         /*
-        ==tsc== you are here.
-        pretty print the matrix.
-        */
-
         for (it : vars_) {
             println(String + it^.idx_ + ": " + it^.name_ + " = " + it^.value_);
+        }
+        */
+
+        nrows int = rows_.size();
+        idx_width = 0;
+        String s;
+        for (i : 0..nrows) {
+            s = i;
+            len int = s.size();
+            idx_width = math:max(idx_width, len);
+        }
+        Format xfmt;
+        xfmt.min_width_ = idx_width;
+
+        name_width = 0;
+        for (var : vars_) {
+            s = String + var^.name_;
+            len int = s.size();
+            name_width = math:max(name_width, len);
+        }
+        Format nfmt;
+        nfmt.min_width_ = name_width;
+
+        coeff_width = 0;
+        for (row : rows_) {
+            numer float64 = row^.constant_.numer_;
+            denom float64 = row^.constant_.denom_;
+            konst = numer / denom;
+            s = String + konst;
+            len int = s.size();
+            coeff_width = math:max(coeff_width, len);
+        }
+        Format cfmt;
+        cfmt.justify_ = kRightJustify;
+        cfmt.min_width_ = coeff_width;
+
+        s.clear();
+        s = xfmt*"" + " " + nfmt*"" + "  " + cfmt*"";
+        for (col : cols_) {
+            owner = col^.owner_;
+            name = ^vars_[owner].name_;
+            s = s + "   " + cfmt*name^;
+        }
+        println(s);
+
+        for (i : 0..nrows) {
+            row = ^rows_[i];
+            owner = row^.owner_;
+            numer float64 = row^.constant_.numer_;
+            denom float64 = row^.constant_.denom_;
+            konst = numer / denom;
+            name = ^vars_[owner].name_;
+            s = String + xfmt*i + ":" + nfmt*name^ + ": " + cfmt*konst;
+            for (term : row^.terms_) {
+                if (term^.coeff_.numer_) {
+                    numer float64 = term^.coeff_.numer_;
+                    denom float64 = term^.coeff_.denom_;
+                    coeff = numer / denom;
+                    owner = term^.var_idx_;
+                    name = ^vars_[owner].name_;
+                    sign = "+";
+                    if (coeff < 0.0) {
+                        coeff = - coeff;
+                        sign = "-";
+                    }
+                    s = s + " " + sign + " " + cfmt*coeff;
+                } else {
+                    s = s + "   " + cfmt*"";
+                }
+            }
+            s += " >= 0";
+            println(s);
         }
     }
 
@@ -344,9 +448,19 @@ LP(
 
         if (user) {
             ++nuser_vars_;
-        }
 
-        /* ==tsc== add user variable to row Z. */
+            /* add user var to z row. */
+            Term term;
+            term.var_idx_ = idx;
+            term.coeff_.numer_ = 1;
+            term.coeff_.denom_ = 1;
+            rows_[0].terms_.append(term);
+
+            /* add user var to colunns. */
+            Column col;
+            col.owner_ = idx;
+            cols_.append(col);
+        }
 
         return Var(idx);
     }
@@ -369,17 +483,49 @@ LP(
         Row row;
         row.owner_ = var^.idx_;
         row.constant_ = expr^.constant_;
-        row.terms_.resize(nuser_vars_);
+        row.terms_.reserve(nuser_vars_);
 
-        /*
-        ==tsc==
-        copy the terms from expr to the correct row term.
+        /* init the terms. */
+        for (var : vars_) {
+            if (var^.user_ == false) {
+                continue;
+            }
+            Term term;
+            term.var_idx_ = var^.idx_;
+            term.coeff_.numer_ = 0;
+            term.coeff_.denom_ = 1;
+            row.terms_.append(term);
+        }
 
-        munge the row terms.
-        if relation is < or <= then multiply by -1
-        and change to >= or >.
-        if > then subtract 1 from constant.
-        */
+        /* copy the terms from the expr to the row. */
+        for (var_term : expr^.terms_) {
+            var_idx = var_term^.var_idx_;
+            for (row_term : row.terms_) {
+                if (row_term^.var_idx_ == var_idx) {
+                    row_term^.coeff_.numer_ += var_term^.coeff_.numer_;
+                    break;
+                }
+            }
+        }
+
+        /* convert less-than rows. */
+        rel = expr^.relation_;
+        if (rel == kLT || rel == kLTE) {
+            row.constant_.numer_ = - row.constant_.numer_;
+            for (row_term : row.terms_) {
+                row_term^.coeff_.numer_ = - row_term^.coeff_.numer_;
+            }
+            if (rel == kLT) {
+                rel = kGT;
+            } else {
+                rel = kGTE;
+            }
+        }
+
+        /* convert greater-than rows. */
+        if (rel == kGT) {
+            row.constant_.numer_ -= 1;
+        }
 
         rows_.append(row);
     }
@@ -387,6 +533,7 @@ LP(
     /* find a solution. */
     void solve() {
     }
+
 }
 
 int32 main() {
@@ -396,12 +543,12 @@ int32 main() {
     ba = lp.add_var("BA");
     xa = lp.add_var("XA");
     xb = lp.add_var("XB");
-    a = 100;
-    b = 200;
-    w = 300;
-    x = 400;
-    baw = 10;
-    xaw = 20;
+    a = 90;
+    b = 80;
+    w = 100;
+    x = 200;
+    baw = 40;
+    xaw = 150;
     /* a beats w and x. */
     row0 = LP:Expr + a - ab + ba + xa + LP:gte + w;
     row1 = LP:Expr + a - ab + ba + xa + LP:gte + x - xa - xb;

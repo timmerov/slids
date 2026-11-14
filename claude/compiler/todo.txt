@@ -9,6 +9,15 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
+  * a global can't hold a string literal: global (const char)[] g_ = "glob"; and
+    global grp(h_ = "grp") { } say "has a string initializer, which does not match declared
+    type". the initializer should capture the literal's address. untyped globals should then
+    infer (const char)[] like locals and fields. global const char[] g_ = "x"; is blocked
+    separately by "A const variable of a non-scalar type ... requires global storage".
+
+  * a const pointer field default reports a const write: Foo(const char[] f = "field") { }
+    says "Cannot write to a const value." at the default's initialization.
+
   * vector.sl remove(T^ it, count) does `it - storage` on a reference: "Arithmetic is not allowed on a
     reference" when any flavor's remove-by-pointer is used (guthrie 1815). likely `<T[]> <mutable> it`.
 

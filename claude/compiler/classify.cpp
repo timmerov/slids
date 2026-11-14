@@ -46,6 +46,11 @@ bool isLiteralKind(parse::Kind k) {
 // Rejecting a non-constant initializer is not a soundness fix (the gate orders
 // cross-global reads correctly); it is language policy. An initializer that quietly
 // reads another global looks like data and behaves like code.
+// `(const char)[]` — what a typeless local / field bound to a string literal infers.
+widen::TypeRef constCharIterator() {
+    return widen::internIterator(widen::internConst(widen::intern("char")));
+}
+
 bool isConstantInit(parse::Tree const& tree, parse::Node const& e) {
     if (isLiteralKind(e.kind)) return true;
     if (e.kind == parse::Kind::kNullptrLiteral) return true;
@@ -8129,7 +8134,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 return;
             }
             if (!s.children.empty()) {
-                inferExpr(tree, *s.children[0], s.return_type, diag);
+                // A TYPELESS LOCAL bound to a string literal is an ITERATOR TO CONST
+                // (`sign = "+";` -> `(const char)[]`, re-bindable to another literal;
+                // `const sign = "+";` -> `const char[]` via the deepConst below). The
+                // literal takes the iterator from context, as at a `(const char)[]`
+                // param. `name^ = "x"` keeps the array (it asks for a reference).
+                widen::TypeRef init_ctx = s.return_type;
+                if (init_ctx == widen::kNoType && !s.is_global && !s.infer_ref
+                    && s.children[0]
+                    && s.children[0]->kind == parse::Kind::kStringLiteral)
+                    init_ctx = constCharIterator();
+                inferExpr(tree, *s.children[0], init_ctx, diag);
                 // Inferred-init: a typeless decl (empty return_type, promoted from
                 // an assign in resolve) takes the rhs type. A literal-inferred type
                 // normalizes to its preferred spelling (int32->int, ...); a typed
@@ -9735,6 +9750,15 @@ void classifyClassSignature(parse::Tree& tree, widen::TypeRef classType,
         assert(p && !p->children.empty() && p->children[0]
             && "classifyClassSignature: a deferred field must carry a default");
         parse::Node& def = *p->children[0];
+        // A string-literal default makes the field an ITERATOR TO CONST, like a
+        // typeless local: `Foo(f = "x")` -> `(const char)[] f`.
+        if (def.kind == parse::Kind::kStringLiteral) {
+            inferExpr(tree, def, constCharIterator(), diag);
+            info.field_types[i] = def.inferred_type;
+            p->return_type = def.inferred_type;
+            changed = true;
+            continue;
+        }
         inferExpr(tree, def, widen::kNoType, diag);
         if (!isLiteralKind(def.kind)) {
             diagnostic::report(diag, {def.file_id, def.tok,

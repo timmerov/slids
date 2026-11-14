@@ -523,14 +523,14 @@ int32 main() {
     println(String + "shadow= " + shx);                   // 306
 
     /* a string LITERAL loops over its characters only — the trailing nul is not
-       part of the loop. A variable holding a literal is an ordinary array: 6. */
+       part of the loop. An array holding a literal is an ordinary array: 6. */
     int nlit = 0;
     for (ch : "hello") { nlit = nlit + 1; ch; }
     println(String + "literal passes= " + nlit);          // 5
     String lit_chars;
     for (ch : "abc") { lit_chars += ch; }
     println(String + "literal chars= " + lit_chars);      // abc
-    held = "hello";
+    const char held[6] = "hello";
     int nheld = 0;
     for (ch : held) { nheld = nheld + 1; ch; }
     println(String + "held passes= " + nheld);            // 6
