@@ -3657,7 +3657,17 @@ PLUMBING
                   consumer's BUILD name is the fragment's (`<name>.deps.mk` ->
                   `<name>.ll`, `<name>_TMPL_OBJS`), not the source's stem — a
                   consumer may share a stem with a library it imports
-                  (test/lib builds vector.sl as t_vector). A LEX ERROR during the scan is NOT rendered: the
+                  (test/lib builds vector.sl as t_vector). LIBRARY ORDERING
+                  (Y waits for X) has two sources: X's files import Y, and a
+                  Y type spelled as an argument of an X template
+                  (scanTypeArgEdges: `N<` at file/namespace scope in a
+                  library's file makes N that library's; `alias A = rhs;`
+                  carries rhs's libraries; every `N<...>` use orders N's
+                  libraries before the bracketed names' libraries). A cycle
+                  in the combined graph is an error ("no compile order
+                  exists"), exit 1, no fragment. Deduced template calls
+                  (`quicksort(v)`) spell no `<...>` and add no edge.
+                  A LEX ERROR during the scan is NOT rendered: the
                   scan prints one `slidsc: scan-deps: <file> has errors.` line
                   per erroring file and exits 1 (no fragment written; the
                   Makefiles `-include` it, so make goes on to the compile,

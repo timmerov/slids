@@ -2,6 +2,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <set>
@@ -92,6 +93,153 @@ void readSliFile(std::string const& path, std::string const& target,
     if (!addressed_here) return;
     for (auto& m : file_imports) injects.push_back(m);
     for (auto& d : file_demands) demands.push_back(d);
+}
+
+// --scan-deps TYPE-ARGUMENT EDGES. An import is not the only way one template
+// library comes to demand another: `Map<Vector<int>, int>` makes map's compile
+// instantiate Map with a vector type, and Map's bodies (Key.op<) dump demands
+// FOR vector — so vector waits for map though map.sl never imports vector.
+// Lex-only, like the rest of the scan:
+//   OWNERS   a name N spelled `N<` at namespace/file scope (no `=` earlier in
+//            the statement) in a library module's file is that module's
+//            template (class, function, or alias template). A name claimed by
+//            several modules keeps them all (conservative: more edges).
+//   ALIASES  `alias X = rhs;` (anywhere): X carries the modules of the names
+//            in rhs, to a fixed point — `alias Rankings = slids:Vector<int>;`
+//            makes `Map<Rankings, int>` an edge.
+//   USES     every `N<...>` (any file, any depth), matched to its `>`: each
+//            module of N must compile before each OTHER module named by an
+//            identifier inside the brackets.
+// Returns y -> { x : y's compile waits for x's }.
+std::map<std::string, std::set<std::string>> scanTypeArgEdges(
+        token::List const& tokens, std::set<std::string> const& lib_set) {
+    using token::Kind;
+    auto const& toks = tokens.tokens;
+    std::map<std::string, std::set<std::string>> mods;          // name -> modules
+    std::map<std::string, std::set<std::string>> alias_rhs;     // alias -> names
+    std::vector<std::pair<std::string, std::set<std::string>>> uses;
+
+    // Per-file scope state: the brace stack (true = namespace brace) and the
+    // statement-level paren depth / seen-`=` flag at namespace scope.
+    struct FileState {
+        std::vector<bool> braces;
+        int parens = 0;
+        bool seen_eq = false;
+    };
+    std::map<int, FileState> state;
+
+    auto isNamespaceScope = [](FileState const& s) {
+        if (s.parens != 0) return false;
+        for (bool ns : s.braces) if (!ns) return false;
+        return true;
+    };
+
+    size_t n = toks.size();
+    for (size_t i = 0; i < n; ++i) {
+        auto const& t = toks[i];
+        if (t.kind == Kind::kEndOfInput) break;
+        if (t.file_id < 0 || t.file_id >= (int)tokens.files.size()) continue;
+        auto const& file = tokens.files[t.file_id];
+        FileState& s = state[t.file_id];
+        bool same_prev = i > 0 && toks[i - 1].file_id == t.file_id;
+        Kind prev = same_prev ? toks[i - 1].kind : Kind::kSemicolon;
+        Kind prev2 = (i > 1 && toks[i - 2].file_id == t.file_id)
+                         ? toks[i - 2].kind : Kind::kSemicolon;
+
+        if (t.kind == Kind::kLBrace) {
+            // `ident {` at a statement start is a namespace.
+            bool ns = prev == Kind::kIdentifier &&
+                      (prev2 == Kind::kSemicolon || prev2 == Kind::kRBrace ||
+                       prev2 == Kind::kLBrace);
+            s.braces.push_back(ns);
+            s.seen_eq = false;
+            continue;
+        }
+        if (t.kind == Kind::kRBrace) {
+            if (!s.braces.empty()) s.braces.pop_back();
+            s.seen_eq = false;
+            continue;
+        }
+        if (t.kind == Kind::kSemicolon) { s.seen_eq = false; continue; }
+        if (t.kind == Kind::kLParen) { ++s.parens; continue; }
+        if (t.kind == Kind::kRParen) { if (s.parens > 0) --s.parens; continue; }
+        if (t.kind == Kind::kEquals) { s.seen_eq = true; continue; }
+        if (t.kind == Kind::kAlias) {
+            // alias X [<...>] = rhs ;
+            if (i + 1 >= n || toks[i + 1].kind != Kind::kIdentifier) continue;
+            std::string name = toks[i + 1].text;
+            size_t j = i + 2;
+            while (j < n && toks[j].kind != Kind::kEquals &&
+                   toks[j].kind != Kind::kSemicolon &&
+                   toks[j].kind != Kind::kEndOfInput) ++j;
+            if (j >= n || toks[j].kind != Kind::kEquals) continue;
+            for (++j; j < n && toks[j].kind != Kind::kSemicolon &&
+                      toks[j].kind != Kind::kEndOfInput &&
+                      toks[j].kind != Kind::kLBrace &&
+                      toks[j].kind != Kind::kRBrace; ++j) {
+                if (toks[j].kind == Kind::kIdentifier)
+                    alias_rhs[name].insert(toks[j].text);
+            }
+            continue;   // the walk re-reads the rhs for its `N<` uses
+        }
+        if (t.kind != Kind::kIdentifier) continue;
+
+        // kIdentifier: only `N<` matters.
+        if (i + 1 >= n || toks[i + 1].kind != Kind::kLt) continue;
+        std::string const& name = t.text;
+        std::string module = std::filesystem::path(file.path).stem().string();
+
+        // OWNER claim.
+        if (lib_set.count(module) && isNamespaceScope(s) && !s.seen_eq)
+            mods[name].insert(module);
+
+        // USE: match the brackets.
+        std::set<std::string> inner;
+        int depth = 1, parens = 0;
+        bool ok = false;
+        for (size_t j = i + 2; j < n && j < i + 256; ++j) {
+            Kind k = toks[j].kind;
+            if (k == Kind::kSemicolon || k == Kind::kLBrace ||
+                k == Kind::kRBrace || k == Kind::kEndOfInput) break;
+            if (k == Kind::kLParen) { ++parens; continue; }
+            if (k == Kind::kRParen) { if (--parens < 0) break; continue; }
+            if (k == Kind::kLt) { ++depth; continue; }
+            if (k == Kind::kGt) depth -= 1;
+            else if (k == Kind::kRShift) depth -= 2;
+            else if (k == Kind::kIdentifier) inner.insert(toks[j].text);
+            if (depth <= 0) { ok = true; break; }
+        }
+        if (ok && !inner.empty()) uses.emplace_back(name, std::move(inner));
+    }
+
+    // Aliases carry the modules of their rhs names, to a fixed point.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto const& [a, names] : alias_rhs) {
+            for (auto const& nm : names) {
+                if (nm == a) continue;
+                auto it = mods.find(nm);
+                if (it == mods.end()) continue;
+                for (auto const& m : std::set<std::string>(it->second))
+                    if (mods[a].insert(m).second) changed = true;
+            }
+        }
+    }
+
+    std::map<std::string, std::set<std::string>> waits;
+    for (auto const& [outer, inner] : uses) {
+        auto oi = mods.find(outer);
+        if (oi == mods.end()) continue;
+        for (auto const& nm : inner) {
+            auto ii = mods.find(nm);
+            if (ii == mods.end()) continue;
+            for (auto const& x : oi->second)
+                for (auto const& y : ii->second)
+                    if (x != y && lib_set.count(x) && lib_set.count(y))
+                        waits[y].insert(x);
+        }
+    }
+    return waits;
 }
 
 }  // namespace
@@ -253,6 +401,48 @@ int main(int argc, char** argv) {
             if (fid < 0 || fid >= (int)tokens.files.size()) continue;
             mod_imports[moduleOf(tokens.files[fid].path)].insert(module);
         }
+        // y -> { x : y's compile waits for x's }: import edges + type-argument
+        // edges. A cycle has no compile order — every library in it would miss
+        // demands — so it is an error, not a fragment make would half-honor.
+        std::map<std::string, std::set<std::string>> waits =
+            scanTypeArgEdges(tokens, lib_set);
+        for (auto const& x : libs)
+            for (auto const& y : mod_imports[x])
+                if (y != x && lib_set.count(y)) waits[y].insert(x);
+        {
+            std::map<std::string, int> color;     // 0 new, 1 on stack, 2 done
+            std::vector<std::string> path;
+            std::vector<std::string> cycle;
+            std::function<bool(std::string const&)> dfs =
+                [&](std::string const& m) -> bool {
+                color[m] = 1;
+                path.push_back(m);
+                for (auto const& x : waits[m]) {
+                    if (color[x] == 1) {
+                        auto it = std::find(path.begin(), path.end(), x);
+                        cycle.assign(it, path.end());
+                        cycle.push_back(x);
+                        return true;
+                    }
+                    if (color[x] == 0 && dfs(x)) return true;
+                }
+                path.pop_back();
+                color[m] = 2;
+                return false;
+            };
+            for (auto const& m : libs) {
+                if (color[m] == 0 && dfs(m)) break;
+            }
+            if (!cycle.empty()) {
+                // cycle lists waiters: each one waits for the next.
+                std::cerr << "slidsc: scan-deps: template libraries need each "
+                             "other's instantiations, no compile order exists:";
+                for (size_t k = 0; k < cycle.size(); ++k)
+                    std::cerr << (k ? " waits for " : " ") << cycle[k];
+                std::cerr << "\n";
+                return 1;
+            }
+        }
         std::string bld =
             std::filesystem::path(scan_path).parent_path().string();
         if (bld.empty()) bld = ".";
@@ -265,13 +455,11 @@ int main(int argc, char** argv) {
             for (auto const& m : libs) mk << ll(m) << " ";
             mk << ": " << ll(consumer) << "\n";
             // Library-to-library ordering: X's files importing Y means X's
-            // compile dumps demands FOR Y — Y waits for X.
-            for (auto const& x : libs) {
-                for (auto const& y : mod_imports[x]) {
-                    if (y != x && lib_set.count(y))
-                        mk << ll(y) << ": " << ll(x) << "\n";
-                }
-            }
+            // compile dumps demands FOR Y — Y waits for X. So does a Y type
+            // spelled as an argument of an X template (scanTypeArgEdges).
+            for (auto const& [y, xs] : waits)
+                for (auto const& x : xs)
+                    mk << ll(y) << ": " << ll(x) << "\n";
             // The template-library compile flags, as a TARGET-SPECIFIC
             // variable the directory's generic .ll rule splices in: read the
             // demand pool, and put the consumer's own directory on the import

@@ -127,6 +127,19 @@ UNBLOCKED FEATURES
 
   * revisit the decision that makes this an error: char ch = 0;
 
+  * --scan-deps library ordering cycle: Map<Vector<int>, int> and Vector<Map<int, int>>
+    in one program means map waits for vector AND vector waits for map. no one-pass
+    compile order exists; the scan reports an error. fix needs a fixed-point demand
+    pass: every library writes .sli (demands only, no codegen) until no .sli changes,
+    then every library compiles .ll once. new slidsc mode + a driver loop make can't
+    express.
+
+  * --scan-deps misses deduced function-template calls: quicksort(v) with v a
+    Vector<X> instantiates quicksort<Vector<X>> in algorithm, which demands Vector
+    methods, but no `<...>` is spelled so the lex-only scan adds no
+    vector-after-algorithm edge. user/linpro links only because algorithm happens to
+    compile first. the fixed-point demand pass above would close this too.
+
   * allow construction with move operator.
     allow assignment/move with placement new.
     save_container <-- container;
@@ -410,6 +423,13 @@ BLOCKED FEATURES
     but they fail because the const is stripped from the template type at the same time
     aliases are reduced to their base type.
     so const Class^ and (const Class)^ both become Class^.
+
+  * there are use cases for compare operators to return non-primitives.
+    like vector compare that returns a vector of bools.
+    Vector<bool> Vector<int>:op<(Vector<int>);
+    and linear programming:
+    expr = LPExpr + x + 200 >= LPExpr + y * 2;
+    LPExpr LPExpr:op>=(LPExpr);
 
 
 REACH GOALS

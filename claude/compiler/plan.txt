@@ -4449,6 +4449,19 @@ test/ + user/ SPLIT (user, 2026-11-02)
   no tests: the Makefiles lost negatives/positives and build into build/user/<dir>. Older entries
   in this file keep the paths of their day.
 
+--scan-deps TYPE-ARGUMENT EDGES (2026-11-13, from user/linpro)
+  user/linpro failed to link: map.o called Vector<int>:op< but vector.o never defined it.
+  `alias BlocMap = slids:Map<Rankings, int>` (Rankings = Vector<int>) makes map's compile
+  demand Vector<int>:op< (Map's insert compares keys), but the scan ordered libraries by
+  import statements only and map.sl never imports vector, so vector compiled before
+  map.sli existed. scanTypeArgEdges (main.cpp) adds lex-only edges: a name spelled `N<`
+  at file/namespace scope in a library's file belongs to that library (several claims
+  keep all); `alias A = rhs;` carries rhs's libraries to a fixed point; every `N<...>`
+  orders N's libraries before the libraries named inside the brackets. Import edges and
+  type-argument edges form one graph; a cycle is an error, no fragment. linpro's fragment
+  now has `vector.ll: map.ll`; clean build links and runs. OPEN (todo): cycles need a
+  fixed-point demand pass; deduced calls (`quicksort(v)`) add no edge.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
