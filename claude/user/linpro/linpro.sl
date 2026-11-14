@@ -308,13 +308,11 @@ LP(
         Relation relation_ = kErr,
         Terms terms_
     ) {
-        op+(Expr^ lhs, Expr^ rhs) { }
-        op+(Expr^ lhs, int rhs) { }
-        op+(Expr^ lhs, Comparison^ rhs) { }
-        op+=(Expr^ rhs) { }
         op+=(int rhs) { }
-        op+=(Comparison^ rhs) { }
         op-=(int rhs) { }
+        op+=(Var^ rhs) { }
+        op-=(Var^ rhs) { }
+        op+=(Comparison^ rhs) { }
     }
 
     /* print the matrix. */
@@ -398,16 +396,39 @@ int32 main() {
     ba = lp.add_var("BA");
     xa = lp.add_var("XA");
     xb = lp.add_var("XB");
-    expr1 = LP:Expr + 1;
-    expr2 = LP:Expr + expr1;
-    expr3 = LP:Expr + 1 + expr2 + 3 + expr1;
-    lp.add_row(expr1);
-    lp.add_row(expr2);
-    lp.add_row(expr3);
+    a = 100;
+    b = 200;
+    w = 300;
+    x = 400;
+    baw = 10;
+    xaw = 20;
+    /* a beats w and x. */
+    row0 = LP:Expr + a - ab + ba + xa + LP:gte + w;
+    row1 = LP:Expr + a - ab + ba + xa + LP:gte + x - xa - xb;
+    /* b beats w and x. */
+    row2 = LP:Expr + b + ab - ba + xb + LP:gte + w;
+    row3 = LP:Expr + b + ab - ba + xb + LP:gte + x - xa - xb;
+    /* limit a to b votes. */
+    row4 = LP:Expr + ab + LP:lte + a;
+    /* limit b to a votes. */
+    row5 = LP:Expr + ba + LP:lte + baw;
+    /* limit x to a,b votes. */
+    row6 = LP:Expr + xa + xb + LP:lte + xaw;
+    /* =tsc= to do: break ties. */
+    /* add the rows. */
+    lp.add_row(row0);
+    lp.add_row(row1);
+    lp.add_row(row2);
+    lp.add_row(row3);
+    lp.add_row(row4);
+    lp.add_row(row5);
+    lp.add_row(row6);
     lp.dump();
 
     ab; ba; xa; xb;
-    expr1; expr2; expr3;
+    a; b; w; x;
+    baw; xaw;
+    //row0; row1; row2; row3; row4; row5; row6;
 
 /*
     LinPro linpro;
