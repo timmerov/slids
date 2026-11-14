@@ -280,7 +280,12 @@ ASSIGNMENT RELATION (the one implicit-conversion matrix; spans classify + codege
     sees it as a tuple of chars (stringLiteralAsTuple), a for-loop skips the NUL
     (lowerForTuple), and a LOCAL const char array bound to one aliases the pool
     constant (Node::alias_literal — no alloca). See plan.txt STRING LITERAL
-    OPERATIONS. A COMPARISON
+    OPERATIONS. A TYPELESS binding (2026-11-13): a local `x = "lit"` and a field
+    `Foo(f = "lit")` infer `(const char)[]` (the literal takes the iterator from
+    context — classify's decl-init arm / classifyClassSignature, constCharIterator);
+    a typeless local `const x = "lit"` skips constfold's string branch and keeps
+    `const char[N]`, deep-consted (`const (const char)[N]`), aliased. Globals still
+    reject a literal (todo). A COMPARISON
     uses these same rules — ptrImplicitOk plus ptrBaseUpcastOk (derived->base, the
     base at offset 0, but NOT for both pointer kinds alike: a REFERENCE names one
     object and always demotes, while an ITERATOR strides by its pointee, so it

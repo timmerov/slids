@@ -15,6 +15,11 @@ BUGS
     infer (const char)[] like locals and fields. global const char[] g_ = "x"; is blocked
     separately by "A const variable of a non-scalar type ... requires global storage".
 
+  * ^ on a typeless const variable is rejected: const held = "hello"; ^held[0] and
+    const c = a; ^c[0] say "Cannot take the address of". resolve sees a kConst before
+    classify turns it into a variable. accept it at resolve, recheck in classify so a
+    folded scalar (const n = 3; ^n) still errors.
+
   * a const pointer field default reports a const write: Foo(const char[] f = "field") { }
     says "Cannot write to a const value." at the default's initialization.
 

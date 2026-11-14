@@ -14,6 +14,6 @@ same address= true true true
 copy= b false
 sign= + (const char)[]
 rebound= - true
-const= fixed const (const char)[]
+const= fixed 6 6 const (const char)[6]
 field= label (const char)[]
 field rebound= relabeled

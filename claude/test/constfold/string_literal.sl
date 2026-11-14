@@ -97,9 +97,11 @@ claude says:
   so two aliases of the same text share one address.
 - INFERRED: a typeless local `x = "lit"` is an iterator to const, `(const char)[]`,
   pointing at the pooled constant — it may be re-bound to another literal, never
-  written through. `const x = "lit"` is `const char[]` (prints `const (const char)[]`):
-  neither re-bound nor written through. A typeless FIELD default `Foo(f = "lit")` is
-  `(const char)[]` too. (Globals: open in todo.)
+  written through. `const x = "lit"` keeps the literal's array type, deep-consted like
+  every typeless const (prints `const (const char)[N]`): it can't be re-bound, so it
+  keeps its length (sizeof, for-loops) and ALIASES the pool like a typed const char
+  array. A typeless FIELD default `Foo(f = "lit")` is `(const char)[]`. (Globals: open
+  in todo.)
 - for-loops over a literal stop before the nul (test/flow/forarray.sl).
 */
 
@@ -176,9 +178,12 @@ int32 main() {
     println(String + "rebound= " + sign + " "
         + (^sign[0] == ^"-"[0]));                               // - true
 
-    /* a typeless const is const char[]: fixed. */
+    /* a typeless const keeps the literal's array: fixed, sized, iterable. */
     const fixed = "fixed";
-    println(String + "const= " + fixed + " " + ##type(fixed));  // fixed const (const char)[]
+    int nfixed = 0;
+    for (ch : fixed) { nfixed = nfixed + 1; ch; }
+    println(String + "const= " + fixed + " " + sizeof(fixed) + " " + nfixed
+        + " " + ##type(fixed));                                 // fixed 6 6 const (const char)[6]
 
     /* a typeless field default is an iterator to const too. */
     Labeled lab;

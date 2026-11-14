@@ -8135,13 +8135,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             }
             if (!s.children.empty()) {
                 // A TYPELESS LOCAL bound to a string literal is an ITERATOR TO CONST
-                // (`sign = "+";` -> `(const char)[]`, re-bindable to another literal;
-                // `const sign = "+";` -> `const char[]` via the deepConst below). The
-                // literal takes the iterator from context, as at a `(const char)[]`
-                // param. `name^ = "x"` keeps the array (it asks for a reference).
+                // (`sign = "+";` -> `(const char)[]`, re-bindable to another literal).
+                // The literal takes the iterator from context, as at a `(const char)[]`
+                // param. A typeless CONST keeps the literal's own `const char[N]` (it
+                // can't be re-bound, so the array keeps its length; it aliases the
+                // pool below). `name^ = "x"` keeps the array (it asks for a reference).
                 widen::TypeRef init_ctx = s.return_type;
                 if (init_ctx == widen::kNoType && !s.is_global && !s.infer_ref
-                    && s.children[0]
+                    && !s.is_const && s.children[0]
                     && s.children[0]->kind == parse::Kind::kStringLiteral)
                     init_ctx = constCharIterator();
                 inferExpr(tree, *s.children[0], init_ctx, diag);

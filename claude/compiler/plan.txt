@@ -4462,6 +4462,22 @@ test/ + user/ SPLIT (user, 2026-11-02)
   now has `vector.ll: map.ll`; clean build links and runs. OPEN (todo): cycles need a
   fixed-point demand pass; deduced calls (`quicksort(v)`) add no edge.
 
+TYPELESS STRING-LITERAL BINDINGS (2026-11-13, from user/linpro linpro.sl:407)
+  `sign = "+"; ... sign = "-";` errored "Cannot write to a const value": a typeless local
+  took the literal's `const char[2]`. User's rulings: a typeless local or field bound to a
+  literal is an iterator to const, `(const char)[]` — re-bindable, never written through;
+  a typeless `const x = "lit"` keeps the literal's array (`const char[N]`, deep-consted):
+  it can't be re-bound, so it keeps its length (sizeof, for-loops) and aliases the pool.
+  classify passes `(const char)[]` as the decl-init context for a typeless non-const,
+  non-global, non-`name^` local and for a typeless field default; constfold's string branch
+  returns unfolded for a typeless local const so classify's typeless-const arm routes it.
+  Coverage: test/constfold/string_literal.sl (sign/fixed/Labeled + four negatives);
+  test/flow/forarray.sl's `held` became `const char held[6]` to keep its 6-pass loop.
+  OPEN (todo): globals can't hold a literal at all; `^held[0]` on a typeless const is
+  rejected at resolve; a `const char[]` field default reports a const write. The canon
+  example in string_literal.sl's top comment (`hello = "hello"; // const char hello[6]`)
+  still shows the old type — the user's to edit.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
