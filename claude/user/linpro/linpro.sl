@@ -273,6 +273,14 @@ LP(
         int numer_ = 0,
         int denom_ = 1
     ) {
+        int ivalue() {
+            return (int=fvalue());
+        }
+        float64 fvalue() {
+            n float64 = numer_;
+            d float64 = denom_;
+            return n / d;
+        }
         op=(int rhs) {
             numer_ = rhs;
             denom_ = 1;
@@ -393,15 +401,11 @@ LP(
 
     /* print the matrix. */
     void dump() {
-        /*
-        for (it : vars_) {
-            println(String + it^.idx_ + ": " + it^.name_ + " = " + it^.value_);
-        }
-        */
-
         nrows int = rows_.size();
-        idx_width = 0;
         String s;
+
+        /* find the width of the row index numbers. */
+        idx_width = 0;
         for (i : 0..nrows) {
             s = i;
             len int = s.size();
@@ -410,6 +414,7 @@ LP(
         Format xfmt;
         xfmt.min_width_ = idx_width;
 
+        /* find the width of the variable names. */
         name_width = 0;
         for (var : vars_) {
             s = String + var^.name_;
@@ -419,19 +424,60 @@ LP(
         Format nfmt;
         nfmt.min_width_ = name_width;
 
+        /* find the needed precision. */
+        precision = 0;
+        for (row : rows_) {
+            int get_precision(int denom) {
+                switch (denom) {
+                    /* integer */
+                    1: { return 0; }
+                    /* these need only a single digit. */
+                    2: 5: 10: { return 1; }
+                    /* everything else is truncated to 2 digits. */
+                    default: { return 2; }
+                }
+            }
+            prec = get_precision(row^.constant_.denom_);
+            precision = math:max(precision, prec);
+            if (precision >= 2) {
+                break precision_loop;
+            }
+            for (term : row^.terms_) {
+                prec = get_precision(term^.coeff_.denom_);
+                precision = math:max(precision, prec);
+                if (precision >= 2) {
+                    break precision_loop;
+                }
+            }
+        } :precision_loop;
+        Format cfmt;
+        cfmt.float_style_ = kFixedPoint;
+        cfmt.precision_ = precision;
+
+        /* find the width of the constants. */
         coeff_width = 0;
         for (row : rows_) {
-            numer float64 = row^.constant_.numer_;
-            denom float64 = row^.constant_.denom_;
-            konst = numer / denom;
-            s = String + konst;
-            len int = s.size();
+            int get_string_length(Rational^ x) {
+                konst = row^.constant_.fvalue();
+                ss = cfmt*konst;
+                slen int = ss.size();
+                return slen;
+            }
+            /* constants are signed. */
+            len = get_string_length(row^.constant_);
             coeff_width = math:max(coeff_width, len);
+            for (term : row^.terms_) {
+                /* exclude the coefficient sign. */
+                x = term^.coeff_;
+                x.numer_ = math:abs(x.numer_);
+                len = get_string_length(x);
+                coeff_width = math:max(coeff_width, len);
+            }
         }
-        Format cfmt;
         cfmt.justify_ = kRightJustify;
         cfmt.min_width_ = coeff_width;
 
+        /* print the column headers. */
         s.clear();
         s = xfmt*"" + " " + nfmt*"" + "  " + cfmt*"";
         for (col : cols_) {
@@ -441,19 +487,16 @@ LP(
         }
         println(s);
 
+        /* print the rows. */
         for (i : 0..nrows) {
             row = ^rows_[i];
             owner = row^.owner_;
-            numer float64 = row^.constant_.numer_;
-            denom float64 = row^.constant_.denom_;
-            konst = numer / denom;
+            konst = row^.constant_.fvalue();
             name = ^vars_[owner].name_;
             s = String + xfmt*i + ":" + nfmt*name^ + ": " + cfmt*konst;
             for (term : row^.terms_) {
                 if (term^.coeff_.numer_) {
-                    numer float64 = term^.coeff_.numer_;
-                    denom float64 = term^.coeff_.denom_;
-                    coeff = numer / denom;
+                    coeff = term^.coeff_.fvalue();
                     owner = term^.var_idx_;
                     name = ^vars_[owner].name_;
                     sign = "+";
@@ -570,8 +613,50 @@ LP(
 
     /* find a solution. */
     void solve() {
-    }
+        /* find the row with the most negative constant. */
+        row_idx = -1;
+        min_konst float64 = 0.0;
+        nrows int = rows_.size();
+        for (i : 0..nrows) {
+            row = ^rows_[i];
+            konst = row^.constant_.fvalue();
+            if (min_konst > konst) {
+                row_idx = i;
+                min_konst = konst;
+            }
+        }
+        if (min_konst >= 0.0) {
+            println("No rows have a negative constant.");
+            return;
+        }
+        println(String + "row " + row_idx + " has the most negative constant " + min_konst);
 
+        /*
+        find the pivot:
+        - row coefficient is positive.
+        - minimizes Z/K ratio.
+        */
+        rowz = ^rows_[0];
+        row = ^rows_[row_idx];
+        nterms int = row^.terms_.size();
+        min_col = -1;
+        float64 min_ratio = 0.0;
+        for (col_idx : 0..nterms) {
+            term = ^row^.terms_[col_idx];
+            konst = term^.coeff_.fvalue();
+            if (konst <= 0.0) {
+                continue;
+            }
+            termz = ^rowz^.terms_[col_idx];
+            konstz = termz^.coeff_.fvalue();
+            ratio = konstz / konst;
+            if (min_col < 0 || ratio < min_ratio) {
+                min_col = col_idx;
+                min_ratio = ratio;
+            }
+        }
+        println(String + "pivot is column " + min_col + " minimum ratio " + min_ratio);
+    }
 }
 
 int32 main() {
@@ -609,6 +694,7 @@ int32 main() {
     lp.add_row(row5);
     lp.add_row(row6);
     lp.dump();
+    lp.solve();
 
     ab; ba; xa; xb;
     a; b; w; x;

@@ -139,6 +139,14 @@ void quicksort<T,S>(
 /* math namespace */
 math {
 
+/* abs template */
+T abs<T>(T a) {
+    if (a < 0) {
+        return a;
+    }
+    return - a;
+}
+
 /* min template */
 T min<T>(T a, T b) {
     if (a < b) {
