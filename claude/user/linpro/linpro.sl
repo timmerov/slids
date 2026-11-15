@@ -310,7 +310,7 @@ LP(
                 /* find gcd. */
                 a = n;
                 b = d;
-                while (a) {
+                while (b) {
                     r = a % b;
                     a = b;
                     b = r;
@@ -348,10 +348,30 @@ LP(
     /* inequality relation classes and enum. */
     enum Relation (kErr, kLT, kGT, kLTE, kGTE);
     Comparison(Relation relation_ = kErr) { }
-    Comparison : lt() { _() { relation_ = kLT; } ~() { } }
-    Comparison : gt() { _() { relation_ = kGT; } ~() { } }
-    Comparison : lte() { _() { relation_ = kLTE; } ~() { } }
-    Comparison : gte() { _() { relation_ = kGTE; } ~() { } }
+    Comparison : lt() {
+        _() {
+            relation_ = kLT;
+        }
+        ~() { }
+    }
+    Comparison : gt() {
+        _() {
+            relation_ = kGT;
+        }
+        ~() { }
+    }
+    Comparison : lte() {
+        _() {
+            relation_ = kLTE;
+        }
+        ~() { }
+    }
+    Comparison : gte() {
+        _() {
+            relation_ = kGTE;
+        }
+        ~() { }
+    }
 
     /* an expression is how we build a row. */
     Expr(
@@ -393,7 +413,7 @@ LP(
         }
         op+=(Comparison^ rhs) {
             if (relation_ != kErr) {
-                println("**Error** expression has multiple comparision operations.");
+                println("**Error** expression has multiple comparison operations.");
             }
             relation_ = rhs^.relation_;
         }
@@ -458,7 +478,7 @@ LP(
         coeff_width = 0;
         for (row : rows_) {
             int get_string_length(Rational^ x) {
-                konst = row^.constant_.fvalue();
+                konst = x^.fvalue();
                 ss = cfmt*konst;
                 slen int = ss.size();
                 return slen;
@@ -479,7 +499,7 @@ LP(
 
         /* print the column headers. */
         s.clear();
-        s = xfmt*"" + " " + nfmt*"" + "  " + cfmt*"";
+        s = xfmt*"" + "  " + nfmt*"" + "   " + cfmt*"";
         for (col : cols_) {
             owner = col^.owner_;
             name = ^vars_[owner].name_;
@@ -493,7 +513,7 @@ LP(
             owner = row^.owner_;
             konst = row^.constant_.fvalue();
             name = ^vars_[owner].name_;
-            s = String + xfmt*i + ":" + nfmt*name^ + ": " + cfmt*konst;
+            s = String + xfmt*i + ": " + nfmt*name^ + " = " + cfmt*konst;
             for (term : row^.terms_) {
                 if (term^.coeff_.numer_) {
                     coeff = term^.coeff_.fvalue();
@@ -509,7 +529,6 @@ LP(
                     s = s + "   " + cfmt*"";
                 }
             }
-            s += " >= 0";
             println(s);
         }
     }
@@ -530,6 +549,10 @@ LP(
         vars_.append(vi);
 
         if (user) {
+            if (rows_.size() > 1) {
+                println("**Error** add variables before adding rows.");
+            }
+
             ++nuser_vars_;
 
             /* add user var to z row. */
@@ -538,7 +561,7 @@ LP(
             term.coeff_ = 1;
             rows_[0].terms_.append(term);
 
-            /* add user var to colunns. */
+            /* add user var to columns. */
             Column col;
             col.owner_ = idx;
             cols_.append(col);
@@ -626,7 +649,7 @@ LP(
             }
         }
         if (min_konst >= 0.0) {
-            println("No rows have a negative constant.");
+            println("no rows have a negative constant.");
             return;
         }
         println(String + "row " + row_idx + " has the most negative constant " + min_konst);
@@ -654,6 +677,10 @@ LP(
                 min_col = col_idx;
                 min_ratio = ratio;
             }
+        }
+        if (min_col < 0) {
+            println("no positive coefficients found.");
+            return;
         }
         println(String + "pivot is column " + min_col + " minimum ratio " + min_ratio);
     }
