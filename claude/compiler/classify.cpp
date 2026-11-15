@@ -3180,6 +3180,15 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 }
                 e.inferred_type = widen::intern("bool");
             } else {  // + - ~
+                // A CLASS operand reaching here declared neither unary operator shape
+                // (arity-0 built-in nor arity-1 produce-self): reject it, or codegen
+                // would emit the scalar op on the class's struct (invalid IR).
+                if (widen::form(widen::strip(operand.inferred_type))
+                        == widen::Type::Form::kSlid) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        noClassOperatorMsg(tree, op, {},
+                            widen::strip(operand.inferred_type), widen::kNoType), {}});
+                }
                 e.inferred_type = operand.inferred_type;
                 e.alias_label = operand.alias_label;   // a unary keeps the label
             }

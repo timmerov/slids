@@ -4478,6 +4478,16 @@ TYPELESS STRING-LITERAL BINDINGS (2026-11-13, from user/linpro linpro.sl:407)
   example in string_literal.sl's top comment (`hello = "hello"; // const char hello[6]`)
   still shows the old type — the user's to edit.
 
+CLASS UNARY WITH NO OPERATOR (2026-11-14, from user/linpro linpro.sl:551)
+  `row_term^.coeff_ = - row_term^.coeff_;` on a Rational with no unary op- built, then llc
+  died "integer constant must have integer type" on `sub { i32, i32 } 0, %slot`. The
+  kUnaryExpr arm tries the arity-0 rewrite, then stampClassUnary (arity-1), then the
+  aggregate explode; a class matching none fell to the built-in `+ - ~` branch, which typed
+  the node as the class with no diagnostic. That branch now rejects a class operand through
+  noClassOperatorMsg ("Operator '-' is not defined on class 'C'.", the binary wording).
+  `!` / `++` / `--` already rejected a class (worded "on type"; unchanged). Coverage:
+  test/class/operator.sl NoUnary / NoUnaryP / NoUnaryT (one negative per + - ~).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

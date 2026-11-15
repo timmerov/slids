@@ -1254,6 +1254,36 @@ negatives — one //-block uncommented per run.
 //    return a.v_;
 //}
 
+/* a class UNARY with no unary operator (neither the arity-0 built-in return nor the
+   arity-1 produce-self) is rejected the same way — never lowered to the numeric path
+   (`sub { i32, i32 } 0, %t` = invalid IR). One negative per unary + - ~. */
+//-EXPECT-ERROR: Operator '-' is not defined on class 'NoUnary'.
+//NoUnary(int v_) {
+//}
+//int neg_class_unary_minus() {
+//    NoUnary a(3);
+//    NoUnary b = -a;
+//    return b.v_;
+//}
+
+//-EXPECT-ERROR: Operator '+' is not defined on class 'NoUnaryP'.
+//NoUnaryP(int v_) {
+//}
+//int neg_class_unary_plus() {
+//    NoUnaryP a(3);
+//    NoUnaryP b = +a;
+//    return b.v_;
+//}
+
+//-EXPECT-ERROR: Operator '~' is not defined on class 'NoUnaryT'.
+//NoUnaryT(int v_) {
+//}
+//int neg_class_unary_tilde() {
+//    NoUnaryT a(3);
+//    NoUnaryT b = ~a;
+//    return b.v_;
+//}
+
 /* a binary operator's FIRST parameter must be the enclosing class (canon 170-182): it IS
    the left operand, and the operator produces self from it. A PRIMITIVE param0 means the
    operator could only ever be selected by the assignment target's type — which inverts

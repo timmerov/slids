@@ -241,8 +241,7 @@ LP(
 
         /* add the cost row. */
         Expr expr;
-        expr.constant_.numer_ = 0;
-        expr.constant_.denom_ = 1;
+        expr.constant_ = 0;
         expr.relation_ = kGTE;
         add_row(z, expr);
     }
@@ -274,6 +273,49 @@ LP(
         int numer_ = 0,
         int denom_ = 1
     ) {
+        op=(int rhs) {
+            numer_ = rhs;
+            denom_ = 1;
+        }
+        op+=(int rhs) {
+            self += Rational(rhs);
+        }
+        op-=(int rhs) {
+            self += - rhs;
+        }
+        op+=(Rational^ rhs) {
+            n int64 = numer_;
+            d int64 = denom_;
+            n = n * rhs^.denom_ + d * rhs^.numer_;
+            d = d * rhs^.denom_;
+            reduce(n, d);
+        }
+        op-=(Rational^ rhs) {
+            self += - rhs^;
+        }
+        op-(Rational^ rhs) {
+            numer_ = - rhs^.numer_;
+            denom_ = rhs^.denom_;
+        }
+        void reduce(int64 n, int64 d) {
+            if (d != 1) {
+                /* find gcd. */
+                a = n;
+                b = d;
+                while (a) {
+                    r = a % b;
+                    a = b;
+                    b = r;
+                }
+                if (a < 0) {
+                    a = - a;
+                }
+                n /= a;
+                d /= a;
+            }
+            numer_ = (int=n);
+            denom_ = (int=d);
+        }
     }
 
     /* a term is a variable index and its coefficient. */
@@ -311,35 +353,33 @@ LP(
     ) {
         op+=(int rhs) {
             if (relation_ == kErr) {
-                constant_.numer_ += rhs;
+                constant_ += rhs;
             } else {
-                constant_.numer_ -= rhs;
+                constant_ -= rhs;
             }
         }
         op-=(int rhs) {
             if (relation_ == kErr) {
-                constant_.numer_ -= rhs;
+                constant_ -= rhs;
             } else {
-                constant_.numer_ += rhs;
+                constant_ += rhs;
             }
         }
         op+=(Var^ rhs) {
             Term term;
             term.var_idx_ = rhs^.idx_;
-            term.coeff_.numer_ = 1;
-            term.coeff_.denom_ = 1;
+            term.coeff_ = 1;
             if (relation_ != kErr) {
-                term.coeff_.numer_ = -1;
+                term.coeff_ = -1;
             }
             terms_.append(term);
         }
         op-=(Var^ rhs) {
             Term term;
             term.var_idx_ = rhs^.idx_;
-            term.coeff_.numer_ = -1;
-            term.coeff_.denom_ = 1;
+            term.coeff_ = -1;
             if (relation_ != kErr) {
-                term.coeff_.numer_ = 1;
+                term.coeff_ = 1;
             }
             terms_.append(term);
         }
@@ -452,8 +492,7 @@ LP(
             /* add user var to z row. */
             Term term;
             term.var_idx_ = idx;
-            term.coeff_.numer_ = 1;
-            term.coeff_.denom_ = 1;
+            term.coeff_ = 1;
             rows_[0].terms_.append(term);
 
             /* add user var to colunns. */
@@ -492,8 +531,7 @@ LP(
             }
             Term term;
             term.var_idx_ = var^.idx_;
-            term.coeff_.numer_ = 0;
-            term.coeff_.denom_ = 1;
+            term.coeff_ = 0;
             row.terms_.append(term);
         }
 
@@ -502,7 +540,7 @@ LP(
             var_idx = var_term^.var_idx_;
             for (row_term : row.terms_) {
                 if (row_term^.var_idx_ == var_idx) {
-                    row_term^.coeff_.numer_ += var_term^.coeff_.numer_;
+                    row_term^.coeff_ += var_term^.coeff_;
                     break;
                 }
             }
@@ -511,9 +549,9 @@ LP(
         /* convert less-than rows. */
         rel = expr^.relation_;
         if (rel == kLT || rel == kLTE) {
-            row.constant_.numer_ = - row.constant_.numer_;
+            row.constant_ = - row.constant_;
             for (row_term : row.terms_) {
-                row_term^.coeff_.numer_ = - row_term^.coeff_.numer_;
+                row_term^.coeff_ = - row_term^.coeff_;
             }
             if (rel == kLT) {
                 rel = kGT;
@@ -524,7 +562,7 @@ LP(
 
         /* convert greater-than rows. */
         if (rel == kGT) {
-            row.constant_.numer_ -= 1;
+            row.constant_ -= 1;
         }
 
         rows_.append(row);

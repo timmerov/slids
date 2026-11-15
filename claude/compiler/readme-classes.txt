@@ -745,9 +745,16 @@ canon test/class/evaluate.sl (blocks J-P). Plan: plan-evaluate.txt.
     kBinaryExpr arm has had the no-viable-operator guard since the class-binary work; the
     kAugAssignStmt arm never got it. Now: "Operator '+=' is not defined on class 'X'." Pinned
     by evaluate.sl's neg_aug_no_op.
-  * THE NO-OPERATOR MESSAGE NAMES THE OPERAND WHEN IT IS THE REASON (2026-10-24). All three
-    rejects (the aggregate-RHS head, the binary catch-all, the aug-assign) build the text in
-    one helper, noClassOperatorMsg. When the class DECLARES an operator dispatch could have
+  * A UNARY WITH NO MATCH IS REJECTED (fixed 2026-11-14). A unary `+ - ~` on a class with
+    NEITHER unary shape (the arity-0 built-in return, the arity-1 produce-self) fell through
+    the kUnaryExpr arm's built-in `+ - ~` branch, typed as the class, and codegen emitted
+    `sub { i32, i32 } 0, %t`: INVALID IR. That branch now rejects a class operand: "Operator
+    '-' is not defined on class 'C'." (`!`, `++`, `--` already rejected a class, worded "on
+    type".) Pinned by operator.sl NoUnary / NoUnaryP / NoUnaryT.
+  * THE NO-OPERATOR MESSAGE NAMES THE OPERAND WHEN IT IS THE REASON (2026-10-24). All four
+    rejects (the aggregate-RHS head, the binary catch-all, the aug-assign, the unary) build
+    the text in one helper, noClassOperatorMsg. The unary passes no operator names, so it
+    never appends " for type". When the class DECLARES an operator dispatch could have
     used — binary: any `op<OP>` or `op<OP>=`, any arity; aug-assign: `op<OP>=` — the operand
     is why nothing applied, so it appends " for type 'R'" (aliases peeled): "Operator '+' is
     not defined on class 'String' for type 'Class'." A class with no such operator keeps the
