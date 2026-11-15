@@ -1,0 +1,122 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+linear programming solver.
+
+example usage:
+
+    LP lp;
+    xa = lp.add_var("XA");
+    xb = lp.add_var("XB");
+    ab = lp.add_var("AB");
+    ba = lp.add_var("BA");
+    a = 90;
+    b = 80;
+    w = 100;
+    x = 200;
+    baw = 40;
+    xaw = 150;
+    /* a beats w and x. */
+    row0 = LP:Expr + a - ab + ba + xa + LP:gte + w;
+    row1 = LP:Expr + a - ab + ba + xa + LP:gte + x - xa - xb;
+    /* b beats w and x. */
+    row2 = LP:Expr + b + ab - ba + xb + LP:gte + w;
+    row3 = LP:Expr + b + ab - ba + xb + LP:gte + x - xa - xb;
+    /* limit x to a,b votes. */
+    row4 = LP:Expr + xa + xb + LP:lte + xaw;
+    /* limit a to b votes. */
+    row5 = LP:Expr + ab + LP:lte + a;
+    /* limit b to a votes. */
+    row6 = LP:Expr + ba + LP:lte + baw;
+    /* =tsc= to do: break ties. */
+    /* add the rows. */
+    lp.add_row(row0);
+    lp.add_row(row1);
+    lp.add_row(row2);
+    lp.add_row(row3);
+    lp.add_row(row4);
+    lp.add_row(row5);
+    lp.add_row(row6);
+    println("initial matrix:");
+    lp.print();
+    lp.solve();
+    println("solved matrix:");
+    lp.print();
+    lp.solve_integral();
+    println("solved for integral matrix:");
+    lp.print();
+
+    z = lp.get_minimum();
+    xa_val = lp.get_value(xa);
+    xb_val = lp.get_value(xb);
+    ab_val = lp.get_value(ab);
+    ba_val = lp.get_value(ba);
+    println(String + "z = " + z);
+    println(String + "xa = " + xa_val);
+    println(String + "xb = " + xb_val);
+    println(String + "ab = " + ab_val);
+    println(String + "ba = " + ba_val);
+*/
+
+import string;
+import vector;
+
+slids {
+
+/*
+linear programming solver.
+*/
+LP(
+    bool solved_,
+    ...
+) {
+    _(); ~();
+
+    /* returned to the author. */
+    Var(int idx_) { }
+
+    /* inequality relation classes and enum. */
+    enum Relation (kErr, kLT, kGT, kLTE, kGTE);
+    Comparison(Relation relation_ = kErr) { }
+    Comparison : lt() { _(); ~(); }
+    Comparison : gt() { _(); ~(); }
+    Comparison : lte() { _(); ~(); }
+    Comparison : gte() { _(); ~(); }
+
+    /* an expression is how we build a row. */
+    Expr(...) {
+        _(); ~();
+
+        /* operators. */
+        op+=(int rhs);
+        op-=(int rhs);
+        op+=(Var^ rhs);
+        op-=(Var^ rhs);
+        op+=(Comparison^ rhs);
+    }
+
+    /* print the matrix. */
+    void print();
+
+    /* add a user variable. */
+    Var add_var(String^ name);
+
+    /* add a user row. */
+    void add_row(Expr^ expr);
+
+    /* find a solution - possibly fractional. */
+    void solve();
+
+    /* find an integral solution from a fractional solution. */
+    void solve_integral();
+
+    /* return the minimized sum of the user variables. */
+    int get_minimum();
+
+    /* return the integral value of the user variable. */
+    int get_value(Var^ var);
+}
+
+} /*slids*/
