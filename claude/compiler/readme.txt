@@ -2987,7 +2987,11 @@ STAGE FILES (.h / .cpp pairs)
             the source: non-coercible operands for ! && || ^^ (and the &&= ||= ^^=
             aug-assigns), an if / while / for condition not coercible to bool,
             non-numeric shift sides, bitwise on
-            float, no-common-type binaries. Return-correctness (endsInReturn) recurses
+            float, no-common-type binaries, unary `+ - ~` on a class with no unary
+            operator or on any pointer (reference / iterator / anyptr — the binary
+            arms' "Arithmetic is not ..." wording; `!` stays a null test), unary `~` on
+            a float (constfold catches only a literal; codegen's emitUnary ASSERTS all
+            of these walls for `+ - ~`, as emitBinary asserts no aggregate). Return-correctness (endsInReturn) recurses
             into a trailing block and a trailing if/else whose arms both return.
             Constant-condition unreachable detection (runs HERE, post-constfold, so
             a folded literal / substituted const / synthesized empty-`()` is

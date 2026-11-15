@@ -136,6 +136,25 @@ int32 main() {
 //    intptr d = a - b;
 //    return d;
 //}
+/* unary + - ~ are arithmetic too — rejected on a reference. */
+//-EXPECT-ERROR: Arithmetic is not allowed on a reference.
+//void neg_unary_minus() {
+//    int x = 0;
+//    int^ ref = ^x;
+//    ref = - ref;
+//}
+//-EXPECT-ERROR: Arithmetic is not allowed on a reference.
+//void neg_unary_plus() {
+//    int x = 0;
+//    int^ ref = ^x;
+//    ref = + ref;
+//}
+//-EXPECT-ERROR: Arithmetic is not allowed on a reference.
+//void neg_unary_bnot() {
+//    int x = 0;
+//    int^ ref = ^x;
+//    ref = ~ ref;
+//}
 
 /* a comparison between pointers of different pointee types is rejected. */
 //-EXPECT-ERROR: Pointer comparison requires the same pointee type.

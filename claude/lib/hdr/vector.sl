@@ -62,6 +62,7 @@ Vector<T>(
         }
 
         /* delete our storage. */
+        destruct(0, size_);
         delete storage_;
 
         /* copy from v. */

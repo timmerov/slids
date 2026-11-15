@@ -450,6 +450,23 @@ std::string emitUnary(ast::Node const& expr, SymTab const& syms,
     std::string const& op = expr.text;
     ast::Node const& operand = *expr.children[0];
 
+    // classify's walls — `+ - ~` reach here only on a numeric scalar. An AGGREGATE was
+    // exploded slot-wise (see emitBinary); a CLASS dispatched its operator or was
+    // rejected; a POINTER was rejected; `~` on a FLOAT was rejected. Any of them here
+    // would emit invalid IR (`sub ptr 0`, `xor float`, `sub { i32 } 0`).
+    if (op != "!" && operand.inferred_type != widen::kNoType) {
+        widen::Type::Form of = widen::form(widen::strip(operand.inferred_type));
+        assert(of != widen::Type::Form::kTuple && of != widen::Type::Form::kArray
+            && "emitUnary: an aggregate operand must have been exploded in classify");
+        assert(of != widen::Type::Form::kSlid
+            && "emitUnary: a class operand must have been dispatched or rejected in classify");
+        assert(of != widen::Type::Form::kPointer && of != widen::Type::Form::kIterator
+            && of != widen::Type::Form::kAnyptr
+            && "emitUnary: a pointer operand must have been rejected in classify");
+        assert(!(op == "~" && isFloatType(operand.inferred_type))
+            && "emitUnary: '~' on a float must have been rejected in classify");
+    }
+
     if (op == "+") {
         return emitExpr(operand, syms, pool, out, diag, dest_type);
     }

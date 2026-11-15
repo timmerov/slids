@@ -403,29 +403,23 @@ LP(
             }
         }
         op-=(int rhs) {
-            if (relation_ == kErr) {
-                constant_ -= rhs;
-            } else {
-                constant_ += rhs;
-            }
+            self += - rhs;
         }
         op+=(Var^ rhs) {
-            Term term;
-            term.var_idx_ = rhs^.idx_;
-            term.coeff_ = 1;
+            term = terms_.append();
+            term^.var_idx_ = rhs^.idx_;
+            term^.coeff_ = 1;
             if (relation_ != kErr) {
-                term.coeff_ = -1;
+                term^.coeff_ = -1;
             }
-            terms_.append(term);
         }
         op-=(Var^ rhs) {
-            Term term;
-            term.var_idx_ = rhs^.idx_;
-            term.coeff_ = -1;
+            term = terms_.append();
+            term^.var_idx_ = rhs^.idx_;
+            term^.coeff_ = -1;
             if (relation_ != kErr) {
-                term.coeff_ = 1;
+                term^.coeff_ = 1;
             }
-            terms_.append(term);
         }
         op+=(Comparison^ rhs) {
             if (relation_ != kErr) {
@@ -436,7 +430,7 @@ LP(
     }
 
     /* print the matrix. */
-    void dump() {
+    void print() {
         nrows int = rows_.size();
         String s;
 
@@ -557,12 +551,11 @@ LP(
     /* add a user variable. */
     Var add_var(String^ name, bool user) {
         idx int = vars_.size();
-        VarInfo vi;
-        vi.idx_ = idx;
-        vi.user_ = user;
-        vi.value_ = 0;
-        vi.name_ = name^;
-        vars_.append(vi);
+        vi = vars_.append();
+        vi^.idx_ = idx;
+        vi^.user_ = user;
+        vi^.value_ = 0;
+        vi^.name_ = name^;
 
         if (user) {
             if (rows_.size() > 1) {
@@ -572,15 +565,13 @@ LP(
             ++nuser_vars_;
 
             /* add user var to z row. */
-            Term term;
-            term.var_idx_ = idx;
-            term.coeff_ = 1;
-            rows_[0].terms_.append(term);
+            term = rows_[0].terms_.append();
+            term^.var_idx_ = idx;
+            term^.coeff_ = 1;
 
             /* add user var to columns. */
-            Column col;
-            col.owner_ = idx;
-            cols_.append(col);
+            col = cols_.append();
+            col^.owner_ = idx;
         }
 
         return Var(idx);
@@ -601,26 +592,25 @@ LP(
         Var^ var,
         Expr^ expr
     ) {
-        Row row;
-        row.owner_ = var^.idx_;
-        row.constant_ = expr^.constant_;
-        row.terms_.reserve(nuser_vars_);
+        Row^ row = rows_.append();
+        row^.owner_ = var^.idx_;
+        row^.constant_ = expr^.constant_;
+        row^.terms_.reserve(nuser_vars_);
 
         /* init the terms. */
         for (var : vars_) {
             if (var^.user_ == false) {
                 continue;
             }
-            Term term;
-            term.var_idx_ = var^.idx_;
-            term.coeff_ = 0;
-            row.terms_.append(term);
+            term = row^.terms_.append();
+            term^.var_idx_ = var^.idx_;
+            term^.coeff_ = 0;
         }
 
         /* copy the terms from the expr to the row. */
         for (var_term : expr^.terms_) {
             var_idx = var_term^.var_idx_;
-            for (row_term : row.terms_) {
+            for (row_term : row^.terms_) {
                 if (row_term^.var_idx_ == var_idx) {
                     row_term^.coeff_ += var_term^.coeff_;
                     break;
@@ -631,8 +621,8 @@ LP(
         /* convert less-than rows. */
         rel = expr^.relation_;
         if (rel == kLT || rel == kLTE) {
-            row.constant_ = - row.constant_;
-            for (row_term : row.terms_) {
+            row^.constant_ = - row^.constant_;
+            for (row_term : row^.terms_) {
                 row_term^.coeff_ = - row_term^.coeff_;
             }
             if (rel == kLT) {
@@ -644,10 +634,8 @@ LP(
 
         /* convert greater-than rows. */
         if (rel == kGT) {
-            row.constant_ -= 1;
+            row^.constant_ -= 1;
         }
-
-        rows_.append(row);
     }
 
     /* find a solution. */
@@ -710,7 +698,7 @@ LP(
             for (term : row^.terms_) {
                 term^.coeff_ *= factor;
             }
-            //dump();
+            //print();
 
             for (row_idx : 0..nrows) {
                 if (row_idx == pivot_row_idx) {
@@ -727,17 +715,17 @@ LP(
                     termi = ^rowi^.terms_[col_idx];
                     termi^.coeff_ = term^.coeff_ * scale + termi^.coeff_;
                 }
-                //dump();
+                //print();
 
                 //println(String + "replace row " + row_idx + " column " + pivot_col_idx + " coefficient");
                 termi = ^rowi^.terms_[pivot_col_idx];
                 termi^.coeff_ = - factor * scale;
-                //dump();
+                //print();
             }
 
             //println(String + "replace pivot row " + pivot_row_idx + " column " + pivot_col_idx + " coefficient");
             row^.terms_[pivot_col_idx].coeff_ = - factor;
-            //dump();
+            //print();
 
             //println(String + "swap row column owners.");
             col_owner = row^.owner_;
@@ -745,7 +733,7 @@ LP(
             for (rowi : rows_) {
                 rowi^.terms_[pivot_col_idx].var_idx_ = col_owner;
             }
-            //dump();
+            //print();
         } :iter_loop;
     }
 }
@@ -785,10 +773,10 @@ int32 main() {
     lp.add_row(row5);
     lp.add_row(row6);
     println("initial matrix:");
-    lp.dump();
+    lp.print();
     lp.solve();
     println("solved matrix:");
-    lp.dump();
+    lp.print();
 
     ab; ba; xa; xb;
     a; b; w; x;

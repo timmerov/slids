@@ -2355,10 +2355,9 @@ ElectoralMethod : CoombsMethod() {
         RankedChoices ranked_choices;
         ranked_choices.reserve(nblocs);
         for (it : bloc_map^) {
-            RankedChoice ranked_choice;
-            ranked_choice.rankings_ = it^.rankings_;
-            ranked_choice.size_ = it^.bloc_.size_;
-            ranked_choices.append(ranked_choice);
+            ranked_choice = ranked_choices.append();
+            ranked_choice^.rankings_ = it^.rankings_;
+            ranked_choice^.size_ = it^.bloc_.size_;
         }
 
         /* allocate vote counts. */
@@ -2785,10 +2784,9 @@ ElectoralMethod : InstantRunoffMethod() {
         RankedChoices ranked_choices;
         ranked_choices.reserve(nblocs);
         for (it : bloc_map^) {
-            RankedChoice ranked_choice;
-            ranked_choice.rankings_ = it^.rankings_;
-            ranked_choice.size_ = it^.bloc_.size_;
-            ranked_choices.append(ranked_choice);
+            ranked_choice = ranked_choices.append();
+            ranked_choice^.rankings_ = it^.rankings_;
+            ranked_choice^.size_ = it^.bloc_.size_;
         }
 
         /* allocate vote counts. */

@@ -452,6 +452,14 @@ int32 main() {
 //    return y[0][0];
 //}
 
+/* a unary '~' explodes per slot — a FLOAT slot is rejected like a scalar float. */
+//-EXPECT-ERROR: Bitwise '~' not defined on floating-point type 'float32'.
+//int neg_bnot_float_slot() {
+//    float32 f = 1.5;
+//    t = ~ (f, 1);
+//    return t[1];
+//}
+
 /* a swap of two DIFFERENT-typed tuple slots is rejected — swap is exact-type. */
 //-EXPECT-ERROR: Swap operands must be the same type
 //int neg_swap_hetero_slot() {

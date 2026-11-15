@@ -517,6 +517,14 @@ int32 main() {
 //    return arr[0];
 //}
 
+/* a unary '~' explodes per slot — a FLOAT array is rejected like a scalar float. */
+//-EXPECT-ERROR: Bitwise '~' not defined on floating-point type 'float32'.
+//float32 neg_bnot_float_array() {
+//    float32 a[2] = (1.5, 2.5);
+//    float32 b[2] = ~ a;
+//    return b[0];
+//}
+
 /* the first (row) dimension of `int twodim[3][5]` is 3 — index 3 is out of bounds */
 //-EXPECT-ERROR: Array index 3 is out of bounds
 //int neg_oob_2d_row() {

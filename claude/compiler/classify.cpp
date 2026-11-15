@@ -3189,6 +3189,24 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         noClassOperatorMsg(tree, op, {},
                             widen::strip(operand.inferred_type), widen::kNoType), {}});
                 }
+                // A POINTER operand has no unary arithmetic either — the same walls
+                // the binary and ++/-- arms raise. Unchecked, codegen emitted
+                // `sub ptr 0, %p` (invalid IR). `!` above stays legal: a null test.
+                else if (isReference(operand.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Arithmetic is not allowed on a reference.", {}});
+                } else if (isPtrLikeType(operand.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Arithmetic is not defined on a pointer.", {}});
+                }
+                // `~` on a FLOAT — the binary bitwise arm's wall. constfold catches a
+                // literal / folded const; a variable reached codegen as `xor float`.
+                // An aggregate's float slot lands here too (the explode re-infers it).
+                else if (op == "~" && isFloatType(operand.inferred_type)) {
+                    diagnostic::report(diag, {e.file_id, e.tok,
+                        "Bitwise '~' not defined on floating-point type '"
+                        + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
+                }
                 e.inferred_type = operand.inferred_type;
                 e.alias_label = operand.alias_label;   // a unary keeps the label
             }

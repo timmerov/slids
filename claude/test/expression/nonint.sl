@@ -366,6 +366,9 @@ int32 main() {
     //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float32'.
     // float32 f32Xor = f32A ^ f32B;
     // println(String + "f32Xor= " + f32Xor);
+    //-EXPECT-ERROR: Bitwise '~' not defined on floating-point type 'float32'.
+    // float32 f32BNot = ~f32A;
+    // println(String + "f32BNot= " + f32BNot);
 
     // float64
     float64 f64A = 12.5;
@@ -401,6 +404,9 @@ int32 main() {
     //-EXPECT-ERROR: Bitwise '^' not defined on floating-point type 'float64'.
     // float64 f64Xor = f64A ^ f64B;
     // println(String + "f64Xor= " + f64Xor);
+    //-EXPECT-ERROR: Bitwise '~' not defined on floating-point type 'float64'.
+    // float64 f64BNot = ~f64A;
+    // println(String + "f64BNot= " + f64BNot);
 
     /* --- Type(value): non-int primitive temporaries, bound by the DECL-INIT rules --- */
     println(String + "tf32= "  + float32(1.5));

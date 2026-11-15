@@ -212,6 +212,29 @@ intptr litLen(char[] s) {
 //    return bad^;
 //}
 
+/* unary + - ~ are not defined on an iterator. */
+//-EXPECT-ERROR: Arithmetic is not defined on a pointer.
+//int neg_unary_minus() {
+//    int arr[5];
+//    int[] it = ^arr[0];
+//    int[] bad = - it;
+//    return bad^;
+//}
+//-EXPECT-ERROR: Arithmetic is not defined on a pointer.
+//int neg_unary_plus() {
+//    int arr[5];
+//    int[] it = ^arr[0];
+//    int[] bad = + it;
+//    return bad^;
+//}
+//-EXPECT-ERROR: Arithmetic is not defined on a pointer.
+//int neg_unary_bnot() {
+//    int arr[5];
+//    int[] it = ^arr[0];
+//    int[] bad = ~ it;
+//    return bad^;
+//}
+
 /* the difference of iterators with different pointee types is rejected. */
 //-EXPECT-ERROR: Pointer subtraction requires the same pointee type.
 //intptr neg_diff_pointee() {

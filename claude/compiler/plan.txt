@@ -4488,6 +4488,32 @@ CLASS UNARY WITH NO OPERATOR (2026-11-14, from user/linpro linpro.sl:551)
   `!` / `++` / `--` already rejected a class (worded "on type"; unchanged). Coverage:
   test/class/operator.sl NoUnary / NoUnaryP / NoUnaryT (one negative per + - ~).
 
+POINTER UNARY ARITHMETIC REJECTED (2026-11-15, from user/linpro linpro.sl:417)
+  `self += - rhs;` with `rhs` a `Var^` compiled clean, then llc died "integer constant must
+  have integer type" on `sub ptr 0, %p`. The same built-in `+ - ~` branch typed a POINTER
+  operand as itself with no diagnostic. It now rejects with the walls the binary and ++/--
+  arms already raise: a reference (`T^`, incl. a function pointer) -> "Arithmetic is not
+  allowed on a reference."; an iterator / anyptr -> "Arithmetic is not defined on a
+  pointer." Unary `+` rejects too (canon: "you may not do math operations on references").
+  `!` stays legal (a null test). Coverage: test/pointer/reference.sl and iterator.sl
+  neg_unary_minus / neg_unary_plus / neg_unary_bnot.
+
+UNARY `~` ON A FLOAT REJECTED + emitUnary WALL ASSERTS (2026-11-15)
+  `float x = ~ f;` compiled clean, then llc died on `xor float %v, -1` (also float64, a
+  tuple float slot `~ (f, 1)`, and a float array `~ a`). constfold rejected only a literal /
+  folded const; the binary arm rejects `& | ^` on a float, the unary arm never asked. It now
+  reports "Bitwise '~' not defined on floating-point type 'T'." — the aggregate explode
+  re-infers each slot through the same arm, so one check covers scalar, tuple and array.
+  emitUnary now ASSERTS classify's walls for `+ - ~` (following emitBinary's aggregate
+  asserts): no aggregate, no class, no pointer, no `~` on a float. A diagnostic halts the
+  pipeline before codegen, so an assert firing means classify missed a case — it names
+  the case instead of llc rejecting the IR. Survey of the rest (user ruled: accepted as
+  is): `- ~ +` on bool, char, enum, uint compute on the operand WIDENED to the destination
+  first (`int x = - true` is -1, `int x = ~ c` is -98, `x = - c` stays char 159); a char
+  LITERAL folds `- 'a'` to int -97 but `~ 'a'` to char 158. Coverage:
+  test/expression/nonint.sl (f32BNot / f64BNot), test/tuple/anon.sl neg_bnot_float_slot,
+  test/tuple/array.sl neg_bnot_float_array.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
