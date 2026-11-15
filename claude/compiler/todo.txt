@@ -154,6 +154,22 @@ UNBLOCKED FEATURES
     vector-after-algorithm edge. user/linpro links only because algorithm happens to
     compile first. the fixed-point demand pass above would close this too.
 
+  * a prebuilt library (libslids.o) can't carry template instances: they are strong
+    external symbols, so a program that builds the same one gets "multiple definition"
+    (user/linpro: LP in libslids clashed on Vector<LP:Row>; with LP's fields/classes
+    private, only math:max<int> / math:abs<int> remain shared). plan, leaning 3:
+    - the .sli says provider, needer, or both: `export vector { Vector<int>; }` beside
+      `import vector { ... }`. a program's --instantiate skips what a linked library
+      exports.
+    - two libraries exporting the same instance: (1) a library built against another
+      reads its exports and skips them -- covers chains only. (2) the program's build
+      reports duplicate providers -- loud, but can't link. (3) exported instances (and
+      the __$sizeof word) emit linkonce_odr: the linker keeps one copy, exports become an
+      optimization. ODR risk: copies built from different template sources silently
+      pick one; (2) can survive as a warning for that.
+    - lib/Makefile gets its own instantiation stage over its TUs' .sli and writes
+      libslids.sli.
+
   * allow construction with move operator.
     allow assignment/move with placement new.
     save_container <-- container;
