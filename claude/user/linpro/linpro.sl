@@ -301,9 +301,25 @@ LP(
         op-=(Rational^ rhs) {
             self += - rhs^;
         }
+        op*=(Rational^ rhs) {
+            n int64 = numer_;
+            d int64 = denom_;
+            n *= rhs^.numer_;
+            d *= rhs^.denom_;
+            reduce(n, d);
+        }
+        op/=(Rational^ rhs) {
+            self *= rhs^.reciprocal();
+        }
         op-(Rational^ rhs) {
             numer_ = - rhs^.numer_;
             denom_ = rhs^.denom_;
+        }
+        Rational reciprocal() {
+            Rational x;
+            x.numer_ = denom_;
+            x.denom_ = numer_;
+            return x;
         }
         void reduce(int64 n, int64 d) {
             if (d != 1) {
@@ -636,63 +652,111 @@ LP(
 
     /* find a solution. */
     void solve() {
-        /* find the row with the most negative constant. */
-        row_idx = -1;
-        min_konst float64 = 0.0;
         nrows int = rows_.size();
-        for (i : 0..nrows) {
-            row = ^rows_[i];
-            konst = row^.constant_.fvalue();
-            if (min_konst > konst) {
-                row_idx = i;
-                min_konst = konst;
-            }
-        }
-        if (min_konst >= 0.0) {
-            println("no rows have a negative constant.");
-            return;
-        }
-        println(String + "row " + row_idx + " has the most negative constant " + min_konst);
 
-        /*
-        find the pivot:
-        - row coefficient is positive.
-        - minimizes Z/K ratio.
-        */
-        rowz = ^rows_[0];
-        row = ^rows_[row_idx];
-        nterms int = row^.terms_.size();
-        min_col = -1;
-        float64 min_ratio = 0.0;
-        for (col_idx : 0..nterms) {
-            term = ^row^.terms_[col_idx];
-            konst = term^.coeff_.fvalue();
-            if (konst <= 0.0) {
-                continue;
+        for (iter = 0) () {++iter;} {
+            //println(String + "iteration " + iter);
+
+            /* find the row with the most negative constant. */
+            pivot_row_idx = -1;
+            min_konst float64 = 0.0;
+            for (i : 0..nrows) {
+                row = ^rows_[i];
+                konst = row^.constant_.fvalue();
+                if (min_konst > konst) {
+                    pivot_row_idx = i;
+                    min_konst = konst;
+                }
             }
-            termz = ^rowz^.terms_[col_idx];
-            konstz = termz^.coeff_.fvalue();
-            ratio = konstz / konst;
-            if (min_col < 0 || ratio < min_ratio) {
-                min_col = col_idx;
-                min_ratio = ratio;
+            if (min_konst >= 0.0) {
+                //println("no rows have a negative constant.");
+                break iter_loop;
             }
-        }
-        if (min_col < 0) {
-            println("no positive coefficients found.");
-            return;
-        }
-        println(String + "pivot is column " + min_col + " minimum ratio " + min_ratio);
+            //println(String + "row " + pivot_row_idx + " has the most negative constant " + min_konst);
+
+            /*
+            find the pivot:
+            - row coefficient is positive.
+            - minimizes Z/K ratio.
+            */
+            rowz = ^rows_[0];
+            row = ^rows_[pivot_row_idx];
+            nterms int = row^.terms_.size();
+            pivot_col_idx = -1;
+            float64 min_ratio = 0.0;
+            for (col_idx : 0..nterms) {
+                term = ^row^.terms_[col_idx];
+                konst = term^.coeff_.fvalue();
+                if (konst <= 0.0) {
+                    continue;
+                }
+                termz = ^rowz^.terms_[col_idx];
+                konstz = termz^.coeff_.fvalue();
+                ratio = konstz / konst;
+                if (pivot_col_idx < 0 || ratio < min_ratio) {
+                    pivot_col_idx = col_idx;
+                    min_ratio = ratio;
+                }
+            }
+            if (pivot_col_idx < 0) {
+                //println("no positive coefficients found.");
+                break iter_loop;
+            }
+            //println(String + "pivot is column " + pivot_col_idx + " minimum ratio " + min_ratio);
+
+            factor = - row^.terms_[pivot_col_idx].coeff_.reciprocal();
+            //println(String + "multiply row " + pivot_row_idx + " by factor " + factor.fvalue());
+            row^.constant_ *= factor;
+            for (term : row^.terms_) {
+                term^.coeff_ *= factor;
+            }
+            //dump();
+
+            for (row_idx : 0..nrows) {
+                if (row_idx == pivot_row_idx) {
+                    continue;
+                }
+
+                rowi = ^rows_[row_idx];
+                scale = rowi^.terms_[pivot_col_idx].coeff_;
+                //println(String + "multiply row " + pivot_row_idx + " by " + scale.fvalue() + " add to row " + row_idx);
+
+                rowi^.constant_ = row^.constant_ * scale + rowi^.constant_;
+                for (col_idx : 0..nterms) {
+                    term = ^row^.terms_[col_idx];
+                    termi = ^rowi^.terms_[col_idx];
+                    termi^.coeff_ = term^.coeff_ * scale + termi^.coeff_;
+                }
+                //dump();
+
+                //println(String + "replace row " + row_idx + " column " + pivot_col_idx + " coefficient");
+                termi = ^rowi^.terms_[pivot_col_idx];
+                termi^.coeff_ = - factor * scale;
+                //dump();
+            }
+
+            //println(String + "replace pivot row " + pivot_row_idx + " column " + pivot_col_idx + " coefficient");
+            row^.terms_[pivot_col_idx].coeff_ = - factor;
+            //dump();
+
+            //println(String + "swap row column owners.");
+            col_owner = row^.owner_;
+            row^.owner_ <--> cols_[pivot_col_idx].owner_;
+            for (rowi : rows_) {
+                rowi^.terms_[pivot_col_idx].var_idx_ = col_owner;
+            }
+            //dump();
+        } :iter_loop;
     }
 }
 
 int32 main() {
 
     LP lp;
-    ab = lp.add_var("AB");
-    ba = lp.add_var("BA");
     xa = lp.add_var("XA");
     xb = lp.add_var("XB");
+    ab = lp.add_var("AB");
+    ba = lp.add_var("BA");
     a = 90;
     b = 80;
     w = 100;
@@ -705,12 +769,12 @@ int32 main() {
     /* b beats w and x. */
     row2 = LP:Expr + b + ab - ba + xb + LP:gte + w;
     row3 = LP:Expr + b + ab - ba + xb + LP:gte + x - xa - xb;
-    /* limit a to b votes. */
-    row4 = LP:Expr + ab + LP:lte + a;
-    /* limit b to a votes. */
-    row5 = LP:Expr + ba + LP:lte + baw;
     /* limit x to a,b votes. */
-    row6 = LP:Expr + xa + xb + LP:lte + xaw;
+    row4 = LP:Expr + xa + xb + LP:lte + xaw;
+    /* limit a to b votes. */
+    row5 = LP:Expr + ab + LP:lte + a;
+    /* limit b to a votes. */
+    row6 = LP:Expr + ba + LP:lte + baw;
     /* =tsc= to do: break ties. */
     /* add the rows. */
     lp.add_row(row0);
@@ -720,8 +784,11 @@ int32 main() {
     lp.add_row(row4);
     lp.add_row(row5);
     lp.add_row(row6);
+    println("initial matrix:");
     lp.dump();
     lp.solve();
+    println("solved matrix:");
+    lp.dump();
 
     ab; ba; xa; xb;
     a; b; w; x;
