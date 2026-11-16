@@ -16,11 +16,10 @@ templates inferred + explicit, an alias template (type-level, no demand), a
 template method via the out-of-line body, a cross-header argument
 (Box<Bird>, carried by the .sli's provenance import) — plus the LOCAL-type
 path: Box<Loc> and tpick<Loc^> clone the implicitly-loaded template
-source's bodies and emit internal here, the only TU that can. the
-tpick/tpock pair pins the private-helper asymmetry: tpock's aggregated
-flavor works (its body and `tick` live in tmpl_lib.o), its local-type
-instance errors — a body leaning on TU-private names is emittable only by
-its own TU.
+source's bodies and emit internal here, the only TU that can. tpock's
+local-type instances (Loc, Lodd) keep the source's private helpers (tick,
+tock) and emit them internal here; so does tbias<Lbias> its private CONST
+(kBias). a body reaching a private mutable GLOBAL (tcount's gCount) errors.
 
 `Twin` is the other half of a pair with bird.sl: THE SAME SYMBOL FROM TWO
 TUs. both files declare a private file-scope class of that name with a
@@ -94,6 +93,10 @@ Holder(
     int sum() { return a_.total() + b_.total() + tag_; }
     intptr counts() { return a_.count() + b_.count(); }
 }
+
+/* THIS TU's own `tick`, beside the source's private `tick` that the inline
+   tpock<Loc> keeps: a different signature, and neither sees the other. */
+int tick() { return 7; }
 
 int32 main() {
 
@@ -270,22 +273,36 @@ int32 main() {
     //Wrap2<int> zw(21);
     //println(String + "zw = " + zw.dub());
 
-    /* a template body that uses the source's PRIVATE helper can only be
-       emitted by the source's own TU — a local-type instance gets the full
-       cross-TU chain: use site, local class, template, the body's reference,
-       the private definition, and the header remedy. */
-    //-EXPECT-ERROR: private to its source
-    //Loc na(1);
-    //Loc nb(2);
-    //Loc^ pb = tpock(^na, ^nb);
-    //println(String + "pb = " + pb^.lv());
+    /* a template body on the source's PRIVATE helper inlines too: the helper
+       `tick` — and `tock`, which tick calls — is kept from the loaded source
+       and emitted internal here, ONE copy shared by both local flavors. */
+    Lodd(int d_ = 0) {
+        int dv() { return d_ + 2; }
+    }
+    Loc na(1);
+    Loc nb(2);
+    Loc pb = tpock(na, nb);
+    println(String + "pb = " + pb.lv());
+    Lodd da(5);
+    Lodd db(6);
+    Lodd pdd = tpock(da, db);
+    println(String + "pdd = " + pdd.dv() + " tick = " + tick());
 
-    /* the identifier flavor of the same chain: the body READS a private
-       const — the note says "references 'kBias'". */
-    //-EXPECT-ERROR: references 'kBias'
-    //Loc ra(1);
-    //Loc^ rb = tbias(^ra);
-    //println(String + "rb = " + rb^.lv());
+    /* the body READS a private CONST: kept like a helper (an immutable copy is
+       harmless), so the local flavor inlines and reads kBias = 100. */
+    Lbias(int b_ = 0) {
+        op+(Lbias^ a, int k) { b_ = a^.b_ + k; }
+    }
+    Lbias ra(1);
+    Lbias rb = tbias(ra);
+    println(String + "rb = " + rb.b_);
+
+    /* a private mutable GLOBAL is not copied with the helpers: one more copy
+       would be a second, separate counter. */
+    //-EXPECT-ERROR: references 'gCount'
+    //Loc rcc(1);
+    //Loc rc = tcount(rcc);
+    //println(String + "rc = " + rc.lv());
 
     /* a BARE-host use of a header template's nested alias: a pattern
        qualifier needs its list (bare-host is out of the syntax since the
@@ -451,7 +468,7 @@ int32 main() {
     println(String + "hybpriv = " + hybpriv());   // 102: the completer set both
 
     /* CLASS-TEMPLATE ARMS across the seam: selected here, defined by the template
-       source's --instantiate pass; plus this TU's own alias re-opens. */
+       instantiation stage; plus this TU's own alias re-opens. */
     Spec<int> spi(3);
     Spec<int8> sp8(4);
     Spec<bool> spb(true);

@@ -15,7 +15,7 @@ an imported file), class templates whose members — methods, hooks, even a
 user op= — are declarations, and whole alias templates. a consumer compiles
 against these alone: full layout (sizeof folds), declaration-only members,
 kDeclare linkage, and a .sli demand per flavor. the definitions live in the
-SAME-NAMED source, tmpl_lib.sl, whose own compile (--instantiate) emits
+SAME-NAMED source, tmpl_lib.sl; the instantiation stage (--instantiate) emits
 every demanded flavor once.
 */
 
@@ -53,7 +53,7 @@ Box<T>(T^ p_ = nullptr) {
 /* LAZY TEMPLATE METHODS across the seam: `lt` needs T's op<, `has` needs
    nothing. A method of a flavor is built only when called, so a flavor over a
    class with NO op< is fine until something calls `lt` — and the .sli demands
-   only the methods a consumer calls, so the source's --instantiate pass never
+   only the methods a consumer calls, so the instantiation stage never
    builds the unused ones either. */
 Rank<T>(T^ p_ = nullptr) {
     int has();
@@ -65,13 +65,13 @@ T tsum<T>(T a, T b);
 
 /* ARITY-ONLY template overloading across the seam: two same-name templates
    with distinct parameter counts; a demand spelling carries no arity, so the
-   --instantiate pass emits every fitting sibling. */
+   instantiation stage emits every fitting sibling. */
 T tpair<T>(T a);
 T tpair<T>(T a, T b);
 
 /* pointer-friendly twins: `tpick`'s body is self-contained (a local-type
    instance can inline it); `tpock`'s body leans on a tmpl_lib-PRIVATE helper,
-   so only tmpl_lib's own TU can emit its flavors. Under const correctness
+   which every TU hosting a flavor keeps (internal). Under const correctness
    (canon B, 2026-07-26) a bare-T body cannot RETURN a pointer binding (the
    munge consts the param's pointee; the return type stays mutable), so the
    POINTER demands ride `tdiff` — a read-only comparison body, legal for
@@ -81,8 +81,12 @@ T tpock<T>(T a, T b);
 bool tdiff<T>(T a, T b);
 
 /* like `tpock`, but the body READS a private name (a const) instead of
-   calling one — the identifier flavor of the private-name diagnostic. */
+   calling one — kept like a helper. */
 T tbias<T>(T v);
+
+/* like `tbias`, but the body WRITES a private mutable global: a local-type
+   instance would need a second copy of the state, so it is an error. */
+T tcount<T>(T v);
 
 /* ITERATOR-ARITHMETIC templates: explicitly-spelled `T[]` params (no bare-T
    munge), so an OPAQUE argument flavor (tstep<Rope>) makes the aggregated
@@ -99,7 +103,7 @@ alias TRef<T> = T^;
    list and the bodies. An incomplete template is no more special than an
    incomplete class: an aggregated flavor is OPAQUE to a consumer (its fields
    stripped from the consumer's clone, exactly as library.slh's Rope's
-   completion is), sized by the --instantiate TU's exported @Grow<T>__$sizeof
+   completion is), sized by the instantiation stage's exported @Grow<T>__$sizeof
    word, still embeddable BY VALUE through the computed-layout convention. */
 Grow<T>(...) {
     void add(T v);
@@ -187,7 +191,7 @@ Ucp<T>(T^ u_ = nullptr) {
 //}
 
 /* a template method inside a header class template stays rejected too — its
-   instances aren't knowable to the source's --instantiate pass (a TU-local
+   instances aren't knowable to the instantiation stage (a TU-local
    class template takes both forms; nested_tmpl.sl). */
 //-EXPECT-ERROR: may not contain a template method
 //MBad<T>(T m_ = 0) {

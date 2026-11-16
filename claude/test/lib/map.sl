@@ -17,6 +17,7 @@ maps' destructors at different scope exits.
 
 import+ slids.map;
 import slids.string;
+import slids.vector;
 alias slids;
 
 Map<String, String> : CapitalMap() {
@@ -173,6 +174,31 @@ int32 main() {
             println(String + it^.key_ + " - " + it^.value_^.pop_);
         }
         println(String + "ottawa = " + ottawa.pop_);
+    }
+
+    println(String + "---vector keys, map elements---");
+    {
+        /* each library instantiates the other's template: Map's bodies compare
+           Vector<int> keys (Vector's op<), Vector's bodies copy Map<int, int>
+           elements (Map's op=). no per-library compile order exists; the one
+           instantiation stage builds both. */
+        Vector<int> k1;
+        k1.append(2);
+        Vector<int> k2;
+        k2.append(1);
+        Map<Vector<int>, int> vm;
+        vm.insert(k1, 20);
+        vm.insert(k2, 10);
+        for (it : vm) {
+            println(String + it^.key_[0] + " - " + it^.value_);
+        }
+        Map<int, int> m1;
+        m1.insert(7, 70);
+        Vector<Map<int, int>> mv;
+        mv.append(m1);
+        for (it : mv[0]) {
+            println(String + it^.key_ + " - " + it^.value_);
+        }
     }
 
     /* compile error: a const pointer cannot be stored as a value of mutable

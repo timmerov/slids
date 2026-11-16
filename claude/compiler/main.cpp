@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -36,9 +38,12 @@ namespace {
 // Plain imports accumulate per file; a braced block addressed to `target`
 // contributes its spellings as demands and the file's plain imports as
 // injection candidates (the provenance headers an argument type needs).
+// An EMPTY `target` is the instantiation stage: every block is addressed to it,
+// and each block's module lands in `targets` (when given).
 void readSliFile(std::string const& path, std::string const& target,
                  std::vector<std::string>& demands,
-                 std::vector<std::string>& injects) {
+                 std::vector<std::string>& injects,
+                 std::vector<std::string>* targets = nullptr) {
     std::ifstream f(path);
     if (!f.is_open()) return;
     std::stringstream buf;
@@ -75,8 +80,9 @@ void readSliFile(std::string const& path, std::string const& target,
         }
         if (i < s.size() && s[i] == '{') {
             i++;
-            bool mine = (module == target);
+            bool mine = target.empty() || module == target;
             if (mine) addressed_here = true;
+            if (mine && targets) targets->push_back(module);
             while (true) {
                 skipWs();
                 if (i >= s.size() || s[i] == '}') { if (i < s.size()) i++; break; }
@@ -97,169 +103,113 @@ void readSliFile(std::string const& path, std::string const& target,
     for (auto& d : file_demands) demands.push_back(d);
 }
 
-// --scan-deps TYPE-ARGUMENT EDGES. An import is not the only way one template
-// library comes to demand another: `Map<Vector<int>, int>` makes map's compile
-// instantiate Map with a vector type, and Map's bodies (Key.op<) dump demands
-// FOR vector — so vector waits for map though map.sl never imports vector.
-// Lex-only, like the rest of the scan:
-//   OWNERS   a name N spelled `N<` at namespace/file scope (no `=` earlier in
-//            the statement) in a library module's file is that module's
-//            template (class, function, or alias template). A name claimed by
-//            several modules keeps them all (conservative: more edges).
-//   ALIASES  `alias X = rhs;` (anywhere): X carries the modules of the names
-//            in rhs, to a fixed point — `alias Rankings = slids:Vector<int>;`
-//            makes `Map<Rankings, int>` an edge.
-//   USES     every `N<...>` (any file, any depth), matched to its `>`: each
-//            module of N must compile before each OTHER module named by an
-//            identifier inside the brackets.
-//   DEDUCED  a call `N(` (no `<...>`; not after `.`) of a module's template,
-//            in a file of ANOTHER module: its arguments are invisible to a lex
-//            scan, and the instance it deduces (`countof<Vector<String>>`)
-//            demands from libraries the scan can't name. Collected in
-//            `deduced` (the callee modules); the caller adds conservative edges.
-// Returns y -> { x : y's compile waits for x's }.
-std::map<std::string, std::set<std::string>> scanTypeArgEdges(
-        token::List const& tokens, std::set<std::string> const& lib_set,
-        std::set<std::string>& deduced) {
-    using token::Kind;
-    auto const& toks = tokens.tokens;
-    std::map<std::string, std::set<std::string>> mods;          // name -> modules
-    std::map<std::string, std::set<std::string>> alias_rhs;     // alias -> names
-    std::vector<std::pair<std::string, std::set<std::string>>> uses;
-    std::vector<std::pair<std::string, std::string>> calls;   // (name, caller module)
-
-    // Per-file scope state: the brace stack (true = namespace brace) and the
-    // statement-level paren depth / seen-`=` flag at namespace scope.
-    struct FileState {
-        std::vector<bool> braces;
-        int parens = 0;
-        bool seen_eq = false;
-    };
-    std::map<int, FileState> state;
-
-    auto isNamespaceScope = [](FileState const& s) {
-        if (s.parens != 0) return false;
-        for (bool ns : s.braces) if (!ns) return false;
-        return true;
-    };
-
-    size_t n = toks.size();
-    for (size_t i = 0; i < n; ++i) {
-        auto const& t = toks[i];
-        if (t.kind == Kind::kEndOfInput) break;
-        if (t.file_id < 0 || t.file_id >= (int)tokens.files.size()) continue;
-        auto const& file = tokens.files[t.file_id];
-        FileState& s = state[t.file_id];
-        bool same_prev = i > 0 && toks[i - 1].file_id == t.file_id;
-        Kind prev = same_prev ? toks[i - 1].kind : Kind::kSemicolon;
-        Kind prev2 = (i > 1 && toks[i - 2].file_id == t.file_id)
-                         ? toks[i - 2].kind : Kind::kSemicolon;
-
-        if (t.kind == Kind::kLBrace) {
-            // `ident {` at a statement start is a namespace.
-            bool ns = prev == Kind::kIdentifier &&
-                      (prev2 == Kind::kSemicolon || prev2 == Kind::kRBrace ||
-                       prev2 == Kind::kLBrace);
-            s.braces.push_back(ns);
-            s.seen_eq = false;
-            continue;
-        }
-        if (t.kind == Kind::kRBrace) {
-            if (!s.braces.empty()) s.braces.pop_back();
-            s.seen_eq = false;
-            continue;
-        }
-        if (t.kind == Kind::kSemicolon) { s.seen_eq = false; continue; }
-        if (t.kind == Kind::kLParen) { ++s.parens; continue; }
-        if (t.kind == Kind::kRParen) { if (s.parens > 0) --s.parens; continue; }
-        if (t.kind == Kind::kEquals) { s.seen_eq = true; continue; }
-        if (t.kind == Kind::kAlias) {
-            // alias X [<...>] = rhs ;
-            if (i + 1 >= n || toks[i + 1].kind != Kind::kIdentifier) continue;
-            std::string name = toks[i + 1].text;
-            size_t j = i + 2;
-            while (j < n && toks[j].kind != Kind::kEquals &&
-                   toks[j].kind != Kind::kSemicolon &&
-                   toks[j].kind != Kind::kEndOfInput) ++j;
-            if (j >= n || toks[j].kind != Kind::kEquals) continue;
-            for (++j; j < n && toks[j].kind != Kind::kSemicolon &&
-                      toks[j].kind != Kind::kEndOfInput &&
-                      toks[j].kind != Kind::kLBrace &&
-                      toks[j].kind != Kind::kRBrace; ++j) {
-                if (toks[j].kind == Kind::kIdentifier)
-                    alias_rhs[name].insert(toks[j].text);
-            }
-            continue;   // the walk re-reads the rhs for its `N<` uses
-        }
-        if (t.kind != Kind::kIdentifier) continue;
-
-        // A DEDUCED CALL candidate: `N(` not reached through `.` (a method).
-        if (i + 1 < n && toks[i + 1].kind == Kind::kLParen && prev != Kind::kDot)
-            calls.emplace_back(t.text, file.module);
-
-        // kIdentifier: otherwise only `N<` matters.
-        if (i + 1 >= n || toks[i + 1].kind != Kind::kLt) continue;
-        std::string const& name = t.text;
-        std::string const& module = file.module;
-
-        // OWNER claim.
-        if (lib_set.count(module) && isNamespaceScope(s) && !s.seen_eq)
-            mods[name].insert(module);
-
-        // USE: match the brackets.
-        std::set<std::string> inner;
-        int depth = 1, parens = 0;
-        bool ok = false;
-        for (size_t j = i + 2; j < n && j < i + 256; ++j) {
-            Kind k = toks[j].kind;
-            if (k == Kind::kSemicolon || k == Kind::kLBrace ||
-                k == Kind::kRBrace || k == Kind::kEndOfInput) break;
-            if (k == Kind::kLParen) { ++parens; continue; }
-            if (k == Kind::kRParen) { if (--parens < 0) break; continue; }
-            if (k == Kind::kLt) { ++depth; continue; }
-            if (k == Kind::kGt) depth -= 1;
-            else if (k == Kind::kRShift) depth -= 2;
-            else if (k == Kind::kIdentifier) inner.insert(toks[j].text);
-            if (depth <= 0) { ok = true; break; }
-        }
-        if (ok && !inner.empty()) uses.emplace_back(name, std::move(inner));
+// THE STAGE'S LIBRARY FILTER, input half: every GLOBAL symbol an already-built
+// object defines (`nm --defined-only`; an uppercase type letter, or `u`). A local
+// symbol is that object's private business and never suppresses a definition.
+bool readDefinedSymbols(std::string const& obj, std::set<std::string>& out) {
+    std::string cmd = "nm --defined-only --format=posix '" + obj + "' 2>&1";
+    FILE* p = popen(cmd.c_str(), "r");
+    if (!p) return false;
+    char buf[4096];
+    std::string text;
+    while (fgets(buf, sizeof buf, p)) text += buf;
+    int rc = pclose(p);
+    if (rc != 0) {
+        std::cerr << "slidsc: error: cannot read symbols of '" << obj << "':\n" << text;
+        return false;
     }
+    std::istringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+        std::istringstream ls(line);
+        std::string sym, type;
+        if (!(ls >> sym >> type) || type.size() != 1) continue;
+        char c = type[0];
+        if ((c >= 'A' && c <= 'Z') || c == 'u') out.insert(sym);
+    }
+    return true;
+}
 
-    // Aliases carry the modules of their rhs names, to a fixed point.
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (auto const& [a, names] : alias_rhs) {
-            for (auto const& nm : names) {
-                if (nm == a) continue;
-                auto it = mods.find(nm);
-                if (it == mods.end()) continue;
-                for (auto const& m : std::set<std::string>(it->second))
-                    if (mods[a].insert(m).second) changed = true;
+// THE STAGE'S LIBRARY FILTER, output half: a symbol some linked object already
+// defines is not defined again — its `define` becomes a `declare` (the body
+// dropped) and its global becomes `external`. One funnel over the finished IR,
+// so every kind of definition codegen emits (methods, hooks, transfer
+// operators, layout words, template-scope globals) is covered alike. Internal
+// and private definitions are this module's own and are never touched.
+std::string dropDefinedSymbols(std::string const& ir, std::set<std::string> const& defined) {
+    auto symAfterAt = [](std::string const& line, std::size_t at) {
+        std::size_t b = at + 1, e = b;
+        if (b < line.size() && line[b] == '"') {
+            e = line.find('"', b + 1);
+            return e == std::string::npos ? std::string() : line.substr(b + 1, e - b - 1);
+        }
+        while (e < line.size() && (std::isalnum((unsigned char)line[e]) || line[e] == '_'
+                                   || line[e] == '$' || line[e] == '.')) e++;
+        return line.substr(b, e - b);
+    };
+    auto local = [](std::string const& head) {
+        return head.find(" internal ") != std::string::npos
+            || head.find(" private ") != std::string::npos;
+    };
+    std::istringstream in(ir);
+    std::ostringstream out;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.rfind("define ", 0) == 0) {
+            std::size_t at = line.find('@');
+            std::string head = line.substr(0, at == std::string::npos ? 0 : at);
+            if (at != std::string::npos && !local(" " + head)
+                && defined.count(symAfterAt(line, at))) {
+                std::string decl = "declare " + line.substr(7);
+                std::size_t brace = decl.rfind('{');
+                if (brace != std::string::npos) decl.erase(brace);
+                while (!decl.empty() && decl.back() == ' ') decl.pop_back();
+                // linkonce/weak linkage words belong to a definition only
+                for (char const* w : {"linkonce_odr ", "weak_odr ", "linkonce ", "weak "}) {
+                    std::size_t k = decl.find(w);
+                    if (k != std::string::npos && k < decl.find('@')) decl.erase(k, std::strlen(w));
+                }
+                out << decl << "\n";
+                while (std::getline(in, line) && line != "}") {}
+                continue;
+            }
+        } else if (line.rfind("@", 0) == 0) {
+            std::string sym = symAfterAt(line, 0);
+            std::size_t eq = line.find(" = ");
+            if (eq != std::string::npos && defined.count(sym)) {
+                std::istringstream ws(line.substr(eq + 3));
+                std::string w;
+                bool is_var = false;
+                std::string kind;
+                while (ws >> w) {
+                    if (w == "global" || w == "constant") { kind = w; is_var = true; break; }
+                    if (w == "internal" || w == "private" || w == "external") break;
+                }
+                if (is_var) {
+                    // the value type: one token, or a balanced {...} / [...] / <...>
+                    std::string rest;
+                    std::getline(ws, rest);
+                    std::size_t i = rest.find_first_not_of(' ');
+                    std::string ty;
+                    if (i != std::string::npos) {
+                        int depth = 0;
+                        std::size_t j = i;
+                        for (; j < rest.size(); j++) {
+                            char c = rest[j];
+                            if (c == '{' || c == '[' || c == '<' || c == '(') depth++;
+                            else if (c == '}' || c == ']' || c == '>' || c == ')') depth--;
+                            else if (c == ' ' && depth == 0) break;
+                        }
+                        ty = rest.substr(i, j - i);
+                    }
+                    out << line.substr(0, eq) << " = external global " << ty << "\n";
+                    continue;
+                }
             }
         }
+        out << line << "\n";
     }
-
-    for (auto const& [name, caller] : calls) {
-        auto it = mods.find(name);
-        if (it == mods.end()) continue;
-        for (auto const& x : it->second)
-            if (x != caller && lib_set.count(x)) deduced.insert(x);
-    }
-
-    std::map<std::string, std::set<std::string>> waits;
-    for (auto const& [outer, inner] : uses) {
-        auto oi = mods.find(outer);
-        if (oi == mods.end()) continue;
-        for (auto const& nm : inner) {
-            auto ii = mods.find(nm);
-            if (ii == mods.end()) continue;
-            for (auto const& x : oi->second)
-                for (auto const& y : ii->second)
-                    if (x != y && lib_set.count(x) && lib_set.count(y))
-                        waits[y].insert(x);
-        }
-    }
-    return waits;
+    return out.str();
 }
 
 }  // namespace
@@ -276,7 +226,13 @@ int main(int argc, char** argv) {
         return widen::typeSelfTest(std::cout) ? 0 : 1;
     }
 
-    std::string in_path = argv[1];
+    // THE INSTANTIATION STAGE: `slidsc --instantiate <dir> -o <out.ll> [-I ...]
+    // [<obj.o>...]` — no root source. Reads every .sli in the pool, builds every
+    // demanded flavor (and what their bodies demand, across libraries) in ONE
+    // TU, and leaves out what a listed object already defines.
+    bool stage = std::string(argv[1]) == "--instantiate";
+    std::vector<std::string> stage_objs;
+    std::string in_path = stage ? std::string() : argv[1];
     std::string out_path;
     std::vector<std::string> import_paths;
     std::string deps_path;      // -MF <file>: write make deps to this file
@@ -285,9 +241,11 @@ int main(int argc, char** argv) {
     std::string scan_path;      // --scan-deps <file>: lex-only import scan; write
                                 //   the make fragment wiring the consumer's
                                 //   template-library instantiation stage
-    for (int i = 2; i < argc; ++i) {
+    for (int i = stage ? 1 : 2; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "-o" && i + 1 < argc) {
+        if (stage && arg.size() > 2 && arg.compare(arg.size() - 2, 2, ".o") == 0) {
+            stage_objs.push_back(arg);
+        } else if (arg == "-o" && i + 1 < argc) {
             out_path = argv[++i];
         } else if (arg == "-I" && i + 1 < argc) {
             import_paths.push_back(argv[++i]);
@@ -308,11 +266,15 @@ int main(int argc, char** argv) {
     // so an argument type from another header is spellable here.
     std::vector<std::string> inst_demands;
     std::vector<std::string> extra_imports;
-    if (!inst_dir.empty()) {
-        std::string target = token::moduleIdentity(in_path, import_paths);
-        // The pool is every .sli under the build dir, RECURSIVELY: a library
-        // that is itself a consumer writes its .sli beside its .ll, which sits
-        // at the module's path (<bld>/slids/map.sli).
+    std::set<std::string> stage_defined;
+    if (stage) {
+        if (inst_dir.empty() || out_path.empty()) {
+            std::cerr << "usage: slidsc --instantiate <dir> -o <out.ll> [-I <path>...] "
+                         "[<obj.o>...]\n";
+            return 1;
+        }
+        for (auto const& o : stage_objs)
+            if (!readDefinedSymbols(o, stage_defined)) return 1;
         std::error_code ec;
         std::vector<std::string> sli_files;
         for (auto const& e :
@@ -320,20 +282,42 @@ int main(int argc, char** argv) {
             if (e.path().extension() == ".sli")
                 sli_files.push_back(e.path().string());
         }
-        std::sort(sli_files.begin(), sli_files.end());   // deterministic order
+        std::sort(sli_files.begin(), sli_files.end());
+        std::vector<std::string> targets;
         for (auto const& p : sli_files)
-            readSliFile(p, target, inst_demands, extra_imports);
-        // Dedup, preserving first-seen order.
+            readSliFile(p, "", inst_demands, extra_imports, &targets);
+        // THE STAGE'S ROOT: a generated file importing every target module and
+        // every provenance header; every template source the closure reaches is
+        // loaded (the cross-library closure needs them all).
         std::set<std::string> seen;
-        std::vector<std::string> uniq;
-        for (auto& m : extra_imports)
-            if (m != target && seen.insert(m).second) uniq.push_back(m);
-        extra_imports = std::move(uniq);
+        std::ostringstream root;
+        root << "/* generated by slidsc --instantiate; do not edit. */\n";
+        for (auto const* list : {&targets, &extra_imports})
+            for (auto const& m : *list)
+                if (seen.insert(m).second) root << "import " << m << ";\n";
+        extra_imports.clear();
+        in_path = out_path;
+        {
+            auto pos = in_path.rfind(".ll");
+            if (pos != std::string::npos) in_path.erase(pos);
+            in_path += ".stage.sl";
+        }
+        std::ofstream rf(in_path);
+        if (!rf) {
+            std::cerr << "slidsc: error: cannot write '" << in_path << "'\n";
+            return 1;
+        }
+        rf << root.str();
+        rf.close();
         seen.clear();
-        uniq.clear();
+        std::vector<std::string> uniq;
         for (auto& d : inst_demands)
             if (seen.insert(d).second) uniq.push_back(d);
         inst_demands = std::move(uniq);
+    } else if (!inst_dir.empty()) {
+        std::cerr << "slidsc: error: --instantiate takes no source file: "
+                     "slidsc --instantiate <dir> -o <out.ll> [<obj.o>...]\n";
+        return 1;
     }
 
     diagnostic::Sink diag;
@@ -347,7 +331,7 @@ int main(int argc, char** argv) {
     };
 
     lex::run(in_path, import_paths, tokens, diag, extra_imports,
-             /*load_all_sources=*/!scan_path.empty());
+             /*load_all_sources=*/!scan_path.empty() || stage);
     if (diagnostic::hasErrors(diag)) {
         if (scan_path.empty()) return bail();
         // The import scan only feeds make: the compile that follows reports the
@@ -388,17 +372,20 @@ int main(int argc, char** argv) {
     // --scan-deps: the IMPORT SCAN — lex only, no compile. The lexer chased
     // the whole import closure and loaded each template source sitting beside
     // an imported header (token::File.template_source), so the file table
-    // already names every template library this consumer pulls in, and the
-    // token stream carries each file's `import x;` statements — the
-    // library-to-library ordering edges. Emit the make fragment that wires
-    // the instantiation stage:
-    //   <bld>/X.ll ...: <bld>/<consumer>.ll     (demand pool first)
-    //   <bld>/Y.ll: <bld>/X.ll                  (X's files import Y)
-    //   <consumer>_TMPL_OBJS = <bld>/X.o ...    (the link line's extras)
-    //   <fragment>: <every scanned file>        (self-maintaining)
-    // The build directory is the fragment's own directory — the same place
-    // the .ll/.o/.sli files land. Exits before the pipeline: dependency
-    // generation must not require the program to compile.
+    // already names every template library this consumer pulls in. Emit the
+    // make fragment that wires the consumer into its build directory's ONE
+    // instantiation stage (`slidsc --instantiate`):
+    //   <bld>/slids_inst.ll: <bld>/<consumer>.ll <bld>/X.o ...
+    //                                    (every demand pool and every object
+    //                                     the stage must not redefine, first)
+    //   <consumer>_TMPL_OBJS = <bld>/X.o ... <bld>/slids_inst.o
+    //                                    (the link line's extras)
+    //   <fragment>: <every scanned file> (self-maintaining)
+    // A template library compiles as an ordinary TU, in no particular order:
+    // the stage builds every instance, across libraries, in one process. The
+    // build directory is the fragment's own directory — the same place the
+    // .ll/.o/.sli files land. Exits before the pipeline: dependency generation
+    // must not require the program to compile.
     if (!scan_path.empty()) {
         // The consumer's BUILD name is the fragment's (`<name>.deps.mk`), not the
         // source's stem: a consumer may share a stem with a library it imports
@@ -417,111 +404,25 @@ int main(int argc, char** argv) {
             if (f.template_source && lib_set.insert(m).second)
                 libs.push_back(m);
         }
-        // module -> modules its files import (header and source both count;
-        // the lexer consumed the statements but recorded every edge).
-        std::map<std::string, std::set<std::string>> mod_imports;
-        for (auto const& [fid, module] : tokens.import_edges) {
-            if (fid < 0 || fid >= (int)tokens.files.size()) continue;
-            mod_imports[tokens.files[fid].module].insert(module);
-        }
-        // y -> { x : y's compile waits for x's }: import edges + type-argument
-        // edges. A cycle has no compile order — every library in it would miss
-        // demands — so it is an error, not a fragment make would half-honor.
-        std::set<std::string> deduced;   // modules with a deduced template call
-        std::map<std::string, std::set<std::string>> waits =
-            scanTypeArgEdges(tokens, lib_set, deduced);
-        for (auto const& x : libs)
-            for (auto const& y : mod_imports[x])
-                if (y != x && lib_set.count(y)) waits[y].insert(x);
-        // DEDUCED-CALL EDGES (conservative): a deduced call of X's template may
-        // instantiate it over any library's class, and X's compile then demands
-        // from that library — so every other library waits for X. Skipped when
-        // X already waits (transitively) for that library: a real mutual
-        // dependency the scan can't order (vector imports dump, so a deduced
-        // `dump(v)` keeps dump after vector).
-        {
-            auto reaches = [&](std::string const& from, std::string const& to) {
-                std::set<std::string> seen;
-                std::vector<std::string> work{from};
-                while (!work.empty()) {
-                    std::string m = work.back();
-                    work.pop_back();
-                    if (m == to) return true;
-                    if (!seen.insert(m).second) continue;
-                    for (auto const& w : waits[m]) work.push_back(w);
-                }
-                return false;
-            };
-            for (auto const& x : deduced)
-                for (auto const& y : libs)
-                    if (y != x && !reaches(x, y)) waits[y].insert(x);
-        }
-        {
-            std::map<std::string, int> color;     // 0 new, 1 on stack, 2 done
-            std::vector<std::string> path;
-            std::vector<std::string> cycle;
-            std::function<bool(std::string const&)> dfs =
-                [&](std::string const& m) -> bool {
-                color[m] = 1;
-                path.push_back(m);
-                for (auto const& x : waits[m]) {
-                    if (color[x] == 1) {
-                        auto it = std::find(path.begin(), path.end(), x);
-                        cycle.assign(it, path.end());
-                        cycle.push_back(x);
-                        return true;
-                    }
-                    if (color[x] == 0 && dfs(x)) return true;
-                }
-                path.pop_back();
-                color[m] = 2;
-                return false;
-            };
-            for (auto const& m : libs) {
-                if (color[m] == 0 && dfs(m)) break;
-            }
-            if (!cycle.empty()) {
-                // cycle lists waiters: each one waits for the next.
-                std::cerr << "slidsc: scan-deps: template libraries need each "
-                             "other's instantiations, no compile order exists:";
-                for (size_t k = 0; k < cycle.size(); ++k)
-                    std::cerr << (k ? " waits for " : " ") << cycle[k];
-                std::cerr << "\n";
-                return 1;
-            }
-        }
         std::string bld =
             std::filesystem::path(scan_path).parent_path().string();
         if (bld.empty()) bld = ".";
         // A library's build files sit at its MODULE PATH under the build dir
-        // (slids.vector -> <bld>/slids/vector.ll), so a consumer-local `map`
+        // (slids.vector -> <bld>/slids/vector.o), so a consumer-local `map`
         // and slids.map never share a file, and a pattern rule maps the object
         // back to its source (<root>/slids/vector.sl).
-        auto ll = [&](std::string const& m) {
-            return bld + "/" + token::modulePath(m) + ".ll";
+        auto obj = [&](std::string const& m) {
+            return bld + "/" + token::modulePath(m) + ".o";
         };
         std::ostringstream mk;
         mk << "# generated by slidsc --scan-deps; do not edit.\n";
-        if (!libs.empty()) {
-            // The demand pool first: every template library waits for the
-            // consumer's compile (which dumps the .sli beside its .ll).
-            for (auto const& m : libs) mk << ll(m) << " ";
-            mk << ": " << ll(consumer) << "\n";
-            // Library-to-library ordering: X's files importing Y means X's
-            // compile dumps demands FOR Y — Y waits for X. So does a Y type
-            // spelled as an argument of an X template (scanTypeArgEdges).
-            for (auto const& [y, xs] : waits)
-                for (auto const& x : xs)
-                    mk << ll(y) << ": " << ll(x) << "\n";
-            // The template-library compile flags, as a TARGET-SPECIFIC
-            // variable the directory's generic .ll rule splices in: read the
-            // demand pool, and put the consumer's own directory on the import
-            // path (a pool's provenance imports may name its headers).
-            for (auto const& m : libs) mk << ll(m) << " ";
-            mk << ": SLIDS_INST = -I . --instantiate " << bld << "\n";
-        }
         mk << consumer << "_TMPL_OBJS =";
-        for (auto const& m : libs) mk << " " << bld << "/" << token::modulePath(m) << ".o";
+        if (!libs.empty()) {
+            for (auto const& m : libs) mk << " " << obj(m);
+            mk << " " << bld << "/slids_inst.o\n";
+            mk << bld << "/slids_inst.ll: " << bld << "/" << consumer << ".ll";
+            for (auto const& m : libs) mk << " " << obj(m);
+        }
         mk << "\n" << scan_path << ":";
         for (auto const& f : tokens.files) mk << " " << f.path;
         mk << "\n";
@@ -578,6 +479,12 @@ int main(int argc, char** argv) {
     if (diagnostic::hasErrors(diag)) return bail();
     grammar::run(tokens, parse_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();
+    // The stage is EVERY loaded template source's sibling: it supplies the
+    // definitions and instances of each header whose source it loaded.
+    parse_tree.inst_stage = stage;
+    if (stage)
+        for (std::size_t h = 0; h < parse_tree.header_source_loaded.size(); h++)
+            if (parse_tree.header_source_loaded[h]) parse_tree.file_sibling[h] = true;
     resolve::run(parse_tree, diag);
     if (diagnostic::hasErrors(diag)) return bail();
     constfold::run(parse_tree, diag);
@@ -610,7 +517,7 @@ int main(int argc, char** argv) {
     //   import vector;
     //   import library;
     //   import vector { Vector<int>; tsum<int>; }
-    if (!out_path.empty()) {
+    if (!out_path.empty() && !stage) {
         auto moduleOfFile = [&](int fid) -> std::string {
             if (fid < 0 || fid >= (int)tokens.files.size()) return "";
             return tokens.files[fid].module;
@@ -782,11 +689,13 @@ int main(int argc, char** argv) {
 
     if (diagnostic::hasErrors(diag)) return bail();
 
+    std::string ir = codegen_buf.str();
+    if (stage && !stage_defined.empty()) ir = dropDefinedSymbols(ir, stage_defined);
     if (out_path.empty()) {
-        std::cout << codegen_buf.str();
+        std::cout << ir;
     } else {
         std::ofstream out(out_path);
-        out << codegen_buf.str();
+        out << ir;
     }
 
     return 0;

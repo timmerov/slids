@@ -1538,7 +1538,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     since 2026-10-21: an aggregated flavor of an incomplete header template is
     OPAQUE in a consumer (readme-classes AN INCOMPLETE TEMPLATE IS NO MORE
     SPECIAL THAN AN INCOMPLETE CLASS), so its layout comes from the
-    --instantiate TU's `__$sizeof` word (see SOURCE-PRIVATE FIELDS below for
+    instantiation stage's `__$sizeof` word (see SOURCE-PRIVATE FIELDS below for
     the diagnostic that survives). An aggregated flavor needs NO template
     source. The flavor is recorded in the .sli demand pool.
   - INLINE-LOCAL (an argument class is local to this TU): nobody else can
@@ -1557,8 +1557,20 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     it, and resolve STRIPS its non-template content before relocation (a NAMESPACE
     in the source — the library's `slids { }` — is a scope, not content: it is kept
     with its own members filtered by the same rule, recursively; one left empty
-    drops). A body
-    referencing a TU-private name therefore cannot inline — and gets THE
+    drops). PRIVATE HELPERS SURVIVE (2026-11-16): a header-undeclared plain
+    FUNCTION or CONST of the source that a kept template body names — directly
+    or through another kept helper, BY NAME, to a fixed point — is kept and
+    emits internal in the hosting TU (one copy per host; immutable, so
+    harmless). It takes a per-source hidden name `_$tsrc<file>_<name>`, and so
+    do the unqualified calls / bare const reads inside that source's kept
+    bodies and helpers, so an importer's own same-named function neither
+    collides nor overloads (limits in todo.txt: a shadowing local is renamed
+    too, `^helper` is not). A name an imported header declares is the source's
+    public function — never copied. Canon: test/import tmpl_test.sl (tpock
+    over Loc/Lodd reaches tick -> tock; tbias<Lbias> reads kBias; the
+    consumer's own tick()). A body referencing a private CLASS, MUTABLE
+    GLOBAL or out-of-line member therefore cannot inline (negative: tcount
+    reaching gCount) — and gets THE
     PRIVATE-NAME CHAIN, not a bare unknown-name error: the strip RECORDS every
     name it drops (kind + file + token — tokens outlive the freed nodes), an
     inline-instantiation context stack (template, use site, local class)
@@ -1642,8 +1654,8 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   - --scan-deps still loads EVERY template source (lex::run load_all_sources):
     the library list and the library-to-library ordering edges come from the
     sources. The compile's `.d` lists a source only when it was loaded.
-  - --instantiate's injected provenance imports are plain: an aggregated
-    demand never needs another module's source.
+  - The stage's generated root imports targets and provenance headers
+    plainly; it loads every source anyway (load_all_sources).
   Canon: test/template complete.sl (`import+ vector` for Vector<Pt>;
   negatives: missing `import+ map`, unneeded `import+ map`, both ways);
   test/import (`import+ tmpl_lib` in tmpl_test/tmpl_test2/bird; the `.slh`
@@ -1771,18 +1783,49 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   template-instance argument spells as its qualified template over its own
   arguments, recursively). A METHOD demand `Flavor<args>:name` (2026-10-22)
   names a lazy method the consumer called on an aggregated flavor (see LAZY
-  TEMPLATE METHODS); the reader splits it at the flavor's bracket-matched `>`. `slidsc <m>.sl --instantiate <dir> -o ...`
-  is an ordinary compile plus: a driver-side parser reads every .sli, keeps
-  blocks addressed to `<m>`, injects the provenance imports at lex
-  (imported_once dedups), and feeds each demand through the SAME memoized
-  instantiation path a local use takes — classes at resolve (before the body
-  drain), functions and methods at classify (classifyInstantiationDemands;
-  `Owner:member<...>` reaches one qualifier level). N demands for one flavor
-  emit one body set; the sibling's own uses memo against them. The BUILD
-  shape: consumers compile first, each template source compiles after its
-  consumers with --instantiate, then link — a make dependency, not a new
-  tool; a MIXED-ROLE TU (a template source consuming another library) dumps
-  its own .sli and chains (tmpl_lib before tmpl_lib2).
+  TEMPLATE METHODS); the reader splits it at the flavor's bracket-matched `>`.
+
+  THE INSTANTIATION STAGE (2026-11-16; replaces the per-source --instantiate
+  compile). ONE stage per build directory:
+  `slidsc --instantiate <dir> -o <bld>/slids_inst.ll [-I ...] [objs.o...]`,
+  no source file ("--instantiate takes no source file" otherwise).
+  - THE ROOT. A driver-side parser reads EVERY .sli under <dir> (recursively,
+    every block, all targets), dedups the demands, and writes a generated
+    root `<out>.stage.sl` importing every target module and provenance
+    header. lex runs with load_all_sources, so every template source the
+    closure reaches is loaded; the stage is every loaded source's SIBLING
+    (Tree::file_sibling set per header whose source loaded; Tree::inst_stage
+    set). The strip keeps each source's bare `alias Ns;` in the stage — the
+    generated root has no imports of its own for the bodies to lean on — so
+    those aliases are in force stage-wide.
+  - THE DEMANDS feed the SAME memoized instantiation path a local use takes —
+    classes at resolve (before the body drain), functions and methods at
+    classify (classifyInstantiationDemands; `Owner:member<...>` reaches one
+    qualifier level). N demands for one flavor emit one body set. A nested
+    demand (an instance's body using another flavor, possibly of another
+    library) is built in the same process, so cross-library cycles
+    (Map<Vector<int>,int> + Vector<Map<int,int>>, test/lib map.sl) need no
+    ordering at all.
+  - THE FILTER. Every positional `.o` is read with `nm --defined-only`; on the
+    finished IR a non-internal `define` of a symbol one of them already
+    defines becomes a `declare` (a global becomes `external global`). Per
+    SYMBOL, so a library defining some of a flavor's methods leaves the rest
+    to the stage. It is load-bearing today: a TEMPLATE SOURCE compiles as an
+    ordinary TU and defines (strong) the flavors its own code uses —
+    tmpl_lib.o defines Part<int>'s hooks and Vector<int>:sum, which the stage
+    then skips. Nested demands are still built, then dropped.
+  - THE BUILD (--scan-deps fragment): `<c>_TMPL_OBJS = <libs>.o
+    <bld>/slids_inst.o` and `<bld>/slids_inst.ll: <bld>/<c>.ll <libs>.o`;
+    the rule itself lives in lib/slids-install.mk and passes `$(filter
+    %.o,$^)` as the filter objects. Hand-listed extra TUs add themselves as
+    prerequisites (test/import: library.o bird.o extra.o). Template sources
+    compile in no particular order.
+  - Stage-only fixes (a flavor built only in the stage reaches code a
+    sibling-hosted one didn't): the anchored prefix stops at template-source
+    files (a stage-built Grow<int64> ctor skipped source-private field
+    defaults); a member-template instance of a hook-less header class
+    (Gauge:scaled<int>) is not marked external in the stage, and the kPerTU
+    on_demand rule no longer drops it as "synthesized".
 
   LAZY TEMPLATE METHODS (landed 2026-10-22). A class-template flavor's method is
   BUILT — body resolved, folded, typed, emitted — only when USED, so a method may
@@ -1815,7 +1858,7 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   - COST. An error in a method body nothing calls is not reported.
 
   THE SELF-INSTANTIATE STAGE — SPIKED, MEASURED, ROLLED BACK (2026-10-14).
-  An INLINE-LOCAL flavor is the one flavor no library's --instantiate pass can
+  An INLINE-LOCAL flavor is the one flavor the instantiation stage cannot
   emit, because no other TU can spell its argument, so the main compile emits it
   here. A spike added a second per-TU stage (`--instantiate-self` + `--api-list`)
   plus an IR-merge build chain in test/import, so the main compile could
@@ -2160,8 +2203,8 @@ STAGE FILES (.h / .cpp pairs)
             (`<root>/slids/vector.slh` and its `vector.sl` are both
             `slids.vector`); under no root, the bare stem. One file has one
             name in every TU that passes the same roots — the .sli targets,
-            --instantiate's own module, the --scan-deps library names and
-            import_edges all key on it. Messages spell the path form
+            the stage's generated imports, the --scan-deps library names
+            and import_edges all key on it. Messages spell the path form
             (token::modulePath): "Cannot find 'slids/x.slh' on the import
             path."
             `import+ X;` ALSO lexes the TEMPLATE SOURCE `X.sl` beside it, and
@@ -2171,8 +2214,8 @@ STAGE FILES (.h / .cpp pairs)
             --scan-deps (load_all_sources). Every consumed statement is a
             token::ImportStmt whose `import` token is PARKED after
             kEndOfInput. run() takes driver-injected extra imports
-            (--instantiate's provenance headers, plain), appended after the
-            root's tokens — see TEMPLATES, cross-TU, THE SOURCE IS THE
+            (unused since the stage writes its own root), appended after
+            the root's tokens — see TEMPLATES, cross-TU, THE SOURCE IS THE
             AUTHOR'S CALL.
             Computes THE PRIVACY OWNER per file (File::private_owner), the
             one piece of provenance THE VISIBILITY RULE runs on: the
@@ -3672,9 +3715,11 @@ PLUMBING
                   dependency flags -MF <file> / -M, --scan-deps <frag.mk>,
                   --instantiate <dir>), opens the root via lex::run, walks
                   the seven stages, prints diagnostics + exits 1 if any
-                  errors, otherwise runs codegen. --instantiate carries the
-                  cross-TU template machinery: it reads the .sli demand pool
-                  addressed to this module.
+                  errors, otherwise runs codegen. --instantiate <dir> is the
+                  INSTANTIATION STAGE (no source file): it reads every .sli
+                  under <dir>, compiles a generated root, and declares what
+                  its positional .o arguments define (TEMPLATES, cross-TU,
+                  THE INSTANTIATION STAGE).
                   --scan-deps is lex-only and exits before the pipeline:
                   dependency generation must not require the program to
                   compile. Its libraries are the loaded TEMPLATE SOURCES only
@@ -3683,25 +3728,18 @@ PLUMBING
                   consumer's BUILD name is the fragment's (`<name>.deps.mk` ->
                   `<name>.ll`, `<name>_TMPL_OBJS`), not the source's stem — a
                   consumer may share a stem with a library it imports
-                  (test/lib builds vector.sl as t_vector). LIBRARY ORDERING
-                  (Y waits for X) has two sources: X's files import Y, and a
-                  Y type spelled as an argument of an X template
-                  (scanTypeArgEdges: `N<` at file/namespace scope in a
-                  library's file makes N that library's; `alias A = rhs;`
-                  carries rhs's libraries; every `N<...>` use orders N's
-                  libraries before the bracketed names' libraries). A cycle
-                  in the combined graph is an error ("no compile order
-                  exists"), exit 1, no fragment. A DEDUCED template call
-                  (`countof(v)`: `N(` not after `.`, N a library's template,
-                  in another module's file) spells no `<...>`, so its
-                  instance's demands are invisible: CONSERVATIVELY every
-                  other library waits for N's library — skipped where that
-                  library already reaches N's (a mutual dependency, open in
-                  todo.txt). Library build files sit at the MODULE PATH
+                  (test/lib builds vector.sl as t_vector). The fragment
+                  wires the consumer into the build dir's ONE stage
+                  (`<c>_TMPL_OBJS = <libs>.o <bld>/slids_inst.o`;
+                  `<bld>/slids_inst.ll: <bld>/<c>.ll <libs>.o`). There is no
+                  library ordering (the type-argument edges, deduced-call
+                  edges and cycle error of 2026-11-13/15 are gone): template
+                  sources compile as ordinary TUs and the stage builds every
+                  instance in one process. Library build files sit at the MODULE PATH
                   under the build dir (slids.vector -> <bld>/slids/vector.ll
                   / .o / .sli / .d), so a pattern rule maps an object back to
                   <root>/slids/vector.sl and a local `map` never shares a
-                  file with slids.map; --instantiate reads the pool's .sli
+                  file with slids.map; the stage reads the pool's .sli
                   files RECURSIVELY for that reason.
                   A LEX ERROR during the scan is NOT rendered: the
                   scan prints one `slidsc: scan-deps: <file> has errors.` line

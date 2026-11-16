@@ -4449,7 +4449,7 @@ test/ + user/ SPLIT (user, 2026-11-02)
   no tests: the Makefiles lost negatives/positives and build into build/user/<dir>. Older entries
   in this file keep the paths of their day.
 
---scan-deps TYPE-ARGUMENT EDGES (2026-11-13, from user/linpro)
+--scan-deps TYPE-ARGUMENT EDGES (2026-11-13, from user/linpro; SUPERSEDED 2026-11-16 by THE INSTANTIATION STAGE)
   user/linpro failed to link: map.o called Vector<int>:op< but vector.o never defined it.
   `alias BlocMap = slids:Map<Rankings, int>` (Rankings = Vector<int>) makes map's compile
   demand Vector<int>:op< (Map's insert compares keys), but the scan ordered libraries by
@@ -4569,6 +4569,41 @@ DOTTED IMPORTS + THE MODULE IDENTITY + DEDUCED-CALL EDGES (2026-11-15)
   Coverage: every test imports `slids.*`; test/import/consumer.sl negative "Cannot find
   'slids/no_such_module.slh'"; test/template/complete.sl's import negatives respelled.
   Not pinned: dotted imports skipping the importer's directory (needs a subdirectory).
+
+THE INSTANTIATION STAGE (2026-11-16; landing plan steps 1-3 of 4)
+  Replaces the per-source `--instantiate` compile and --scan-deps' library ordering. The
+  user's design: one stage per link reads and merges every .sli, builds new nested demands
+  to a fixed point, dedups, skips what library .o files already define, compiles to one .o.
+  Multi-library linkonce deferred until a use case. Detail: readme.txt THE INSTANTIATION
+  STAGE and PRIVATE HELPERS SURVIVE; todo.txt for step 4 and the open limits.
+  - STEP 1, PRIVATE HELPERS (the user's option 2). A TU hosting instances keeps internal
+    copies of the source-private functions (and consts) template bodies reach, renamed
+    per source (`_$tsrc<file>_<name>`). Vector<int> and Vector<float> share one copy per
+    host; private FILE-SCOPE mutable globals still error (user: "template scope globals
+    should be fine" — a flavor's own statics are per flavor). Consts are a deviation:
+    tbias<int> reads kBias, which broke once it moved to the stage.
+  - STEP 2, THE MODE. `slidsc --instantiate <dir> -o out.ll [-I ...] [objs.o...]` (the
+    user's spelling, no root source): a generated root importing every target and
+    provenance module, every source loaded, every header's sibling; bare `alias Ns;` lines
+    kept stage-wide. The filter is a define->declare pass over the finished IR against
+    `nm` of the positional objects (deviation: not a request-list prune, so nested demands
+    are built then dropped).
+  - STEP 3, THE BUILD. Template sources compile as ordinary TUs and define (strong) the
+    flavors they use themselves (deviation: declaring them lost the source's private
+    view); the stage skips those per symbol. One stage per BUILD DIRECTORY (deviation from
+    per link: a test dir's binaries share slids_inst.o). Gone: SLIDS_INST,
+    scanTypeArgEdges, deduced-call edges, the cycle error; so the scan-deps cycle and the
+    mutual deduced case are closed.
+  - Found along the way: kept helpers emitted external (decl_in_header now excludes
+    template sources); anchoredPrefixCount stops at template-source files (stage-built
+    Grow<int64> skipped field defaults); Gauge:scaled<int> unemitted (liftMember skips
+    external_decl for a stage template instance; "synthesized" excludes template sources).
+  Coverage: test/import tmpl_test.sl — tpock over Loc/Lodd (tick -> tock), tbias<Lbias>
+  (kBias), the consumer's own tick(), negative tcount reaching gCount; test/lib map.sl
+  "vector keys, map elements" (the cycle). Filter load-bearing in test/import (tmpl_lib.o
+  defines Part<int> hooks, Vector<int>:sum). Not run: other test dirs, user/ (linpro's
+  Makefile still names SLIDS_INST). Step 4 (libslids ships instances) not started: no lib
+  TU uses a template, and lib/Makefile has no stage.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

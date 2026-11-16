@@ -40,6 +40,9 @@ pk = 4
 po = 4
 tb = 105
 zpick = 1
+pb = 3
+pdd = 8 tick = 7
+rb = 101
 mq = 7
 nn = 3
 pv = 1 2 41 2

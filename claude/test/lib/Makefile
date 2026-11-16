@@ -39,10 +39,9 @@ positives: all
 # binary keeps the plain name (bin/<name>, golden exp.<name>).
 #
 # THE IMPORT SCAN (slidsc --scan-deps): each test's generated fragment wires
-# its template-library instantiation stage — the libraries it pulls in, their
-# ordering (every consumer's demand pool before a library compiles; a library
-# consuming another library orders after it), their compile flags (SLIDS_INST),
-# and the extra objects the link needs (t_<name>_TMPL_OBJS). Included BEFORE
+# it into this directory's instantiation stage (slids_inst) — the template
+# libraries it pulls in, compiled as ordinary TUs, and the extra objects the
+# link needs (t_<name>_TMPL_OBJS, slids_inst.o among them). Included BEFORE
 # the test rules so the link prerequisites can read the variables; a missing
 # fragment is generated and make restarts itself.
 ifneq ($(MAKECMDGOALS),clean)

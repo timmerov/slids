@@ -10,8 +10,8 @@ no explicit canon.
 claude says:
 
 test imported templates defined in another source file.
-this is the second-level template source: it compiles LAST of all (its
-demands come from tmpl_lib.sl's own compile).
+this is the second-level template source: tmpl_lib.sl's own compile
+demands its flavors, and the one instantiation stage builds them.
 */
 
 import tmpl_lib2;

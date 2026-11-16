@@ -12,15 +12,14 @@ claude says:
 
 the DEFINITIONS file: a function template's body merges onto the header's
 declaration; a class template's bodies arrive as a RE-OPEN of the header's
-primary opening; a member template's via the out-of-line form. compiling
-this file with `--instantiate <build-dir>` IS the post-compile-pre-link
-stage: it reads every consumer's .sli, injects their provenance imports,
-and instantiates the union of demanded flavors once each, external —
-memoized against this file's own uses (viaOwn). private helpers (tick) may
-back template bodies: aggregated flavors emit here and link them; only a
-consumer's local-type inline instance cannot see them. this file is ALSO a
-consumer (of tmpl_lib2 — viaW2), so it dumps its own .sli and tmpl_lib2
-compiles after it.
+primary opening; a member template's via the out-of-line form. this file
+compiles as an ordinary TU and defines only the flavors its own code uses
+(viaOwn); the build directory's instantiation stage (`slidsc --instantiate
+<build-dir>`) builds every consumer's demands and leaves out what this
+object already defines. private helpers (tick) may back template bodies:
+every TU hosting an instance keeps the private functions and consts its
+bodies reach and emits them internal. this file is ALSO a consumer (of
+tmpl_lib2 — viaW2), so it dumps its own .sli into the same pool.
 */
 
 import slids.string;
@@ -29,9 +28,13 @@ import tmpl_lib;
 alias slids;
 import tmpl_lib2;
 
-/* PRIVATE to this TU — an instance body may call it, because the instance
-   body is always emitted HERE (the aggregation stage is this file's compile). */
+/* PRIVATE to this TU — an instance body may call it: a TU that hosts the
+   instance keeps the private helpers its bodies reach (tick, and tock through
+   tick) and emits them internal. */
+void tock() {
+}
 void tick() {
+    tock();
 }
 
 /* the class template's bodies: a RE-OPEN of the header's primary opening.
@@ -144,13 +147,17 @@ T[] tstep<T>(T[] p, intptr n) {
 }
 intptr tgap<T>(T[] a, T[] b) { return b - a; }
 
-/* a body on a PRIVATE helper: aggregated flavors emit here and link `tick`
-   internally; a consumer's local-type instance has no `tick` and errors. */
+/* a body on a PRIVATE helper: every TU hosting a flavor (here, and a
+   consumer's local-type instance) gets its own internal `tick`. */
 T tpock<T>(T a, T b) { tick(); return b; }
 
 /* the identifier flavor: a PRIVATE const read by a template body. */
 const int kBias = 100;
 T tbias<T>(T v) { return v + kBias; }
+
+/* the global flavor: a PRIVATE mutable global written by a template body. */
+int gCount = 0;
+T tcount<T>(T v) { int was = gCount; gCount = was + 1; return v; }
 
 /* the template method's body: the out-of-line form; a plain out-of-line
    member beside it. */

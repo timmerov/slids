@@ -137,41 +137,28 @@ UNBLOCKED FEATURES
 
   * revisit the decision that makes this an error: char ch = 0;
 
-  * --scan-deps library ordering cycle: Map<Vector<int>, int> and Vector<Map<int, int>>
-    in one program means map waits for vector AND vector waits for map. no one-pass
-    compile order exists; the scan reports an error. fix needs a fixed-point demand
-    pass: every library writes .sli (demands only, no codegen) until no .sli changes,
-    then every library compiles .ll once. new slidsc mode + a driver loop make can't
-    express.
-
-  * --scan-deps deduced function-template calls, MUTUAL case: a deduced call of X's
-    template orders every other library after X, unless X already waits for it. when it
-    does (vector imports dump, so dump waits for vector), a deduced dump(v) that makes
-    dump demand Vector methods has no order: dump compiles after vector and its demands
-    go unbuilt. the fixed-point demand pass above would close this too.
-
-  * a prebuilt library (libslids.o) can't carry template instances: they are strong
-    external symbols, so a program that builds the same one gets "multiple definition"
-    (user/linpro: LP in libslids clashed on Vector<LP:Row>; with LP's fields/classes
-    private, only math:max<int> / math:abs<int> remain shared). plan, leaning 3:
-    - the .sli says provider, needer, or both: `export slids.vector { slids:Vector<int>; }`
-      beside `import slids.vector { ... }`. a program's --instantiate skips what a linked library
-      exports.
-    - two libraries exporting the same instance: (1) a library built against another
-      reads its exports and skips them -- covers chains only. (2) the program's build
-      reports duplicate providers -- loud, but can't link. (3) exported instances (and
-      the __$sizeof word) emit linkonce_odr: the linker keeps one copy, exports become an
-      optimization. ODR risk: copies built from different template sources silently
-      pick one; (2) can survive as a warning for that.
-    - lib/Makefile gets its own instantiation stage over its TUs' .sli and writes
-      libslids.sli, installed beside libslids.o in build/install/lib (outside every
-      --instantiate pool dir). source it from what each template library's
-      --instantiate compile actually EMITTED, not from the TUs' demands (a demand list
-      misses instances nested inside other instances).
+  * a prebuilt library (libslids.o) carrying template instances (landing plan step 4).
+    the program's instantiation stage already skips any symbol an object on its
+    prerequisite list defines, libslids.o included (per symbol, so a program can add
+    methods libslids lacks). open:
+    - no libslids TU uses a template today, so libslids ships no instances and the
+      libslids.o side of the filter is untested. a test needs a lib TU that uses a
+      flavor, and a test/lib program that uses the same flavor plus a method the lib
+      didn't call.
+    - lib/Makefile has no stage of its own: a lib TU's aggregated demands would go
+      unbuilt (the program's stage reads only its own build dir's .sli).
+    - two libraries shipping the same instance: deferred until a use case. option:
+      instances (and the __$sizeof word) emit linkonce_odr, the linker keeps one copy,
+      and the nm filter goes away. ODR risk: copies built from different template
+      sources silently pick one.
     - shipping instances on purpose (a lib/src/templates.sl): `Vector<int>;` doesn't
       parse at file or function scope (explicit instantiation is ungrammared), and lazy
       methods mean a use ships only the methods it calls. wants an explicit form that
       means every method.
+
+  * kept template-source helpers (instantiation stage step 1) are renamed BY NAME:
+    a body local that shadows a kept private const is renamed too, and a helper
+    taken by address (`^helper`) is not renamed.
 
   * allow construction with move operator.
     allow assignment/move with placement new.

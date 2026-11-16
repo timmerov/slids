@@ -6,8 +6,6 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 define a vector class declared in a header file.
 */
 
-import slids.dump;
-import slids.string;
 import slids.vector;
 
 /* slids namespace */
@@ -315,7 +313,6 @@ Vector<T>(
         ) (i < end) {
             ++i; ptr += sizeof(T);
         } {
-            //println(String + "Vector<T>: placement new.");
             new(ptr) T;
         }
     }
@@ -331,7 +328,6 @@ Vector<T>(
         ) (i < end) {
             ++i; ++ptr;
         } {
-            //println(String + "Vector<T>: inline dtor.");
             ptr^.~();
         }
     }

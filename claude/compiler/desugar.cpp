@@ -802,8 +802,12 @@ std::unique_ptr<ast::Node> copyNode(parse::Node const& p, parse::Tree const& tre
     if (p.kind == parse::Kind::kFunctionDef) {
         int fid = p.resolved_entry_id >= 0
                       ? tree.entries[p.resolved_entry_id].file_id : -1;
+        // A loaded TEMPLATE SOURCE is not a header: a private helper kept from it
+        // (a template body reaches it) is this TU's internal copy.
         bool decl_in_header = fid >= 0 && fid < (int)tree.file_imported.size()
-                           && tree.file_imported[fid];
+                           && tree.file_imported[fid]
+                           && !(fid < (int)tree.file_template_source.size()
+                                && tree.file_template_source[fid]);
         node->internal_def = p.name != "main" && !decl_in_header;
     }
     // ast.is_const means a SUBSTITUTED constant — codegen emits no storage for it.
@@ -1410,10 +1414,16 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
             fn->internal_def = true;
             return fn;
         }
+        // THE STAGE defines a member TEMPLATE's instance (`Gauge:scaled<int>`) even
+        // under a declare-only owner: the owner's own members are its owning TU's,
+        // but every template instance is the stage's.
+        bool stage_tmpl_instance = in.inst_stage && f.resolved_entry_id >= 0
+            && f.resolved_entry_id < (int)in.entries.size()
+            && !in.entries[f.resolved_entry_id].tmpl_args.empty();
         if (f.kind == parse::Kind::kFunctionDef && owner != widen::kNoType
             && widen::slidLinkage(owner) == widen::Type::Linkage::kDeclare
             && f.file_id >= 0 && f.file_id < (int)in.file_imported.size()
-            && in.file_imported[f.file_id]) {
+            && in.file_imported[f.file_id] && !stage_tmpl_instance) {
             fn->external_decl = true;
         }
         // A member of a class this TU keeps PRIVATE is emitted `internal`. THIS is the
@@ -1428,8 +1438,11 @@ void flattenScope(parse::Node const& node, ast::Node* prog,
         // while a member the author wrote stays external like any header class's.
         if (owner != widen::kNoType) {
             widen::Type::Linkage lk = widen::slidLinkage(owner);
+            // (A body from a loaded TEMPLATE SOURCE is authored, not synthesized.)
             bool synthesized = f.file_id >= 0 && f.file_id < (int)in.file_imported.size()
-                && in.file_imported[f.file_id];
+                && in.file_imported[f.file_id]
+                && !(f.file_id < (int)in.file_template_source.size()
+                     && in.file_template_source[f.file_id]);
             fn->on_demand = lk == widen::Type::Linkage::kPerTU && synthesized;
             fn->internal_def = lk == widen::Type::Linkage::kInternal || fn->on_demand;
         }

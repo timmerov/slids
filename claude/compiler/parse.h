@@ -986,6 +986,9 @@ struct Tree {
         std::string method;
     };
     std::vector<InstDemand> inst_demands;
+    // THE INSTANTIATION STAGE (`slidsc --instantiate <dir>`, no root source): this TU
+    // is every loaded template source's sibling, and hosts nothing of its own.
+    bool inst_stage = false;
     // LAZY TEMPLATE METHODS. A method of a class-template flavor is built — body
     // resolved, folded, typed, emitted — only when USED. The drain marks each
     // eligible method (not a hook, a transfer operator, a virtual, or synthesized)

@@ -67,7 +67,9 @@ hooks and even a user op= as bodyless decls — and its same-named source
 supplies the bodies through the RE-OPEN machinery above; consumers get the
 complete layout (sizeof folds, fields construct with defaults) but
 declaration-only members, kDeclare linkage, and every flavor is emitted ONCE
-by the source's --instantiate compile: the synthesized AND user transfer
+— by the instantiation stage (`slidsc --instantiate`, one per build dir), or
+by the template source's own TU for a flavor the source itself uses (the
+stage then declares it): the synthesized AND user transfer
 operators, the hooks, the vtable of a virtual flavor all cross the seam as
 external symbols (a consumer may derive a local class from an aggregated
 instance base and dispatch through it). A flavor with a LOCAL type argument
@@ -1890,8 +1892,8 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
   is complete within its own TU, so nobody sees it incompletely.
     AN INCOMPLETE TEMPLATE IS NO MORE SPECIAL THAN AN INCOMPLETE CLASS (landed 2026-10-21). An
     AGGREGATED flavor of an incomplete header template (`Vector<int>` of `Vector<T>(...)`) is
-    opaque in EVERY TU; its completer is the template source's --instantiate compile (kDefine
-    there), which exports the flavor's `__$sizeof` word exactly as a plain class's owner does.
+    opaque in EVERY TU; its completer is the instantiation stage, or the template source's own
+    TU for a flavor it uses itself (kDefine there), which exports the flavor's `__$sizeof` word exactly as a plain class's owner does.
     The flag rides only facts every TU computes alike — the header's `...` and the flavor's
     MODE — never "is the source loaded here": a consumer STRIPS the source's completing re-open
     FIELDS from an aggregated clone (instantiateClassTemplate, declare_only), the twin of the
@@ -1994,7 +1996,9 @@ A CLASS ACROSS TRANSLATION UNITS (landed 2026-07-16; Phase 8 slice; single-`.slh
     property of the HEADER, never of the viewer, which is what lets ONE exported symbol carry
     it: an importer's whole field list IS the prefix (its completion was stripped), and the
     completer counts the leading run whose kParam sits in the imported header
-    (resolve::anchoredPrefixCount). The PREFIX is placeable in every TU for the same reason it
+    (resolve::anchoredPrefixCount; a field from a loaded TEMPLATE SOURCE ends the run too —
+    in the stage the source is imported, and without that stop a stage-built Grow<int64>
+    ctor skipped the source-private field defaults). The PREFIX is placeable in every TU for the same reason it
     is a PREFIX — nothing hidden precedes it, so its offsets follow from the visible types
     alone, which is the fact the field WRITE (`Hyb h; h.pub_ = 10;`) already relied on.
     WHAT THE SITE OWNS, IT OWNS EVERYWHERE, because the site is the only place that holds

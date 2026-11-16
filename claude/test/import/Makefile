@@ -63,13 +63,11 @@ positives: all
 	@../run_positives.sh $(DIR) $(SAMPLES)
 
 # THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
-# its template-library stage — the template sources it pulls in
-# (tmpl_lib, tmpl_lib2), their ordering (each consumer's
-# demand pool before a library compiles; tmpl_lib consumes tmpl_lib2, so
-# tmpl_lib2 compiles after it), their compile flags (SLIDS_INST), and the
-# objects the link needs (<sample>_TMPL_OBJS). Included BEFORE the sample
-# rules so the link prerequisites can read the variables; a missing fragment
-# is generated and make restarts itself.
+# it into this directory's instantiation stage (slids_inst) — the template
+# sources it pulls in (tmpl_lib, tmpl_lib2), compiled as ordinary TUs, and the
+# objects the link needs (<sample>_TMPL_OBJS, slids_inst.o among them).
+# Included BEFORE the sample rules so the link prerequisites can read the
+# variables; a missing fragment is generated and make restarts itself.
 ifneq ($(MAKECMDGOALS),clean)
 -include $(SAMPLES:%=$(BUILD_DIR)/%.deps.mk)
 endif
@@ -99,12 +97,16 @@ $(eval $(call SAMPLE_RULES,tmpl_test2,$(LIBRARY) $(BIRD),))
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-# Any OTHER .sl in this directory: the template sources (the fragments set
-# SLIDS_INST — `-I . --instantiate <build>` — on the ones that read the demand
-# pool) and plain extra TUs like library.sl / bird.sl (empty SLIDS_INST).
+# Any OTHER .sl in this directory: the template sources and plain extra TUs
+# like library.sl / bird.sl — all ordinary compiles.
 $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS) $(SLIDS_INST)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS)
+
+# The hand-listed extra TUs are consumers too (bird.sl demands flavors): their
+# demand pools are in before the stage runs, and the stage leaves out what they
+# define.
+$(BUILD_DIR)/slids_inst.ll: $(LIBRARY) $(BIRD) $(EXTRA)
 
 # slidsc writes a `.d` alongside the `.ll` (-MF): the make rule naming every
 # `.slh` the source textually imported. Editing a header then re-triggers the

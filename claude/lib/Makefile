@@ -6,9 +6,9 @@
 # tree.slh are template-free, so one object serves every consumer. dump, vector,
 # algorithm, and map are TEMPLATE libraries — their sources sit BESIDE their headers in
 # hdr/ (`import+` loads the template source sitting next to the header;
-# --scan-deps loads every one), and their objects can only be built against a CONSUMER's demand
-# pool (--instantiate), so each consumer's Makefile builds them (via the
-# slidsc --scan-deps fragments); they are NOT part of libslids.o. The
+# --scan-deps loads every one), and each consumer's Makefile builds them as
+# ordinary TUs beside its own instantiation stage (via the slidsc --scan-deps
+# fragments); they are NOT part of libslids.o. The
 # library's tests live in test/lib.
 #
 # THE PACKAGE: the headers live in hdr/slids/, so every importer — lib's own

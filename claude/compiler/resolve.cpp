@@ -10137,7 +10137,10 @@ int anchoredPrefixCount(parse::Tree const& tree, parse::ClassInfo const& info) {
     std::size_t k = 0;
     for (; k < info.field_params.size(); k++) {
         parse::Node const* p = info.field_params[k];
-        if (!p || !fileIsImported(tree, p->file_id)) break;
+        // A loaded template source is imported too, but its fields are the
+        // completion's, not the header's prefix.
+        if (!p || !fileIsImported(tree, p->file_id)
+            || fileIsTemplateSource(tree, p->file_id)) break;
     }
     return static_cast<int>(k);
 }
@@ -11720,6 +11723,96 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     // A NAMESPACE in a template source (the library's `slids { }`) is a scope, not
     // content: it stays, with its own members filtered by the same rule, nested
     // namespaces likewise; one left empty is dropped.
+    // PRIVATE HELPERS REACHED BY TEMPLATE BODIES are the exception: a private
+    // (header-undeclared) plain FUNCTION or CONST that a kept template body names —
+    // directly or through another kept helper, by NAME, to a fixed point — stays,
+    // and emits internal here (private by default), one copy per hosting TU. A
+    // name some imported header declares is the source's PUBLIC function, defined
+    // external in its own TU: never copied. A const is immutable, so its copy is as
+    // harmless as a function's. Private mutable globals, classes and out-of-line
+    // members still drop (a body reaching one gets the chain).
+    std::set<parse::Node const*> keep_private;
+    {
+        auto isTmplKeep = [](parse::Node const& n) {
+            return !n.type_params.empty()
+                && (n.kind == parse::Kind::kFunctionDef
+                    || n.kind == parse::Kind::kClassDef
+                    || n.kind == parse::Kind::kAliasDecl);
+        };
+        std::set<std::string> header_fns;
+        std::vector<parse::Node const*> roots, candidates;
+        std::function<void(std::vector<std::unique_ptr<parse::Node>> const&)> scan =
+            [&](std::vector<std::unique_ptr<parse::Node>> const& list) {
+            for (auto const& ch : list) {
+                if (!ch) continue;
+                if (ch->kind == parse::Kind::kNamespaceDecl) { scan(ch->children); continue; }
+                if (fileIsTemplateSource(tree, ch->file_id)) {
+                    if (isTmplKeep(*ch)) roots.push_back(ch.get());
+                    else if ((ch->kind == parse::Kind::kFunctionDef
+                              || (ch->kind == parse::Kind::kVarDeclStmt && ch->is_const))
+                             && ch->qualifier.empty() && !ch->name.empty())
+                        candidates.push_back(ch.get());
+                } else if (fileIsImported(tree, ch->file_id)
+                           && ch->kind == parse::Kind::kFunctionDecl) {
+                    header_fns.insert(ch->name);
+                }
+            }
+        };
+        scan(program->children);
+        std::set<std::string> named;
+        std::function<void(parse::Node const&)> collect = [&](parse::Node const& n) {
+            if ((n.kind == parse::Kind::kCallExpr || n.kind == parse::Kind::kCallStmt
+                 || n.kind == parse::Kind::kIdentExpr) && !n.name.empty())
+                named.insert(n.name);
+            for (auto const* v : {&n.children, &n.params, &n.dim_exprs, &n.field_aliases})
+                for (auto const& c : *v) if (c) collect(*c);
+        };
+        for (auto const* r : roots) collect(*r);
+        for (bool grew = true; grew;) {
+            grew = false;
+            for (auto const* c : candidates) {
+                if (keep_private.count(c) || header_fns.count(c->name)
+                    || !named.count(c->name)) continue;
+                keep_private.insert(c);
+                collect(*c);
+                grew = true;
+            }
+        }
+        // A kept helper is the SOURCE's name, not this TU's: it takes a per-source
+        // hidden name (`_$tsrc<file>_<name>`), and so do the unqualified CALLS to a
+        // helper (and bare READS of a const) inside that source's kept template bodies
+        // and helpers — by name, so a body local shadowing a kept const's name is
+        // renamed too, and a helper taken by `^name` is not — so a same-named
+        // function of the importer (or of another source) neither collides nor
+        // overloads with it.
+        std::map<int, std::set<std::string>> kept_names;   // file -> helper names
+        std::map<int, std::set<std::string>> kept_consts;  // file -> const names
+        for (auto const* k : keep_private)
+            (k->kind == parse::Kind::kVarDeclStmt ? kept_consts : kept_names)
+                [k->file_id].insert(k->name);
+        auto hidden = [](int fid, std::string const& nm) {
+            return "_$tsrc" + std::to_string(fid) + "_" + nm;
+        };
+        std::function<void(parse::Node&, int)> rename = [&](parse::Node& n, int fid) {
+            if ((n.kind == parse::Kind::kCallExpr || n.kind == parse::Kind::kCallStmt)
+                && n.qualifier.empty() && !n.global_qualified
+                && kept_names[fid].count(n.name))
+                n.name = hidden(fid, n.name);
+            else if (n.kind == parse::Kind::kIdentExpr && n.qualifier.empty()
+                     && !n.global_qualified && kept_consts[fid].count(n.name))
+                n.name = hidden(fid, n.name);
+            for (auto* v : {&n.children, &n.params, &n.dim_exprs, &n.field_aliases})
+                for (auto& c : *v) if (c) rename(*c, fid);
+        };
+        for (auto const* r : roots)
+            if (kept_names.count(r->file_id))
+                rename(const_cast<parse::Node&>(*r), r->file_id);
+        for (auto const* k : keep_private) {
+            parse::Node& kn = const_cast<parse::Node&>(*k);
+            rename(kn, kn.file_id);
+            kn.name = hidden(kn.file_id, kn.name);
+        }
+    }
     {
         std::function<void(std::vector<std::unique_ptr<parse::Node>>&)> strip =
             [&](std::vector<std::unique_ptr<parse::Node>>& list) {
@@ -11731,10 +11824,16 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
                     strip(ch->children);
                     if (!ch->children.empty()) continue;
                 }
-                bool keep = !ch->type_params.empty()
+                // In the STAGE a source's bare `alias Ns;` stays too: the stage's
+                // root has no imports of its own for the bodies to lean on. (In a
+                // consumer it would open the namespace for the consumer's own file.)
+                bool keep = (!ch->type_params.empty()
                     && (ch->kind == parse::Kind::kFunctionDef
                         || ch->kind == parse::Kind::kClassDef
-                        || ch->kind == parse::Kind::kAliasDecl);
+                        || ch->kind == parse::Kind::kAliasDecl))
+                    || keep_private.count(ch.get())
+                    || (tree.inst_stage && ch->kind == parse::Kind::kAliasDecl
+                        && ch->return_type == widen::kNoType && !ch->type_set);
                 if (!keep) {
                     // Remember the dropped NAME: an inline-local instance body
                     // that references it gets the full private-name chain instead

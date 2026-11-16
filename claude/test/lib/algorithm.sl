@@ -18,7 +18,7 @@ class). every comparator sorts DESCENDING, so the output proves the pointer,
 not op<, did the ordering.
 an array of a TU-local class (Item, Tracked) instantiates HERE, not in the
 library, which could not spell it. a const container is rejected: here for a
-local element type, in the library's --instantiate build for a header-visible
+local element type, in the instantiation stage for a header-visible
 one (a demand keeps the buried const, as a call does).
 DEFERRED (commented out in main):
 - countof(int[2][3]): algorithm.slh's `T=[N]` arm matches one dimension
