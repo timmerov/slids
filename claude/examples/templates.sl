@@ -1,5 +1,6 @@
 import string;
 import vector;
+alias slids;
 
 T biggest<T>(T a, T b) {
     if (a > b) {

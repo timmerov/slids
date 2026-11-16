@@ -1,7 +1,7 @@
 # The slids library: headers in hdr/, TU sources in src/.
 #
 # The deliverable is ONE relocatable object, build/lib/libslids.o — every test
-# binary links it. It is `ld -r`-merged from the library's per-TU objects
+# binary links it (from the install, below). It is `ld -r`-merged from the library's per-TU objects
 # (string.o, tree.o; more land in LIB_SRCS as the library grows). string.slh and
 # tree.slh are template-free, so one object serves every consumer. dump, vector,
 # algorithm, and map are TEMPLATE libraries — their sources sit BESIDE their headers in
@@ -10,6 +10,15 @@
 # pool (--instantiate), so each consumer's Makefile builds them (via the
 # slidsc --scan-deps fragments); they are NOT part of libslids.o. The
 # library's tests live in test/lib.
+#
+# THE INSTALL (build/install) is the library as a consumer outside this tree
+# gets it: include/slids/ (every header, and each template library's source
+# beside its header), lib/libslids.o, bin/slidsc, and slids.mk (from
+# slids-install.mk: how to build against it). Consumers in this tree include
+# lib/slids.mk, which runs this Makefile and then includes the installed
+# slids.mk. A file is copied only when its source is newer, read-only (an
+# edit to an installed copy fails instead of being silently overwritten).
+# lib/src is not installed: its TUs ship inside libslids.o.
 #
 # A failed recipe (slidsc/llc error) removes its target, so a partial or stale
 # .ll/.o is never left looking up-to-date on the next build.
@@ -27,9 +36,14 @@ LIB_OBJS = $(LIB_SRCS:%=$(BUILD_DIR)/%.o)
 
 LIBSLIDS = $(BUILD_DIR)/libslids.o
 
+INSTALL_DIR  = ../build/install
+INSTALL_HDRS = $(patsubst hdr/%,$(INSTALL_DIR)/include/slids/%,$(wildcard hdr/*.slh hdr/*.sl))
+INSTALLED    = $(INSTALL_HDRS) $(INSTALL_DIR)/lib/libslids.o \
+               $(INSTALL_DIR)/bin/slidsc $(INSTALL_DIR)/slids.mk
+
 .PHONY: all clean
 
-all: $(LIBSLIDS)
+all: $(INSTALLED)
 
 # THE IMPORT SCAN (slidsc --scan-deps): each library TU's generated fragment
 # wires any template libraries it pulls in — ordering, SLIDS_INST compile
@@ -64,5 +78,26 @@ $(BUILD_DIR)/%.deps.mk: src/%.sl $(SLIDSC)
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
+# Each install directory is made ONCE, by its own rule, and the copies wait on
+# it (order-only). Not `install -D`: uutils install races creating the same
+# directory from parallel copies under -j ("cannot create directory").
+$(INSTALL_DIR):
+	mkdir -p $@
+
+$(INSTALL_DIR)/include/slids $(INSTALL_DIR)/lib $(INSTALL_DIR)/bin: | $(INSTALL_DIR)
+	mkdir -p $@
+
+$(INSTALL_DIR)/include/slids/%: hdr/% | $(INSTALL_DIR)/include/slids
+	install -p -m 444 $< $@
+
+$(INSTALL_DIR)/lib/libslids.o: $(LIBSLIDS) | $(INSTALL_DIR)/lib
+	install -p -m 444 $< $@
+
+$(INSTALL_DIR)/bin/slidsc: $(SLIDSC) | $(INSTALL_DIR)/bin
+	install -p -m 555 $< $@
+
+$(INSTALL_DIR)/slids.mk: slids-install.mk | $(INSTALL_DIR)
+	install -p -m 444 $< $@
+
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(INSTALL_DIR)

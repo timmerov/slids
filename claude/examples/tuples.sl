@@ -1,4 +1,5 @@
 import string;
+alias slids;
 
 (bool, int) divide(int a, int b) {
     if (b == 0) {

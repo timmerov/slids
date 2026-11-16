@@ -1,4 +1,5 @@
 import string;
+alias slids;
 
 Animal(int legs_ = 4) {
     virtual void speak() = delete;          // pure virtual: Animal is abstract

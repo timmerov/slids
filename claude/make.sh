@@ -9,6 +9,9 @@ make ${OPTS} -C compiler/
 echo "building library..."
 make ${OPTS} -C lib/
 
+echo "building example code..."
+make ${OPTS} -C examples/
+
 echo "building test code..."
 make ${OPTS} -C test/
 

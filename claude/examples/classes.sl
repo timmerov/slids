@@ -1,4 +1,5 @@
 import string;
+alias slids;
 
 Counter(int value_ = 0, int step_ = 1) {
     _() {                                   // ctor: runs after the fields are set

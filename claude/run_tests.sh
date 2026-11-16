@@ -15,11 +15,14 @@ make ${OPTS} -C lib/ || { echo "library build FAILED"; exit 1; }
 echo "running type-arena self-test..."
 ./bin/slidsc --type-selftest || { echo "type self-test FAILED"; exit 1; }
 
+echo "building examples code..."
+make ${OPTS} -C examples/ || { echo "examples build FAILED"; exit 1; }
+
 echo "building test code..."
 make ${OPTS} -C test/ || { echo "test build FAILED"; exit 1; }
 
 echo "building user code..."
-make ${OPTS} -C test/ || { echo "user build FAILED"; exit 1; }
+make ${OPTS} -C user/ || { echo "user build FAILED"; exit 1; }
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

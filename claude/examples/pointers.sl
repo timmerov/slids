@@ -1,4 +1,5 @@
 import string;
+alias slids;
 
 Base(int b_ = 1) { }
 Base : Derived(int d_ = 2) { }

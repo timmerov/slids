@@ -2,7 +2,6 @@
 # .ll/.o is never left looking up-to-date on the next build.
 .DELETE_ON_ERROR:
 
-SLIDSC    = ../../bin/slidsc
 LLC       = llc
 CXX       = g++
 LLCFLAGS  = --filetype=obj --relocation-model=pic
@@ -12,12 +11,10 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/user/$(DIR)
 
-# The library headers (lib/hdr) are on every compile's import path; the binary
-# links the merged library object build/lib/libslids.o.
-LIB       = ../../lib
-LIB_HDR   = $(LIB)/hdr
-LIB_BUILD = ../../build/lib
-IFLAGS    = -I $(LIB_HDR)
+# The slids library, as installed in build/install: lib/slids.mk brings lib/
+# up to date first, then includes the installed slids.mk (SLIDSC, IFLAGS,
+# SLIDS_LIB, and the rule that builds a template library here).
+include ../../lib/slids.mk
 
 # Every .sl in the directory is a TU of the one binary — no hand-maintained list.
 SL_SRCS = $(wildcard *.sl)
@@ -49,7 +46,7 @@ endif
 # objects, the native random TU, and the library.
 $(BIN_DIR)/guthrie: $(SL_OBJS) \
 		$(sort $(foreach s,$(SL_STEMS),$($(s)_TMPL_OBJS))) \
-		$(BUILD_DIR)/random.o $(LIB_BUILD)/libslids.o
+		$(BUILD_DIR)/random.o $(SLIDS_LIB)
 	$(CXX) $^ -o $@
 
 # random.cc is a native C++ TU (the RNG wrapper). Only this one .cc builds; the
@@ -61,14 +58,7 @@ $(BUILD_DIR)/random.o: random.cc
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 	$(LLC) $(LLCFLAGS) $< -o $@
 
-# A TEMPLATE LIBRARY out of lib/hdr: the generated fragments supply the
-# ordering and the flags (SLIDS_INST = `-I . --instantiate <build>` — this
-# directory joins the import path for the pool's provenance imports).
-$(BUILD_DIR)/%.ll: $(LIB_HDR)/%.sl $(SLIDSC)
-	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS) $(SLIDS_INST)
-
-$(BUILD_DIR)/%.deps.mk: %.sl $(SLIDSC)
+$(BUILD_DIR)/%.deps.mk: %.sl $(SLIDSC) | $(SLIDS_MK)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $< --scan-deps $@ $(IFLAGS)
 
@@ -82,15 +72,6 @@ $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d $(IFLAGS)
 
 -include $(wildcard $(BUILD_DIR)/*.d)
-
-# libslids.o is owned by lib's own Makefile. FORCE asks lib/ to bring itself up
-# to date on every build (its .d files track lib/src and lib/hdr); make re-reads
-# the file's time afterward, so this directory relinks only when lib/ rebuilt it.
-$(LIB_BUILD)/libslids.o: FORCE
-	$(MAKE) -C $(LIB)
-
-.PHONY: FORCE
-FORCE:
 
 clean:
 	rm -rf $(BUILD_DIR)

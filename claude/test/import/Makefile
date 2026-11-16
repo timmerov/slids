@@ -2,7 +2,6 @@
 # .ll/.o is never left looking up-to-date on the next build.
 .DELETE_ON_ERROR:
 
-SLIDSC    = ../../bin/slidsc
 LLC       = llc
 CXX       = g++
 LLCFLAGS  = --filetype=obj --relocation-model=pic
@@ -11,12 +10,10 @@ BIN_DIR   = ../../bin
 DIR       := $(notdir $(CURDIR))
 BUILD_DIR = ../../build/test/$(DIR)
 
-# The library: string.slh on every compile's import path (`import string;` for
-# println(String + ...)); every binary links the merged build/lib/libslids.o.
-LIB       = ../../lib
-LIB_HDR   = $(LIB)/hdr
-LIB_BUILD = ../../build/lib
-IFLAGS    = -I $(LIB_HDR)
+# The slids library, as installed in build/install: lib/slids.mk brings lib/
+# up to date first, then includes the installed slids.mk (SLIDSC, IFLAGS,
+# SLIDS_LIB, and the rule that builds a template library here).
+include ../../lib/slids.mk
 
 # The runnable programs (each has an exp.<name> golden). `consumer` is the cross-TU
 # import test; `math` is a standalone TU binding libm's C functions via `= import`
@@ -88,7 +85,7 @@ $(BUILD_DIR)/$(1).ll: $(1).sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $$< -o $$@ -MF $(BUILD_DIR)/$(1).d $(IFLAGS)
 
-$(BUILD_DIR)/$(1).deps.mk: $(1).sl $(SLIDSC)
+$(BUILD_DIR)/$(1).deps.mk: $(1).sl $(SLIDSC) | $(SLIDS_MK)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $$< --scan-deps $$@ $(IFLAGS)
 endef
@@ -116,16 +113,7 @@ $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 
 # Every sample links the library (an extra prerequisite onto the template
 # rule; $^ in the link recipe picks it up).
-$(addprefix $(BIN_DIR)/,$(SAMPLES)): $(LIB_BUILD)/libslids.o
-
-# libslids.o is owned by lib's own Makefile. FORCE asks lib/ to bring itself up
-# to date on every build (its .d files track lib/src and lib/hdr); make re-reads
-# the file's time afterward, so this directory relinks only when lib/ rebuilt it.
-$(LIB_BUILD)/libslids.o: FORCE
-	$(MAKE) -C $(LIB)
-
-.PHONY: FORCE
-FORCE:
+$(addprefix $(BIN_DIR)/,$(SAMPLES)): $(SLIDS_LIB)
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -1,4 +1,5 @@
 import string;
+alias slids;
 
 /* block comments /* nest */ like this. */
 

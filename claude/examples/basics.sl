@@ -1,4 +1,5 @@
 import string;
+alias slids;
 
 const int kSize = 4;
 const int kTwice = 2 * kSize;

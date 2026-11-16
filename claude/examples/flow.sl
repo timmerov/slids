@@ -1,4 +1,5 @@
 import string;
+alias slids;
 
 enum Dir ( kNorth, kEast, kSouth, kWest );
 
