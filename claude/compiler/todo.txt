@@ -168,7 +168,14 @@ UNBLOCKED FEATURES
       optimization. ODR risk: copies built from different template sources silently
       pick one; (2) can survive as a warning for that.
     - lib/Makefile gets its own instantiation stage over its TUs' .sli and writes
-      libslids.sli.
+      libslids.sli, installed beside libslids.o in build/install/lib (outside every
+      --instantiate pool dir). source it from what each template library's
+      --instantiate compile actually EMITTED, not from the TUs' demands (a demand list
+      misses instances nested inside other instances).
+    - shipping instances on purpose (a lib/src/templates.sl): `Vector<int>;` doesn't
+      parse at file or function scope (explicit instantiation is ungrammared), and lazy
+      methods mean a use ships only the methods it calls. wants an explicit form that
+      means every method.
 
   * allow construction with move operator.
     allow assignment/move with placement new.

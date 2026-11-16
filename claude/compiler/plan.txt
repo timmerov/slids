@@ -4514,6 +4514,32 @@ UNARY `~` ON A FLOAT REJECTED + emitUnary WALL ASSERTS (2026-11-15)
   test/expression/nonint.sl (f32BNot / f64BNot), test/tuple/anon.sl neg_bnot_float_slot,
   test/tuple/array.sl neg_bnot_float_array.
 
+THE LIBRARY INSTALL — build/install + slids.mk (2026-11-15)
+  `make -C lib` builds libslids.o, then installs the library as a consumer outside the
+  tree gets it: build/install/include/slids/ (every lib/hdr .slh, and each template
+  library's .sl beside its header — consumers instantiate from it, so template sources
+  ship even when the library ships "without source"), lib/libslids.o, bin/slidsc, and
+  slids.mk. Copied only when newer, read-only (444; slidsc 555); `make -C lib clean`
+  wipes build/install. Each install directory has its own mkdir rule the copies wait on
+  order-only — not `install -D`: the system's uutils install races creating one
+  directory from parallel copies under -j.
+  TWO ENTRY POINTS, one body. lib/slids-install.mk ships as build/install/slids.mk: it
+  finds its own directory (relocatable) and sets SLIDSC (?=), SLIDS_INCLUDE, SLIDS_LIB,
+  IFLAGS (+=), and the template-library rule `$(BUILD_DIR)/%.ll: $(SLIDS_INCLUDE)/%.sl`
+  — a consumer sets BUILD_DIR first. lib/slids.mk is the in-repo entry: it includes the
+  INSTALLED file and gives it a FORCE rule running `make -C lib`; make remakes an
+  included makefile before reading anything else, so lib is current and installed before
+  any timestamp is checked, and a clean tree bootstraps itself. In-repo SLIDSC is the
+  repo's bin/slidsc (compiler edits still trigger recompiles); the installed slidsc is
+  unused in-tree. It skips everything on `clean` and restores the includer's default goal.
+  SLIDS_MK names the installed file; each consumer's .deps.mk rule orders after it
+  (`| $(SLIDS_MK)`) since the scan reads installed headers.
+  Every consumer Makefile (test/*, examples/, user/*) dropped its SLIDSC / LIB / LIB_HDR
+  / LIB_BUILD / IFLAGS lines, its template-library rule and its FORCE rule for one
+  `include .../lib/slids.mk`; test/run_negatives.sh's -I points at the installed headers.
+  Nothing builds the compiler but make.sh / run_tests.sh (user: leave it). examples/*.sl
+  gained `alias slids;` (they predated the slids namespace and failed to build).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
