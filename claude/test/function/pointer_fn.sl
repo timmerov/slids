@@ -120,7 +120,7 @@ claude says:
   with const kept.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 bool less(int a, int b) {

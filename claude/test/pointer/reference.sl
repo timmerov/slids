@@ -36,7 +36,7 @@ claude says:
   reference has no sequence position. references support NO arithmetic.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

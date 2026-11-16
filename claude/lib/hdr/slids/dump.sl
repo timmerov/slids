@@ -7,8 +7,8 @@ dump prints the type name and value of a variable.
 uses the stringification operator #.
 */
 
-import dump;
-import string;
+import slids.dump;
+import slids.string;
 
 /* slids namespace */
 slids {

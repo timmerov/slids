@@ -104,10 +104,6 @@ BUGS
   * a template diagnostic names the binder instead of the binding: biggest<float64>(1.5, 2)
     reports "Cannot implicitly convert 'int' to 'T'" — should say 'float64'.
 
-  * one header reached through two spellings of its path is loaded twice: lex skips a repeat
-    import by the raw path string, not the canonical path (./b.slh vs ../../lib/hdr/b.slh).
-    found by reading the code. not reproduced yet.
-
   * a const Vector can be written through op[]: void f(Vector<int>^ v) { v^[0] = 1; } compiles.
     vector.slh declares T^ const op[] (const method, mutable result); the body's <T[]> storage_
     cast drops the const. begin/end/next have the same shape. found in guthrie sort_methods.
@@ -148,18 +144,18 @@ UNBLOCKED FEATURES
     then every library compiles .ll once. new slidsc mode + a driver loop make can't
     express.
 
-  * --scan-deps misses deduced function-template calls: quicksort(v) with v a
-    Vector<X> instantiates quicksort<Vector<X>> in algorithm, which demands Vector
-    methods, but no `<...>` is spelled so the lex-only scan adds no
-    vector-after-algorithm edge. user/linpro links only because algorithm happens to
-    compile first. the fixed-point demand pass above would close this too.
+  * --scan-deps deduced function-template calls, MUTUAL case: a deduced call of X's
+    template orders every other library after X, unless X already waits for it. when it
+    does (vector imports dump, so dump waits for vector), a deduced dump(v) that makes
+    dump demand Vector methods has no order: dump compiles after vector and its demands
+    go unbuilt. the fixed-point demand pass above would close this too.
 
   * a prebuilt library (libslids.o) can't carry template instances: they are strong
     external symbols, so a program that builds the same one gets "multiple definition"
     (user/linpro: LP in libslids clashed on Vector<LP:Row>; with LP's fields/classes
     private, only math:max<int> / math:abs<int> remain shared). plan, leaning 3:
-    - the .sli says provider, needer, or both: `export vector { Vector<int>; }` beside
-      `import vector { ... }`. a program's --instantiate skips what a linked library
+    - the .sli says provider, needer, or both: `export slids.vector { slids:Vector<int>; }`
+      beside `import slids.vector { ... }`. a program's --instantiate skips what a linked library
       exports.
     - two libraries exporting the same instance: (1) a library built against another
       reads its exports and skips them -- covers chains only. (2) the program's build

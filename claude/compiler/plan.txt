@@ -4540,6 +4540,36 @@ THE LIBRARY INSTALL — build/install + slids.mk (2026-11-15)
   Nothing builds the compiler but make.sh / run_tests.sh (user: leave it). examples/*.sl
   gained `alias slids;` (they predated the slids namespace and failed to build).
 
+DOTTED IMPORTS + THE MODULE IDENTITY + DEDUCED-CALL EDGES (2026-11-15)
+  The library is the package `slids`: lib/hdr/*.slh and the template .sl moved to
+  lib/hdr/slids/, every importer spells `import slids.vector;` (test/, examples/, lib/,
+  user/), and consumers pass `-I <install>/include` (the root, not include/slids).
+  - LEX. `import a.b;` / `import+ a.b;` (SawImportDot state; pushback replays the whole
+    buffered name) seek `a/b.slh` in the -I roots ONLY; a bare name still tries the
+    importer's directory first. imported_once keys by CANONICAL path (closed the todo
+    "one header through two path spellings loads twice").
+  - IDENTITY. token::moduleIdentity: a file's path relative to the DEEPEST -I root
+    containing it, dotted, extension dropped; else the bare stem. Derived from the file,
+    never the spelling, so a bare sibling import inside a package and a dotted import
+    reach one name. Every File carries it (File::module); the .sli targets / provenance
+    imports, --instantiate's own target, the scan's library names, scanTypeArgEdges'
+    owner claims and import_edges all use it (moduleOf(stem) is gone).
+  - BUILD FILES at the module path: <bld>/slids/vector.{ll,o,sli,d}. The --instantiate
+    pool is read recursively (a mixed-role library's .sli sits in <bld>/slids/).
+    slids-install.mk: SLIDS_INCLUDE is the include root, the template rule mkdirs
+    $(dir $@), and it -includes <bld>/slids/*.d.
+  - Messages spell paths: "Cannot find 'slids/x.slh' on the import path.", "import+
+    slids.map is not needed: no template declared in slids/map.slh ...".
+  - DEDUCED-CALL EDGES. test/lib raced under -j (6/10 clean builds failed): algorithm's
+    countof(v) deduces countof<Vector<String>>, whose compile demands Vector methods, but
+    no edge ordered vector after algorithm. scanTypeArgEdges now collects deduced calls
+    (`N(` not after `.`, N a library template, in another module's file); every other
+    library waits for that library unless it already reaches it (the mutual case stays in
+    todo.txt). 0/20 failures after.
+  Coverage: every test imports `slids.*`; test/import/consumer.sl negative "Cannot find
+  'slids/no_such_module.slh'"; test/template/complete.sl's import negatives respelled.
+  Not pinned: dotted imports skipping the importer's directory (needs a subdirectory).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

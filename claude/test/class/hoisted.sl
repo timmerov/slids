@@ -40,7 +40,7 @@ a namespace qualifier"). Hoisted classes are kept distinct via def_id like local
 classes; identity rides the handle, never a spelling.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Outer(int x_ = -1) {

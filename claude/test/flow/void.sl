@@ -84,7 +84,7 @@ range.") — a different error; void; does not touch it.
 the diagnostic carries the suggestion note.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 /* the debugging early-exit: the dead tail is compiled and checked, then

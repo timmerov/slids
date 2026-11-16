@@ -21,7 +21,7 @@ convention, and its exported @Pack__$sizeof is a word this TU's layout init
 computes from @Rope__$sizeof at run time (before any code reads it).
 */
 
-import string;
+import slids.string;
 
 import library;
 

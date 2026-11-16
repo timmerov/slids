@@ -6,8 +6,8 @@ Copyright (C) 2012-2025 tim cotter. All rights reserved.
 model the electorate.
 */
 
-import string;
-import vector;
+import slids.string;
+import slids.vector;
 
 /* initialization options. */
 const int kElectorateUniform = 0;

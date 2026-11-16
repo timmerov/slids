@@ -203,7 +203,7 @@ claude says:
   qualifier, so those rules and their test cases are held until const lands.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

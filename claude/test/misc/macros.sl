@@ -34,7 +34,7 @@ deferred:
 ##value(expr)
 */
 
-import string;
+import slids.string;
 alias slids;
 
 void dump( (char[], char[], char[], char[], int^)^ tuple ) {

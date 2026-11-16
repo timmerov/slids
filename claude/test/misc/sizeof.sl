@@ -65,7 +65,7 @@ claude says:
   read of `u` still errors.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 foo() {

@@ -41,7 +41,7 @@ forms covered:
 malformed exponent cases follow the //-EXPECT-ERROR pattern.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

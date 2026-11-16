@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 Point(int x_ = 0, int y_ = 0) { }

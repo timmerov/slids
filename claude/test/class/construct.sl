@@ -172,7 +172,7 @@ alongside the loop context, gated by completion so we never emit after a
 terminator.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 CtorDtor(int c_) {

@@ -62,7 +62,7 @@ policy is untested-by-design and unspec'd.
 params arrive initialized; reading them is fine. an unread param (unused) is
 NOT flagged — only body-declared locals are swept, params are exempt.
 */
-import string;
+import slids.string;
 alias slids;
 
 int32 add(int a, int b, int unused_param) {

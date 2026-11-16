@@ -81,7 +81,7 @@ defining) a member template.
 */
 
 /* the workhorse: explicit + inferred calls, field read/write, memoization. */
-import string;
+import slids.string;
 alias slids;
 
 Jar(int n_ = 0) {

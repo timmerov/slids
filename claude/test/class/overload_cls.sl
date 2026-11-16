@@ -39,7 +39,7 @@ candidate is "No matching overload" — the same wording as a free function.
 - a single (non-overloaded) method keeps its detailed arity / cast errors.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 /* the three field-count shapes a construction argument is checked against. */

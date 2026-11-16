@@ -7,7 +7,7 @@ gambler simulation
 
 */
 
-import string;
+import slids.string;
 alias slids;
 
 

@@ -6,9 +6,9 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 define a vector class declared in a header file.
 */
 
-import dump;
-import string;
-import vector;
+import slids.dump;
+import slids.string;
+import slids.vector;
 
 /* slids namespace */
 slids {

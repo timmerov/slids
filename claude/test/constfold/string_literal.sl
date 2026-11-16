@@ -105,7 +105,7 @@ claude says:
 - for-loops over a literal stop before the nul (test/flow/forarray.sl).
 */
 
-import string;
+import slids.string;
 alias slids;
 
 void fn(const char[] s) {

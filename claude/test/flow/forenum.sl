@@ -48,7 +48,7 @@ should we check for contiguousness?
 lean no.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 enum Color ( red, green, blue );

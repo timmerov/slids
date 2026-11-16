@@ -15,8 +15,8 @@ rotations, and the inner-child (case 2) rotations; the nested block runs two
 maps' destructors at different scope exits.
 */
 
-import+ map;
-import string;
+import+ slids.map;
+import slids.string;
 alias slids;
 
 Map<String, String> : CapitalMap() {

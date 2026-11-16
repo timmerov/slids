@@ -94,7 +94,7 @@ deferred to later landings:
   - array-init-via-tuple, for-tuple, #x, class init
 */
 
-import string;
+import slids.string;
 alias slids;
 
 enum Dir ( kN, kE, kS, kW );

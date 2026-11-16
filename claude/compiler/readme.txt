@@ -1761,7 +1761,8 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   beside its .ll: per target module, `import <target>;`, an `import <P>;`
   per PROVENANCE header (the declaring header of each class-type argument —
   what lets a cross-header argument like `Box<Bird>` aggregate), then
-  `import <target> { Vector<int>; Gauge:scaled<int>; tsum<int8>; }` in
+  `import <target> { Vector<int>; Gauge:scaled<int>; tsum<int8>; }` (targets
+  and provenance imports are MODULE IDENTITIES — `import slids.vector { ... }`) in
   canonical spellings (aliases erased, so `Vector<Integer>` and `Vector<int>`
   are one line and one flavor), FULLY QUALIFIED (2026-10-22): the template's
   owner chain and every class argument's scope path (`slids:Map<slids:String,
@@ -2141,12 +2142,28 @@ STAGE FILES (.h / .cpp pairs)
 
   lex       text -> tokens. Wraps the scanner in an ImportWrapper that
             recursively expands `import X;` at depth-0 file scope into one
-            unified token list. `import X;` seeks `X.slh` in the IMPORTING
-            SOURCE'S OWN DIRECTORY FIRST, then each `-I` dir in order — so a
-            header sitting beside its importer can NOT be shadowed by a `-I`,
-            and a tool that wants a substitute header (test/run_negatives.sh)
-            must place the importing source beside it. Each path is imported
-            ONCE per compile (imported_once, keyed by resolved path).
+            unified token list. A BARE `import X;` seeks `X.slh` in the
+            IMPORTING SOURCE'S OWN DIRECTORY FIRST, then each `-I` dir in
+            order — so a header sitting beside its importer can NOT be
+            shadowed by a `-I`, and a tool that wants a substitute header
+            (test/run_negatives.sh) must place the importing source beside
+            it. A DOTTED `import a.b;` (2026-11-15) seeks `a/b.slh` in the
+            `-I` dirs ONLY (findHeader): a package path is spelled from a
+            root, never from the importer's directory. The library is the
+            package `slids` (`import slids.vector;`). Each file is imported
+            ONCE per compile (imported_once, keyed by CANONICAL path —
+            token::canonicalPath — so two spellings of one path open once).
+            THE MODULE IDENTITY (File::module, token::moduleIdentity, set for
+            every file at the end of run()) is derived from WHERE a file is,
+            never from how an import spelled it: its path relative to the
+            DEEPEST `-I` root containing it, extension dropped, `/` as `.`
+            (`<root>/slids/vector.slh` and its `vector.sl` are both
+            `slids.vector`); under no root, the bare stem. One file has one
+            name in every TU that passes the same roots — the .sli targets,
+            --instantiate's own module, the --scan-deps library names and
+            import_edges all key on it. Messages spell the path form
+            (token::modulePath): "Cannot find 'slids/x.slh' on the import
+            path."
             `import+ X;` ALSO lexes the TEMPLATE SOURCE `X.sl` beside it, and
             — spec 2 — the sources of the template headers X.slh / X.sl import
             (makeFull; marked template_source; skipped when the root IS that
@@ -3674,8 +3691,18 @@ PLUMBING
                   carries rhs's libraries; every `N<...>` use orders N's
                   libraries before the bracketed names' libraries). A cycle
                   in the combined graph is an error ("no compile order
-                  exists"), exit 1, no fragment. Deduced template calls
-                  (`quicksort(v)`) spell no `<...>` and add no edge.
+                  exists"), exit 1, no fragment. A DEDUCED template call
+                  (`countof(v)`: `N(` not after `.`, N a library's template,
+                  in another module's file) spells no `<...>`, so its
+                  instance's demands are invisible: CONSERVATIVELY every
+                  other library waits for N's library — skipped where that
+                  library already reaches N's (a mutual dependency, open in
+                  todo.txt). Library build files sit at the MODULE PATH
+                  under the build dir (slids.vector -> <bld>/slids/vector.ll
+                  / .o / .sli / .d), so a pattern rule maps an object back to
+                  <root>/slids/vector.sl and a local `map` never shares a
+                  file with slids.map; --instantiate reads the pool's .sli
+                  files RECURSIVELY for that reason.
                   A LEX ERROR during the scan is NOT rendered: the
                   scan prints one `slidsc: scan-deps: <file> has errors.` line
                   per erroring file and exits 1 (no fragment written; the

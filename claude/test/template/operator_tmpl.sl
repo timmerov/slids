@@ -62,7 +62,7 @@ concrete types). a template operator with T in NO parameter is unusable
 */
 
 /* the canon workhorse: scalar scaling over any numeric T. */
-import string;
+import slids.string;
 alias slids;
 
 Vec(float64 x_ = 0.0, float64 y_ = 0.0) {

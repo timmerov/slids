@@ -18,6 +18,47 @@ bool samePath(std::string const& a, std::string const& b) {
     return ca == cb;
 }
 
+std::string canonicalPath(std::string const& path) {
+    std::error_code ec;
+    std::filesystem::path c = std::filesystem::weakly_canonical(path, ec);
+    if (ec) return path;
+    return c.string();
+}
+
+std::string modulePath(std::string const& module) {
+    std::string p = module;
+    for (char& c : p) if (c == '.') c = '/';
+    return p;
+}
+
+std::string moduleIdentity(std::string const& path,
+                           std::vector<std::string> const& roots) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path cp = fs::weakly_canonical(path, ec);
+    if (ec) cp = fs::path(path).lexically_normal();
+    bool found = false;
+    std::size_t best_len = 0;
+    fs::path best;
+    for (auto const& r : roots) {
+        fs::path cr = fs::weakly_canonical(r, ec);
+        if (ec) continue;
+        if (cr.filename().empty()) cr = cr.parent_path();   // a trailing '/'
+        fs::path rel = cp.lexically_relative(cr);
+        if (rel.empty() || rel == "." || *rel.begin() == "..") continue;
+        std::size_t len = cr.string().size();
+        if (!found || len > best_len) { found = true; best_len = len; best = rel; }
+    }
+    if (!found) return fs::path(path).stem().string();
+    best.replace_extension();
+    std::string m;
+    for (auto const& part : best) {
+        if (!m.empty()) m += '.';
+        m += part.string();
+    }
+    return m;
+}
+
 void add(List& list, Token const& tok) {
     list.tokens.push_back(tok);
 }

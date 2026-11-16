@@ -59,7 +59,7 @@ the ban is about the CLASS being declared in a header, not about which source fi
 is. neither file may add one.
 */
 
-import string;
+import slids.string;
 
 import library;
 /* a template header this TU imports but never DEMANDS from: the compile writes
@@ -634,3 +634,8 @@ be runtime-sized, so the symbol holds a pointer to a heap object built on first 
    class gets no special dispensation. */
 //-EXPECT-ERROR: A non-primitive parameter must be a pointer
 //int neg_param(Rope r) { return 0; }
+
+/* A DOTTED import names a path under an -I root (slids.string -> slids/string.slh);
+   the error names the path it looked for. */
+//-EXPECT-ERROR: Cannot find 'slids/no_such_module.slh' on the import path.
+//import slids.no_such_module;

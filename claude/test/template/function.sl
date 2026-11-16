@@ -98,7 +98,7 @@ forces the template). templates declare anywhere a function does — file
 scope, namespaces, blocks.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 T add<T>(T a, T b) {

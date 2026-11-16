@@ -116,7 +116,7 @@ claude says:
   an enum yields values, so `ref^ :` rejects there.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 alias Cell = int;

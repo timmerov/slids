@@ -17,7 +17,7 @@ defines both classes' _ / ~, so it owns them; this file shares the stem
 links libslids.o. (A module is never identified by file name.)
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

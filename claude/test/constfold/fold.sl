@@ -198,7 +198,7 @@ of an unsigned literal reports the small nominal, and ~'A' yields a char (value
 190) rather than rejecting.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

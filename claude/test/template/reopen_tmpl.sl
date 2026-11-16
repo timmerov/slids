@@ -54,9 +54,9 @@ and re-spelled to the arm's names). A filter adds aliases, methods, operators â€
 fields, never a `...`; a member it duplicates is caught when the flavor builds.
 */
 
-import string;
+import slids.string;
 alias slids;
-import vector;
+import slids.vector;
 
 /* the qualified re-open, a RENAMED qualified re-open (U binds positionally to T), and
    the namespace-block re-open â€” three openings, one template. */

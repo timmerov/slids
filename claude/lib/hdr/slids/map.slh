@@ -7,7 +7,7 @@ key/value map.
 built upon red/black tree.
 */
 
-import tree;
+import slids.tree;
 
 /* slids namespace */
 slids {

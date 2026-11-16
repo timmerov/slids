@@ -41,10 +41,10 @@ its synthesized transfer ops twice (invalid IR at llc).
 
 /* incomplete primary; an appending re-open; a closing re-open that adds a
    method reading fields from BOTH earlier openings. */
-import string;
+import slids.string;
 /* `import+`: Vector<Pt> below is an instance over a locally defined private
    class, so this TU needs vector.sl's bodies. */
-import+ vector;
+import+ slids.vector;
 alias slids;
 
 Grow<T>(T a_ = 1, ...) {
@@ -191,17 +191,17 @@ Vector<int> : VDer(int vd_ = 0) {
 
 /* THE SOURCE IS THE AUTHOR'S CALL. A template declared in map.slh used with
    the locally defined private class Pt, but map is imported plainly. */
-//-EXPECT-ERROR: is used with a locally defined private class; write 'import+ map;'
-//import map;
+//-EXPECT-ERROR: is used with a locally defined private class; write 'import+ slids.map;'
+//import slids.map;
 //Map<Pt, int> mpt;
 
 /* ...and the converse: `import+` when nothing here needs map.sl. */
-//-EXPECT-ERROR: import+ map is not needed: no template declared in map.slh uses a locally defined private class.
-//import+ map;
+//-EXPECT-ERROR: import+ slids.map is not needed: no template declared in slids/map.slh uses a locally defined private class.
+//import+ slids.map;
 
 /* one file may not import the same header both ways. */
 //-EXPECT-ERROR: is imported both with 'import' and 'import+'
-//import vector;
+//import slids.vector;
 
 /* a closed re-open cannot add fields... */
 //-EXPECT-ERROR: cannot add fields

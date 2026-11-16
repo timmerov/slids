@@ -8,7 +8,7 @@ algorithm library.
 template implementations.
 */
 
-import algorithm;
+import slids.algorithm;
 
 /* slids namespace */
 slids {

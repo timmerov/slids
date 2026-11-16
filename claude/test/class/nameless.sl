@@ -79,7 +79,7 @@ qualified construction (`Space:Nested(args)`) and a class-typed field (the inner
 ctor runs first, torn down last) both work.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Class(int c_) {

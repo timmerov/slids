@@ -152,7 +152,7 @@ ANALYSIS:
 */
 
 /* a named enum whose members are referenced by qualified name in case labels. */
-import string;
+import slids.string;
 alias slids;
 
 enum Dir ( N, S, E, W );

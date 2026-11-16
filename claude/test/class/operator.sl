@@ -349,7 +349,7 @@ TEST PLAN
   are already below. One //-EXPECT-ERROR per negative, matching the v2 messages.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 DefaultMove(

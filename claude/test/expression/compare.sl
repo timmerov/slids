@@ -49,7 +49,7 @@ and the opposite way against an intptr holding the same bits.
 */
 
 /* a base and a derived, to compare pointers across an inheritance edge. */
-import string;
+import slids.string;
 alias slids;
 
 Base(int b_ = 1) {

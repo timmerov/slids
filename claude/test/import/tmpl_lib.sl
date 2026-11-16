@@ -23,7 +23,7 @@ consumer (of tmpl_lib2 — viaW2), so it dumps its own .sli and tmpl_lib2
 compiles after it.
 */
 
-import string;
+import slids.string;
 
 import tmpl_lib;
 alias slids;

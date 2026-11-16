@@ -33,7 +33,7 @@ below reads the other TU's layout — silently, no diagnostic, no link
 error.
 */
 
-import string;
+import slids.string;
 
 import+ tmpl_lib;
 import library;

@@ -146,7 +146,7 @@ header-owned template. (The out-of-line form targeting a template LANDED
    UClass uses the outer T UNLISTED (the qualifier binds it); and the canon
    <> member set (aliases, an alias template, plain nested classes, an enum,
    a const, a global). */
-import string;
+import slids.string;
 alias slids;
 
 TClass<T>(T t_) {

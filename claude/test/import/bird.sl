@@ -44,7 +44,7 @@ because the samples demand Part<int> too — harmless here, and it is not the lo
 flavors: those are excluded from the pool by construction.
 */
 
-import string;
+import slids.string;
 
 import library;
 

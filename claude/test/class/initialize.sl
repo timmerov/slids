@@ -113,7 +113,7 @@ through an array, or around a longer cycle) is infinite-size and rejected — a
 `^` reference field breaks the cycle.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 MyFirstClass(

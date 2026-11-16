@@ -56,7 +56,7 @@ through the SAME path the binary op uses (a shared aggregateArithType), so
 classify. Coverage in tuple/anon.sl, tuple/array.sl, tuple/combined.sl.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

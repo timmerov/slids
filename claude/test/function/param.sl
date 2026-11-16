@@ -47,7 +47,7 @@ claude says:
   call omitted a rejected default). Arity is the range [required, total].
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int one() {

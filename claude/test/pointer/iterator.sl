@@ -50,7 +50,7 @@ claude says:
 - iterators compare with all six ops against a same-pointee pointer.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

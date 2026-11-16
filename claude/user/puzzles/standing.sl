@@ -22,8 +22,8 @@ last one standing.
 and things get interesting.
 */
 
-import string;
-import vector;
+import slids.string;
+import slids.vector;
 alias slids;
 
 

@@ -44,7 +44,7 @@ read of an outer local on only one path still counts as a use.
 */
 
 /* both arms initialize r -> r is definitely assigned after the merge. */
-import string;
+import slids.string;
 alias slids;
 
 int both_arms(int n) {

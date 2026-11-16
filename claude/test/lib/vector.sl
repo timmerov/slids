@@ -20,8 +20,8 @@ same build directory — and the lexer still loads the library's template
 source, because it is a different file by path.
 */
 
-import string;
-import+ vector;
+import slids.string;
+import+ slids.vector;
 alias slids;
 
 global int g_count = 0;

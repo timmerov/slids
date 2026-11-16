@@ -133,7 +133,7 @@ caveats:
     `(const int)^ r` (a leading `const int x` would be the named constant).
 */
 
-import string;
+import slids.string;
 alias slids;
 
 // parameter munge: `mutable char[]` opts out (-> char[]); plain `char[]`

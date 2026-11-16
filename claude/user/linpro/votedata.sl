@@ -8,8 +8,8 @@ provide voter bloc data.
 data from guthrie voting simulated electorates at end of file.
 */
 
-import map;
-import vector;
+import slids.map;
+import slids.vector;
 import votedata;
 alias slids;
 

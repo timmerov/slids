@@ -116,7 +116,7 @@ design (explicit-types round; typeless/reuse + labels deferred):
 */
 
 /* basic long-for: body runs before update, so the body sees i = 0..n-1. */
-import string;
+import slids.string;
 alias slids;
 
 int sum_for(int n) {

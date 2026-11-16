@@ -81,7 +81,7 @@ SESSION 6 — labels on loops (switch labels deferred / "distant future"):
   in a long-for update clause. No labels on switch this round.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 enum Dir ( N, S, E, W );

@@ -57,7 +57,7 @@ so self does double duty: it names the receiver, and it reaches members
 that a local or nested-function name would otherwise shadow.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Self(int x_) {

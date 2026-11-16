@@ -10960,7 +10960,7 @@ static bool requirePrivateInstanceSource(parse::Tree& tree, int tmpl_entry_id,
     int pfile = stmt >= 0 ? tree.import_stmts[stmt].file_id : use_file;
     int ptok = stmt >= 0 ? tree.import_stmts[stmt].tok : use_tok;
     diagnostic::report(diag, {pfile, ptok,
-        "A template declared in '" + module + ".slh' is used with a locally defined "
+        "A template declared in '" + token::modulePath(module) + ".slh' is used with a locally defined "
         "private class; write 'import+ " + module + ";' so its source is loaded.",
         notes});
     return false;

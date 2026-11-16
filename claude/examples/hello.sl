@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

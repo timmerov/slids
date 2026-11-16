@@ -46,7 +46,7 @@ from slidsc. so the hook bodies below are in the sibling because that is what WO
 because the model requires it.
 */
 
-import string;
+import slids.string;
 
 import library;
 alias slids;

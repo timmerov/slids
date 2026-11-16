@@ -50,7 +50,7 @@ claude says:
   the pointer — so there the pointer is merely read.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Point(int x = 1, int y = 2) { }

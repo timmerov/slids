@@ -95,7 +95,7 @@ examples:
   ~0xFF                    -> uint64              (weak no-width -> 64-bit complement)
 */
 
-import string;
+import slids.string;
 alias slids;
 
 const float kPi = 2.14 + 1.0;

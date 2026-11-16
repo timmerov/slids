@@ -37,7 +37,7 @@ tick above). DEFERRED: SWAP (its questions outrank it) and const METHODS
 (a method call on a const class lvalue is unchecked — the known hole).
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Simple(int x_, int y_) {

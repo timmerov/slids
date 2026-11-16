@@ -73,7 +73,7 @@ the SAME stack address across iterations (reused), so no per-iteration leak.
 */
 
 /* basic counting loop; sum 1..n. n <= 0 runs zero times. */
-import string;
+import slids.string;
 alias slids;
 
 int sum_to(int n) {

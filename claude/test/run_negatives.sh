@@ -78,9 +78,9 @@ if [ "${1:-}" = "--worker" ]; then
         compile_file="$case_file"
     fi
     # -I .: the invoking directory (a fallback — the farm already holds its headers).
-    # -I <build/install/include/slids>: the installed library headers (`import string;` in every test).
+    # -I <build/install/include>: the installed library root (`import slids.string;` in every test).
     err=$("$SLIDSC" "$compile_file" -o "$case_dir/out.ll" -I . \
-          -I "$(dirname "$SLIDSC")/../build/install/include/slids" 2>&1)
+          -I "$(dirname "$SLIDSC")/../build/install/include" 2>&1)
     rc=$?
     # A TEMPLATE header's own completion (or lack of one) is judged by its template
     # SOURCE's compile, not by an importer's — an importer that did not `import+` it
@@ -90,7 +90,7 @@ if [ "${1:-}" = "--worker" ]; then
     if [ "${src##*.}" = "slh" ] && [ -e "${case_file%.slh}.sl" ]; then
         sib_file="${case_file%.slh}.sl"
         sib_err=$("$SLIDSC" "$sib_file" -o "$case_dir/sib.ll" -I . \
-              -I "$(dirname "$SLIDSC")/../build/install/include/slids" 2>&1)
+              -I "$(dirname "$SLIDSC")/../build/install/include" 2>&1)
         sib_rc=$?
         sib_diag=$(printf '%s' "$sib_err" | grep -Ev '^[[:space:]]*[0-9]+:|^[[:space:]]*\^')
         if [ $sib_rc -ne 0 ] && printf '%s' "$sib_diag" | grep -qF -- "$substring"; then

@@ -6,7 +6,7 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 test the lexer's ability to import a file.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 import importee1;

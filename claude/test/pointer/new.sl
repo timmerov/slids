@@ -59,7 +59,7 @@ claude says:
   classes (Phase 5).
 */
 
-import string;
+import slids.string;
 alias slids;
 
 alias Big = int64;

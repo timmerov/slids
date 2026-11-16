@@ -6,7 +6,7 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 ensure the lexer rejects invalid characters.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 //-EXPECT-ERROR: Unexpected character: '@'

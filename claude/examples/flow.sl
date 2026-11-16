@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 enum Dir ( kNorth, kEast, kSouth, kWest );

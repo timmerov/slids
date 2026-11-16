@@ -224,7 +224,7 @@ notes / corrections still pending:
   2d) can be tightened to match.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

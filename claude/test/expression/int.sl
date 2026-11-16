@@ -43,7 +43,7 @@ int is signed i32 throughout (sdiv/srem/ashr, slt..), confirmed against the IR.
 Nothing open here.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

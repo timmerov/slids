@@ -16,8 +16,8 @@ puts it in scope.
 
 //import algorithm;
 //import dump;
-import map;
-import string;
+import slids.map;
+import slids.string;
 //import vector;
 
 alias slids;

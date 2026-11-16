@@ -113,6 +113,10 @@ struct File {
     // first-come (imported_once dedups), so `import vector; import string;`
     // must not leave String owned by vector.sl.
     int private_owner = -1;
+    // THE MODULE IDENTITY (token::moduleIdentity): `slids.vector` for both
+    // vector.slh and its template source vector.sl under an -I root's slids/;
+    // the bare stem for a file under no -I root. Set by lex::run for every file.
+    std::string module;
 };
 
 // One `import module;` / `import+ module;` statement, kept after the lexer consumes it
@@ -121,7 +125,7 @@ struct File {
 struct ImportStmt {
     int file_id = -1;          // the importing file
     int tok = -1;              // the parked `import` token (token::List::tokens index)
-    std::string module;        // `vector`
+    std::string module;        // as SPELLED: `slids.vector`
     bool plus = false;         // `import+`: load the header's template source too
     int header_file_id = -1;   // the header it reached (an earlier one when deduped)
     // `import+` only: every header whose template source this statement caused to load —
@@ -134,7 +138,7 @@ struct List {
     std::vector<Token> tokens;
     std::deque<File> files;     // deque for stable references — Stream holds a pointer to source
     // Every `import module;` statement the lexer consumed: (importing file id,
-    // module name) — INCLUDING deduplicated repeats, so the full import graph
+    // the reached header's module IDENTITY) — INCLUDING deduplicated repeats, so the full import graph
     // survives the statements' removal from the stream. Serves --scan-deps'
     // library-ordering edges.
     std::vector<std::pair<int, std::string>> import_edges;
@@ -151,5 +155,18 @@ int openFile(List& list, std::string path, std::string source, int imported_by =
 std::string templateSourcePath(std::string const& header_path);
 // True if `a` and `b` name the same file (canonical paths compared).
 bool samePath(std::string const& a, std::string const& b);
+// The canonical spelling of a path (weakly_canonical; the path itself on error):
+// the key the lexer dedups imports by, so `./b.slh` and `../x/b.slh` are one file.
+std::string canonicalPath(std::string const& path);
+// A dotted module name as a relative path: `slids.vector` -> `slids/vector`.
+std::string modulePath(std::string const& module);
+// THE MODULE IDENTITY of a file — derived from WHERE it is, never from how an
+// import spelled it, so one file has one name in every TU. Under an -I root:
+// its path relative to the DEEPEST root containing it, extension dropped, `/`
+// as `.` (`<root>/slids/vector.slh` and `<root>/slids/vector.sl` are both
+// `slids.vector`). Under none: the bare stem. Every TU of one build must pass
+// the same roots (a consumer's .sli names the target a library compile matches).
+std::string moduleIdentity(std::string const& path,
+                           std::vector<std::string> const& roots);
 
 }  // namespace token

@@ -7,7 +7,7 @@ candidate classes.
 */
 
 import electorate;
-import vector;
+import slids.vector;
 
 alias Rankings = slids:Vector<int>;
 alias Utilities = slids:Vector<float64>;

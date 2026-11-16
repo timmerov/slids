@@ -70,7 +70,7 @@ nested uses (`Pair<Vec<int>>`) landed with the `>>` closer split
 
 /* the workhorse: fields and methods on T, a user binary operator, and a member
    const (read from outside via the instance-qualified spelling). */
-import string;
+import slids.string;
 alias slids;
 
 Vec<T>(T x_ = 0, T y_ = 0) {

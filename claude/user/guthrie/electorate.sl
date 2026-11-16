@@ -20,12 +20,12 @@ C. clustered - voters are normally distributed around one of several points.
 how many clusters? how much spread? to be determined.
 */
 
-import+ algorithm;
-import dump;
+import+ slids.algorithm;
+import slids.dump;
 import electorate;
-import math;
+import slids.math;
 import random;
-import+ vector;
+import+ slids.vector;
 alias slids;
 
 Position() {

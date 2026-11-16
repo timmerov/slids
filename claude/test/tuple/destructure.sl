@@ -45,7 +45,7 @@ the same underlying type), and the `(named slots) name` "too many names" shape
 rule (the parse-level disambiguation of a tuple-type decl from a destructure).
 */
 
-import string;
+import slids.string;
 alias slids;
 
 (int, int) makePair() {       // a function returning a tuple — a destructure rhs

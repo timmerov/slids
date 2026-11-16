@@ -358,7 +358,7 @@ every type (scalar / array / tuple / class). Nothing is deferred.
 */
 
 /* SHORT form — explicit type and inferred type, across scalar kinds. */
-import string;
+import slids.string;
 alias slids;
 
 global int shots_ = 42;

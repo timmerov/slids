@@ -7,8 +7,8 @@ key/value map implementation.
 built upon red/black tree.
 */
 
-import map;
-import tree;
+import slids.map;
+import slids.tree;
 
 /* slids namespace */
 slids {

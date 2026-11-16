@@ -136,7 +136,7 @@ so the rule genuinely is per-body there.
 
 /* STAGE A — a primary + block re-opens: later openings add members that see the
    primary's field, const, and method bare (and vice-versa). */
-import string;
+import slids.string;
 alias slids;
 
 Rc(int a_) {

@@ -16,8 +16,8 @@ depth) and check() verifies: black root, no red node with a red child, equal
 black height on every path, every child's parent_ points back.
 */
 
-import string;
-import tree;
+import slids.string;
+import slids.tree;
 alias slids;
 
 TreeNode : Node(

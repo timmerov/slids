@@ -100,7 +100,7 @@ claude says:
   (`(int,int) a[3] = ((1,2),(3,4),(5,6))`).
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int[3] widenArr() {                          // int[3] returned from an int8[3] value

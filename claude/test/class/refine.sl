@@ -124,7 +124,7 @@ RUN-TIME-scope only — the same non-local target in a file / namespace / class 
 still errors per-segment.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Data(int x_) {

@@ -10,7 +10,7 @@ the file itself lexes clean — all error cases are //-prefixed and
 get uncommented one at a time by the runner.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 //-EXPECT-ERROR: Unmatched '[*][/]'

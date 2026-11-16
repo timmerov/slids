@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 Vec(int x_ = 0, int y_ = 0) {

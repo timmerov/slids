@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 Base(int b_ = 1) { }

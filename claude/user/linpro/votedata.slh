@@ -6,9 +6,9 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 blocs of voter data.
 */
 
-import map;
-import string;
-import vector;
+import slids.map;
+import slids.string;
+import slids.vector;
 
 /* candidate rankings. */
 alias Rankings = slids:Vector<int>;

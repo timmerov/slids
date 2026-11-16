@@ -1,5 +1,5 @@
-import string;
-import vector;
+import slids.string;
+import slids.vector;
 alias slids;
 
 T biggest<T>(T a, T b) {

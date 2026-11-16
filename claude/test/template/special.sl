@@ -250,7 +250,7 @@ sizeof and countof both yield 6 here. flagged as a canon conflict — nothing
 changed on either side.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 /* the canon sets, plus Arrays2 so the complement excludes 2-D arrays too. */

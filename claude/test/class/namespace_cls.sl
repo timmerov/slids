@@ -32,7 +32,7 @@ Time:Count (type) and Time:Count:kZero (value) both resolve.
 alias Space; is rejected — a class is a type, not an importable namespace.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Space(int x_) {

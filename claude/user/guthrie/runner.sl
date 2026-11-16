@@ -255,17 +255,17 @@ star - range plus automatic runoff of the top two.
 cumulative voting - split 1.0 votes among candidates.
 */
 
-import+ algorithm;
+import+ slids.algorithm;
 import candidate;
-import dump;
+import slids.dump;
 import electorate;
-import math;
-import+ map;
+import slids.math;
+import+ slids.map;
 import random;
 import runner;
 import settings;
-import string;
-import+ vector;
+import slids.string;
+import+ slids.vector;
 alias slids;
 
 stdc import {

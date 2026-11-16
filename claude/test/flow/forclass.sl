@@ -119,7 +119,7 @@ normal local variable shadowing rules for scopes apply to these scopes.
           |--loop-var--------|
 */
 
-import string;
+import slids.string;
 alias slids;
 
 // size/op[] — op[] returns a reference to a field; iterated by value (a copy) or

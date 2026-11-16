@@ -61,7 +61,7 @@ covered here:
 deferred (not landed): inferring from classes / functions.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 alias Integer = int;

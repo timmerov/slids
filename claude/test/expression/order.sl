@@ -47,7 +47,7 @@ handles || and ^^ at one level). Ladder is complete in const + runtime form;
 nothing open.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

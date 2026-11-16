@@ -32,7 +32,7 @@ to module-level functions exactly like a file-scope class's.
 */
 
 /* a file-scope class, shadowed by a same-named LOCAL class in main. */
-import string;
+import slids.string;
 alias slids;
 
 Shadowed(int x_) {

@@ -36,11 +36,11 @@ it has some radius that's larger than the characteristic distance.
 the innermost ring is at this radius.
 */
 
-import+ algorithm;
-import dump;
-import math;
-import string;
-import+ vector;
+import+ slids.algorithm;
+import slids.dump;
+import slids.math;
+import slids.string;
+import+ slids.vector;
 alias slids;
 
 /* meters per light year. */

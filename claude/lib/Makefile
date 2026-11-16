@@ -11,6 +11,10 @@
 # slidsc --scan-deps fragments); they are NOT part of libslids.o. The
 # library's tests live in test/lib.
 #
+# THE PACKAGE: the headers live in hdr/slids/, so every importer — lib's own
+# sources (-I hdr) and every consumer (-I <install>/include) — spells a module
+# `import slids.vector;`, and its identity is `slids.vector` everywhere.
+#
 # THE INSTALL (build/install) is the library as a consumer outside this tree
 # gets it: include/slids/ (every header, and each template library's source
 # beside its header), lib/libslids.o, bin/slidsc, and slids.mk (from
@@ -37,7 +41,7 @@ LIB_OBJS = $(LIB_SRCS:%=$(BUILD_DIR)/%.o)
 LIBSLIDS = $(BUILD_DIR)/libslids.o
 
 INSTALL_DIR  = ../build/install
-INSTALL_HDRS = $(patsubst hdr/%,$(INSTALL_DIR)/include/slids/%,$(wildcard hdr/*.slh hdr/*.sl))
+INSTALL_HDRS = $(patsubst hdr/%,$(INSTALL_DIR)/include/%,$(wildcard hdr/slids/*.slh hdr/slids/*.sl))
 INSTALLED    = $(INSTALL_HDRS) $(INSTALL_DIR)/lib/libslids.o \
                $(INSTALL_DIR)/bin/slidsc $(INSTALL_DIR)/slids.mk
 
@@ -87,7 +91,7 @@ $(INSTALL_DIR):
 $(INSTALL_DIR)/include/slids $(INSTALL_DIR)/lib $(INSTALL_DIR)/bin: | $(INSTALL_DIR)
 	mkdir -p $@
 
-$(INSTALL_DIR)/include/slids/%: hdr/% | $(INSTALL_DIR)/include/slids
+$(INSTALL_DIR)/include/slids/%: hdr/slids/% | $(INSTALL_DIR)/include/slids
 	install -p -m 444 $< $@
 
 $(INSTALL_DIR)/lib/libslids.o: $(LIBSLIDS) | $(INSTALL_DIR)/lib

@@ -60,11 +60,11 @@ example usage:
     println(String + "ba = " + ba_val);
 */
 
-import algorithm;
+import slids.algorithm;
 import linpro;
-import math;
-import string;
-import+ vector;
+import slids.math;
+import slids.string;
+import+ slids.vector;
 
 slids {
 

@@ -46,7 +46,7 @@ Open: a char >= 128 can't be written as a source literal, so char's
 sign-extension into a mixed expression stays IR-verified only, not output-locked.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

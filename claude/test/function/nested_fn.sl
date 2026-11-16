@@ -82,7 +82,7 @@ claude says:
 */
 
 /* a nested function using only its own parameter (no capture). */
-import string;
+import slids.string;
 alias slids;
 
 int basic(int x) {

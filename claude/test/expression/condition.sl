@@ -33,7 +33,7 @@ forlong.sl) and the logical AUGMENTED-ASSIGN `&&=` / `||=` / `^^=` (same "Operat
 'X' is not defined" message). slids has no ternary `?:`.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 // A class is a valid condition operand IFF it defines op! — dispatched by `!`.

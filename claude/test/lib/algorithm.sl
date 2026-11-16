@@ -26,9 +26,9 @@ DEFERRED (commented out in main):
   should return is undecided.
 */
 
-import+ algorithm;
-import string;
-import vector;
+import+ slids.algorithm;
+import slids.string;
+import slids.vector;
 alias slids;
 
 /* a small class ordered by op<. */

@@ -88,7 +88,7 @@ the same way a literal var-decl init flexes into its declared type.
 ident args widen via widen::convert.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 // forward declaration (signature only); the definition is at the bottom of the

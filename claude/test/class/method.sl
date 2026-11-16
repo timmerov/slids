@@ -49,7 +49,7 @@ REQUIRED only when a local legally SHADOWS the method (then a bare `m()` binds t
 local, not the method — exactly as a bare field is shadowed by a same-named local).
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Method(int x_) {

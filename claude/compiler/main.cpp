@@ -27,16 +27,12 @@
 
 namespace {
 
-// The base module name of a path: "build/tmpl_lib.ll" -> "tmpl_lib".
-std::string moduleOf(std::string const& path) {
-    std::string base = std::filesystem::path(path).stem().string();
-    return base;
-}
-
 // Parse ONE .sli file (the human-readable, slids-shaped demand format):
 //   import vector;
 //   import library;
 //   import vector { Vector<int>; tsum<int>; }
+// Module names are IDENTITIES (token::moduleIdentity), dotted for a module
+// under an -I root: `import slids.vector { slids:Vector<int>; }`.
 // Plain imports accumulate per file; a braced block addressed to `target`
 // contributes its spellings as demands and the file's plain imports as
 // injection candidates (the provenance headers an argument type needs).
@@ -58,13 +54,19 @@ void readSliFile(std::string const& path, std::string const& target,
         while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_')) i++;
         return s.substr(b, i - b);
     };
+    auto moduleWord = [&]() {   // a dotted name: `slids.vector`
+        std::size_t b = i;
+        while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_'
+                                || s[i] == '.')) i++;
+        return s.substr(b, i - b);
+    };
     while (true) {
         skipWs();
         if (i >= s.size()) break;
         std::string w = word();
         if (w != "import") break;   // malformed — stop quietly (driver-owned file)
         skipWs();
-        std::string module = word();
+        std::string module = moduleWord();
         skipWs();
         if (i < s.size() && s[i] == ';') {
             i++;
@@ -110,14 +112,21 @@ void readSliFile(std::string const& path, std::string const& target,
 //   USES     every `N<...>` (any file, any depth), matched to its `>`: each
 //            module of N must compile before each OTHER module named by an
 //            identifier inside the brackets.
+//   DEDUCED  a call `N(` (no `<...>`; not after `.`) of a module's template,
+//            in a file of ANOTHER module: its arguments are invisible to a lex
+//            scan, and the instance it deduces (`countof<Vector<String>>`)
+//            demands from libraries the scan can't name. Collected in
+//            `deduced` (the callee modules); the caller adds conservative edges.
 // Returns y -> { x : y's compile waits for x's }.
 std::map<std::string, std::set<std::string>> scanTypeArgEdges(
-        token::List const& tokens, std::set<std::string> const& lib_set) {
+        token::List const& tokens, std::set<std::string> const& lib_set,
+        std::set<std::string>& deduced) {
     using token::Kind;
     auto const& toks = tokens.tokens;
     std::map<std::string, std::set<std::string>> mods;          // name -> modules
     std::map<std::string, std::set<std::string>> alias_rhs;     // alias -> names
     std::vector<std::pair<std::string, std::set<std::string>>> uses;
+    std::vector<std::pair<std::string, std::string>> calls;   // (name, caller module)
 
     // Per-file scope state: the brace stack (true = namespace brace) and the
     // statement-level paren depth / seen-`=` flag at namespace scope.
@@ -184,10 +193,14 @@ std::map<std::string, std::set<std::string>> scanTypeArgEdges(
         }
         if (t.kind != Kind::kIdentifier) continue;
 
-        // kIdentifier: only `N<` matters.
+        // A DEDUCED CALL candidate: `N(` not reached through `.` (a method).
+        if (i + 1 < n && toks[i + 1].kind == Kind::kLParen && prev != Kind::kDot)
+            calls.emplace_back(t.text, file.module);
+
+        // kIdentifier: otherwise only `N<` matters.
         if (i + 1 >= n || toks[i + 1].kind != Kind::kLt) continue;
         std::string const& name = t.text;
-        std::string module = std::filesystem::path(file.path).stem().string();
+        std::string const& module = file.module;
 
         // OWNER claim.
         if (lib_set.count(module) && isNamespaceScope(s) && !s.seen_eq)
@@ -224,6 +237,13 @@ std::map<std::string, std::set<std::string>> scanTypeArgEdges(
                     if (mods[a].insert(m).second) changed = true;
             }
         }
+    }
+
+    for (auto const& [name, caller] : calls) {
+        auto it = mods.find(name);
+        if (it == mods.end()) continue;
+        for (auto const& x : it->second)
+            if (x != caller && lib_set.count(x)) deduced.insert(x);
     }
 
     std::map<std::string, std::set<std::string>> waits;
@@ -289,11 +309,14 @@ int main(int argc, char** argv) {
     std::vector<std::string> inst_demands;
     std::vector<std::string> extra_imports;
     if (!inst_dir.empty()) {
-        std::string target = moduleOf(in_path);
+        std::string target = token::moduleIdentity(in_path, import_paths);
+        // The pool is every .sli under the build dir, RECURSIVELY: a library
+        // that is itself a consumer writes its .sli beside its .ll, which sits
+        // at the module's path (<bld>/slids/map.sli).
         std::error_code ec;
         std::vector<std::string> sli_files;
         for (auto const& e :
-             std::filesystem::directory_iterator(inst_dir, ec)) {
+             std::filesystem::recursive_directory_iterator(inst_dir, ec)) {
             if (e.path().extension() == ".sli")
                 sli_files.push_back(e.path().string());
         }
@@ -390,7 +413,7 @@ int main(int argc, char** argv) {
         std::set<std::string> lib_set;
         // A loaded template source is never the root (the lexer skips that by path).
         for (auto const& f : tokens.files) {
-            std::string m = moduleOf(f.path);
+            std::string const& m = f.module;
             if (f.template_source && lib_set.insert(m).second)
                 libs.push_back(m);
         }
@@ -399,16 +422,40 @@ int main(int argc, char** argv) {
         std::map<std::string, std::set<std::string>> mod_imports;
         for (auto const& [fid, module] : tokens.import_edges) {
             if (fid < 0 || fid >= (int)tokens.files.size()) continue;
-            mod_imports[moduleOf(tokens.files[fid].path)].insert(module);
+            mod_imports[tokens.files[fid].module].insert(module);
         }
         // y -> { x : y's compile waits for x's }: import edges + type-argument
         // edges. A cycle has no compile order — every library in it would miss
         // demands — so it is an error, not a fragment make would half-honor.
+        std::set<std::string> deduced;   // modules with a deduced template call
         std::map<std::string, std::set<std::string>> waits =
-            scanTypeArgEdges(tokens, lib_set);
+            scanTypeArgEdges(tokens, lib_set, deduced);
         for (auto const& x : libs)
             for (auto const& y : mod_imports[x])
                 if (y != x && lib_set.count(y)) waits[y].insert(x);
+        // DEDUCED-CALL EDGES (conservative): a deduced call of X's template may
+        // instantiate it over any library's class, and X's compile then demands
+        // from that library — so every other library waits for X. Skipped when
+        // X already waits (transitively) for that library: a real mutual
+        // dependency the scan can't order (vector imports dump, so a deduced
+        // `dump(v)` keeps dump after vector).
+        {
+            auto reaches = [&](std::string const& from, std::string const& to) {
+                std::set<std::string> seen;
+                std::vector<std::string> work{from};
+                while (!work.empty()) {
+                    std::string m = work.back();
+                    work.pop_back();
+                    if (m == to) return true;
+                    if (!seen.insert(m).second) continue;
+                    for (auto const& w : waits[m]) work.push_back(w);
+                }
+                return false;
+            };
+            for (auto const& x : deduced)
+                for (auto const& y : libs)
+                    if (y != x && !reaches(x, y)) waits[y].insert(x);
+        }
         {
             std::map<std::string, int> color;     // 0 new, 1 on stack, 2 done
             std::vector<std::string> path;
@@ -446,7 +493,13 @@ int main(int argc, char** argv) {
         std::string bld =
             std::filesystem::path(scan_path).parent_path().string();
         if (bld.empty()) bld = ".";
-        auto ll = [&](std::string const& m) { return bld + "/" + m + ".ll"; };
+        // A library's build files sit at its MODULE PATH under the build dir
+        // (slids.vector -> <bld>/slids/vector.ll), so a consumer-local `map`
+        // and slids.map never share a file, and a pattern rule maps the object
+        // back to its source (<root>/slids/vector.sl).
+        auto ll = [&](std::string const& m) {
+            return bld + "/" + token::modulePath(m) + ".ll";
+        };
         std::ostringstream mk;
         mk << "# generated by slidsc --scan-deps; do not edit.\n";
         if (!libs.empty()) {
@@ -468,7 +521,7 @@ int main(int argc, char** argv) {
             mk << ": SLIDS_INST = -I . --instantiate " << bld << "\n";
         }
         mk << consumer << "_TMPL_OBJS =";
-        for (auto const& m : libs) mk << " " << bld << "/" << m << ".o";
+        for (auto const& m : libs) mk << " " << bld << "/" << token::modulePath(m) << ".o";
         mk << "\n" << scan_path << ":";
         for (auto const& f : tokens.files) mk << " " << f.path;
         mk << "\n";
@@ -544,7 +597,7 @@ int main(int argc, char** argv) {
         if (!needed)
             diagnostic::report(diag, {st.file_id, st.tok,
                 "import+ " + st.module + " is not needed: no template declared in "
-                + st.module + ".slh uses a locally defined private class.", {}});
+                + token::modulePath(st.module) + ".slh uses a locally defined private class.", {}});
     }
     if (diagnostic::hasErrors(diag)) return bail();
 
@@ -560,7 +613,7 @@ int main(int argc, char** argv) {
     if (!out_path.empty()) {
         auto moduleOfFile = [&](int fid) -> std::string {
             if (fid < 0 || fid >= (int)tokens.files.size()) return "";
-            return moduleOf(tokens.files[fid].path);
+            return tokens.files[fid].module;
         };
         // target module -> (provenance imports, demand spellings)
         std::map<std::string,

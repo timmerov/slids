@@ -44,7 +44,7 @@ output-invisible (every operand is small + positive) — verified correct in the
 IR but not locked by output. Add a negative / high-bit case per width to pin it.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

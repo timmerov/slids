@@ -513,10 +513,32 @@ token::Token next(Stream& s) {
 
 namespace {
 
+// Where `import <module>;` looks. A BARE name (`import tmpl_lib;`) tries the
+// importing file's own directory, then each -I root; a DOTTED name
+// (`import slids.vector;` -> slids/vector.slh) tries the -I roots only — a
+// package path is spelled from a root, never from wherever the importer sits.
+// Returns the found header's path, or "" (the caller reports).
+std::string findHeader(std::string const& module, std::string const& source_dir,
+                       std::vector<std::string> const& import_paths) {
+    std::string header = token::modulePath(module) + ".slh";
+    std::vector<std::string> search;
+    if (module.find('.') == std::string::npos)
+        search.push_back(source_dir.empty() ? std::string(".") : source_dir);
+    for (auto& p : import_paths) search.push_back(p);
+    for (auto& dir : search) {
+        std::filesystem::path candidate = std::filesystem::path(dir) / header;
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec)) return candidate.string();
+    }
+    return "";
+}
+
 struct ImportWrapper {
     token::List& out;
     diagnostic::Sink& diag;
     std::vector<std::string> const& import_paths;
+    // CANONICAL paths of every file opened (token::canonicalPath): one file
+    // reached by two spellings (`./b.slh`, `../x/b.slh`) opens once.
     std::set<std::string>& imported_once;
     std::string root_path;   // the primary source's path
     bool load_all = false;   // --scan-deps: load every template source
@@ -607,7 +629,7 @@ int ImportWrapper::sourceOf(int h) const {
 
 int ImportWrapper::fileByPath(std::string const& path) const {
     for (std::size_t i = 0; i < out.files.size(); i++)
-        if (out.files[i].path == path) return (int)i;
+        if (token::samePath(out.files[i].path, path)) return (int)i;
     return -1;
 }
 
@@ -694,12 +716,21 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
     int depth = 0;
     std::vector<std::pair<char, int>> brackets;   // (expected close char, tok index of the open)
 
-    enum class State { Normal, SawImport, SawImportPlus, SawImportIdent };
+    // SawImportIdent: a module name so far ends on an identifier (`;` or `.`
+    // may follow); SawImportDot: it ends on a `.` (an identifier must follow).
+    enum class State { Normal, SawImport, SawImportPlus, SawImportIdent, SawImportDot };
     State state = State::Normal;
     token::Token saved_import{};
     token::Token saved_plus{};
-    token::Token saved_ident{};
+    std::vector<token::Token> saved_name;   // the module name's identifiers and dots
     bool saw_plus = false;
+    // Pushback: the buffered `import [+] a.b` tokens go out as ordinary tokens.
+    auto flushSaved = [&]() {
+        token::add(out, saved_import);
+        if (saw_plus) token::add(out, saved_plus);
+        for (auto const& n : saved_name) token::add(out, n);
+        saved_name.clear();
+    };
 
     // handle() returns false when this file's processing must stop.
     std::function<bool(token::Token const&)> handle = [&](token::Token const& t) -> bool {
@@ -711,10 +742,8 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
             } else if (state == State::SawImportPlus) {
                 token::add(out, saved_import);
                 token::add(out, saved_plus);
-            } else if (state == State::SawImportIdent) {
-                token::add(out, saved_import);
-                if (saw_plus) token::add(out, saved_plus);
-                token::add(out, saved_ident);
+            } else if (state == State::SawImportIdent || state == State::SawImportDot) {
+                flushSaved();
             }
             state = State::Normal;
             if (depth != 0) {
@@ -780,7 +809,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
             }
             case State::SawImport: {
                 if (t.kind == token::Kind::kIdentifier) {
-                    saved_ident = t;
+                    saved_name.assign(1, t);
                     state = State::SawImportIdent;
                     return true;
                 }
@@ -798,7 +827,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
             }
             case State::SawImportPlus: {
                 if (t.kind == token::Kind::kIdentifier) {
-                    saved_ident = t;
+                    saved_name.assign(1, t);
                     state = State::SawImportIdent;
                     return true;
                 }
@@ -808,37 +837,44 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
                 token::add(out, saved_plus);
                 return handle(t);
             }
+            case State::SawImportDot: {
+                if (t.kind == token::Kind::kIdentifier) {
+                    saved_name.push_back(t);
+                    state = State::SawImportIdent;
+                    return true;
+                }
+                state = State::Normal;
+                flushSaved();
+                return handle(t);
+            }
             case State::SawImportIdent: {
+                if (t.kind == token::Kind::kDot) {
+                    saved_name.push_back(t);
+                    state = State::SawImportDot;
+                    return true;
+                }
                 if (t.kind == token::Kind::kSemicolon) {
                     state = State::Normal;
-                    std::string module = saved_ident.text;
-                    // The statement is consumed below — record the edge first
-                    // (dedup included), so --scan-deps sees the full graph.
-                    out.import_edges.emplace_back(file_id, module);
-                    std::string header = module + ".slh";
-
-                    std::vector<std::string> search;
-                    search.push_back(source_dir.empty() ? std::string(".") : source_dir);
-                    for (auto& p : import_paths) search.push_back(p);
-
-                    std::string found_path;
-                    for (auto& dir : search) {
-                        std::filesystem::path candidate = std::filesystem::path(dir) / header;
-                        std::error_code ec;
-                        if (std::filesystem::exists(candidate, ec)) {
-                            found_path = candidate.string();
-                            break;
-                        }
-                    }
+                    std::string module;
+                    for (auto const& n : saved_name)
+                        module += n.kind == token::Kind::kDot ? std::string(".") : n.text;
+                    std::string found_path = findHeader(module, source_dir, import_paths);
                     if (found_path.empty()) {
-                        int idx = addAndIndex(out, saved_ident);
-                        reportAt(diag, file_id, idx,
-                            "Cannot find '" + header + "' on the import path.");
+                        int idx = addAndIndex(out, saved_name.front());
+                        reportAt(diag, file_id, idx, "Cannot find '"
+                            + token::modulePath(module) + ".slh' on the import path.");
                         fatal = true;
                         return false;
                     }
+                    token::Token name_tok = saved_name.front();
+                    saved_name.clear();
+                    // The statement is consumed below — record the edge (dedup
+                    // included), so --scan-deps sees the full graph. By the header's
+                    // IDENTITY, not the spelling: the scan keys modules by identity.
+                    out.import_edges.emplace_back(file_id,
+                        token::moduleIdentity(found_path, import_paths));
                     int stmt = recordStmt(file_id, saved_import, module, saw_plus);
-                    if (!imported_once.insert(found_path).second) {
+                    if (!imported_once.insert(token::canonicalPath(found_path)).second) {
                         // Already imported elsewhere — but THIS import may be
                         // the public one. Provenance is first-come, so without
                         // this a header a template source happened to reach
@@ -854,7 +890,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
 
                     std::ifstream f(found_path);
                     if (!f.is_open()) {
-                        int idx = addAndIndex(out, saved_ident);
+                        int idx = addAndIndex(out, name_tok);
                         reportAt(diag, file_id, idx,
                             "Cannot open '" + found_path + "'.");
                         fatal = true;
@@ -876,9 +912,7 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
                 }
                 // pushback
                 state = State::Normal;
-                token::add(out, saved_import);
-                if (saw_plus) token::add(out, saved_plus);
-                token::add(out, saved_ident);
+                flushSaved();
                 return handle(t);
             }
         }
@@ -894,26 +928,14 @@ void ImportWrapper::processFile(int file_id, std::string const& source_dir,
 void ImportWrapper::importModule(std::string const& module,
                                  std::string const& source_dir, int from_file,
                                  int owner) {
-    std::string header = module + ".slh";
-    std::vector<std::string> search;
-    search.push_back(source_dir.empty() ? std::string(".") : source_dir);
-    for (auto& p : import_paths) search.push_back(p);
-    std::string found_path;
-    for (auto& dir : search) {
-        std::filesystem::path candidate = std::filesystem::path(dir) / header;
-        std::error_code ec;
-        if (std::filesystem::exists(candidate, ec)) {
-            found_path = candidate.string();
-            break;
-        }
-    }
+    std::string found_path = findHeader(module, source_dir, import_paths);
     if (found_path.empty()) {
-        diagnostic::report(diag, {-1, -1,
-            "Cannot find '" + header + "' on the import path.", {}});
+        diagnostic::report(diag, {-1, -1, "Cannot find '" + token::modulePath(module)
+            + ".slh' on the import path.", {}});
         fatal = true;
         return;
     }
-    if (!imported_once.insert(found_path).second) {   // already imported
+    if (!imported_once.insert(token::canonicalPath(found_path)).second) {   // already imported
         int h = fileByPath(found_path);
         if (h >= 0 && owner < 0) publicize(h);
         if (h >= 0 && load_all) {
@@ -953,7 +975,7 @@ void ImportWrapper::loadTemplateSource(std::string const& header_path,
     if (!std::filesystem::exists(sp, ec)) return;   // aggregation-only module
     std::string spath = sp.string();
     if (token::samePath(spath, root_path)) return;   // the root IS this source
-    if (!imported_once.insert(spath).second) return;
+    if (!imported_once.insert(token::canonicalPath(spath)).second) return;
     std::ifstream f(spath);
     if (!f.is_open()) return;
     std::stringstream buf;
@@ -1006,6 +1028,9 @@ void run(std::string const& root_path,
         if (wrap.fatal) break;
         wrap.importModule(m, source_dir, root_file_id, /*owner=*/-1);
     }
+
+    // Every file's MODULE IDENTITY, derived from its path and the -I roots.
+    for (auto& file : out.files) file.module = token::moduleIdentity(file.path, import_paths);
 
     if (!wrap.fatal) {
         token::Token eoi{token::Kind::kEndOfInput, "", -1, 0, 0, 0};

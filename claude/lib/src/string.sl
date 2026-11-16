@@ -12,7 +12,7 @@ copying null terminated strings,
 copying null terminated strings limited by length.
 */
 
-import string;
+import slids.string;
 
 /* slids namespace */
 slids {

@@ -19,7 +19,7 @@ namespaces may not be instantiated.
 */
 
 /* open in global scope. */
-import string;
+import slids.string;
 alias slids;
 
 Space {

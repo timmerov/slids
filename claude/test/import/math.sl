@@ -26,7 +26,7 @@ tbd
 */
 
 /* math namespace. */
-import string;
+import slids.string;
 alias slids;
 
 math {

@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 Counter(int value_ = 0, int step_ = 1) {

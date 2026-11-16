@@ -114,7 +114,7 @@ grammar looksLikeQualifiedScopeDef doesn't skip `<..>`, so it parses as
 a NEW file-scope template deriving from Ns, silent while unused.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 alias Integer = int;

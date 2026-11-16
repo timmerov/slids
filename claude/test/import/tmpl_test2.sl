@@ -15,7 +15,7 @@ transfers and lifecycle across the seam, and the remaining instantiation
 forms.
 */
 
-import string;
+import slids.string;
 
 import+ tmpl_lib;
 import library;

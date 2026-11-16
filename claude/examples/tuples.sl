@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 (bool, int) divide(int a, int b) {

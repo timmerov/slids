@@ -6,7 +6,7 @@ Copyright (C) 2026 tim cotter. All rights reserved.
 hello, world canonical code example.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

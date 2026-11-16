@@ -1,4 +1,4 @@
-import string;
+import slids.string;
 alias slids;
 
 const int kSize = 4;

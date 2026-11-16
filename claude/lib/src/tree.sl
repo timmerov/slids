@@ -12,7 +12,7 @@ red black tree implementation.
 if this breaks rules 2,3 then recolor/rebalance.
 */
 
-import tree;
+import slids.tree;
 
 /* slids namespace */
 slids {

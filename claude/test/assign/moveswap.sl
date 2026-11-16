@@ -104,7 +104,7 @@ negatives: swap of mismatched types; move into a constant; swap of an
 uninitialized operand; a non-lvalue swap operand; a narrowing move.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 int32 main() {

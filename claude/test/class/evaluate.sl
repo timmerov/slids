@@ -224,7 +224,7 @@ deliberately NOT correct yet (still-broken / deferred):
     local never reaches it. Untested on purpose: a golden here would pin the wrong answer.
 */
 
-import string;
+import slids.string;
 alias slids;
 
 Class(int a_) {
