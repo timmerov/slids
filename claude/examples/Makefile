@@ -41,11 +41,10 @@ run: all
 	@for s in $(SAMPLES); do echo "=== $$s"; $(BIN_DIR)/$$s; done
 
 # THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
-# its template-library instantiation stage — which imported modules are
-# template libraries, their build ordering (the consumer's demand pool first,
-# then library-to-library edges), their compile flags (a target-specific
-# SLIDS_INST the generic .ll rule splices in), and the extra objects the link
-# needs (<sample>_TMPL_OBJS). Included BEFORE the sample rules so the link
+# it into this directory's instantiation stage (slids_inst) — which imported
+# modules are template libraries (compiled as ordinary TUs), the stage's
+# prerequisites (the consumer's .ll, the libraries' objects), and the extra
+# objects the link needs (<sample>_TMPL_OBJS, slids_inst.o among them). Included BEFORE the sample rules so the link
 # prerequisites can read the variables. A missing fragment has a rule below,
 # so make generates it and RESTARTS itself with full knowledge — the first
 # build links right with no hand-maintained library lists. (Guarded so
@@ -83,6 +82,10 @@ $(BUILD_DIR)/%.ll: %.sl $(SLIDSC)
 
 # files.sl links the shape module.
 $(BIN_DIR)/files: $(BUILD_DIR)/shape.o
+
+# Keep its .ll: named only through the .o, it would be an intermediate make
+# deletes after the build and rebuilds on the next run (its .d names it).
+.SECONDARY: $(BUILD_DIR)/shape.ll
 
 # slidsc writes a `.d` alongside each `.ll` (-MF): the make rule naming every
 # `.slh` that compile imported, transitively. Editing a header re-triggers the

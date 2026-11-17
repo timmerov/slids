@@ -20,6 +20,11 @@ an array of a TU-local class (Item, Tracked) instantiates HERE, not in the
 library, which could not spell it. a const container is rejected: here for a
 local element type, in the instantiation stage for a header-visible
 one (a demand keeps the buried const, as a call does).
+math:abs<int> and math:max<int> are PREBUILT: libslids.o ships them (linpro.sl
+uses them), so this directory's instantiation stage must leave them out (else
+"multiple definition" at link); min<int>, clamp<int> and abs<int8> are not in
+libslids.o, so the stage must build them (else "undefined reference"). this
+pin holds only while linpro.sl keeps using abs<int> / max<int>.
 DEFERRED (commented out in main):
 - countof(int[2][3]): algorithm.slh's `T=[N]` arm matches one dimension
   only, so a 2-D array falls into ClassSet and fails on size(). What it
@@ -212,6 +217,17 @@ int32 main() {
             + tr[2].key_ + " " + tr[3].key_ + " " + tr[4].key_);
     }
     println(String + "live at end: " + g_live);
+
+    println(String + "---math templates, prebuilt---");
+    {
+        int ai = -5;
+        int8 a8 = -6;
+        println(String + "abs<int>: " + math:abs(ai));
+        println(String + "max<int>: " + math:max(3, 7));
+        println(String + "min<int>: " + math:min(3, 7));
+        println(String + "clamp<int>: " + math:clamp(12, 0, 10));
+        println(String + "abs<int8>: " + math:abs(a8));
+    }
 
     return 0;
 }

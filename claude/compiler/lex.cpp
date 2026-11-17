@@ -556,7 +556,7 @@ struct ImportWrapper {
     // header-only chain. It propagates to every file this one imports.
     void processFile(int file_id, std::string const& source_dir, int owner);
     // Import `module`.slh as if an `import module;` appeared in `from_file` —
-    // the driver-injected form (--instantiate provenance headers). Errors
+    // the driver-injected form (unused since the stage writes its own root). Errors
     // attribute bare ({-1,-1}: no source token exists for an injected import).
     void importModule(std::string const& module, std::string const& source_dir,
                       int from_file, int owner);
@@ -958,8 +958,8 @@ void ImportWrapper::importModule(std::string const& module,
     std::string new_source_dir =
         std::filesystem::path(found_path).parent_path().string();
     processFile(new_file_id, new_source_dir, owner);
-    // An injected (provenance) import is a plain one: an --instantiate compile
-    // demands AGGREGATED flavors only, which never need another module's source.
+    // An injected import is a plain one (no driver injects any today: the
+    // instantiation stage writes its imports into a generated root).
     if (!fatal && load_all) {
         std::vector<int> col;
         std::set<int> seen;
@@ -1021,8 +1021,8 @@ void run(std::string const& root_path,
                        load_all_sources, false, {}, {}, {}};
     wrap.processFile(root_file_id, source_dir, /*owner=*/-1);
 
-    // Driver-injected imports (the --instantiate demand files' provenance
-    // headers), appended after the root's tokens — file-scope declaration
+    // Driver-injected imports (none today; the instantiation stage writes a
+    // generated root instead), appended after the root's tokens — file-scope declaration
     // order is free, and imported_once dedups any the root already pulled.
     for (auto const& m : extra_imports) {
         if (wrap.fatal) break;

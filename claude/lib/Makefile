@@ -1,15 +1,27 @@
 # The slids library: headers in hdr/, TU sources in src/.
 #
 # The deliverable is ONE relocatable object, build/lib/libslids.o — every test
-# binary links it (from the install, below). It is `ld -r`-merged from the library's per-TU objects
-# (string.o, tree.o; more land in LIB_SRCS as the library grows). string.slh and
-# tree.slh are template-free, so one object serves every consumer. dump, vector,
-# algorithm, and map are TEMPLATE libraries — their sources sit BESIDE their headers in
-# hdr/ (`import+` loads the template source sitting next to the header;
-# --scan-deps loads every one), and each consumer's Makefile builds them as
-# ordinary TUs beside its own instantiation stage (via the slidsc --scan-deps
-# fragments); they are NOT part of libslids.o. The
-# library's tests live in test/lib.
+# binary links it (from the install, below). It is `ld -r`-merged from the
+# library's per-TU objects (LIB_SRCS: string.o, tree.o, linpro.o) and the
+# library's own INSTANTIATION STAGE (slids_inst.o, below). dump, vector,
+# algorithm, and map are TEMPLATE libraries — their sources sit BESIDE their
+# headers in hdr/ (`import+` loads the template source sitting next to the
+# header; --scan-deps loads every one), and each consumer's Makefile builds them
+# as ordinary TUs beside its own instantiation stage (via the slidsc --scan-deps
+# fragments); they are NOT part of libslids.o. The library's tests live in
+# test/lib.
+#
+# THE LIBRARY'S STAGE: a library TU that uses a template (linpro.sl: Vector,
+# algorithm, math) writes a .sli demand pool like any consumer, and the stage
+# here builds those instances into slids_inst.o, which ships inside libslids.o.
+# A consumer's own stage lists libslids.o as a prerequisite, so it leaves out
+# every instance libslids.o already defines and builds only the rest (a method
+# the library never called). The template libraries' objects the lib builds
+# here (<build>/slids/vector.o, ...) are NOT merged: every consumer compiles its
+# own copy of each template source it imports, and a source that uses its own
+# flavors defines them in that object — shipping the lib's copy too would
+# define them twice. The stage still reads them, so it leaves those flavors to
+# the consumer's copy.
 #
 # THE PACKAGE: the headers live in hdr/slids/, so every importer — lib's own
 # sources (-I hdr) and every consumer (-I <install>/include) — spells a module
@@ -35,8 +47,12 @@ LLCFLAGS  = --filetype=obj --relocation-model=pic
 
 BUILD_DIR = ../build/lib
 
-LIB_SRCS = string tree
+LIB_SRCS = string tree linpro
 LIB_OBJS = $(LIB_SRCS:%=$(BUILD_DIR)/%.o)
+
+# Keep each TU's .ll: named only through its .o, it would be an intermediate
+# make deletes after the build and rebuilds on the next run (its .d names it).
+.SECONDARY: $(LIB_SRCS:%=$(BUILD_DIR)/%.ll)
 
 LIBSLIDS = $(BUILD_DIR)/libslids.o
 
@@ -50,18 +66,20 @@ INSTALLED    = $(INSTALL_HDRS) $(INSTALL_DIR)/lib/libslids.o \
 all: $(INSTALLED)
 
 # THE IMPORT SCAN (slidsc --scan-deps): each library TU's generated fragment
-# wires any template libraries it pulls in — ordering, SLIDS_INST compile
-# flags, and the objects to merge (<src>_TMPL_OBJS; empty today — string
-# imports no template library). Included BEFORE the merge rule so its
+# wires it into the library's stage — the template libraries it pulls in and
+# slids_inst.o (<src>_TMPL_OBJS), and the stage's prerequisites (the TU's .ll,
+# the template libraries' objects). Included BEFORE the merge rule so its
 # prerequisite list can read the variables; a missing fragment is generated
 # and make restarts itself.
 ifneq ($(MAKECMDGOALS),clean)
 -include $(LIB_SRCS:%=$(BUILD_DIR)/%.deps.mk)
 endif
 
-# One relocatable object from all the library's objects (plus any scanned
-# template-library objects a library TU demands).
-$(LIBSLIDS): $(LIB_OBJS) $(sort $(foreach s,$(LIB_SRCS),$($(s)_TMPL_OBJS)))
+# One relocatable object from the library TUs' objects plus the stage's (when
+# any library TU uses a template). Only slids_inst.o of the scanned extras.
+LIB_STAGE = $(filter %/slids_inst.o,$(sort $(foreach s,$(LIB_SRCS),$($(s)_TMPL_OBJS))))
+
+$(LIBSLIDS): $(LIB_OBJS) $(LIB_STAGE)
 	$(LD) -r $^ -o $@
 
 $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
@@ -69,18 +87,32 @@ $(BUILD_DIR)/%.o: $(BUILD_DIR)/%.ll
 
 # slidsc writes a `.d` alongside the `.ll` (-MF): the make rule naming every
 # `.slh` the source textually imported, so editing a header re-triggers the
-# compile. Sources import their own headers from hdr/ (-I). SLIDS_INST comes
-# from a scan fragment when the TU is a demanded template library (none of
-# libslids.o's own TUs are today).
+# compile. Sources import their own headers from hdr/ (-I).
 $(BUILD_DIR)/%.ll: src/%.sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
-	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d -I hdr $(SLIDS_INST)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/$*.d -I hdr
+
+# A template library a library TU pulls in, built at its MODULE PATH
+# (slids.vector -> <build>/slids/vector.ll) as the scan fragments name it: an
+# ordinary compile, read by the stage, not merged. (The fragments mark its .ll
+# .SECONDARY, so make does not delete it as an intermediate and rebuild it on
+# the next run.)
+$(BUILD_DIR)/slids/%.ll: hdr/slids/%.sl $(SLIDSC)
+	mkdir -p $(dir $@)
+	$(SLIDSC) $< -o $@ -MF $(BUILD_DIR)/slids/$*.d -I hdr
+
+# THE LIBRARY'S INSTANTIATION STAGE: every library TU's .sli under BUILD_DIR.
+# The fragments add the prerequisites; every object among them is passed to the
+# filter (the stage leaves out what they define).
+$(BUILD_DIR)/slids_inst.ll: $(SLIDSC)
+	mkdir -p $(dir $@)
+	$(SLIDSC) --instantiate $(BUILD_DIR) -o $@ -I hdr $(filter %.o,$^)
 
 $(BUILD_DIR)/%.deps.mk: src/%.sl $(SLIDSC)
 	mkdir -p $(BUILD_DIR)
 	$(SLIDSC) $< --scan-deps $@ -I hdr
 
--include $(wildcard $(BUILD_DIR)/*.d)
+-include $(wildcard $(BUILD_DIR)/*.d $(BUILD_DIR)/slids/*.d)
 
 # Each install directory is made ONCE, by its own rule, and the copies wait on
 # it (order-only). Not `install -D`: uutils install races creating the same

@@ -142,9 +142,9 @@ math {
 /* abs template */
 T abs<T>(T a) {
     if (a < 0) {
-        return a;
+        return - a;
     }
-    return - a;
+    return a;
 }
 
 /* min template */

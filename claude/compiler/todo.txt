@@ -137,24 +137,21 @@ UNBLOCKED FEATURES
 
   * revisit the decision that makes this an error: char ch = 0;
 
-  * a prebuilt library (libslids.o) carrying template instances (landing plan step 4).
-    the program's instantiation stage already skips any symbol an object on its
-    prerequisite list defines, libslids.o included (per symbol, so a program can add
-    methods libslids lacks). open:
-    - no libslids TU uses a template today, so libslids ships no instances and the
-      libslids.o side of the filter is untested. a test needs a lib TU that uses a
-      flavor, and a test/lib program that uses the same flavor plus a method the lib
-      didn't call.
-    - lib/Makefile has no stage of its own: a lib TU's aggregated demands would go
-      unbuilt (the program's stage reads only its own build dir's .sli).
-    - two libraries shipping the same instance: deferred until a use case. option:
-      instances (and the __$sizeof word) emit linkonce_odr, the linker keeps one copy,
-      and the nm filter goes away. ODR risk: copies built from different template
-      sources silently pick one.
-    - shipping instances on purpose (a lib/src/templates.sl): `Vector<int>;` doesn't
-      parse at file or function scope (explicit instantiation is ungrammared), and lazy
-      methods mean a use ships only the methods it calls. wants an explicit form that
-      means every method.
+  * two libraries shipping the same template instance: deferred until a use case.
+    option: instances (and the __$sizeof word) emit linkonce_odr, the linker keeps one
+    copy, and the stage's nm filter goes away. ODR risk: copies built from different
+    template sources silently pick one.
+
+  * shipping template instances in a library on purpose (a lib/src/templates.sl):
+    `Vector<int>;` doesn't parse at file or function scope (explicit instantiation is
+    ungrammared), and lazy methods mean a use ships only the methods it calls. wants
+    an explicit form that means every method. until then test/lib/algorithm.sl's
+    prebuilt pin (math:abs<int> / max<int>) holds only while lib/src/linpro.sl keeps
+    using them.
+
+  * libslids.o now needs libm: linpro.sl calls ceil, and libslids.o is one relocatable
+    object, so every program links all of it. g++ links resolve it today; a link that
+    doesn't pull in libm fails with "undefined reference to ceil".
 
   * kept template-source helpers (instantiation stage step 1) are renamed BY NAME:
     a body local that shadows a kept private const is renamed too, and a helper

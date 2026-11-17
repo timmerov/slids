@@ -36,3 +36,9 @@ live before: 5
 live after: 5
 Tracked: 5 4 3 2 1
 live at end: 0
+---math templates, prebuilt---
+abs<int>: 5
+max<int>: 7
+min<int>: 3
+clamp<int>: 10
+abs<int8>: 6

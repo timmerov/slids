@@ -1813,13 +1813,23 @@ each flavor is compiled ONCE per project, by the template's own source TU)
     to the stage. It is load-bearing today: a TEMPLATE SOURCE compiles as an
     ordinary TU and defines (strong) the flavors its own code uses —
     tmpl_lib.o defines Part<int>'s hooks and Vector<int>:sum, which the stage
-    then skips. Nested demands are still built, then dropped.
+    then skips; and libslids.o's shipped instances. Nested demands are
+    still built, then dropped.
   - THE BUILD (--scan-deps fragment): `<c>_TMPL_OBJS = <libs>.o
-    <bld>/slids_inst.o` and `<bld>/slids_inst.ll: <bld>/<c>.ll <libs>.o`;
-    the rule itself lives in lib/slids-install.mk and passes `$(filter
-    %.o,$^)` as the filter objects. Hand-listed extra TUs add themselves as
-    prerequisites (test/import: library.o bird.o extra.o). Template sources
-    compile in no particular order.
+    <bld>/slids_inst.o`, `<bld>/slids_inst.ll: <bld>/<c>.ll <libs>.o`, and
+    `.SECONDARY: <libs>.ll` (named only through its .o, a library's .ll
+    would be an intermediate make deletes, and the next run — its .d names
+    it — would rebuild it). The rule itself lives in lib/slids-install.mk
+    and passes `$(filter %.o,$^)` as the filter objects, libslids.o among
+    them. Hand-listed extra TUs add themselves as prerequisites (test/import:
+    library.o bird.o extra.o) and mark their own .ll .SECONDARY. Template
+    sources compile in no particular order.
+  - THE LIBRARY'S STAGE. lib/Makefile runs the same stage over its own TUs'
+    .sli (linpro.sl demands math:abs<int> / max<int>) and merges slids_inst.o
+    into libslids.o — but not its copies of the template sources, which
+    every consumer compiles itself. A consumer's stage then declares what
+    libslids.o ships and builds the rest, per symbol (canon: test/lib
+    algorithm.sl "math templates, prebuilt").
   - Stage-only fixes (a flavor built only in the stage reaches code a
     sibling-hosted one didn't): the anchored prefix stops at template-source
     files (a stage-built Grow<int64> ctor skipped source-private field

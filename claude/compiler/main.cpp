@@ -260,10 +260,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    // --instantiate: this TU is a template source. Collect the demand pool's
-    // entries addressed to it (blocks named with ITS module name), plus the
-    // provenance headers those demand files imported — injected into the lex
-    // so an argument type from another header is spellable here.
+    // THE STAGE's inputs: every demand in the pool (all targets), the target
+    // modules and the provenance headers the demand files imported — written
+    // as the generated root's imports, so an argument type from another header
+    // is spellable — and the symbols the filter objects already define.
     std::vector<std::string> inst_demands;
     std::vector<std::string> extra_imports;
     std::set<std::string> stage_defined;
@@ -422,6 +422,12 @@ int main(int argc, char** argv) {
             mk << " " << bld << "/slids_inst.o\n";
             mk << bld << "/slids_inst.ll: " << bld << "/" << consumer << ".ll";
             for (auto const& m : libs) mk << " " << obj(m);
+            // A library's .ll is otherwise an INTERMEDIATE (only the .o is named):
+            // make would delete it after the build, and the next run — where the
+            // library's .d names it — would rebuild it. Keep it.
+            mk << "\n.SECONDARY:";
+            for (auto const& m : libs)
+                mk << " " << bld << "/" << token::modulePath(m) << ".ll";
         }
         mk << "\n" << scan_path << ":";
         for (auto const& f : tokens.files) mk << " " << f.path;
@@ -511,8 +517,8 @@ int main(int argc, char** argv) {
     // .sli dump — the demands THIS TU makes on other libraries' templates: for
     // each header-declared template this TU is not the sibling of, every
     // instantiated flavor, tagged with the template's header module plus the
-    // provenance header of every class-typed argument (so the template
-    // source's --instantiate compile can spell it). Written beside the .ll,
+    // provenance header of every class-typed argument (so the instantiation
+    // stage can spell it). Written beside the .ll,
     // human-readable and slids-shaped:
     //   import vector;
     //   import library;
@@ -526,8 +532,8 @@ int main(int argc, char** argv) {
         std::map<std::string,
                  std::pair<std::set<std::string>, std::vector<std::string>>>
             targets;
-        // THE QUALIFIED SPELLING of a demand. The template source's --instantiate
-        // TU has none of this TU's `alias Ns;` imports in force, so the template's
+        // THE QUALIFIED SPELLING of a demand. The instantiation stage has none
+        // of this TU's `alias Ns;` imports in force, so the template's
         // own name and every class in its arguments carry their full namespace path
         // (`slids:Map<slids:String, int>`). A path is the owner chain of namespace /
         // class names; a class that has a stable symbol path (Type::symbol_path)
@@ -659,7 +665,7 @@ int main(int argc, char** argv) {
             // build dir, so a stale one from an earlier compile of this TU would
             // keep demanding flavors this TU no longer names — the importer
             // comments out its one `dump(...)` call, recompiles clean, and the
-            // library's --instantiate stage still fails on the old demand.
+            // directory's instantiation stage still fails on the old demand.
             std::error_code ec;
             std::filesystem::remove(sli_path, ec);
         } else {

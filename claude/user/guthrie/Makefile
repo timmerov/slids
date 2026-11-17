@@ -32,10 +32,11 @@ all: guthrie
 guthrie: $(BIN_DIR)/guthrie
 
 # THE IMPORT SCAN (slidsc --scan-deps): every TU's generated fragment wires
-# the template-library instantiation stage — each library it pulls in, the
-# ordering (that TU's demand pool before the library compiles; the fragments'
-# lines merge across TUs, so a library waits for EVERY consumer), the compile
-# flags (SLIDS_INST), and the objects the link needs (<stem>_TMPL_OBJS).
+# this directory's instantiation stage (slids_inst) — each template library it
+# pulls in (compiled as ordinary TUs), the stage's prerequisites (that TU's .ll,
+# the libraries' objects; the fragments' lines merge across TUs, so the stage
+# waits for EVERY TU), and the objects the link needs (<stem>_TMPL_OBJS,
+# slids_inst.o among them).
 # Included BEFORE the link rule so its prerequisites can read the variables;
 # a missing fragment is generated and make restarts itself.
 ifneq ($(MAKECMDGOALS),clean)

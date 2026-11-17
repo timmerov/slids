@@ -7514,7 +7514,7 @@ void registerClassTemplate(parse::Tree& tree, parse::Node& node,
     // TU-local template keeps its nested classes (tmpl_class.sl Kit:Sub) AND
     // its template methods (tmpl_nested.sl): the flavor clone re-registers
     // them per instance through the ordinary member diverts. A header's
-    // flavors are declaration-only with bodies aggregated by --instantiate,
+    // flavors are declaration-only with bodies built by the instantiation stage,
     // and an inner pattern's instances aren't knowable there — no delivery
     // channel, so both forms stay rejected cross-TU. fileIsImported covers
     // the header's openings AND a loaded template source's re-opens alike.
@@ -8178,8 +8178,9 @@ void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     // class is complete within its own TU (no importer), so it is never opaque.
     //
     // An incomplete header class-template is NO MORE SPECIAL than an incomplete header
-    // class: an AGGREGATED flavor is opaque in every TU, its completer being the template
-    // source's --instantiate compile (kDefine there, exporting the layout). The flag rides
+    // class: an AGGREGATED flavor is opaque in every TU, its completer being the
+    // instantiation stage, or the template source's own TU for a flavor it uses itself
+    // (kDefine there, exporting the layout). The flag rides
     // only facts every TU computes alike — the header's `...` and the flavor's mode — never
     // "is the source loaded here": a consumer strips the source's completing re-open's fields
     // from an aggregated clone (instantiateClassTemplate), exactly as a plain class's
@@ -10325,7 +10326,7 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
 
     // MODE (the class twin's rule): a HEADER-declared template's flavor is
     // AGGREGATED (all args header-visible: a declaration-only instance here,
-    // defined by the source's --instantiate pass) or INLINE (a LOCAL arg: the
+    // defined by the instantiation stage) or INLINE (a LOCAL arg: the
     // body clones from the loaded template source, emitted internal — nobody
     // else can). The sibling — and a TU-local template — defines as before.
     bool header_tmpl =
@@ -10535,7 +10536,7 @@ int instantiateTemplate(parse::Tree& tree, int tmpl_entry_id,
     } else {
         // A DECLARATION-ONLY instance: the pattern is a header's bodyless
         // template declaration and this TU is a consumer — the body is
-        // emitted by the template source's --instantiate pass. The entry
+        // emitted by the instantiation stage. The entry
         // becomes an external declaration (munged, so the extern signature
         // matches the definition's); the node splices as a plain kFunctionDecl
         // and codegen `declare`s it on use.
@@ -11183,8 +11184,8 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // its completion should be visible. Cross-TU completion WORKS (a header's
     // `Tmpl<T>(...)` closes via the template source's completing re-open —
     // canon test/import Grow). THE GUARD: an AGGREGATED flavor in a TU that did
-    // not load the source is OPAQUE here, its completion the --instantiate
-    // TU's business — exactly an incomplete header class an importer never sees
+    // not load the source is OPAQUE here, its completion the instantiation
+    // stage's business — exactly an incomplete header class an importer never sees
     // closed, so it is no error. (The end-of-resolve sweep catches the
     // never-USED case; open_reported keeps the two sites to one diagnostic.)
     bool source_unseen = header_tmpl && !here_sibling
@@ -11206,7 +11207,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // MODE. A HEADER-declared template's flavor is either AGGREGATED — every
     // argument header-visible: declaration-only here (method bodies stripped
     // from the clones), stable file-scope symbols, kDeclare linkage, defined
-    // once by the source's --instantiate pass — or INLINE: an argument is
+    // once by the instantiation stage — or INLINE: an argument is
     // LOCAL to this TU, so nobody else can emit the flavor; the bodies clone
     // from the loaded template source and the instance is internal, def_id-
     // suffixed. The header's SIBLING defines externally, as before.
@@ -11321,7 +11322,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
             // (the loaded template source's bodies) sheds its function
             // members entirely — a stripped twin would sit beside the
             // header's declaration as an ambiguous duplicate, and the bodies
-            // are defined once, externally, by the --instantiate pass. It
+            // are defined once, externally, by the instantiation stage. It
             // sheds its FIELDS too: the flavor is OPAQUE here, so the source's
             // fields are the completer's to place (@C__$ctor) and must not be
             // slots — the consumer's slot list is the header's public prefix,
@@ -12327,7 +12328,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
         }
     }
 
-    // --instantiate demands (this TU is the template source): the CLASS
+    // Instantiation-stage demands (this TU is every loaded source's sibling): the CLASS
     // flavors instantiate here — a demanded spelling rides resolveDeclType
     // exactly like a local use, memoized against any use this file already
     // made. Function / method flavors wait for classify, where those
@@ -12382,7 +12383,7 @@ void run(parse::Tree& tree, diagnostic::Sink& diag) {
     for (auto& [tid, ti] : tree.templates) {
         if (!ti.def || ti.def->kind != parse::Kind::kClassDef) continue;
         // THE GUARD: a header template whose source this TU did not load is
-        // completed elsewhere (its --instantiate TU), like any incomplete
+        // completed elsewhere (the instantiation stage), like any incomplete
         // header class.
         int hf = ti.def->file_id;
         if (fileIsImported(tree, hf) && !fileIsSibling(tree, hf)

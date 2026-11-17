@@ -33,11 +33,10 @@ positives: all
 	@../run_positives.sh $(DIR) $(SAMPLES)
 
 # THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
-# its template-library instantiation stage — which imported modules are
-# template libraries, their build ordering (the consumer's demand pool first,
-# then library-to-library edges), their compile flags (a target-specific
-# SLIDS_INST the generic .ll rule splices in), and the extra objects the link
-# needs (<sample>_TMPL_OBJS). Included BEFORE the sample rules so the link
+# it into this directory's instantiation stage (slids_inst) — which imported
+# modules are template libraries (compiled as ordinary TUs), the stage's
+# prerequisites (the consumer's .ll, the libraries' objects), and the extra
+# objects the link needs (<sample>_TMPL_OBJS, slids_inst.o among them). Included BEFORE the sample rules so the link
 # prerequisites can read the variables. A missing fragment has a rule below,
 # so make generates it and RESTARTS itself with full knowledge — the first
 # build links right with no hand-maintained library lists. (Guarded so

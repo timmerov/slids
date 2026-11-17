@@ -25,13 +25,13 @@ SAMPLES = \
 all: $(SAMPLES)
 
 # THE IMPORT SCAN (slidsc --scan-deps): each sample's generated fragment wires
-# its template-library instantiation stage — the libraries it pulls in, their
-# ordering (every consumer's demand pool before a library compiles; a library
-# consuming another library orders after it), their compile flags (SLIDS_INST),
-# and the extra objects the link needs (<sample>_TMPL_OBJS). Included BEFORE
-# the sample rules so the link prerequisites can read the variables; a missing
-# fragment is generated and make restarts itself. With several consumers of
-# one library, the fragments' ordering lines simply merge.
+# it into this directory's instantiation stage (slids_inst) — the template
+# libraries it pulls in (compiled as ordinary TUs), the stage's prerequisites
+# (the consumer's .ll, the libraries' objects), and the extra objects the link
+# needs (<sample>_TMPL_OBJS, slids_inst.o among them). Included BEFORE the
+# sample rules so the link prerequisites can read the variables; a missing
+# fragment is generated and make restarts itself. With several consumers, the
+# fragments' stage prerequisites simply merge.
 ifneq ($(MAKECMDGOALS),clean)
 -include $(SAMPLES:%=$(BUILD_DIR)/%.deps.mk)
 endif

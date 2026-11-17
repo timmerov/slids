@@ -4570,7 +4570,7 @@ DOTTED IMPORTS + THE MODULE IDENTITY + DEDUCED-CALL EDGES (2026-11-15)
   'slids/no_such_module.slh'"; test/template/complete.sl's import negatives respelled.
   Not pinned: dotted imports skipping the importer's directory (needs a subdirectory).
 
-THE INSTANTIATION STAGE (2026-11-16; landing plan steps 1-3 of 4)
+THE INSTANTIATION STAGE (2026-11-16; landing plan steps 1-4)
   Replaces the per-source `--instantiate` compile and --scan-deps' library ordering. The
   user's design: one stage per link reads and merges every .sli, builds new nested demands
   to a fixed point, dedups, skips what library .o files already define, compiles to one .o.
@@ -4601,9 +4601,27 @@ THE INSTANTIATION STAGE (2026-11-16; landing plan steps 1-3 of 4)
   Coverage: test/import tmpl_test.sl — tpock over Loc/Lodd (tick -> tock), tbias<Lbias>
   (kBias), the consumer's own tick(), negative tcount reaching gCount; test/lib map.sl
   "vector keys, map elements" (the cycle). Filter load-bearing in test/import (tmpl_lib.o
-  defines Part<int> hooks, Vector<int>:sum). Not run: other test dirs, user/ (linpro's
-  Makefile still names SLIDS_INST). Step 4 (libslids ships instances) not started: no lib
-  TU uses a template, and lib/Makefile has no stage.
+  defines Part<int> hooks, Vector<int>:sum).
+  - STEP 4, LIBSLIDS SHIPS INSTANCES. The user moved the LP library (linpro.slh/.sl) from
+    user/linpro into lib/hdr/slids + lib/src: the first library TU that uses templates.
+    lib/Makefile: LIB_SRCS gains linpro; the library gets its own stage (build/lib/
+    slids_inst.ll, -I hdr) over its TUs' .sli, and template sources build at their module
+    path (build/lib/slids/%.ll) for the stage to read. libslids.o merges the TU objects +
+    slids_inst.o only, NOT the lib's copies of the template sources (every consumer
+    compiles its own; a source using its own flavors would define them twice). linpro
+    demands math:abs<int> / max<int>, so libslids.o now defines both. A consumer's stage
+    already lists libslids.o as a prerequisite and declares those per symbol.
+    user/linpro/Makefile dropped LINPRO, the old ordering rule and SLIDS_INST.
+  - INTERMEDIATE .ll FILES. After step 3 the scan fragments named only a library's .o,
+    so make deleted its .ll as an intermediate and the next run (the .d names it) rebuilt
+    everything once. --scan-deps now emits `.SECONDARY: <lib>.ll ...`; lib/Makefile
+    (LIB_SRCS), test/import (library, bird, extra) and examples (shape) mark their
+    hand-listed TUs' .ll the same way. A second make is quiet in every dir.
+  Coverage (step 4): test/lib algorithm.sl "math templates, prebuilt" — abs<int> /
+  max<int> come from libslids.o (the stage declares them; else multiple definition),
+  min<int> / clamp<int> / abs<int8> from the stage (else undefined reference). It found
+  math:abs's swapped branches (user fixed). Holds only while linpro uses abs/max<int>.
+  Every Makefile's scan comment rewritten (no SLIDS_INST, no ordering).
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

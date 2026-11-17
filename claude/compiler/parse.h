@@ -969,8 +969,8 @@ struct Tree {
     bool resolve_done = false;   // flips at the end of resolve::run — a later class
                                  // instantiation (from classify) resolves its body
                                  // synchronously instead of queueing for the drain
-    // --instantiate: demand spellings read from the .sli pool, addressed to
-    // THIS TU (it is the demanded template's source). CLASS flavors are
+    // THE INSTANTIATION STAGE: every demand spelling read from the .sli pool
+    // (all targets; this TU is every loaded template source's sibling). CLASS flavors are
     // consumed by resolve (a type exists at resolve); FUNCTION / METHOD
     // flavors by classify (where those instances mint). A leftover errors.
     // `args`: a FUNCTION-template demand's type arguments, RESOLVED at resolve (a class

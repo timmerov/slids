@@ -61,10 +61,10 @@ example usage:
 */
 
 import slids.algorithm;
+import slids.linpro;
 import slids.math;
 import slids.string;
 import+ slids.vector;
-import linpro;
 
 slids {
 

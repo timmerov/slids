@@ -30,7 +30,7 @@ token::Token next(Stream& s);   // returns kEndOfFile at end; kError on fatal (m
 // `extra_imports`: module names imported AS IF the root source ended with
 // `import <name>;` for each — appended after the root's own tokens (file-scope
 // declaration order is free), deduped against the root's own imports. The
-// --instantiate driver injects a demand file's provenance headers this way.
+// No driver injects any today (the instantiation stage writes a generated root).
 // A header's TEMPLATE SOURCE loads only for `import+` (and, transitively, for the
 // template headers a loaded source reaches); `load_all_sources` loads every one —
 // --scan-deps, whose library list and ordering edges come from the sources.

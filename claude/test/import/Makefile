@@ -28,15 +28,19 @@ SAMPLES = \
 
 # The link inputs the import scan cannot derive. The scan finds only TEMPLATE
 # sources (tmpl_lib.sl, tmpl_lib2.sl — loaded beside a header that declares
-# templates), orders them after their consumers' demand pools, and puts them on
-# the link line. A header with no templates names no source file: whichever .sl
-# defines its members is the author's choice. So library.sl (library.slh's
+# templates), compiles them as ordinary TUs, and puts them and the
+# instantiation stage on the link line. A header with no templates names no
+# source file: whichever .sl defines its members is the author's choice. So library.sl (library.slh's
 # classes and functions) and bird.sl (more of library.slh's members) are
 # hand-listed. And extra.sl (extra.slh's Pack, an owner-computed layout) is
 # linked into consumer, its one importer.
 LIBRARY = $(BUILD_DIR)/library.o
 BIRD    = $(BUILD_DIR)/bird.o
 EXTRA   = $(BUILD_DIR)/extra.o
+
+# Keep their .ll: named only through the .o, each would be an intermediate make
+# deletes after the build and rebuilds on the next run (its .d names it).
+.SECONDARY: $(LIBRARY:.o=.ll) $(BIRD:.o=.ll) $(EXTRA:.o=.ll)
 
 # Every file holding negative cases. Unlike the other test dirs this is not just
 # $(SAMPLES): a rule about imports has a side per FILE ROLE, and each has to be
