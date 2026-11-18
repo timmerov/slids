@@ -2078,10 +2078,11 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   same kTmplUse arm as any use site, memoized, so a qualifier MINTS the
   flavor on demand — and continues in the instance's member frame; the
   spelling-level `:` splits are angle-aware (splitQualifiedSpelling). The
-  bypass canonicalizes the spelled qualifier to the flavor's registered
-  name + type (canonicalizeInstanceQualifier; baseClassDepth has the same
-  memo-hit fallback for an instance base name), so alias-spelled args
-  match. An instance qualifier is never a REGISTRATION target
+  bypass matches an ancestor by BARE name; a qualifier that spells a
+  template list must name that flavor, compared by resolved TYPE
+  (resolve classMatchesQualifier / probeClassSpelling; baseClassDepth has
+  the same memo-hit fallback for an instance or alias base name), so
+  alias-spelled args match. An instance qualifier is never a REGISTRATION target
   (relocateOutOfLineMembers rejects the definition kinds focused). A
   hoisted nested template under a qualifier
   (`TClass<int>:SClass<float>`, `TClass<>:SClass<int>`) resolves through

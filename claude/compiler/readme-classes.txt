@@ -1322,11 +1322,26 @@ SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
   gathering the receiver's class frame + base chain (first frame with the name wins, so
   a derived same-name member HIDES the base's overload set — C++ name hiding); a base
   method runs on the derived receiver (the base sub-object is at offset 0 = the same
-  address). The `Base:` QUALIFIER reframes `self` to slot 0: tryResolveBaseQualifier
-  rewrites `Base:self`/`Base:field`/`Base:method()` to `self._$base...X` (parse allows
-  `self` as a `:`-segment; depth from baseClassDepth handles `GrandBase:`), but a
-  `Base:STATIC` is NOT a field access — it's left for the normal qualified-name lookup,
-  which is the disambiguation handle for a shadowed static.
+  address).
+  `.` SELECTS, `:` CHANGES CONTEXT (2026-11-17, canon inheritance.sl / virtual.sl):
+    - `obj.Base` — the DIRECT base by its BARE name (parse::bareClassName: no namespace
+      qualifier, no template list) — IS the slot-0 `_$base` sub-object: classify's
+      kFieldExpr arm maps the name before the inherited-field walk. No copy; as writable
+      as obj (`der.Base = Base(5)` transfers through Base's op=). An ancestor FIELD is
+      reached by WALKING, one level per `.` (`self.Mid.Base.a_`); `.` cannot skip.
+    - a METHOD qualifier bypasses dispatch and may skip ancestors: `X:m()` (self optional),
+      `self.X:m()`, `obj.X:m()`, a ROOT-FIRST chain `A:B:X:m()`. The grammar reads a `:`
+      chain after `.` (parseQualifiedMember — it must be a call); resolve rewrites the bare
+      form to `self.X:m()` when X is the class or an ancestor (tryResolveBaseQualifier,
+      via baseClassDepth / selfOrBaseDepth, which follow an alias-spelled base); classify
+      (qualifiedMethodReceiver) walks the receiver's ancestry — the NEAREST class of that
+      bare name wins — validates the chain, hops the receiver to X's sub-object, and sets
+      bypass_virtual. A qualifier that DOES spell a template list must name that flavor
+      (classMatchesQualifier: `QVB<int8>` is not `QVB<int>`) — checked at resolve for the
+      last segment only.
+    - GONE: `Base:field`, `Base:self`, `Base:self.m()`. They fall to the normal
+      qualified-name lookup's errors; a `Base:STATIC` (const/alias/enum) still resolves
+      there, the disambiguation handle for a shadowed static.
 
   POINTER CASTS. derived->base is IMPLICIT, base->derived is EXPLICIT `<Derived^>`;
   both are offset-0 pointer no-ops (classify.ptrBaseUpcastOk on the assignment relation,
@@ -1790,13 +1805,12 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   (inherited or original) slot but may NOT add a NEW virtual method. Multiple inheritance is
   not supported.
 
-  BYPASS. A qualified method call is a STATIC dispatch bypass (parse.h bypass_virtual, set by
-  resolve tryResolveBaseQualifier). ALL FOUR spellings bypass — `Base:m()` / `Self:m()` (base +
-  own-class qualifier) and `Base:self.m()` / `Self:self.m()` (the same with an explicit
-  `self.`). selfOrBaseDepth unifies them (0 hops = own class, d = a transitive base, -1 =
-  unrelated -> defer), and is_method walks classAndBaseFrames so a qualifier naming a class
-  that only INHERITS the method still bypasses (to the nearest impl) and `X:m()` agrees with
-  `X:self.m()`. Only an unqualified `self.m()` dispatches.
+  BYPASS. A `:` before the method is a STATIC dispatch bypass (parse.h bypass_virtual, set by
+  classify qualifiedMethodReceiver): `X:m()`, `self.X:m()`, `obj.X:m()`, `A:B:X:m()` — X the
+  own class or any ancestor (see INHERITANCE, "`.` SELECTS, `:` CHANGES CONTEXT"). A qualifier
+  naming a class that only INHERITS the method still bypasses (to the nearest impl). A DOT
+  before the method dispatches — `self.m()`, `obj.m()`, even `obj.Base.m()` through an explicit
+  ancestor object (the canon's footgun).
   An UNRELATED class qualifier on a method call is REJECTED (2026-07-26; was silently
   dropped): a qualified call reaching resolveUserCall's bare-method rewrite can only name a
   class outside the self chain (the bypass claimed `Self:`/`Base:`), and the rewrite would

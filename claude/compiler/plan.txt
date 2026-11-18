@@ -1514,9 +1514,10 @@ Phase 7 — class advanced
     A derived OPENS its whole base chain (resolve pushBaseChain): inherited statics,
     FIELDS, and METHODS resolve BARE across the chain (transitive), a derived same-name
     member HIDES the base's (C++ name hiding), and a base method runs on a derived-typed
-    receiver. The `Base:` qualifier reframes `self` to slot 0 — `Base:self`/`Base:field`/
-    `Base:method()` -> `self._$base...X` (resolve tryResolveBaseQualifier), while a
-    `Base:STATIC` (const/alias/enum) defers to the normal qualified-name lookup. Pointer
+    receiver. (SUPERSEDED 2026-11-17 — see "BASE OBJECT + METHOD QUALIFIER" below: the
+    `Base:self`/`Base:field` reframes are gone; `obj.Base` is the base object and `X:m()`
+    the bypass.) A `Base:STATIC` (const/alias/enum) defers to the normal qualified-name
+    lookup. Pointer
     casts: derived->base IMPLICIT, base->derived EXPLICIT `<Derived^>` (both offset-0
     no-ops; classify ptrBaseUpcastOk/ptrBaseCastOk); unrelated/sibling casts rejected.
     The slot-0 `_$base` decode is centralized in parse:: (baseTypeOf / classBaseType /
@@ -1526,6 +1527,26 @@ Phase 7 — class advanced
     DEFERRED: a derived STATIC shadowing a same-named base static is bare-ambiguous
     (qualify to disambiguate) — see todo "OPENED-SCOPE NAME AMBIGUITY".
     [[project_inheritance]]
+  * BASE OBJECT + METHOD QUALIFIER — LANDED 2026-11-17 (canon inheritance.sl, virtual.sl).
+    User's rule: `.` selects, `:` changes context and binds tighter than `.`. `d.Base` /
+    `self.Base` (the direct base's BARE name) is the base sub-object — read, written
+    field-wise, written whole (`der.Base = Base(5)`); `.` cannot skip ancestors, so an
+    ancestor field is walked (`self.Mid.Base.a_`). Base methods: `X:m()` (self optional),
+    `self.X:m()`, `d.X:m()` call X's method directly — X any ancestor (nearest bare-name
+    match wins), chains optional and ROOT FIRST (`Base:Mid:Derived:foo()`); `d.X.m()`
+    dispatches through d's vtable (the canon's footgun). Namespace qualifiers and template
+    lists are not used to name an ancestor; a spelled template list must name the right
+    flavor (method.sl's `QVB<int8>` negative). Removed: `Base:field`, `Base:self`,
+    `Base:self.m()` (generic lookup errors, no special message — user's call). Fixed on
+    the way: baseClassDepth follows an alias-spelled base. Test fallout fixed:
+    test/template/class.sl, test/import/tmpl_test2.sl (field forms -> `self.VB.z_`).
+    Canon examples built differently because of two OUT-OF-SCOPE limits (noted in the
+    test): a qualified base in a derived-class declaration (`Space:Base : D(...)`) does
+    not parse — built via aliases; a class `Base` deriving directly from another `Base`
+    reports a by-value cycle — a middle class sits between. Not done: "a member named like
+    the base is an error" (not in canon); a mid-chain segment's template list is matched
+    by bare name only (classify). Detail: readme-classes.txt INHERITANCE.
+    [[project_d_base_spelling]]
   * VIRTUAL METHODS + VIRTUAL DESTRUCTORS — LANDED. A virtual class (>=1 `virtual`
     member) carries a vtable pointer at OFFSET 0 (C++ ABI): a ROOT gets a hidden
     `_$vptr` unnamed first field (parse::hasVptr), a DERIVED reuses the base's via
@@ -1553,9 +1574,9 @@ Phase 7 — class advanced
     all classes incl. re-opens) enforces: base-must-be-virtual, dtor-must-be-virtual,
     override-must-be-virtual + return-type-match (no covariance), no virtual<->non-
     virtual shadowing, no NEW virtual in a re-open. A qualified call is a STATIC
-    bypass — all four spellings (Base:m() / Self:m() / Base:self.m() / Self:self.m(),
-    inherited methods included via selfOrBaseDepth + classAndBaseFrames); only bare
-    self.m() dispatches. MI is not supported. Canon test/class/virtual.sl.
+    bypass (since 2026-11-17: `X:m()` / `self.X:m()` / `obj.X:m()` / root-first chains,
+    inherited methods included); a dot before the method dispatches, even
+    `obj.Base.m()`. MI is not supported. Canon test/class/virtual.sl.
     [[project_virtual_classes]]
   * RE-OPENING CLASSES + THE EXTERNAL FORM — LANDED (non-virtual). A class re-opens to
     add members after its primary def, as a BLOCK (`Class() {}`, EMPTY field list) or the
