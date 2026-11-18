@@ -1822,7 +1822,7 @@ TestRunner(
 
     /* print all strategic results. */
     void print_strategic_results() {
-        println("Strategic voting results:");
+        println("Strategic voting results: opportunities %, average minimum strategic voters: %");
         for (ElectoralMethod^ method : methods_) {
             method^.print_strategic_results();
         }
@@ -3065,15 +3065,12 @@ ElectoralMethod : PluralityMethod() {
 utility functions for breaking ties in linear programming.
 */
 LP:Comparison gt_or_gte(int a, int b) {
-    LP:Comparison result;
     if (a < b) {
         /* a wins ties. */
-        result.relation_ = kGTE;
-    } else {
-        /* a loses ties. */
-        result.relation_ = kGT;
+        return LP:gte.Comparison;
     }
-    return result;
+    /* a loses ties. */
+    return LP:gt.Comparison;
 }
 
 /*
@@ -3171,11 +3168,11 @@ ElectoralMethod : PluralityRunoffMethod() {
 
         villaina = -1;
         villainb = -1;
-        min_coalition = -1;
-        min_a_to_b = -1;
-        min_b_to_a = -1;
-        min_pool_to_a = -1;
-        min_pool_to_b = -1;
+        min_minions = -1;
+        min_ab = -1;
+        min_ba = -1;
+        min_xa = -1;
+        min_xb = -1;
 
         for (a : 0..ncandidates) {
             if (a == winner_) {
@@ -3324,10 +3321,31 @@ ElectoralMethod : PluralityRunoffMethod() {
                     rowxab = LP:Expr + minion^.xa_ + minion^.xb_ + LP:lte + pools[x];
                     lp.add_row(rowxab);
                 }
-                lp.print();
                 lp.solve();
                 lp.solve_integral();
-                lp.print();
+
+                /* check no solution. */
+                if (lp.solved_ == false) {
+                    continue;
+                }
+
+                /* check better solution. */
+                nminions = lp.get_minimum();
+                if (min_minions > 0 && min_minions < nminions) {
+                    continue;
+                }
+
+                villaina = a;
+                villainb = b;
+                min_minions = nminions;
+                min_ab = lp.get_value(ab);
+                min_ba = lp.get_value(ba);
+                min_xa = 0;
+                min_xb = 0;
+                for (minion : minions) {
+                    min_xa += lp.get_value(minion^.xa_);
+                    min_xb += lp.get_value(minion^.xb_);
+                }
             }
         }
 
@@ -3338,38 +3356,46 @@ ElectoralMethod : PluralityRunoffMethod() {
 
         namea = candidates^[villaina].name_;
         nameb = candidates^[villainb].name_;
+        String namex;
+        need_comma = false;
+        for (minion : minions) {
+            if (need_comma) {
+                namex += ",";
+            }
+            namex += candidates^[minion^.x_].name_;
+        }
         need_comma = false;
         s = String + " " + name_ + ":";
-        if (min_a_to_b > 0) {
+        if (min_ab > 0) {
             need_comma = true;
-            s += String + " " + min_a_to_b + " " + namea + " votes switch to " + nameb;
+            s += String + " " + min_ab + " " + namea + " votes switch to " + nameb;
         }
-        if (min_b_to_a > 0) {
+        if (min_ba > 0) {
             if (need_comma) {
                 s += ",";
             }
             need_comma = true;
-            s += String + " " + min_b_to_a + " " + nameb + " votes switch to " + namea;
+            s += String + " " + min_ba + " " + nameb + " votes switch to " + namea;
         }
-        if (min_pool_to_a > 0) {
+        if (min_xa > 0) {
             if (need_comma) {
                 s += ",";
             }
             need_comma = true;
-            s += String + " " + min_pool_to_a + " other votes switch to " + namea;
+            s += String + " " + min_xa + " " + namex + " votes switch to " + namea;
         }
-        if (min_pool_to_b > 0) {
+        if (min_xb > 0) {
             if (need_comma) {
                 s += ",";
             }
             need_comma = true;
-            s += String + " " + min_pool_to_b + " other votes switch to " + nameb;
+            s += String + " " + min_xb + " " + namex + " votes switch to " + nameb;
         }
         s += ".";
         println(s);
 
         ++nvillains_;
-        nminions_ += min_coalition;
+        nminions_ += min_minions;
     }
 
     virtual void print_strategic_results() {
