@@ -22,18 +22,6 @@ import slids.string;
 
 alias slids;
 
-/*
-Base(int x) {
-}
-Base : Derived(int x) {
-    void foo() {
-        println(String + "x=" + x);
-        println(String + "Base:x=" + Base:x);
-        println(String + "self:Base:x=" + self:Base:x);
-    }
-}
-*/
-
 int32 main() {
 /*
     /*
@@ -44,11 +32,6 @@ int32 main() {
     Format fmt(,Format:Option:kLeftJustify);
 */
     //println("Hello, World!");
-
-    /*
-    Derived d(1,2);
-    d.foo();
-    */
 
     return 0;
 }

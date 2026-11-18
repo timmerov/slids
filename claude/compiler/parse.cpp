@@ -113,6 +113,13 @@ widen::TypeRef baseTypeOf(ClassInfo const& info) {
     return widen::kNoType;
 }
 
+std::string bareClassName(std::string const& name) {
+    std::size_t lt = name.find('<');
+    std::string s = lt == std::string::npos ? name : name.substr(0, lt);
+    std::size_t colon = s.rfind(':');
+    return colon == std::string::npos ? s : s.substr(colon + 1);
+}
+
 // True for a ROOT virtual class — one carrying its own hidden `_$vptr` (the vtable
 // pointer) as the unnamed first field. A derived virtual class inherits the vptr through
 // `_$base` and has NO `_$vptr` of its own, so the two are mutually exclusive at slot 0.

@@ -125,14 +125,14 @@ Base0 : TDer<T>(T t_ = 0) {
 /* a virtual template class, and a plain class deriving from its instance. */
 VB<T>(T z_ = 3) {
     virtual T tagv() { return z_; }
-    /* the own-class pin (depth 0) spelled with the instance's own name. */
-    T selfq() { return VB<T>:z_; }
+    /* the own field through `self.` (a field is reached through its object). */
+    T selfq() { return self.z_; }
 }
 VB<int> : VK(int y_ = 0) {
     virtual int tagv() { return 100 + y_; }
-    /* the `Base:` bypass naming the INSTANCE base — the inheritance.sl canon
-       triple: the base field, the explicit-self twin, and the static call. */
-    int trio() { return VB<int>:z_ + VB<int>:self.z_ + VB<int>:tagv(); }
+    /* the INSTANCE base — the inheritance.sl canon: the base field through the base
+       object (by its bare name, `self.VB`), and the bypass naming the instance base. */
+    int trio() { return self.VB.z_ + self.VB.z_ + VB<int>:tagv(); }
 }
 /* a second derived level: the instance base is TWO `_$base` hops away. */
 VK : VKK(int w_ = 0) {

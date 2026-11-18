@@ -2500,6 +2500,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 return;
             }
             int idx = it->second.fieldIndex(e.name);
+            // `obj.Base` — the DIRECT base, by its bare name, IS the slot-0 `_$base`
+            // sub-object (inheritance.sl canon): no copy, as writable as obj. Only the
+            // direct base: an ancestor further up is reached by walking (`obj.Mid.Base`).
+            if (idx < 0) {
+                widen::TypeRef b = parse::baseTypeOf(it->second);
+                auto bi = b != widen::kNoType ? tree.classes.find(b) : tree.classes.end();
+                if (bi != tree.classes.end() && parse::bareClassName(bi->second.name) == e.name) {
+                    e.name = "_$base";
+                    idx = it->second.fieldIndex(e.name);
+                }
+            }
             if (idx < 0) {
                 // A FIELD ALIAS — own or inherited (a nearer level's field of the
                 // same name shadows it): expand to its path and type that.
@@ -6931,7 +6942,77 @@ int classifyTemplateMethodCall(parse::Tree& tree, parse::Node& s, int tid,
     return instantiateAndClassify(tree, tid, bound, s, diag);
 }
 
+// THE ANCESTOR-QUALIFIED METHOD CALL — `recv.X:m(args)` / `recv.A:B:X:m(args)` (and the
+// bare `X:m()` resolve rewrote to `self.X:m()`). `:` changes the lookup CONTEXT, so the
+// call runs X's method on recv's X subobject and BYPASSES virtual dispatch (`recv.X.m()`
+// would dispatch through recv's vtable). X is named by its BARE name, the NEAREST match
+// on recv's ancestry (recv's own class included) winning, and may skip ancestors; a CHAIN
+// names the ancestry ROOT FIRST (`Base:Mid:Derived:m()`), each segment the base of the
+// next. Hops the receiver to X's subobject (`recv._$base…`), sets bypass_virtual and
+// clears the qualifier, so the ordinary binding below runs on X. False on a diagnosed
+// error.
+bool qualifiedMethodReceiver(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    parse::Node& recv = *s.children[0];
+    inferExpr(tree, recv, widen::kNoType, diag);
+    if (recv.inferred_type == widen::kNoType) return false;
+    widen::TypeRef rs = widen::strip(recv.inferred_type);
+    std::string spelled;
+    for (auto const& q : s.qualifier) spelled += q + ":";
+    spelled += s.name;
+    std::vector<widen::TypeRef> chain;   // [0] = recv's class, [1] = its base, ...
+    int guard = static_cast<int>(tree.classes.size()) + 2;
+    for (widen::TypeRef c = rs; c != widen::kNoType && guard-- > 0; ) {
+        auto ci = tree.classes.find(c);
+        if (ci == tree.classes.end()) break;
+        chain.push_back(c);
+        c = widen::strip(parse::baseTypeOf(ci->second));
+    }
+    if (chain.empty()) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "A method call requires a class object; got '"
+            + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
+        return false;
+    }
+    auto bare = [&](std::size_t i) {
+        return parse::bareClassName(tree.classes.at(chain[i]).name);
+    };
+    std::size_t k = 0;
+    std::string target = parse::bareClassName(s.qualifier.back());
+    while (k < chain.size() && bare(k) != target) k++;
+    if (k == chain.size()) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "'" + target + "' in '" + spelled + "' is not '" + bare(0)
+            + "' or one of its ancestors.", {}});
+        return false;
+    }
+    std::size_t n = s.qualifier.size();
+    for (std::size_t j = 1; j < n; j++) {   // qualifier[n-1-j] must be the base j levels up
+        std::size_t at = k + j;
+        if (at >= chain.size() || bare(at) != parse::bareClassName(s.qualifier[n - 1 - j])) {
+            diagnostic::report(diag, {s.file_id, s.tok,
+                "The qualifier chain '" + spelled + "' does not follow the ancestry of '"
+                + bare(0) + "' (a chain names the root ancestor first).", {}});
+            return false;
+        }
+    }
+    for (std::size_t h = 0; h < k; h++) {
+        auto hop = std::make_unique<parse::Node>();
+        hop->kind = parse::Kind::kFieldExpr;
+        hop->name = "_$base";
+        hop->file_id = s.file_id;
+        hop->tok = s.tok;
+        hop->children.push_back(std::move(s.children[0]));
+        s.children[0] = std::move(hop);
+    }
+    s.qualifier.clear();
+    s.qualifier_toks.clear();
+    s.bypass_virtual = true;
+    return true;
+}
+
 void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) {
+    // `recv.X:m(args)` — hop the receiver to X's subobject and bypass dispatch first.
+    if (!s.qualifier.empty() && !qualifiedMethodReceiver(tree, s, diag)) return;
     // obj.method(args) — infer the receiver, resolve the method on its class's
     // member frame, arity-check + infer the args. desugar reads the receiver's
     // class off children[0].inferred_type to mint the symbol. children =

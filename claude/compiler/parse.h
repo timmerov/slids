@@ -1277,6 +1277,9 @@ bool classHasField(ClassInfo const& info, std::string const& name);
 // rather than re-spelling `field_names[0] == "_$base"`. baseTypeOf decodes a ClassInfo
 // directly (no map lookup); classBaseType is the lookup-then-decode for a TypeRef.
 widen::TypeRef baseTypeOf(ClassInfo const& info);
+// A class's BARE name — no namespace qualifier, no template type list (`Space:Base` ->
+// `Base`, `VB<int>` -> `VB`). How a derived class names an ancestor: `d.Base`, `Base:m()`.
+std::string bareClassName(std::string const& name);
 widen::TypeRef classBaseType(Tree const& t, widen::TypeRef cls);
 // True for a ROOT virtual class carrying its own hidden `_$vptr` at slot 0 (the vtable
 // pointer). Derived virtual classes inherit it via `_$base` and have no `_$vptr`.

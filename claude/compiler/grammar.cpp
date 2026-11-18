@@ -1600,6 +1600,7 @@ struct Parser {
                 node->name = peek().text;
                 node->name_tok = pos;
                 advance();   // field name
+                if (!parseQualifiedMember(*node)) return nullptr;
                 base = std::move(node);
                 continue;
             }
@@ -1684,6 +1685,8 @@ struct Parser {
                                       base->file_id, base->tok);
                 call->name = std::move(base->name);
                 call->name_tok = base->name_tok;
+                call->qualifier = std::move(base->qualifier);         // `recv.X:m()`
+                call->qualifier_toks = std::move(base->qualifier_toks);
                 call->children.push_back(std::move(base->children[0]));   // receiver
                 if (peek().kind == token::Kind::kLt
                     && !parseTemplateCallArgs(*call)) return nullptr;
@@ -2402,6 +2405,8 @@ struct Parser {
                                           stmt_file, stmt_tok);
                     call->name = lhs->name;
                     call->name_tok = lhs->name_tok;
+                    call->qualifier = std::move(lhs->qualifier);      // `recv.X:m()`
+                    call->qualifier_toks = std::move(lhs->qualifier_toks);
                     call->children.push_back(std::move(lhs->children[0]));  // recv
                     if (peek().kind == token::Kind::kLt
                         && !parseTemplateCallArgs(*call)) return nullptr;
@@ -2439,6 +2444,7 @@ struct Parser {
                     f->name = peek().text;
                     f->name_tok = pos;
                     advance();   // field name
+                    if (!parseQualifiedMember(*f)) return nullptr;
                     lhs = std::move(f);
                 } else if (peek().kind == token::Kind::kPlusPlus
                            || peek().kind == token::Kind::kMinusMinus) {
@@ -2743,6 +2749,30 @@ struct Parser {
         }
         error("Expected '=' or '(' after a name.");
         return nullptr;
+    }
+
+    // After `recv.name`, a `:` chain — `recv.X:m(args)`, `recv.A:B:X:m(args)` — QUALIFIES
+    // the member: `:` binds tighter than `.`, so the segments before the last are the
+    // qualifier and the last is the member. A qualified member is a METHOD call (a base
+    // field is reached by walking, `recv.Base.f`), so a `(` or a template call list must
+    // follow. `node` is the kFieldExpr just built; its name moves into the qualifier.
+    bool parseQualifiedMember(parse::Node& node) {
+        while (peek().kind == token::Kind::kColon
+               && peekKind(1) == token::Kind::kIdentifier) {
+            node.qualifier.push_back(node.name);
+            node.qualifier_toks.push_back(node.name_tok);
+            advance();   // :
+            node.name = peek().text;
+            node.name_tok = pos;
+            advance();   // segment
+        }
+        if (node.qualifier.empty()) return true;
+        if (peek().kind == token::Kind::kLParen
+            || (peek().kind == token::Kind::kLt && looksLikeTemplateCallArgs(0)))
+            return true;
+        error("A qualified member after '.' must be a method call: an ancestor's field is "
+              "reached through its object ('.Base.field').");
+        return false;
     }
 
     // Map an augmented-assign token kind to its op string. Returns nullptr

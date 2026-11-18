@@ -67,5 +67,34 @@ B:dtor 9
 A:dtor 8
 ed bright = true
 ee dim = true
+== base object ==
+Base:ctor: 1
+Derived:ctor: 2 3
+d2.Base.a_ = 1, d2.a_ = 2, d2.b_ = 3
+Base:ctor: 0
+base.a_ = 1, d2.Base.a_ = 4
+Base:ctor: 5
+Base:dtor: 5
+d2.Base.a_ = 5
+-- end base object --
+Base:dtor: 1
+Derived:dtor: 2 3
+Base:dtor: 5
+== ancestor chain ==
+a_ = 2, self.a_ = 2
+self.Cm.a_ = 2, self.Cm.Cb.a_ = 1
+Cd:foo 3
+Cd:foo 3
+Cm:foo 2
+Cb:foo 1
+Cd:foo 3
+Cb:foo 1
+== bare ancestor names ==
+SpDer: self.Base.a_ = 6, a_ = 7
+self.Base.a_ = 9, self.Base.Mid2.Base.a_ = 8
+HmDer:foo 10
+Home:Base:foo 9
+Space:Base:foo 8
+Home:Base:foo 9
 Derived:dtor: 10 11
 Base:dtor: 1

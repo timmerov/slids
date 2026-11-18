@@ -135,6 +135,10 @@ BUGS
 
 UNBLOCKED FEATURES
 
+  * `d = b;` (Derived d, Base b) is an error today: Derived's synthesized op=(Derived^)
+    hides Base's op=. option: fall back to Base's op= when Derived has none taking b
+    (assigns only the base part). the explicit spelling: d.Base = b.
+
   * reject a bare expression statement with no possible side effect (`arr[0];`,
     `p^;`, `a + b;`, `s.x_;`). a bare name (`x;`) stays legal: it "uses" x.
 

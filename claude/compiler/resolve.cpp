@@ -2841,26 +2841,48 @@ std::unique_ptr<parse::Node> buildFieldLvalue(parse::Tree& tree, std::string con
     return n;
 }
 
-// The `_$base` hop count to reach a transitive BASE CLASS named `className` from the
-// current class (1 = immediate base), else 0. Used by the `Base:` qualifier.
-int baseClassDepth(parse::Tree& tree, std::string const& className) {
+// The `_$base` hop count to reach a transitive BASE CLASS whose BARE name is `className`
+// from the current class (1 = immediate base; the NEAREST match wins), else 0. `out` is
+// that ancestor's type. Used by the `Base:` qualifier — an ancestor is named by its bare
+// name, never its namespace qualifier or template type list (inheritance.sl canon).
+// The class type a qualifier SPELLING names, through a throwaway sink — for an instance
+// spelling (`VB<int>`) that doesn't name-resolve. kNoType when it doesn't resolve.
+widen::TypeRef probeClassSpelling(parse::Tree& tree, std::string const& spelling) {
+    diagnostic::Sink probe;
+    bool reported = false;
+    std::set<std::string> visiting;
+    widen::TypeRef t = widen::deepStrip(resolveTypeRef(tree, widen::intern(spelling),
+        visiting, reported, /*file_id=*/-1, /*tok=*/-1, probe));
+    return reported ? widen::kNoType : t;
+}
+
+// Does the class `cls` (named `name`) match the qualifier `className`? By BARE name — the
+// template type list and namespace qualifier are not needed — EXCEPT that a qualifier
+// which does SPELL a type list names that one flavor: `QVB<int8>` is not `QVB<int>`.
+bool classMatchesQualifier(parse::Tree& tree, widen::TypeRef cls, std::string const& name,
+                           std::string const& className) {
+    if (parse::bareClassName(name) != parse::bareClassName(className)) return false;
+    if (className.find('<') == std::string::npos) return true;
+    widen::TypeRef spelled = probeClassSpelling(tree, className);
+    return spelled != widen::kNoType && spelled == widen::deepStrip(cls);
+}
+
+int baseClassDepth(parse::Tree& tree, std::string const& className,
+                   widen::TypeRef* out = nullptr) {
+    if (out) *out = widen::kNoType;
     if (tree.current_base_name.empty()) return 0;
     widen::TypeRef cls = widen::kNoType;
     int id = resolveName(tree, tree.current_base_name);
     if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kClass) {
         cls = widen::strip(tree.entries[id].slids_type);
-    } else if (tree.current_base_name.find('<') != std::string::npos) {
-        // An INSTANCE base (`VB<int> : VK`): its spelling doesn't name-resolve,
-        // but the flavor was minted when this class registered, so the type use
-        // is a memo hit. Failures stay in the throwaway sink — a 0 depth just
+    } else if (tree.current_base_name.find('<') != std::string::npos
+               || (id >= 0 && tree.entries[id].kind == parse::EntryKind::kAlias)) {
+        // An INSTANCE base (`VB<int> : VK`), or a base spelled through an ALIAS
+        // (`alias SB = Ns:Tpl<int>; SB : D(...)`): the spelling doesn't name-resolve
+        // to a class, but the type was resolved when this class registered, so the
+        // type use is a memo hit. Failures stay in the throwaway sink — a 0 depth just
         // defers to the normal lookup's own diagnosis.
-        diagnostic::Sink probe;
-        bool reported = false;
-        std::set<std::string> visiting;
-        cls = widen::deepStrip(resolveTypeRef(tree,
-            widen::intern(tree.current_base_name), visiting, reported,
-            /*file_id=*/-1, /*tok=*/-1, probe));
-        if (reported) return 0;
+        cls = probeClassSpelling(tree, tree.current_base_name);
     }
     if (cls == widen::kNoType) return 0;
     // Backstop only: a cyclic base chain is diagnosed by checkClassByValueAcyclic
@@ -2869,7 +2891,10 @@ int baseClassDepth(parse::Tree& tree, std::string const& className) {
     for (int depth = 1; cls != widen::kNoType && guard-- > 0; depth++) {
         auto it = tree.classes.find(cls);
         if (it == tree.classes.end()) return 0;
-        if (it->second.name == className) return depth;
+        if (classMatchesQualifier(tree, cls, it->second.name, className)) {
+            if (out) *out = cls;
+            return depth;
+        }
         cls = parse::baseTypeOf(it->second);
     }
     return 0;
@@ -2887,36 +2912,26 @@ bool frameHasFunction(parse::Tree& tree, int frame, std::string const& name) {
 // itself (`Self:` — no reframe, `self` as-is), d>=1 = a transitive base at depth d
 // (`Base:` — self._$base...(d)), -1 = neither (not in the self chain). Unifies the
 // own-class and ancestor qualifier spellings behind one hop count for buildBaseReceiver.
-int selfOrBaseDepth(parse::Tree& tree, std::string const& className) {
-    if (!tree.current_class_name.empty() && className == tree.current_class_name)
-        return 0;
-    int d = baseClassDepth(tree, className);
+int selfOrBaseDepth(parse::Tree& tree, std::string const& className,
+                    widen::TypeRef* out = nullptr) {
+    if (out) *out = widen::kNoType;
+    if (!tree.current_class_name.empty()
+        && parse::bareClassName(className) == parse::bareClassName(tree.current_class_name)) {
+        widen::TypeRef self_t = widen::kNoType;
+        int id = resolveName(tree, tree.current_class_name);
+        if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kClass)
+            self_t = widen::strip(tree.entries[id].slids_type);
+        else
+            self_t = probeClassSpelling(tree, tree.current_class_name);
+        // A spelled type list must name THIS flavor (else fall to the ancestors).
+        if (className.find('<') == std::string::npos || self_t == widen::kNoType
+            || classMatchesQualifier(tree, self_t, tree.current_class_name, className)) {
+            if (out) *out = self_t;
+            return 0;
+        }
+    }
+    int d = baseClassDepth(tree, className, out);
     return d > 0 ? d : -1;
-}
-
-// Canonicalize a `Base:` qualifier that names a template INSTANCE (`VB<int>`,
-// `VB<Integer>`, `VB<T>` inside a flavor's body) to the flavor's registered
-// class name and type, so the string-keyed depth walk (ClassInfo.name) and the
-// member checks see the SAME flavor through any spelling. A non-instance
-// spelling passes through untouched; one that fails to resolve stays as
-// written with kNoType — the normal lookup path re-diagnoses it (failures
-// here go to a throwaway sink).
-void canonicalizeInstanceQualifier(parse::Tree& tree, std::string& q,
-                                   widen::TypeRef& out_type,
-                                   int file_id, int tok) {
-    out_type = widen::kNoType;
-    if (q.find('<') == std::string::npos) return;
-    diagnostic::Sink probe;
-    bool reported = false;
-    std::set<std::string> visiting;
-    widen::TypeRef t = resolveTypeRef(tree, widen::intern(q), visiting,
-                                      reported, file_id, tok, probe);
-    if (reported) return;
-    t = widen::deepStrip(t);
-    auto ci = tree.classes.find(t);
-    if (ci == tree.classes.end()) return;
-    q = ci->second.name;
-    out_type = t;
 }
 
 // THE RETARGET. Map a type through the enclosing refine scopes' usurpers, RECURSIVELY
@@ -2961,86 +2976,35 @@ void stampUsurp(parse::Tree& tree, parse::Node& e, int id) {
     if (mapped != declared) e.usurped_type = mapped;
 }
 
+// THE ANCESTOR-QUALIFIED CALL. A bare `X:m(args)` / `A:B:X:m(args)` inside a class member
+// whose LAST qualifier segment names the class itself or an ancestor (by BARE name, the
+// nearest match winning) is a method call on `self` that BYPASSES virtual dispatch. It
+// becomes the kMethodCallStmt `self.A:B:X:m(args)` — the same node `self.X:m()` /
+// `obj.X:m()` parse to — and classify (qualifiedMethodReceiver) walks the receiver's
+// ancestry ONCE for every spelling: validates the chain (root first), hops the receiver
+// to X's subobject, and marks the bypass. A static member (`X:kConst`, a nested class
+// `X:Inner(...)`) is not a method, and defers to the normal qualified-name lookup, as does
+// a qualifier naming no class on the chain. (A base FIELD is `self.Base.f` — the old
+// `Base:f` / `Base:self` reframes are gone: `:` is a change of context, not an object.)
 bool tryResolveBaseQualifier(parse::Tree& tree, parse::Node& e,
                              diagnostic::Sink& diag, bool unevaluated) {
-    // Spelling `X:self.method(args)` — a method call whose receiver (children[0]) is the
-    // qualified `X:self`. This is the explicit-self twin of `X:method(args)`: reframe the
-    // receiver to X's subobject (0 hops for the own class, d for a base) and BYPASS
-    // dispatch — a static call to X's method, not the runtime-most-derived override.
-    if (e.kind == parse::Kind::kMethodCallStmt
-        && !e.children.empty() && e.children[0]
-        && e.children[0]->kind == parse::Kind::kIdentExpr
-        && e.children[0]->qualifier.size() == 1
-        && e.children[0]->name == "self") {
-        std::string qname = e.children[0]->qualifier[0];
-        widen::TypeRef qtype;
-        canonicalizeInstanceQualifier(tree, qname, qtype, e.file_id, e.tok);
-        int depth = selfOrBaseDepth(tree, qname);
-        if (depth < 0) return false;   // an unrelated qualifier — let normal lookup diagnose
-        e.children[0] = buildBaseReceiver(depth, e.file_id, e.tok);   // self._$base...(depth)
-        e.bypass_virtual = true;
-        for (auto& ch : e.children)
-            if (ch) resolveExpr(tree, *ch, diag, unevaluated);
-        return true;
-    }
-    if (e.qualifier.size() != 1) return false;
-    // 0 = the OWN class (`Self:` — no reframe), d>=1 = a transitive base (`Base:` at
-    // depth d), -1 = neither (not in the self chain -> defer to normal lookup).
-    std::string qname = e.qualifier[0];
-    widen::TypeRef qtype;
-    canonicalizeInstanceQualifier(tree, qname, qtype, e.file_id, e.tok);
-    int depth = selfOrBaseDepth(tree, qname);
-    if (depth < 0) return false;
-    bool is_call  = (e.kind == parse::Kind::kCallExpr || e.kind == parse::Kind::kCallStmt);
-    bool is_ident = (e.kind == parse::Kind::kIdentExpr);
-    if (!is_call && !is_ident) return false;
-    // `X:member` reframes self ONLY for an INSTANCE member (a field, a method, or `self`).
-    // A static (const / alias / enum / nested type) is left for the normal qualified-name
-    // lookup — it is not reached through `self` / `self._$base`. An instance qualifier
-    // already resolved its type above (its spelling doesn't name-resolve).
-    widen::TypeRef anc = qtype;
-    if (anc == widen::kNoType) {
-        int aid = resolveName(tree, e.qualifier[0]);
-        if (aid < 0) return false;
-        anc = widen::strip(tree.entries[aid].slids_type);
-    }
-    auto ci = tree.classes.find(anc);
-    bool is_field = (ci != tree.classes.end())
-        && parse::classHasField(ci->second, e.name);
-    bool is_self   = (is_ident && e.name == "self");
-    // A METHOD reached via the qualifier — the qualified class's own frame OR one it
-    // INHERITS from a base (so `Mid:m()` reaches `Top`'s `m`). This mirrors the
-    // `X:self.method()` form, which binds against the full chain in classify; without
-    // the base-chain walk the two spellings would diverge (one bypasses, one errors).
-    bool is_method = false;
-    if (is_call) {
+    if (e.qualifier.empty() || e.global_qualified) return false;
+    if (e.kind != parse::Kind::kCallExpr && e.kind != parse::Kind::kCallStmt) return false;
+    widen::TypeRef anc = widen::kNoType;
+    if (selfOrBaseDepth(tree, e.qualifier.back(), &anc) < 0) return false;
+    // A METHOD reached via the qualifier — the named class's own frame OR one it INHERITS.
+    if (anc != widen::kNoType) {
+        bool is_method = false;
         for (int fr : parse::classAndBaseFrames(tree, anc))
             if (frameHasFunction(tree, fr, e.name)) { is_method = true; break; }
+        if (!is_method) return false;   // a static -> the normal lookup
     }
-    if (!is_self && !(is_ident && is_field) && !is_method) return false;  // static -> defer
-    auto base_recv = buildBaseReceiver(depth, e.file_id, e.tok);   // depth 0 = self as-is
-    e.qualifier.clear();
-    e.qualifier_toks.clear();
-    if (is_ident && e.name == "self") {
-        // `X:self` as a bare value: the own class (depth 0) is plain `self`; a base
-        // (depth>=1) is `self._$base...(depth)` — take the reframed receiver verbatim.
-        e.kind = base_recv->kind;
-        e.name = base_recv->name;
-        e.children = std::move(base_recv->children);
-    } else if (is_ident) {
-        e.kind = parse::Kind::kFieldExpr;            // X:field -> self[._$base...].field
-        e.children.clear();
-        e.children.push_back(std::move(base_recv));  // [0] = the reframed receiver
-    } else {                                         // X:method(args) -> method call
-        std::vector<std::unique_ptr<parse::Node>> args = std::move(e.children);
-        e.kind = parse::Kind::kMethodCallStmt;       // e.name = method
-        e.children.clear();
-        e.children.push_back(std::move(base_recv));  // [0] = the reframed receiver
-        for (auto& a : args) e.children.push_back(std::move(a));
-        // A qualified call BYPASSES virtual dispatch: it statically targets the named
-        // class's method (own or ancestor), not the runtime-most-derived override.
-        e.bypass_virtual = true;
-    }
+    std::vector<std::unique_ptr<parse::Node>> args = std::move(e.children);
+    e.kind = parse::Kind::kMethodCallStmt;   // e.name = the method; the qualifier stays
+    e.children.clear();
+    e.children.push_back(buildRecvDeref(e.file_id, e.tok));   // [0] = self
+    for (auto& a : args) e.children.push_back(std::move(a));
+    resolveTmplArgs(tree, e, diag);
     for (auto& ch : e.children)
         if (ch) resolveExpr(tree, *ch, diag, unevaluated);
     return true;
@@ -5585,14 +5549,9 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kMethodCallStmt: {
-            // A `X:self.method()` statement is the static bypass: reframe + mark it
-            // (bypass_virtual) BEFORE the children resolve — else resolving the `X:self`
-            // receiver rewrites it in place and the call stays dispatched. (The
-            // expression form runs through tryResolveBaseQualifier at resolveExpr's top.)
-            if (tryResolveBaseQualifier(tree, s, diag, /*unevaluated=*/false))
-                return Completion::Normal;
             // Resolve the receiver (children[0]) and the args (children[1..]); the
-            // method name binds in classify against the receiver's class type. An
+            // method name binds in classify against the receiver's class type — a
+            // qualified `recv.X:m()` there too (qualifiedMethodReceiver). An
             // explicit template type-list resolves here, in the call's scope.
             resolveTmplArgs(tree, s, diag);
             for (auto& ch : s.children)

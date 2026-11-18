@@ -40,9 +40,10 @@ Spec<T=bool>() { int who() { return 2; } }
 /* a LOCAL class deriving from an AGGREGATED instance base. */
 VShape<int> : MyDer(int m_ = 0) {
     virtual int vid() { return 100 + m_; }
-    /* the `Base:` bypass naming the AGGREGATED instance base — the canon
-       triple; the static call binds the base's EXTERNAL vid across the seam. */
-    int trio() { return VShape<int>:s_ + VShape<int>:self.s_ + VShape<int>:vid(); }
+    /* the AGGREGATED instance base — the base field through the base object (by its
+       bare name, `self.VShape`), and the bypass naming the instance base; the static
+       call binds the base's EXTERNAL vid across the seam. */
+    int trio() { return self.VShape.s_ + self.VShape.s_ + VShape<int>:vid(); }
 }
 
 /* a local class for the inline-local virtual / user-op= pins. */

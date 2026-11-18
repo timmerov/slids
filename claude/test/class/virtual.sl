@@ -43,19 +43,33 @@ non-virtual methods may not be shadowed by virtual methods.
 the virtual keyword is required when overriding virtual methods.
 
 methods may bypass the dispatch table using qualifiers or self.
+the colon syntax bypasses the vtable and directly calls the
+specified class's method.
 
-    Virtual ByPass(int z) {
+    Virtual : ByPass(int z) {
         virtual void method() {
             PureVirtual:method();
             Virtual:method();
             ByPass:method();
 
-            PureVirtual:self.method();
-            Virtual:self.method();
-            ByPass:self.method();
-            self.method();
+            /* self qualifier is optional. */
+            self.PureVirtual:method();
+            self.Virtual:method();
+            self.ByPass:method();
         }
     }
+    ByPass bypass;
+    bypass.PureVirtual:method();
+    bypass.Virtual:method();
+    bypass.ByPass:method();
+
+footgun alert:
+a dot before the method will dispatch through the object's vtable.
+even if there is an explicit use of the object's ancestor object.
+
+    /* calls ByPass:method not Virtual:method. */
+    bypass.Virtual.method();
+
 
 during the construction of a derived virtual class, when the base class ctor is called,
 the dispatch table is set for the base class, not the derived class.
@@ -109,14 +123,12 @@ pointer, and an inherited method resolves to the base slot valid in every derive
 The vtable layout: base slots first (stable index), overrides reuse the slot, new virtuals
 append; OVERLOADED virtuals each take their own slot (overload resolution picks the slot at
 compile time, the vptr picks the impl at run time). A qualified call is a STATIC bypass
-(parse.h bypass_virtual, set by resolve for both statement and expression forms). ALL four
-spellings bypass: `Base:m()` / `Self:m()` (base + own-class qualifier) and `Base:self.m()`
-/ `Self:self.m()` (the same with an explicit `self.`). `selfOrBaseDepth` unifies them —
-0 base hops for the own class, d for a transitive base — and `X:self.method()` (a method
-call whose receiver is `X:self`) reframes the receiver + marks bypass. The method may be
-one the qualified class INHERITS (is_method walks classAndBaseFrames), so `X:m()` bypasses
-to the nearest inherited impl and agrees with `X:self.m()`. Only an unqualified `self.m()`
-dispatches.
+(parse.h bypass_virtual, set by classify's qualifiedMethodReceiver). Every spelling with a
+`:` before the method bypasses: `X:m()` (self optional), `self.X:m()`, `obj.X:m()`, and a
+root-first chain `A:B:X:m()` — X the class itself or any ancestor, by bare name, nearest
+first. The method may be one X INHERITS, so `Gp:who()` bypasses to the nearest inherited
+impl. A DOT before the method dispatches — `obj.m()`, `self.m()`, and even `obj.Dp.m()`
+through an explicit ancestor object (the canon's footgun).
 
 STAGE 4 (landed): the destructor occupies vtable SLOT 0 (fixed across the hierarchy). Its
 impl is a per-class COMPLETE destructor `@<Class>__$vdtor` — the dtor body then the
@@ -298,7 +310,7 @@ Bp(int bx_) {
     virtual void who() { println(String + "Bp:who"); }
     virtual void frombase() {
         Bp:who();          /* own-class qualifier -> static Bp:who */
-        Bp:self.who();     /* own-class self.     -> static Bp:who */
+        self.Bp:who();     /* own-class self.     -> static Bp:who */
         self.who();        /* dispatch            -> most-derived */
     }
 }
@@ -308,21 +320,21 @@ Bp : Dp(int dy_) {
     virtual void who() { println(String + "Dp:who"); }
     virtual void fromderived() {
         Bp:who();          /* base qualifier      -> static Bp:who */
-        Bp:self.who();     /* base self.          -> static Bp:who */
+        self.Bp:who();     /* base self.          -> static Bp:who */
         Dp:who();          /* own-class qualifier -> static Dp:who */
-        Dp:self.who();     /* own-class self.     -> static Dp:who */
+        self.Dp:who();     /* own-class self.     -> static Dp:who */
         self.who();        /* dispatch            -> Dp:who */
     }
 }
 /* Gp does NOT override who() — it INHERITS Dp::who. A qualifier that names a class which
    only inherits the method must still bypass (to the nearest inherited impl), and both the
-   `X:method()` and `X:self.method()` spellings must agree. */
+   `X:method()` and `self.X:method()` spellings must agree. */
 Dp : Gp(int gz_) {
     _() {}
     virtual ~() {}
     virtual void frominherited() {
         Gp:who();          /* own class inherits who -> static Dp:who (nearest) */
-        Gp:self.who();     /* same via self.         -> static Dp:who */
+        self.Gp:who();     /* same via self.         -> static Dp:who */
         Bp:who();          /* 2-level base qualifier -> static Bp:who */
     }
 }
@@ -485,6 +497,20 @@ int32 main() {
 
         Gp gp(1, 2, 3);                    // inherits who; bypass to the inherited impl
         gp.frominherited();                // Dp:who, Dp:who, Bp:who
+    }
+
+    /* CANON — the bypass through an OBJECT: `obj.X:m()` calls X's method directly; a
+       DOT before the method dispatches through the object's vtable, even through an
+       explicit ancestor object (the footgun). */
+    {
+        Gp gq(1, 2, 3);
+        gq.Bp:who();                       // Bp:who   (skips Dp)
+        gq.Dp:who();                       // Dp:who
+        gq.Gp:who();                       // Dp:who   (Gp inherits who)
+        gq.Bp:Dp:Gp:who();                 // Dp:who   (a chain, root first)
+        gq.Dp.Bp:who();                    // Bp:who   (walk, then qualify)
+        gq.Dp.who();                       // Dp:who   (dispatch: the object is a Gp)
+        gq.Dp.Bp.who();                    // Dp:who   (dispatch, even two levels up)
     }
 
     /* COVERAGE — dispatch during construction / destruction. */
