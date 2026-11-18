@@ -452,6 +452,12 @@ struct Node {
     bool default_swap_init = false;      // kVarDeclStmt: initialized with `<-->` (a swap);
                                  // classify default-constructs then re-dispatches as a
                                  // kSwapStmt (never reaches desugar as a var-decl)
+    bool ambiguous_group = false;        // kAssignStmt: `name (group) = rhs;` whose group
+                                 // parsed BOTH as values and as types — children[0] = the
+                                 // conversion-shorthand rhs (the TYPE reading), children[1]
+                                 // = the kStoreStmt [name(args), rhs] (the VALUE reading,
+                                 // a nameless assignment). Resolve keeps one by what the
+                                 // group's names ARE (types vs values).
     bool construction_init = false;      // kVarDeclStmt: the `Type name(args)` paren-init
                                  // form (vs `= init`) — a FIELD-LIST construction that
                                  // is ALWAYS built in place, never value-init. Both forms

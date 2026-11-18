@@ -7901,6 +7901,95 @@ widen::TypeRef inferReferenceFrom(widen::TypeRef inferred, parse::Node const& s,
     return widen::kNoType;
 }
 
+// A NAMELESS class object as the target of a store (spec: nameless.sl). Resolve leaves the
+// bare `Class` / `Class(args)` root as a construction kCallExpr. Two shapes, two forms:
+//   * a FIELD store rooted at it — `Class.f = v`, `Class(1).f[0] = v`, `Class.f += v` —
+//     is FORM 1: an unnamed LOCAL VARIABLE, exactly like `Class;`. The construction is
+//     declared as a `_$nameless` local in the PRELUDE (enclosing-scope lifetime: its dtor
+//     runs at scope end and sees the store), and the root becomes a read of it.
+//   * a WHOLE-OBJECT store — `Class = rhs` (resolve rewrote the assignment) — depends on
+//     the op= it selects. A USER op= (written or inherited) is the side effect: FORM 2,
+//     `Class.op=(rhs);`, a method call on a temporary that dies at the semicolon. The
+//     SYNTHESIZED op= has no side effect of its own: FORM 1, as above.
+// FORM 1 needs a ctor or dtor to observe the object; a trivial class is the same "no effect"
+// error `Class;` raises. Returns true when THIS call finished the statement (a form-2
+// rewrite, or an error); false when the caller classifies `s` as usual (untouched, or its
+// root now reads the `_$nameless` local).
+bool liftNamelessStoreTarget(parse::Tree& tree, parse::Node& s,
+                             widen::TypeRef fn_return_type, diagnostic::Sink& diag,
+                             std::vector<std::unique_ptr<parse::Node>>* prelude) {
+    if (!prelude || s.children.size() != 2 || !s.children[0]) return false;
+    auto isCtor = [](parse::Node const& n) {
+        return n.kind == parse::Kind::kCallExpr && n.is_construction
+            && n.resolved_entry_id >= 0;
+    };
+    std::unique_ptr<parse::Node>* slot = &s.children[0];
+    bool whole = isCtor(**slot);
+    if (whole) {
+        if (s.kind != parse::Kind::kStoreStmt) return false;
+    } else {
+        // Walk the field / element chain to its root. Only a root whose IMMEDIATE step is a
+        // FIELD is a nameless object (`Class(1)[0]` is an op[] on a temporary — untouched).
+        parse::Node* parent = nullptr;
+        while (((*slot)->kind == parse::Kind::kFieldExpr
+                || (*slot)->kind == parse::Kind::kIndexExpr)
+               && !(*slot)->children.empty() && (*slot)->children[0]) {
+            parent = slot->get();
+            slot = &(*slot)->children[0];
+        }
+        if (!parent || parent->kind != parse::Kind::kFieldExpr || !isCtor(**slot))
+            return false;
+    }
+    parse::Node& root = **slot;
+    widen::TypeRef ctype = widen::strip(tree.entries[root.resolved_entry_id].slids_type);
+    auto ci = tree.classes.find(ctype);
+    if (ci == tree.classes.end()) return false;
+    if (whole) {
+        parse::Node& rhs = *s.children[1];
+        inferExpr(tree, rhs, ctype, diag);
+        if (diagnostic::hasErrors(diag)) return true;
+        int op_id = findClassOperator(tree, ctype, rhs, "op=", diag);
+        if (op_id == -2 || diagnostic::hasErrors(diag)) return true;
+        if (op_id >= 0 && !tree.entries[op_id].synthesized) {
+            // FORM 2: `Class.op=(rhs);` — the receiver is the construction temporary.
+            s.kind = parse::Kind::kMethodCallStmt;
+            s.name = "op=";
+            s.name_tok = s.tok;
+            s.resolved_entry_id = -1;
+            classifyStmt(tree, s, fn_return_type, diag, prelude);
+            return true;
+        }
+    }
+    // FORM 1: the object must be observable through its ctor/dtor.
+    if (!ci->second.needs_ctor && !ci->second.needs_dtor) {
+        diagnostic::report(diag, {s.file_id, s.tok,
+            "A nameless class statement has no effect: '" + ci->second.name
+            + "' has no constructor or destructor.", {}});
+        return true;
+    }
+    widen::TypeRef decl_type = tree.entries[root.resolved_entry_id].slids_type;
+    Spill sp = spillToTemp(tree, std::move(*slot), decl_type, "_$nameless");
+    classifyStmt(tree, *sp.decl, fn_return_type, diag, prelude);
+    if (diagnostic::hasErrors(diag)) return true;
+    prelude->push_back(std::move(sp.decl));
+    *slot = std::move(sp.read);
+    return false;
+}
+
+// A bare FIELD READ of a nameless object (`Class(1).f;`) is neither an assignment nor a
+// method call — no chance of a side effect (spec: nameless.sl). True when `e` is one.
+bool isNamelessFieldRead(parse::Node const& e) {
+    parse::Node const* n = &e;
+    parse::Node const* parent = nullptr;
+    while ((n->kind == parse::Kind::kFieldExpr || n->kind == parse::Kind::kIndexExpr)
+           && !n->children.empty() && n->children[0]) {
+        parent = n;
+        n = n->children[0].get();
+    }
+    return parent && parent->kind == parse::Kind::kFieldExpr
+        && n->kind == parse::Kind::kCallExpr && n->is_construction;
+}
+
 void classifyStmt(parse::Tree& tree, parse::Node& s,
                   widen::TypeRef fn_return_type, diagnostic::Sink& diag,
                   std::vector<std::unique_ptr<parse::Node>>* prelude = nullptr) {
@@ -8356,6 +8445,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // s.return_type. If resolve failed, we shouldn't be here (main
             // short-circuits) — but be defensive and walk rhs anyway.
             std::string const& op = s.text;
+            // A field of a NAMELESS object (`Class.f += v`): form 1 — lift it to a local.
+            if (liftNamelessStoreTarget(tree, s, fn_return_type, diag, prelude)) return;
             parse::Node* rhs_ptr;
             if (s.children.size() == 2) {
                 // Complex lvalue form: [0]=lvalue chain, [1]=rhs. Infer the lvalue
@@ -8552,6 +8643,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // (-> the pointee / element type), then infer the rhs in that context
             // so a literal flexes to it.
             assert(s.children.size() == 2 && "kStoreStmt needs lvalue + rhs");
+            // A NAMELESS object target (`Class.f = v`, `Class = rhs`): form 1 lifts it to a
+            // local and falls through; form 2 rewrites to `Class.op=(rhs)` and is done.
+            if (liftNamelessStoreTarget(tree, s, fn_return_type, diag, prelude)) return;
             parse::Node& lvalue = *s.children[0];
             inferExpr(tree, lvalue, widen::kNoType, diag);
             inferExpr(tree, *s.children[1], lvalue.inferred_type, diag);
@@ -8848,6 +8942,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             // value discarded — infer for its checks (lvalue / numeric) only.
             for (auto& ch : s.children) {
                 if (!ch) continue;
+                if (isNamelessFieldRead(*ch)) {
+                    diagnostic::report(diag, {s.file_id, s.tok,
+                        "A nameless class expression has no effect.", {}});
+                    return;
+                }
                 if (ch->kind == parse::Kind::kIndirectCallExpr) ch->value_discarded = true;
                 inferExpr(tree, *ch, widen::kNoType, diag);
             }

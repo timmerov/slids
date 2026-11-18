@@ -256,16 +256,17 @@ cumulative voting - split 1.0 votes among candidates.
 */
 
 import+ slids.algorithm;
-import candidate;
 import slids.dump;
-import electorate;
-import slids.math;
+import slids.linpro;
 import+ slids.map;
+import slids.math;
+import slids.string;
+import+ slids.vector;
+import candidate;
+import electorate;
 import random;
 import runner;
 import settings;
-import slids.string;
-import+ slids.vector;
 alias slids;
 
 stdc import {
@@ -343,8 +344,8 @@ ElectoralMethod(
     float64 total_utility_ = 0.0,
     float64 satisfaction_ = 0.0,
     float64 correlation_ = 0.0,
-    int nmunchkins_ = 0,
-    int total_coalition_ = 0
+    int nvillains_ = 0,
+    int nminions_ = 0
 ) {
     global int g_nmethods = 0;
     const int kWidth = 30;
@@ -2938,10 +2939,10 @@ ElectoralMethod : PluralityMethod() {
         /*
         we're looking for the minimum number of strategic
         voters it would take to replace the honest winner
-        with a min/maxxing munchkin candidate.
+        with a min/maxxing villain candidate.
         */
-        munchkin = -1;
-        min_coalition = -1;
+        villain = -1;
+        min_minions = -1;
 
         for (a : 0..ncandidates) {
             if (a == winner_) {
@@ -2963,26 +2964,26 @@ ElectoralMethod : PluralityMethod() {
             we only add counts to A.
             so we only need to count A votes and W votes.
             */
-            votesa = 0;
-            votesw = 0;
-            votesa_strategic = 0;
+            a_votes = 0;
+            w_votes = 0;
+            xtoa_pool = 0;
             for (it : bloc_map^) {
                 first = it^.rankings_[0];
                 /* A voters keep voting A. */
                 if (first == a) {
-                    votesa += it^.bloc_.size_;
+                    a_votes += it^.bloc_.size_;
                     continue;
                 }
                 /* W voters keep voting W. */
                 if (first == winner_) {
-                    votesw += it^.bloc_.size_;
+                    w_votes += it^.bloc_.size_;
                     continue;
                 }
                 /* not A not W voters. */
                 for (which : it^.rankings_) {
                     /* these prefer A>W */
                     if (which == a) {
-                        votesa_strategic += it^.bloc_.size_;
+                        xtoa_pool += it^.bloc_.size_;
                         break;
                     }
                     /* these prefer W>A so they keep voting honestly. */
@@ -2993,34 +2994,47 @@ ElectoralMethod : PluralityMethod() {
             }
 
             /* A must shift enough votes to win. */
-            marginwa = victory_margin(winner_, a, votesw, votesa);
+            marginwa = victory_margin(winner_, a, w_votes, a_votes);
             required = marginwa + 1;
 
             /* not enough votes in the pool */
-            if (votesa_strategic < required) {
+            if (xtoa_pool < required) {
                 continue;
             }
 
             /* save new minimums. */
-            if (min_coalition < 0
-            ||  min_coalition > required) {
-                min_coalition = required;
-                munchkin = a;
+            if (min_minions < 0
+            ||  min_minions > required) {
+                min_minions = required;
+                villain = a;
             }
         }
 
         /* no strategic winner. */
-        if (munchkin < 0) {
+        if (villain < 0) {
             return;
         }
 
-        namew = candidates^[winner_].name_;
-        namem = candidates^[munchkin].name_;
-        println(String + " Plurality needs " + min_coalition
-            + " voters to switch from " + namew + " to " + namem + ".");
+        String others;
+        for (a : 0..ncandidates) {
+            if (a == winner_) {
+                continue;
+            }
+            if (a == villain) {
+                continue;
+            }
+            if (others.size()) {
+                others += ",";
+            }
+            others += candidates^[a].name_;
+        }
 
-        ++nmunchkins_;
-        total_coalition_ += min_coalition;
+        namev = candidates^[villain].name_;
+        println(String + " " + name_ + " needs " + min_minions
+            + " voters to switch from " + others + " to " + namev + ".");
+
+        ++nvillains_;
+        nminions_ += min_minions;
     }
 
     virtual void print_strategic_results() {
@@ -3029,22 +3043,37 @@ ElectoralMethod : PluralityMethod() {
         fmt.precision_ = 1;
 
         ntrials float64 = g_runner.ntrials_;
-        nmunchkins float64 = nmunchkins_;
-        wins = 100.0 * nmunchkins / ntrials;
+        nvillains float64 = nvillains_;
+        wins = 100.0 * nvillains / ntrials;
         coalition_size float64 = 0.0;
         coalition_pct float64 = 0.0;
-        if (nmunchkins_ > 0) {
+        if (nvillains_ > 0) {
             nvoters float64 = g_runner.electorate_.nvoters_;
-            coalition_size = total_coalition_ / nmunchkins;
+            coalition_size = nminions_ / nvillains;
             coalition_pct = 100.0 * coalition_size / nvoters;
         }
 
-        println(String + " " + name_ + ": " + fmt*wins + "% (" + nmunchkins_ + ")"
+        println(String + " " + name_ + ": " + fmt*wins + "% (" + nvillains_ + ")"
             + " strategic voters: " + fmt*coalition_pct + "% (" + coalition_size + ")");
         if (kExplainStrategies) { void;
             println("  W>A pairwise. BC+ voters who prefer A>W switch to A.");
         }
     }
+}
+
+/*
+utility functions for breaking ties in linear programming.
+*/
+LP:Comparison gt_or_gte(int a, int b) {
+    LP:Comparison result;
+    if (a < b) {
+        /* a wins ties. */
+        result.relation_ = kGTE;
+    } else {
+        /* a loses ties. */
+        result.relation_ = kGT;
+    }
+    return result;
 }
 
 /*
@@ -3124,12 +3153,24 @@ ElectoralMethod : PluralityRunoffMethod() {
         ncandidates = g_runner.ncandidates_;
         candidates = ^g_runner.candidates_;
         bloc_map = ^g_runner.bloc_map_;
+        nvoters = g_runner.electorate_.nvoters_;
 
         Vector<int> counts;
+        Vector<int> pools;
         counts.resize(ncandidates);
+        pools.resize(ncandidates);
 
-        munchkina = -1;
-        munchkinb = -1;
+        Minion(
+            int x_,
+            LP:Var xa_,
+            LP:Var xb_
+        ) { }
+        alias Minions = Vector<Minion>;
+        Minions minions;
+        minions.reserve(ncandidates);
+
+        villaina = -1;
+        villainb = -1;
         min_coalition = -1;
         min_a_to_b = -1;
         min_b_to_a = -1;
@@ -3170,65 +3211,36 @@ ElectoralMethod : PluralityRunoffMethod() {
                 }
 
                 /*
-                for linear programming we have:
-                X != A,B,W
-                A total must 1st or 2nd.
-                sum A_ + sum XAW_A + B_A - A_B
-                    > sum W_
-                    > sum X_ - XAW_A - XAW_B
-                B total must 1st or 2nd.
-                sum B_ + sum XAW_B + A_B - B_A
-                    > sum W_
-                    > sum X_ - XAW_A - XAW_B
-                limit how many votes A,B,X can shift.
-                XAW_A + XAW_B <= XAW
-                A_B <= sum A_
-                B_A <= sum BAW
-                this ensures we have an AB runoff.
-                ignoring +1's for tie breakers.
-                want to minimize:
-                A_B + B_A + sum XAW_A + sum XAW_B
+                solve this using linear programming.
+                we need to know the total vote counts for every candidate.
+                we need to know the number of X voters that prefer A>W.
+                this set the size of the pool we can recruit minions from.
 
-                sum A_ = all A voters. same B,W,X.
-                XAW_A = X voters who prefer A>W.
-                they might switch to A. same XAW_B.
-
-                claude says read gnu's glpk source for simplex method.
-                https://github.com/firedrakeproject/glpk/tree/master/src/simplex
-
-                  XA        - AB + BA > W - A
-                2 XA +   XB - AB + BA > X - A
-                         XB + AB - BA > W - B
-                  XA + 2 XB + AB - BA > X - B
-                  XA +   XB           <= XAW
-                              AB      <= A
-                                   BA <= BAW
+                A = counts[a]
+                B = counts[b]
+                W = counts[w]
+                X = counts[x]
+                XAW = pools[x]
+                note: there may be multiple X's.
                 */
 
                 /* clear the counts. */
                 for (p^ : counts) {
                     p^ = 0;
                 }
-                votes_strategic = 0;
-                abw = (uint64=1) << a;
-                abw |= (uint64=1) << b;
-                abw |= (uint64=1) << winner_;
+                for (p^ : pools) {
+                    p^ = 0;
+                }
 
                 /* re-count the votes. */
                 for (it : bloc_map^) {
                     first = it^.rankings_[0];
                     counts[first] += it^.bloc_.size_;
 
-                    /* skip A,B,W voters. */
-                    bit = (uint64=1) << first;
-                    if (abw & bit) {
-                        continue;
-                    }
-
-                    /* add "other" voters who rank A>W to strategic voters.. */
+                    /* add voters who rank A>W to a pool. */
                     for (which : it^.rankings_) {
                         if (which == a) {
-                            votes_strategic += it^.bloc_.size_;
+                            pools[first] += it^.bloc_.size_;
                             break;
                         }
                         if (which == winner_) {
@@ -3238,119 +3250,94 @@ ElectoralMethod : PluralityRunoffMethod() {
                 }
 
                 /*
-                find the candidate C who is not A,B
-                and has the most votes.
+                linear programming variables:
+                AB shifts votes from A to B.
+                BA shifts votes from B to A.
+                XA shifts votes from X to A.
+                XB shifts votes from X to B.
+                note: there may be multiple X's.
                 */
-                c = 0;
-                votesc = 0;
-                for (which : 0..ncandidates) {
-                    if (which == a) {
+                LP lp;
+                ab = lp.add_var(String + candidates^[a].name_ + candidates^[b].name_);
+                ba = lp.add_var(String + candidates^[b].name_ + candidates^[a].name_);
+                minions.clear();
+                for (x : 0..ncandidates) {
+                    /* skip candidates A,B,W. */
+                    if (x == a || x == b || x == winner_) {
                         continue;
                     }
-                    if (which == b) {
-                        continue;
-                    }
-                    votes = counts[which];
-                    if (votesc < votes) {
-                        votesc = votes;
-                        c = which;
-                    }
+
+                    minion = minions.append();
+                    minion^.x_ = x;
+                    minion^.xa_ = lp.add_var(String + candidates^[x].name_ + candidates^[a].name_);
+                    minion^.xb_ = lp.add_var(String + candidates^[x].name_ + candidates^[b].name_);
                 }
 
                 /*
-                ==tsc== bug
-                when C!=W the CAW votes are in the pool.
-                we don't know how many.
-                this happens about 23% of the time.
-                we can remove 1 CAW vote from C.
-                this reduces pool votes by 1 or 2.
-                so we're over-estimating the number of strategic voters.
-                looks like we need LP.
+                linear programming equations:
+
+                A,B must finish 1st or 2nd.
+                A - AB + BA + sum XA > W
+                A - AB + BA + sum XA > X - XA - XB
+                B + AB - BA + sum XB > W
+                B + AB - BA + sum XB > X - XA - XB
+
+                B cannot have a majority.
+                B < votes/2
+
+                votes shifted from A,B,X are limited:
+                AB <= A
+                BA <= BAW
+                XA + XB <= XAW
                 */
-                /*if (c != winner_) {
-                    println("==tsc== C!=W");
-                }*/
-
-                /*
-                ==tsc==
-                we switch votes from B to A.
-                but that assumes BAW voters exist.
-                there could be zero.
-                looks like we need LP.
-                */
-
-                /*
-                A,B must beat C.
-                if both A,B are behind C then we need from the pool:
-                votes = CA margin + 1 + CB margin + 1
-                if A is ahead and B is behind C, then we can
-                transfer AC margin votes to B.
-                the rest must come from the pool.
-                if B is ahead and A is behind C, then we can
-                transfer BC margin votes to A.
-                the rest must come from the pool.
-                A,B cannot both be ahead of C. otherwise the honest
-                runoff would have been AB. which can't happen because
-                W won the runoff.
-                */
-                a_to_b = 0;
-                b_to_a = 0;
-                pool_to_a = 0;
-                pool_to_b = 0;
-                votesa = counts[a];
-                votesb = counts[b];
-                marginca = victory_margin(c, a, votesc, votesa);
-                margincb = victory_margin(c, b, votesc, votesb);
-                if (marginca >= 0 && margincb >= 0) {
-                    /* C is ahead of A,B */
-                    pool_to_a = marginca + 1;
-                    pool_to_b = margincb + 1;
-                } else if (marginca >= 0) {
-                    /* B is ahead of C is ahead of A. */
-                    marginbc = victory_margin(b, c, votesb, votesc);
-                    /* A needs this many votes to beat C. */
-                    pool_to_a = marginca + 1;
-                    /* transfer some from B. */
-                    b_to_a = math:min(marginbc, pool_to_a);
-                    pool_to_a -= b_to_a;
-                } else {
-                    /* A is ahead of C is ahead of B. */
-                    marginac = victory_margin(a, c, votesa, votesc);
-                    /* B needs this many votes to beat C. */
-                    pool_to_b = margincb + 1;
-                    /* transfer some from A. */
-                    a_to_b = math:min(marginac, pool_to_b);
-                    pool_to_b -= a_to_b;
+                suma = LP:Expr + counts[a] - ab + ba;
+                sumb = LP:Expr + counts[b] + ab - ba;
+                for (minion : minions) {
+                    suma += minion^.xa_;
+                    sumb += minion^.xb_;
                 }
-                needed_from_pool = pool_to_a + pool_to_b;
+                rowaw = suma + gt_or_gte(a, winner_) + counts[winner_];
+                rowbw = sumb + gt_or_gte(b, winner_) + counts[winner_];
+                rowab = LP:Expr + ab + LP:lte + counts[a];
+                rowba = LP:Expr + ba + LP:lte + pools[b];
+                /* ==tsc== check this. */
+                rowb = sumb + LP:lt + nvoters/2;
+                lp.add_row(rowaw);
+                lp.add_row(rowbw);
+                lp.add_row(rowab);
+                lp.add_row(rowba);
+                lp.add_row(rowb);
+                for (minion : minions) {
+                    x = minion^.x_;
+                    /*
+                    ==tsc==
+                    i would like to do this but it's not implemented yet:
 
-                /* not enough votes. */
-                if (votes_strategic < needed_from_pool) {
-                    continue;
+                    sumx = LP:Expr + counts[x] - minion^.xa_ - minion^.xb_;
+                    rowax = suma + LP:gt + sumx;
+                    rowbx = sumb + LP:gt + sumx;
+                    */
+                    rowax = suma + gt_or_gte(a, x) + counts[x] - minion^.xa_ - minion^.xb_;
+                    rowbx = sumb + gt_or_gte(b, x) + counts[x] - minion^.xa_ - minion^.xb_;
+                    lp.add_row(rowax);
+                    lp.add_row(rowbx);
+                    rowxab = LP:Expr + minion^.xa_ + minion^.xb_ + LP:lte + pools[x];
+                    lp.add_row(rowxab);
                 }
-
-                /* save new minimums. */
-                test_coalition = a_to_b + b_to_a + pool_to_a + pool_to_b;
-                if (min_coalition < 0
-                ||  min_coalition > test_coalition) {
-                    munchkina = a;
-                    munchkinb = b;
-                    min_coalition = test_coalition;
-                    min_a_to_b = a_to_b;
-                    min_b_to_a = b_to_a;
-                    min_pool_to_a = pool_to_a;
-                    min_pool_to_b = pool_to_b;
-                }
+                lp.print();
+                lp.solve();
+                lp.solve_integral();
+                lp.print();
             }
         }
 
         /* no strategic winner. */
-        if (munchkina < 0) {
+        if (villaina < 0) {
             return;
         }
 
-        namea = candidates^[munchkina].name_;
-        nameb = candidates^[munchkinb].name_;
+        namea = candidates^[villaina].name_;
+        nameb = candidates^[villainb].name_;
         need_comma = false;
         s = String + " " + name_ + ":";
         if (min_a_to_b > 0) {
@@ -3381,8 +3368,8 @@ ElectoralMethod : PluralityRunoffMethod() {
         s += ".";
         println(s);
 
-        ++nmunchkins_;
-        total_coalition_ += min_coalition;
+        ++nvillains_;
+        nminions_ += min_coalition;
     }
 
     virtual void print_strategic_results() {
@@ -3391,17 +3378,17 @@ ElectoralMethod : PluralityRunoffMethod() {
         fmt.precision_ = 1;
 
         ntrials float64 = g_runner.ntrials_;
-        nmunchkins float64 = nmunchkins_;
-        wins = 100.0 * nmunchkins / ntrials;
+        nvillains float64 = nvillains_;
+        wins = 100.0 * nvillains / ntrials;
         coalition_size float64 = 0.0;
         coalition_pct float64 = 0.0;
-        if (nmunchkins_ > 0) {
+        if (nvillains_ > 0) {
             nvoters float64 = g_runner.electorate_.nvoters_;
-            coalition_size = total_coalition_ / nmunchkins;
+            coalition_size = nminions_ / nvillains;
             coalition_pct = 100.0 * coalition_size / nvoters;
         }
 
-        println(String + " " + name_ + ": " + fmt*wins + "% ("  + nmunchkins_ + ")"
+        println(String + " " + name_ + ": " + fmt*wins + "% ("  + nvillains_ + ")"
             + " strategic voters: " + fmt*coalition_pct + "% (" + coalition_size + ")");
         if (kExplainStrategies) { void;
             println("  W>A pairwise. Arrange AB runoff. A,B voters shift.");

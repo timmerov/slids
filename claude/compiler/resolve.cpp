@@ -5268,6 +5268,62 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             return Completion::Normal;
         }
         case parse::Kind::kAssignStmt: {
+            // `name (group) = rhs;` whose group parsed both as TYPES (the conversion
+            // shorthand, children[0]) and as VALUES (the nameless assignment, children[1]).
+            // The group's names decide: all TYPES -> the shorthand; all VALUES (or names
+            // that don't resolve — the value path reports them) -> the nameless
+            // assignment; a MIX is neither.
+            if (s.ambiguous_group) {
+                assert(s.children.size() == 2 && s.children[1]
+                       && s.children[1]->kind == parse::Kind::kStoreStmt
+                       && "ambiguous_group needs both readings");
+                parse::Node& call = *s.children[1]->children[0];
+                int ntypes = 0, nvalues = 0;
+                for (auto const& arg : call.children) {
+                    parse::Node const* n = arg.get();
+                    while (n && n->kind != parse::Kind::kIdentExpr && !n->children.empty())
+                        n = n->children[0].get();
+                    int id = -1;
+                    if (n && n->kind == parse::Kind::kIdentExpr) {
+                        if (isQualified(*n)) {
+                            parse::Node probe = parse::Node();
+                            probe.name = n->name;
+                            probe.qualifier = n->qualifier;
+                            probe.qualifier_toks = n->qualifier_toks;
+                            probe.global_qualified = n->global_qualified;
+                            probe.file_id = n->file_id;
+                            probe.name_tok = n->name_tok;
+                            std::size_t before = diag.records.size();
+                            id = resolveQualifiedRef(tree, probe, diag);
+                            diag.records.resize(before);   // the chosen path reports
+                        } else {
+                            id = resolveName(tree, n->name);
+                        }
+                    }
+                    parse::EntryKind k = id >= 0 ? tree.entries[id].kind
+                                                 : parse::EntryKind::kLocalVar;
+                    if (k == parse::EntryKind::kClass || k == parse::EntryKind::kAlias
+                        || k == parse::EntryKind::kTypeSet) {
+                        ntypes++;
+                    } else {
+                        nvalues++;
+                    }
+                }
+                s.ambiguous_group = false;
+                if (ntypes > 0 && nvalues > 0) {
+                    diagnostic::report(diag, {call.file_id, call.tok,
+                        "The group in '" + s.name + "(...) = ...' mixes types and "
+                        "values: a value group is a nameless assignment, a type group "
+                        "a conversion.", {}});
+                    return Completion::Normal;
+                }
+                if (ntypes == 0) {
+                    std::unique_ptr<parse::Node> alt = std::move(s.children[1]);
+                    s = std::move(*alt);
+                    return resolveStmt(tree, s, diag);
+                }
+                s.children.pop_back();   // the TYPE reading: the shorthand, as before
+            }
             // A bare assignment target matching a class FIELD (no local shadows it)
             // is a field STORE through `self.field` — the write-side mirror of the
             // read rewrite. Without this it would fall into the inferred-init path
@@ -5283,6 +5339,40 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                     resolveExpr(tree, *s.children[1], diag);
                 }
                 return Completion::Normal;
+            }
+            // A bare CLASS name target (`Class = rhs;`) assigns a NAMELESS object (spec:
+            // nameless.sl). Becomes a kStoreStmt [Class, rhs] whose target resolves as a
+            // value — a construction, exactly as `Class` does in any evaluated position.
+            // Classify picks the op= and with it the form (scope-lifetime local or temp).
+            {
+                int cid = -1;
+                if (isQualified(s)) {
+                    cid = resolveQualifiedRef(tree, s, diag);
+                    if (cid < 0) return Completion::Normal;
+                } else {
+                    cid = resolveName(tree, s.name);
+                }
+                if (cid >= 0 && tree.entries[cid].kind == parse::EntryKind::kClass) {
+                    auto tgt = std::make_unique<parse::Node>();
+                    tgt->kind = parse::Kind::kIdentExpr;
+                    tgt->name = s.name;
+                    tgt->name_tok = s.name_tok;
+                    tgt->qualifier = s.qualifier;
+                    tgt->qualifier_toks = s.qualifier_toks;
+                    tgt->global_qualified = s.global_qualified;
+                    tgt->file_id = s.file_id;
+                    tgt->tok = s.tok;
+                    s.children.insert(s.children.begin(), std::move(tgt));
+                    s.kind = parse::Kind::kStoreStmt;
+                    s.name.clear();
+                    s.qualifier.clear();
+                    s.qualifier_toks.clear();
+                    s.global_qualified = false;
+                    resolveExpr(tree, *s.children[0], diag);
+                    if (s.children.size() > 1 && s.children[1])
+                        resolveExpr(tree, *s.children[1], diag);
+                    return Completion::Normal;
+                }
             }
             // Inferred-init / reassign: a typeless bare-name assign. The declare-vs-reuse
             // decision goes through the ONE funnel: an UNDECLARED name declares a fresh
@@ -5426,6 +5516,14 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // Store through an lvalue expression: `ref^ = rhs` or `arr[i] = rhs`.
             // children[0] = lvalue (kDerefExpr / kIndexExpr), [1] = rhs.
             resolveStoreTarget(tree, *s.children[0], diag);
+            // `name(args) = rhs` is a NAMELESS ASSIGNMENT only when name is a CLASS (the
+            // construction); a FUNCTION call's result is no assignable object.
+            if (s.children[0]->kind == parse::Kind::kCallExpr
+                && !s.children[0]->is_construction && !diagnostic::hasErrors(diag)) {
+                diagnostic::report(diag, {s.file_id, s.tok,
+                    "Cannot assign to the result of a function call.", {}});
+                return Completion::Normal;
+            }
             if (s.children.size() > 1 && s.children[1]) {
                 EnumContext ectx(tree, storeEnumFrame(tree, *s.children[0], diag));
                 resolveExpr(tree, *s.children[1], diag);

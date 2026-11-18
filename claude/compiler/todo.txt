@@ -135,6 +135,16 @@ BUGS
 
 UNBLOCKED FEATURES
 
+  * reject a bare expression statement with no possible side effect (`arr[0];`,
+    `p^;`, `a + b;`, `s.x_;`). a bare name (`x;`) stays legal: it "uses" x.
+
+  * review: a bare `arr[0];` statement touches arr (evaluate-and-discard, accepted
+    today). suggest `arr;` instead.
+
+  * allow taking the address of a temp object when it's dereferenced within the
+    same expression: base = (<Base^> ^Derived)^;
+    today: "Cannot take the address of 'Derived'." (user/guthrie/runner.sl gt_or_gte).
+
   * revisit the decision that makes this an error: char ch = 0;
 
   * two libraries shipping the same template instance: deferred until a use case.

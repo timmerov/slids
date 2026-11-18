@@ -13,6 +13,8 @@ form 1: statement or local variable form:
     Class;
     Class();
     Class(1,2,3);
+    Class.x_ = 1;
+    Class = cls; // default assignment.
 
 like a named class, the unnamed variable object is initialized at site
 and the ctor is called.
@@ -24,12 +26,13 @@ otherwise it's a compile error.
 
 form 2: expression or temporary variable form:
 
-    x = Class(1,2,3).x_;
-    y = Class(1,2,3).method();
-    Class(1,2,3).method();
+    x = Class.x_;
+    y = Class().method();
+    Class(1).method();
     Class fn() {
-        return Class(1,2,3);
+        return Class(1,2);
     }
+    Class(1,2,3) = rhs; // user defined assignment
 
 like a temporary object, the unnamed temporary object is initialized at site
 and the ctor is called.
@@ -37,8 +40,13 @@ the dtor is called at end of the statement containing the expression.
 in the first cases, at the semicolon.
 
 note:
-class assignment and overloaded operators aren't implmented yet.
-so we can't test much of the above.
+in all cases, the temporary must at least be able to have a side effect.
+in form 1, the side effect is in the ctor and/or dtor.
+in form 2, the side effect is the assignment or the method.
+
+the initializer list is optional in all cases.
+if Class is accepted then so is Class(), Class(1,2,3), etc.
+and vice versa.
 */
 
 /*
@@ -71,9 +79,20 @@ then reuses the existing class-construction machinery — there is no new codege
   switch — including under `&&`/`||`) it is instead built and destroyed per
   EVALUATION, so a loop or short-circuit rebuilds or skips it (the short-circuit RHS
   lifts into its OWN sub-seq, so a skipped branch runs no ctor/dtor).
-- a construction in any OTHER position is rejected cleanly (no silent miscompile):
-  a store / move / swap operand, and a re-assignment to an existing variable
-  (`w = Class(...)`).
+- a construction as a STORE TARGET's root (classify's liftNamelessStoreTarget):
+  a FIELD store (`Class.f = v`, `Class(1).f[0] = v`, `Class.f += v`) is form 1 — the
+  construction becomes a `_$nameless` local in the statement's prelude (scope
+  lifetime), the root a read of it. a WHOLE-object store (`Class = rhs`, which resolve
+  rewrites from the assignment) follows the op= it selects: a USER op= is form 2
+  (`Class.op=(rhs);`, a method call on a temp); the SYNTHESIZED op= is form 1. form 1
+  with a trivial class is the "has no effect" error. a bare field READ statement
+  (`Class(1).f;`) is "A nameless class expression has no effect."
+- `name (group) = rhs;` is also the tuple conversion shorthand `t (T,...) = e`. the
+  grammar reads the group both ways: values only -> the nameless assignment (a
+  kStoreStmt rooted at `name(args)`); types only -> the shorthand. a group of NAMES
+  parses both ways (an ambiguous_group kAssignStmt carrying both); resolve keeps the
+  reading the names fit — all types, all values, or a mix (an error). a store rooted
+  at a FUNCTION call is "Cannot assign to the result of a function call."
 
 qualified construction (`Space:Nested(args)`) and a class-typed field (the inner
 ctor runs first, torn down last) both work.
@@ -145,6 +164,38 @@ Host(int h_) {
         ~() {
             println(String + "Inner:dtor: " + i_);
         }
+    }
+}
+
+// a class with an ARRAY field — a nameless element store `Vec.v_[0] = 1;`.
+Vec(int v_[2]) {
+    _() {
+        println(String + "Vec:ctor: " + v_[0] + "," + v_[1]);
+    }
+    ~() {
+        println(String + "Vec:dtor: " + v_[0] + "," + v_[1]);
+    }
+}
+
+// a class with a USER op= — `Asg = rhs;` is form 2: the op= is the side effect.
+Asg(int a_) {
+    _() {
+        println(String + "Asg:ctor: " + a_);
+    }
+    ~() {
+        println(String + "Asg:dtor: " + a_);
+    }
+    op=(int rhs) {
+        a_ = rhs;
+        println(String + "Asg:op=: " + a_);
+    }
+}
+
+// a TRIVIAL class with a USER op= — form 2 needs no ctor/dtor.
+TrivAsg(int t_) {
+    op=(int rhs) {
+        t_ = rhs;
+        println(String + "TrivAsg:op=: " + t_);
     }
 }
 
@@ -526,6 +577,81 @@ int32 main() {
         println(String + "-- end 34 --");
     }
 
+    // FORM 1 — a field store into a nameless object: `Class.c_ = 1;` is an unnamed local
+    // VARIABLE. ctor at site, the store, dtor at SCOPE END (it sees the stored value).
+    // The initializer list is optional: every spelling of it is accepted.
+    println(String + "== 35: form-1 field store ==");
+    {
+        Class.c_ = 1;
+        Class().c_ = 2;
+        Class(3).c_ = 4;
+        Pair(0, 5).a_ = 6;
+        println(String + "-- end 35 (dtor 6,5 then 4, 2, 1 next) --");
+    }
+
+    // FORM 1 — the other store shapes: an element store, a compound store, a nested field.
+    println(String + "== 36: form-1 element, compound, nested field stores ==");
+    {
+        Vec.v_[1] = 7;
+        Class(8).c_ += 1;
+        Wrap.in_.c_ = 10;
+        println(String + "-- end 36 (Wrap dtor, Class dtor 10, then 9, then Vec 0,7 next) --");
+    }
+
+    // FORM 1 — a nameless assignment through the DEFAULT op=: the default copy has no side
+    // effect of its own, so it is an unnamed local VARIABLE — dtor at SCOPE END.
+    println(String + "== 37: form-1 default assignment ==");
+    {
+        Class src(11);
+        Class = src;
+        Class(12) = src;
+        println(String + "-- end 37 (dtor 11, 11, then src 11 next) --");
+    }
+
+    // FORM 2 — a nameless assignment through a USER op=: `Asg = 13;` is `Asg.op=(13);`, a
+    // method call on a temporary — dtor at the SEMICOLON.
+    println(String + "== 38: form-2 user assignment ==");
+    {
+        Asg = 13;
+        println(String + "-- mid 38 (dtor 13 already ran) --");
+        Asg(14) = 15;
+        println(String + "-- end 38 (dtor 15 already ran) --");
+    }
+
+    // FORM 2 — a TRIVIAL class with a user op=: the op= is the side effect, no ctor/dtor.
+    println(String + "== 39: form-2 user assignment, trivial class ==");
+    {
+        TrivAsg = 16;
+        TrivAsg() = 17;
+        TrivAsg(1) = 18;
+        println(String + "-- end 39 --");
+    }
+
+    // FORM 1 and FORM 2 assignments in one scope: the form-2 temp dies at its semicolon,
+    // the form-1 object at scope end.
+    println(String + "== 40: form-1 and form-2 assignments interacting ==");
+    {
+        Class src(19);
+        Class(20) = src;
+        Asg(21) = 22;
+        println(String + "-- end 40 (dtor 22 ran; dtor 19, src 19 next) --");
+    }
+
+    // `Class(group) = rhs;` vs the tuple conversion shorthand `t (T,...) = e;`: a value
+    // group is never types, a type group never values. A group of NAMES parses both ways —
+    // what the names ARE decides (resolve). Here `n` is a variable: a nameless assignment.
+    // `pr (Num, Num) = (23, 24);` names types: the conversion shorthand, unchanged.
+    println(String + "== 41: a group of names decides by what the names are ==");
+    {
+        int n = 24;
+        Asg(n) = 25;
+        alias Num = int;
+        (int, int) pr = (0, 0);
+        pr (Num, Num) = (23, 24);
+        println(String + "pr= " + pr[0] + "," + pr[1]);
+        println(String + "-- end 41 --");
+    }
+
     return 0;
 }
 
@@ -565,6 +691,70 @@ int32 main() {
    The construction is materialized as a temporary and transferred in through the target's
    operator; it does NOT field-init over a live object, which is what the old rejection was
    guarding against. */
+
+/* a nameless FIELD STORE is form 1: a trivial class gives it no chance of a side effect. */
+//-EXPECT-ERROR: A nameless class statement has no effect
+//Trivial(int t_) {
+//}
+//void neg_trivial_store() {
+//    Trivial.t_ = 5;
+//}
+
+/* the same, with an initializer list — every spelling of it is accepted or rejected alike. */
+//-EXPECT-ERROR: A nameless class statement has no effect
+//Trivial(int t_) {
+//}
+//void neg_trivial_store_args() {
+//    Trivial(1).t_ = 5;
+//}
+
+/* a nameless assignment through the DEFAULT op= is form 1: a trivial class has no effect. */
+//-EXPECT-ERROR: A nameless class statement has no effect
+//Trivial(int t_) {
+//}
+//void neg_trivial_default_assign() {
+//    Trivial src(1);
+//    Trivial = src;
+//}
+
+/* the same, with an initializer list. */
+//-EXPECT-ERROR: A nameless class statement has no effect
+//Trivial(int t_) {
+//}
+//void neg_trivial_default_assign_args() {
+//    Trivial src(1);
+//    Trivial(2) = src;
+//}
+
+/* `name(args) = rhs` assigns a nameless object only when name is a class. */
+//-EXPECT-ERROR: Cannot assign to the result of a function call
+//int ret(int x) { return x; }
+//void neg_assign_call() {
+//    ret(1) = 2;
+//}
+
+/* a group of names that mixes a type and a value is neither reading. (a type KEYWORD,
+   `Asg(n, int32)`, never gets here: the tokens alone make that group a type.) */
+//-EXPECT-ERROR: mixes types and values
+//void neg_mixed_group() {
+//    int n = 1;
+//    alias Num = int;
+//    Asg(n, Num) = 2;
+//}
+
+/* a bare FIELD READ of a nameless object is neither an assignment nor a method: no effect.
+   (the parenless spelling is rejected by the GRAMMAR: a name-led chain with no `=` is a
+   syntax error for any name — `obj.f;` too — so it never reaches the nameless check.) */
+//-EXPECT-ERROR: Expected '=' after
+//void neg_bare_field_read() {
+//    Class.c_;
+//}
+
+/* the same, with an initializer list. */
+//-EXPECT-ERROR: A nameless class expression has no effect
+//void neg_bare_field_read_args() {
+//    Class(1).c_;
+//}
 
 /* a field that the class does not declare. */
 //-EXPECT-ERROR: has no field 'nope'

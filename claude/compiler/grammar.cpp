@@ -2585,6 +2585,67 @@ struct Parser {
         // (`t (int,int) = e` — checked BEFORE the call arm below, which would
         // otherwise read `t (...)` as a call; a call is never followed by
         // top-level `=`, so the shape is free).
+        // `name (group) = rhs;` is TWO shapes: a NAMELESS ASSIGNMENT `Class(args) = rhs`
+        // (the group is VALUES — never types) and the tuple conversion shorthand
+        // `t (T,...) = e` (the group is TYPES — never values). The tokens decide most groups:
+        // read the group BOTH ways (speculatively, rewinding a failed reading). Only the
+        // value reading parses -> the nameless assignment, a kStoreStmt [name(args), rhs];
+        // only the type reading -> the shorthand below, unchanged. BOTH parse (a group of
+        // names, `(x)` / `(a, b^)`) -> only resolve knows what the names are: keep both
+        // readings on an ambiguous_group kAssignStmt and let resolve pick.
+        if (next == token::Kind::kLParen && parenGroupThenEquals()) {
+            int save_pos = pos;
+            std::size_t save_diag = diag.records.size();
+            auto rewind = [&]() {
+                pos = save_pos;
+                fatal = false;
+                diag.records.resize(save_diag);
+            };
+            // VALUE reading.
+            std::unique_ptr<parse::Node> vstore;
+            {
+                advance();   // (
+                auto call = newNodeAt(parse::Kind::kCallExpr, stmt_file, stmt_tok);
+                // COPY the name (stamp MOVES it): the type reading may still need it.
+                call->name = name;
+                call->name_tok = name_tok;
+                call->qualifier = segs;
+                call->qualifier_toks = toks;
+                call->global_qualified = global;
+                if (parseCallArgs(*call) && !fatal
+                    && peek().kind == token::Kind::kEquals) {
+                    advance();   // =
+                    auto rhs = parseExpr();
+                    if (rhs && !fatal && peek().kind == token::Kind::kSemicolon) {
+                        vstore = newNodeAt(parse::Kind::kStoreStmt, stmt_file, stmt_tok);
+                        vstore->children.push_back(std::move(call));
+                        vstore->children.push_back(std::move(rhs));
+                    }
+                }
+            }
+            int value_end = pos;
+            rewind();
+            if (vstore) {
+                // TYPE reading.
+                auto conv = parseConvertChain(stmt_file, /*shorthand=*/true);
+                bool tok = conv && !fatal && pos == value_end;
+                if (!tok) {
+                    rewind();
+                    pos = value_end;
+                    advance();   // ;
+                    return vstore;
+                }
+                advance();   // ;
+                auto node = newNodeAt(parse::Kind::kAssignStmt, stmt_file, stmt_tok);
+                stamp(*node);
+                node->ambiguous_group = true;
+                node->children.push_back(std::move(conv));
+                node->children.push_back(std::move(vstore));
+                return node;
+            }
+            // the value reading failed: the shorthand below owns the statement (and its
+            // diagnostics), exactly as before.
+        }
         if (startsConvShorthand()) {
             auto rhs = parseConvertChain(stmt_file, /*shorthand=*/true);
             if (!rhs) return nullptr;

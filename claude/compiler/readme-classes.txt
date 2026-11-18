@@ -251,7 +251,32 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     store/move/swap operand, a re-assignment `w = Class(...)`, a method-call VALUE
     `Class(...).method()` — is rejected cleanly (codegen's is_construction guard at
     emitExpr/emitCall, and the parser's "method call in an expression" error), never
-    miscompiled. Detail: test/class/nameless.sl.
+    miscompiled. Detail: test/class/nameless.sl. (A construction as a STORE TARGET is no
+    longer among the rejects — see the next entry.)
+  * A NAMELESS OBJECT AS A STORE TARGET (2026-11-17, canon nameless.sl). Rule: a statement
+    building a nameless object must give something the chance of a side effect — form 1
+    through the ctor/dtor, form 2 through the method or the assignment.
+      - a FIELD store rooted at a construction (`Class.f = v`, `Class(1).f[0] = v`,
+        `Class.f += v`, `Wrap.in_.c_ = v`) is FORM 1. classify's liftNamelessStoreTarget
+        (called first in the kStoreStmt and kAugAssignStmt arms) spills the construction
+        through spillToTemp into a `_$nameless` local and pushes its decl into the
+        statement's PRELUDE — the one placement that gives enclosing-SCOPE lifetime, which
+        is what form 1 is (an unnamed local, not a temp) — then the root reads it. Only a
+        root whose IMMEDIATE step is a field qualifies (`Class(1)[0]` is op[] on a temp).
+      - a WHOLE-object store — `Class = rhs` / `Class(args) = rhs` — follows the op= that
+        findClassOperator selects. A USER op= (written or inherited) is FORM 2: the
+        statement becomes the kMethodCallStmt `Class.op=(rhs)`, a method call on a temp
+        (dies at the semicolon). The SYNTHESIZED op= (Entry.synthesized) has no side effect
+        of its own: FORM 1, the same spill as a field store.
+      - form 1 on a trivial class is "A nameless class statement has no effect" (the
+        `Class;` error). A bare field READ statement `Class(1).f;` is "A nameless class
+        expression has no effect." (classify kExprStmt, isNamelessFieldRead); the
+        parenless `Class.f;` is the grammar's "Expected '='", as for any name.
+      - resolve feeds it: a kAssignStmt whose name is a kClass becomes a kStoreStmt whose
+        target is the class name, resolved as a value (so a construction); a kStoreStmt
+        rooted at a FUNCTION call is "Cannot assign to the result of a function call."
+      - `Class(args) = rhs` shares its shape with the tuple conversion shorthand
+        `t (T,...) = e`; readme.txt (grammar) has the value-vs-type reading.
   * BARE CLASS NAME = DEFAULT CONSTRUCTION: a class name with NO parens is `Class()`
     (a zero-arg default construction). In a VALUE position resolve rewrites a bare
     kIdentExpr that resolves to a kClass into a zero-arg construction kCallExpr

@@ -218,3 +218,60 @@ Class:dtor: 5
 Class:dtor: 44
 Class:dtor: 22
 Class:dtor: 33
+== 35: form-1 field store ==
+Class:ctor: 0
+Class:ctor: 0
+Class:ctor: 3
+Pair:ctor: 0,5
+-- end 35 (dtor 6,5 then 4, 2, 1 next) --
+Pair:dtor: 6,5
+Class:dtor: 4
+Class:dtor: 2
+Class:dtor: 1
+== 36: form-1 element, compound, nested field stores ==
+Vec:ctor: 0,0
+Class:ctor: 8
+Class:ctor: 0
+Wrap:ctor
+-- end 36 (Wrap dtor, Class dtor 10, then 9, then Vec 0,7 next) --
+Wrap:dtor
+Class:dtor: 10
+Class:dtor: 9
+Vec:dtor: 0,7
+== 37: form-1 default assignment ==
+Class:ctor: 11
+Class:ctor: 0
+Class:ctor: 12
+-- end 37 (dtor 11, 11, then src 11 next) --
+Class:dtor: 11
+Class:dtor: 11
+Class:dtor: 11
+== 38: form-2 user assignment ==
+Asg:ctor: 0
+Asg:op=: 13
+Asg:dtor: 13
+-- mid 38 (dtor 13 already ran) --
+Asg:ctor: 14
+Asg:op=: 15
+Asg:dtor: 15
+-- end 38 (dtor 15 already ran) --
+== 39: form-2 user assignment, trivial class ==
+TrivAsg:op=: 16
+TrivAsg:op=: 17
+TrivAsg:op=: 18
+-- end 39 --
+== 40: form-1 and form-2 assignments interacting ==
+Class:ctor: 19
+Class:ctor: 20
+Asg:ctor: 21
+Asg:op=: 22
+Asg:dtor: 22
+-- end 40 (dtor 22 ran; dtor 19, src 19 next) --
+Class:dtor: 19
+Class:dtor: 19
+== 41: a group of names decides by what the names are ==
+Asg:ctor: 24
+Asg:op=: 25
+Asg:dtor: 25
+pr= 23,24
+-- end 41 --

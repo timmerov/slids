@@ -954,8 +954,8 @@ Phase 5 — classes
     parameter list '()'.` in classify; as a STATEMENT `fn;` reports the SAME (in resolve's
     resolveCallTarget) — a function/method is only ever called with `()` (canon method.sl +
     call.sl). (A bare VALUE name statement `x;` is NOT an error — it is a discarded read;
-    see the CONSTRUCTION entry.) OPEN (todo.txt): a construction in a store-target / move
-    operand (rejected).
+    see the CONSTRUCTION entry.) A construction as a store TARGET landed 2026-11-17 (see
+    the NAMELESS entry below).
   * NAMELESS class objects (`Class(args)`) — LANDED. A call whose callee resolves to
     a kClass is a CONSTRUCTION, not a function call: resolve flags is_construction;
     classify spreads the args into the per-field tuple via classifyClassInit. Form 1
@@ -977,6 +977,22 @@ Phase 5 — classes
     ("Function call is missing parameter list '()'."); a namespace/type is "not a
     statement". Detail: readme-classes.txt "CONSTRUCTION" + test/class/nameless.sl,
     test/function/call.sl.
+    SINCE (2026-11-17, canon nameless.sl): a nameless object as a STORE TARGET. Canon rule:
+    a nameless object must give something the chance of a side effect — form 1 via the
+    ctor/dtor, form 2 via the method or the assignment; `Class` and `Class(...)` are
+    accepted or rejected alike. A field store `Class.x_ = 1;` (and element / compound /
+    nested-field stores) is FORM 1: an unnamed local, dtor at scope end, seeing the store.
+    `Class = rhs;` / `Class(args) = rhs;` follow the op= selected: a USER op= is FORM 2
+    (`Class.op=(rhs);`, temp dies at the semicolon); the DEFAULT op= is FORM 1. Form 1 on a
+    trivial class is the "no effect" error; a bare field read `Class(1).x_;` is rejected.
+    `Class(args) = rhs` collides with the tuple conversion shorthand `t (T,...) = e`;
+    resolved by the user's rule "a value group is never types, a type group never
+    values": the grammar reads the group both ways, and a group of names (both readings
+    parse) is decided at resolve by what the names are. Fixed on the way: `Base.b = 1;`
+    (a trivial class) hit codegen's emitElementAddr assert. Detail: readme-classes.txt
+    "A NAMELESS OBJECT AS A STORE TARGET", readme.txt (grammar, the shorthand). Not
+    covered: empty initializer slots `Pair(,5)` in ANY nameless form (they parse only in
+    named declarations); the general "no possible side effect" rule (todo.txt).
   * inferred field types (`Foo(x = 1, y = 3.14)`) — LANDED. A typeless field infers
     its type from its default. resolve DEFERS (registers a kNoType layout slot; a
     typeless field with no default errors); a classify pre-pass (classifyClassSignature)

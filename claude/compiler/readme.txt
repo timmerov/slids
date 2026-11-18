@@ -2328,7 +2328,16 @@ STAGE FILES (.h / .cpp pairs)
             — the immediacy keeps `obj.m(a)^ = e` / `obj.m(a)[2] = e`
             method-call chains, which are VALID statements, out of the claim;
             the same gate excludes such a `(` from finishLvalueChain's
-            method-call loop-head). THE DECL SHAPE WINS every collision:
+            method-call loop-head). A name-led `name (group) = rhs;` is ALSO the
+            nameless assignment `Class(args) = rhs` (2026-11-17): a value group is
+            never types, a type group never values, so the group is read BOTH
+            ways speculatively (rewinding pos, `fatal` and the diagnostics of a
+            failed reading). Values only -> a kStoreStmt [name(args), rhs]; types
+            only -> the shorthand; both (a group of NAMES: `(n)`, `(a, b^)`) -> a
+            kAssignStmt flagged ambiguous_group carrying both readings, and
+            resolve keeps the one the names fit (all types / all values; a mix
+            is an error). The value reading COPIES the statement's name — the
+            `stamp` lambda MOVES it. THE DECL SHAPE WINS every collision:
             `x Amt = e` is `ident ident` (a decl with type x — an EXISTING
             variable x doesn't flip it: "'x' is a variable, not a type"), and
             `p^ Amt = e` / `arr[i] Amt = e` are suffix-run decl shapes; the
