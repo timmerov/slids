@@ -2767,6 +2767,28 @@ ElectoralMethod : GuthrieMethod() {
 }
 
 /*
+cycle through all possible permutations.
+assume it starts in ascending order.
+*/
+bool permute(Vector<int>^ order) {
+    n int = order^.size();
+    for (i : (n-2)..>=0 -1) {
+        if (order^[i] < order^[i+1]) {
+            for (k : (n-1)..>i -1) {
+                if (order^[k] > order^[i]) {
+                    order^[k] <--> order^[i];
+                    for (p=i+1, q=n-1) (p < q) {++p; --q;} {
+                        order^[p] <--> order^[q];
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/*
 instant runoff voting.
 */
 ElectoralMethod : InstantRunoffMethod() {
@@ -2875,6 +2897,109 @@ ElectoralMethod : InstantRunoffMethod() {
         if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
         }
+    }
+
+    virtual void strategic_voting() {
+        ElectoralMethod:strategic_voting();
+
+        /*
+        W is the honest winner.
+        A is the villain.
+        a majority prefer W>A.
+        the objective is to shift A>W votes so
+        A gets a majority before being eliminated.
+        the brute force strategy is to try all possible elimination orders.
+        */
+
+        ncandidates = g_runner.ncandidates_;
+        candidates = ^g_runner.candidates_;
+        bloc_map = ^g_runner.bloc_map_;
+
+        Vector<int> order;
+        order.reserve(ncandidates);
+
+        /*
+        we're looking for the minimum number of strategic
+        voters it would take to replace the honest winner
+        with a min/maxxing villain candidate.
+        */
+        villain = -1;
+        min_minions = -1;
+
+        for (a : 0..ncandidates) {
+            if (a == winner_) {
+                continue;
+            }
+
+            /*
+            if A beats W (the winner) then strategically voting
+            to make A the winner is good strategic voting.
+            we're looking for bad strategic voting.
+            */
+            a_beats_w = g_runner.pairwise_.is_winner(a, winner_);
+            if (a_beats_w) {
+                continue;
+            }
+
+            println(String + " " + name_ + ": " + candidates^[a].name_ +
+                " is a potential villain over " + candidates^[winner_].name_ + "." );
+
+            /*
+            find a finalist B who loses to A in the final round head to head.
+            */
+            for (b : 0..ncandidates) {
+                if (b == a) {
+                    continue;
+                }
+                b_beats_a = g_runner.pairwise_.is_winner(b, a);
+                if (b_beats_a) {
+                    continue;
+                }
+
+                order.clear();
+                for (c : 0..ncandidates) {
+                    if (c == a || c == b) {
+                        continue;
+                    }
+                    order.append(c);
+                }
+
+                while () {
+                    s = String + "  " + candidates^[b].name_;
+                    for (x : order) {
+                        s += candidates^[x].name_;
+                    }
+                    println(s);
+
+                    /*
+                    there are n! possible voter blocs.
+                    WAX is every voter bloc ranking W>A - constants. n!/2
+                    ABWX is every voter bloc ranking A>W and A>B - limiter. n!/4
+                    BAWX is every voter bloc ranking A>W and B>A - limiter. n!/4
+                    ABWX_ABY voters from bloc ABWX now voting ABY. n!/4*n!/2
+                    BAWX_BAY voters from bloc BAWX now voting BAY. n!/4*n!/2
+
+                    constraints:
+                    sum ABWX_ABY <= ABWX
+                    sum BAWX_BAY <= BAWX
+
+                    first to be eliminated is C.
+                    C = sum CWA + sum ABWX_C* + sum BAWX_C*
+                    X = sum XWA + sum ABWX_X* + sum BAWX_X*
+                    C < X
+                    */
+
+                    done = permute(order);
+                    if (done) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        bloc_map;
+        villain;
+        min_minions;
     }
 }
 
@@ -3306,16 +3431,9 @@ ElectoralMethod : PluralityRunoffMethod() {
                 lp.add_row(rowb);
                 for (minion : minions) {
                     x = minion^.x_;
-                    /*
-                    ==tsc==
-                    i would like to do this but it's not implemented yet:
-
                     sumx = LP:Expr + counts[x] - minion^.xa_ - minion^.xb_;
                     rowax = suma + LP:gt + sumx;
                     rowbx = sumb + LP:gt + sumx;
-                    */
-                    rowax = suma + gt_or_gte(a, x) + counts[x] - minion^.xa_ - minion^.xb_;
-                    rowbx = sumb + gt_or_gte(b, x) + counts[x] - minion^.xa_ - minion^.xb_;
                     lp.add_row(rowax);
                     lp.add_row(rowbx);
                     rowxab = LP:Expr + minion^.xa_ + minion^.xb_ + LP:lte + pools[x];

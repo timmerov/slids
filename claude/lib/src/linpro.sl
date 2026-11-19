@@ -285,6 +285,49 @@ LP(
             }
             relation_ = rhs^.relation_;
         }
+        op+=(Expr^ rhs) {
+            /*
+            we need to add/subtract the rhs to/from the lhs.
+            depending on which one has seen the comparison relation.
+
+            lhs\rhs | yes   | no
+            --------+-------+---------
+            yes     | error | subtract
+            no      | add   | add
+
+            in other words, if the lhs has the comparison relation,
+            then we subtract the rhs.
+            otherwise, we add the rhs.
+            */
+            relation = relation_;
+            nrelations = 0;
+            if (relation_ != kErr) {
+                ++nrelations;
+            }
+            if (rhs^.relation_ != kErr) {
+                ++nrelations;
+                relation_ = rhs^.relation_;
+            }
+            if (nrelations > 1) {
+                println("**Error** expression has multiple comparison operations.");
+            }
+            if (relation == kErr) {
+                constant_ += rhs^.constant_;
+            } else {
+                constant_ -= rhs^.constant_;
+            }
+            sz = terms_.size() + rhs^.terms_.size();
+            terms_.reserve(sz);
+            for (rhs_term : rhs^.terms_) {
+                lhs_term = terms_.append();
+                lhs_term^.var_idx_ = rhs_term^.var_idx_;
+                if (relation == kErr) {
+                    lhs_term^.coeff_ = rhs_term^.coeff_;
+                } else {
+                    lhs_term^.coeff_ = - rhs_term^.coeff_;
+                }
+            }
+        }
     }
 
     /* print the matrix. */
