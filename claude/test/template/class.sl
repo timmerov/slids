@@ -705,6 +705,53 @@ int32 main() {
         println(String + "oo8 = " + oh.hv());
     }
 
+    /* a block-scope alias of a flavor over a block-scope class, naming the
+       field of another block-scope class (aliases register with the scope's
+       classes, so a field sees them). */
+    {
+        Mn(int m_ = 4) { }
+        alias Mns = Cell<Mn>;
+        MnBloc(int k_, Mns mns_) { }
+        MnBloc mb(1);
+        println(String + "lp1 = " + mb.k_ + " " + mb.mns_.c_.m_);
+    }
+
+    /* ...in either source order (a plain alias and an alias template), and
+       in a nested block. */
+    {
+        Late(Num n_ = 6, LR<int> r_ = nullptr) { }
+        alias Num = int;
+        alias LR<T> = T^;
+        int z = 2;
+        Late lt(7, ^z);
+        println(String + "lp2 = " + lt.n_ + " " + lt.r_^);
+        if (z == 2) {
+            Inner(Wide w_ = 9) { }
+            alias Wide = int64;
+            Inner iw;
+            println(String + "lp3 = " + iw.w_ + " " + ##type(iw.w_));
+        }
+    }
+
+    /* a block-scope alias and a block-scope class share the scope's names. */
+    //-EXPECT-ERROR: Duplicate declaration
+    //Dup(int d_ = 1) { }
+    //alias Dup = int;
+
+    /* a block-scope alias with a bad target, named by a block-scope field. */
+    //-EXPECT-ERROR: Unknown type
+    //alias Bad = Bogus;
+    //Hb(Bad b_) { }
+    //Hb hb; println(String + "hb = " + hb.b_);
+
+    /* a const-expression dim target folds at its statement: a block-scope
+       class field can't name it. */
+    //-EXPECT-ERROR: Unknown type
+    //const int kN = 3;
+    //alias Arr = int[kN];
+    //Hd(Arr a_) { }
+    //Hd hd; println(String + "hd = " + hd.a_[0]);
+
     /* the type-list is required. */
     //-EXPECT-ERROR: requires a type-argument list
     //Vec miss;

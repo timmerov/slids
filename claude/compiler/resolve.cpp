@@ -5601,9 +5601,10 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // LOCAL class, or registered into a remote NAMESPACE's frame in place — either
             // way it is already a member, so skip it here.
             if (isQualified(s)) return Completion::Normal;
-            // Function-scope value alias: register in the body frame, then
-            // validate the target (forward refs within a body aren't pre-scanned).
-            registerAlias(tree, s, diag);
+            // Function-scope value alias: register in the body frame (unless the
+            // scope's pre-pass, registerLocalClasses, already did), then validate
+            // the target.
+            if (s.resolved_entry_id < 0) registerAlias(tree, s, diag);
             // A body-scope alias TEMPLATE builds its PATTERN here (this is its
             // natural scope point); the node's own target stays pristine.
             if (!s.type_params.empty()) {
@@ -8702,6 +8703,22 @@ void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
 void registerLocalClasses(parse::Tree& tree,
                           std::vector<std::unique_ptr<parse::Node>>& stmts,
                           diagnostic::Sink& diag) {
+    // The scope's type ALIASES join the pre-pass — the class-body NAME phase's rule
+    // (alias entries with a provisional target, resolved at use): a local class's
+    // field may name a local alias, and the alias may name a local class
+    // (`alias Ms = Vector<M>; Bloc(Ms ms_)`), in either source order. A bare
+    // import, a type set, a function alias, and a qualified alias (relocated)
+    // keep their statement-order paths; so does a const-expression dim target
+    // (`int[N]` folds at its statement). The kAliasDecl statement skips an alias
+    // registered here and still validates its target.
+    for (auto& s : stmts) {
+        if (!s || s->kind != parse::Kind::kAliasDecl || s->resolved_entry_id >= 0)
+            continue;
+        if (s->return_type == widen::kNoType || s->type_set || isQualified(*s)
+            || !s->dim_exprs.empty() || isFuncAlias(tree, *s))
+            continue;
+        registerAlias(tree, *s, diag);
+    }
     std::vector<parse::Node*> fresh;
     for (auto& s : stmts) {
         if (!s || s->kind != parse::Kind::kClassDef || s->resolved_entry_id >= 0)

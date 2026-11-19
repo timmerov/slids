@@ -299,7 +299,8 @@ Bloc(
 ) { }
 
 alias BlocMap = Map<Rankings, Bloc>;
-alias BlocMapIters = Vector<BlocMap:MapIter>;
+alias BlocMapIter = BlocMap:MapIter;
+alias BlocMapIters = Vector<BlocMapIter>;
 
 Rankings() {
     String to_string() {
@@ -3040,7 +3041,7 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 println();
 
-                /* create lp var names from the abw bloc rankings and the ab/ba permutation orders. */
+                /* create lp var names from the abw bloc rankings and the ab permutation orders. */
                 println("  abw_vars:");
                 for (head : abw_blocs) {
                     print(String + "  ");
@@ -3059,6 +3060,7 @@ ElectoralMethod : InstantRunoffMethod() {
                     }
                     println();
                 }
+                /* create lp var names from the baw bloc rankings and the ba permutation orders. */
                 println("  baw_vars:");
                 for (head : baw_blocs) {
                     print(String + "  ");
@@ -3078,102 +3080,36 @@ ElectoralMethod : InstantRunoffMethod() {
                     println();
                 }
 
+                Minion(
+                    LP:Var var_,
+                    Rankings strategic_rankings_
+                ) {
+                }
+                alias Minions = Vector<Minion>;
+
+                MinionBloc(
+                    Rankings honest_rankings_,
+                    int bloc_size_,
+                    Minions minions_,
+                    LP:Expr expr_
+                ) {
+                }
+
                 /*
-                order.clear();
-                for (c : 0..ncandidates) {
-                    if (c == a || c == b) {
-                        continue;
-                    }
-                    order.append(c);
-                }
-
-                while () {
-                    s = String + "  " + candidates^[b].name_;
-                    for (x : order) {
-                        s += candidates^[x].name_;
-                    }
-                    println(s);
-
-                    /*
-                    there are n! possible voter blocs.
-                    assume n=4.
-                    these 12 are constants because they prefer W>A.
-                    {WA} =
-                    WABC WACB WBAC WBCA WCAB WCBA
-                    BWAC BWCA CWAB CWBA
-                    BCWA CBWA
-                    these 8 are constraints that prefer A>W and A>B.
-                    {ABW} =
-                    ABCW ABWC ACBW ACWB AWBC AWCB
-                    CABW CAWB
-                    these 4 are constraints that prefer A>W and B>A.
-                    {BAW} =
-                    BACW BAWC BCAW CBAW
-                    every member of the {ABW} and {BAW} sets re-order their ballots.
-                    there are some restrictions.
-                    they all vote W last.
-                    they change their votes.
-                    they don't flip the order of A and B.
-                    every combination produces a variable.
-                    these need to be generated algorithmically.
-                    {ABW} 21 variables:
-                    ABCW_ACB ABCW_CAB
-                    ABWC_ABC ABWC_ACB ABWC_CAB
-                    ACBW_ABC ACBW_CAB
-                    ACWB_ABC ACWB_ACB ACWB_CAB
-                    AWBC_ABC AWBC_ACB AWBC_CAB
-                    AWCB_ABC AWCB_ACB AWCB_CAB
-                    CABW_ABC CABW_ACB
-                    CAWB_ABC CAWB_ACB CAWB_CAB
-                    {BAW} 9 variables:
-                    BACW_BCA BACW_CBA
-                    BAWC_BAC BAWC_BCA BAWC_CBA
-                    BCAW_BAC BCAW_CBA
-                    CBAW_BAC CBAW_BCA
-                    each member of {ABW} and {BAW} has a limiting equation.
-                    sum ABCW_* <= ABCW
-                    we need an expression for every member of {ABW} and {BAW} that don't shift.
-                    ABCW_fixed = ABCW - sum ABCW_*
-                    ...
-                    with those expressions we can rewrite the limiting equations.
-                    ABCW_fixed >= 0
-                    ...
-                    8+4=12 equations.
-
-
-                    there are (n-2)! elimination orders: CW WC
-                    assume CW.
-                    every candidate gets an expression: A B C W
-                    set the initial vote totals.
-                    for each member of {WA}
-                        candate[member.first] += member.value
-                    for each member of {ABW}_fixed and {BAW}_fixed
-                        candidate[member.first] += member.expr
-                    for each member of {ABW} and {BAW}
-                        candidate[member.shift_first] += member.var
-                    C < A
-                    C < B
-                    C < W
-                    +3=15 equations
-
-                    next to be eliminated is W.
-                    ===you are here===
-
-
-                    A,B,W pick up votes from C.
-                    A += CABW + CAWB + sum {ABW}_CA* + sum {BAW}_CA*
-                    B += CBWA + CBAW + sum {ABW}_CB* + sum {BAW}_CB*
-                    W += CWAB + CWBA
-                    W < A
-                    W < B
-                    +2=17 equations
-                    */
-
-                    done = permute(order);
-                    if (done) {
-                        break;
-                    }
-                }
+                so next steps...
+                every abw_bloc and baw_bloc needs an lp:expr = bloc.size - all of the associated variables.
+                this is the number of voters in the bloc who could vote strategically but don't.
+                lp:add_row expr >= 0
+                every candidate C needs an lp:expr = vote count =
+                    wa voters for C (constant)
+                    + abw and baw voters who vote honestly for C (expr)
+                    + abw and baw voters who vote strategically for C (var)
+                at this point we need to decide which candidate E gets eliminated first.
+                so maybe continue working on a copy.
+                lp:add_row E < all other candidates.
+                if not feasible, go to next candidate to eliminate.
+                redistribute E votes to all other candidates.
+                smells like recursion.
                 */
             }
         }

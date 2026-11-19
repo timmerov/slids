@@ -1012,6 +1012,15 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     registered kSlid HANDLE. A local class is a FULL class: members, a hook-class
     field (whose ctor/dtor run — see below), sizeof, new/delete; its ctor/dtor
     lift to module-level functions like a file-scope class's.
+    The same pre-pass registers the scope's TYPE ALIASES first (entry + target
+    spelling, resolved at use — the class-body NAME phase's rule), so a local
+    class field may name a local alias and the alias may name a local class
+    (`alias Ms = Vector<M>; Bloc(Ms ms_)`), in either source order, and a body
+    alias is visible to its whole scope like a local class. Excluded (statement
+    order): bare `alias Ns;`, type sets, function aliases, qualified aliases
+    (relocated), and a const-expression dim target (`int[N]` folds at its
+    statement — a field naming it is Unknown). The kAliasDecl statement skips an
+    alias already registered and still validates its target.
   * HOISTED CLASSES — a class defined in another class's BODY is a namespace-MEMBER
     of the host (like its alias/const/enum members), reached as `Outer:Inner` (and
     `Outer:Inner:Innerger`, any depth). registerScopeNames recurses into the host's

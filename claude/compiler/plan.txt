@@ -4671,6 +4671,20 @@ AN ALIAS TO A TEMPLATE INSTANCE QUALIFIES (2026-11-18, from user/guthrie runner.
   is unchanged (const tree, no diagnostics; its enum-facet caller is unaffected).
   Coverage: no test file named yet; probed `TI:Y`, `Ns:TJ:Y`, and guthrie builds.
 
+LOCAL CLASS FIELDS NAME LOCAL ALIASES (2026-11-19, from user/guthrie runner.sl:3092)
+  `alias Minions = Vector<Minion>;` then a local `MinionBloc(..., Minions minions_)`
+  reported "Unknown type 'Minions'": registerLocalClasses resolved local field types
+  before any statement ran, and a body alias registered only at its statement.
+  registerLocalClasses now registers the scope's plain aliases and alias templates
+  first (registerAlias; target resolved at use), in every scope, classes or not; the
+  kAliasDecl statement skips a registered alias and still validates. A body alias is
+  now visible to its whole scope, like a local class. Excluded: bare imports, type
+  sets, function aliases, qualified aliases, const-expression dim targets (folded at
+  the statement; a field naming one stays Unknown — pinned as a negative).
+  Coverage: test/template class.sl lp1 (the runner shape over Cell<Mn>), lp2 (alias
+  and alias template after the class), lp3 (nested block); negatives Duplicate
+  declaration (alias vs class), Unknown type (bad target; dim target).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
