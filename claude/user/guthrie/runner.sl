@@ -2954,6 +2954,14 @@ ElectoralMethod : InstantRunoffMethod() {
             find a finalist B who loses to A in the final round head to head.
             */
             for (b : 0..ncandidates) {
+                /*
+                can't rely on W>A, A>B therefore W>B.
+                cause there could be a cycle.
+                and this would allow B to be W.
+                */
+                if (b == winner_) {
+                    continue;
+                }
                 if (b == a) {
                     continue;
                 }
@@ -3105,14 +3113,12 @@ ElectoralMethod : InstantRunoffMethod() {
                             println();
                         }
 
-                        /* append the minion bloc. */
-                        if (minions.size() > 0) {
-                            minion_bloc = minion_blocs^.append();
-                            minion_bloc^.honest_rankings_ = head^.rankings_;
-                            minion_bloc^.bloc_size_ = head^.bloc_.size_;
-                            minion_bloc^.minions_ <-- minions;
-                            minion_bloc^.expr_ <-- expr;
-                        }
+                        /* append the minion bloc - even when there are no minions. */
+                        minion_bloc = minion_blocs^.append();
+                        minion_bloc^.honest_rankings_ = head^.rankings_;
+                        minion_bloc^.bloc_size_ = head^.bloc_.size_;
+                        minion_bloc^.minions_ <-- minions;
+                        minion_bloc^.expr_ <-- expr;
                     }
                 }
                 println("  abw_vars:");
@@ -3125,6 +3131,10 @@ ElectoralMethod : InstantRunoffMethod() {
                     MinionBlocs^ minion_blocs
                 ) {
                     for (minion_bloc : minion_blocs^) {
+                        /* ignore blocks with no minions. */
+                        if (minion_bloc^.minions_.size() == 0) {
+                            continue;
+                        }
                         row = minion_bloc^.expr_ + LP:gte + 0;
                         lp.add_row(row);
                     }
