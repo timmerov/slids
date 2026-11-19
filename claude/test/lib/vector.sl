@@ -211,7 +211,7 @@ int32 main() {
 
     /* compile error: comparing vectors whose element class has no op< builds
        Vector<Value>'s comparison methods, which need it. */
-    //-EXPECT-ERROR: Operator '<' is not defined on class 'Value'.
+    //-EXPECT-ERROR: Operator '<' is not defined on class 'T' ('Value').
     //Vector<Value> na;
     //Vector<Value> nb;
     //bool nlt = na < nb;

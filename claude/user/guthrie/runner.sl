@@ -3005,8 +3005,9 @@ ElectoralMethod : InstantRunoffMethod() {
                 println();
 
                 /* generate and separate permutation orders with A>B and B>A. */
-                Vector<Rankings> ab_orders;
-                Vector<Rankings> ba_orders;
+                alias Orders = Vector<Rankings>;
+                Orders ab_orders;
+                Orders ba_orders;
                 order.clear();
                 for (c : 0..ncandidates) {
                     if (c == winner_) {
@@ -3041,45 +3042,10 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 println();
 
-                /* create lp var names from the abw bloc rankings and the ab permutation orders. */
-                println("  abw_vars:");
-                for (head : abw_blocs) {
-                    print(String + "  ");
-                    for (tail : ab_orders) {
-                        same = true;
-                        for (i : 0..(ncandidates-1)) {
-                            if (head^.rankings_[i] != tail^[i]) {
-                                same = false;
-                                break;
-                            }
-                        }
-                        if (same) {
-                            continue;
-                        }
-                        print(String + " " + head^.rankings_.to_string() + "_" + tail^.to_string());
-                    }
-                    println();
-                }
-                /* create lp var names from the baw bloc rankings and the ba permutation orders. */
-                println("  baw_vars:");
-                for (head : baw_blocs) {
-                    print(String + "  ");
-                    for (tail : ba_orders) {
-                        same = true;
-                        for (i : 0..(ncandidates-1)) {
-                            if (head^.rankings_[i] != tail^[i]) {
-                                same = false;
-                                break;
-                            }
-                        }
-                        if (same) {
-                            continue;
-                        }
-                        print(String + " " + head^.rankings_.to_string() + "_" + tail^.to_string());
-                    }
-                    println();
-                }
+                /* begin linear programming. */
+                LP lp;
 
+                /* a minion is A>W voter who votes strategically. */
                 Minion(
                     LP:Var var_,
                     Rankings strategic_rankings_
@@ -3087,6 +3053,11 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 alias Minions = Vector<Minion>;
 
+                /*
+                a bloc of minions share the same honest rankings.
+                who vote strategically in different ways.
+                the expression is the minions who still vote honestly.
+                */
                 MinionBloc(
                     Rankings honest_rankings_,
                     int bloc_size_,
@@ -3094,6 +3065,73 @@ ElectoralMethod : InstantRunoffMethod() {
                     LP:Expr expr_
                 ) {
                 }
+                alias MinionBlocs = Vector<MinionBloc>;
+                MinionBlocs ab_minions;
+                MinionBlocs ba_minions;
+
+                /* create lp var names from the abw bloc rankings and the ab permutation orders. */
+                void add_minions(
+                    MinionBlocs^ minion_blocs,
+                    BlocMapIters^ voter_blocs,
+                    Orders^ orders
+                ) {
+                    for (head : voter_blocs^) {
+                        Minions minions;
+                        expr = LP:Expr + head^.bloc_.size_;
+
+                        for (tail : orders^) {
+                            same = true;
+                            for (i : 0..(ncandidates-1)) {
+                                if (head^.rankings_[i] != tail^[i]) {
+                                    same = false;
+                                    break;
+                                }
+                            }
+                            if (same) {
+                                continue;
+                            }
+                            name = String + head^.rankings_.to_string() + "_" + tail^.to_string();
+                            if (minions.size() == 0) {
+                                print("  ");
+                            }
+                            print(String + " " + name);
+
+                            minion = minions.append();
+                            minion^.var_ = lp.add_var(name);
+                            minion^.strategic_rankings_ = tail^;
+                            expr -= minion^.var_;
+                        }
+                        if (minions.size() > 0) {
+                            println();
+                        }
+
+                        /* append the minion bloc. */
+                        if (minions.size() > 0) {
+                            minion_bloc = minion_blocs^.append();
+                            minion_bloc^.honest_rankings_ = head^.rankings_;
+                            minion_bloc^.bloc_size_ = head^.bloc_.size_;
+                            minion_bloc^.minions_ <-- minions;
+                            minion_bloc^.expr_ <-- expr;
+                        }
+                    }
+                }
+                println("  abw_vars:");
+                add_minions(ab_minions, abw_blocs, ab_orders);
+                println("  baw_vars:");
+                add_minions(ba_minions, baw_blocs, ba_orders);
+
+                /* add the equations for the constraints. */
+                void add_constraints(
+                    MinionBlocs^ minion_blocs
+                ) {
+                    for (minion_bloc : minion_blocs^) {
+                        row = minion_bloc^.expr_ + LP:gte + 0;
+                        lp.add_row(row);
+                    }
+                }
+                add_constraints(ab_minions);
+                add_constraints(ba_minions);
+                lp.print();
 
                 /*
                 so next steps...

@@ -733,6 +733,14 @@ int32 main() {
         }
     }
 
+    /* dereferencing a template's T-typed value spells T and its binding. */
+    //-EXPECT-ERROR: of type 'T' ('int')
+    //Cell<int> ce(3); int bi = ce.take()^; println(String + "bi = " + bi);
+
+    /* ...and a user alias spells its underlying type the same way. */
+    //-EXPECT-ERROR: of type 'Integer' ('int')
+    //Integer ig = 1; int bg = ig^; println(String + "bg = " + bg);
+
     /* a block-scope alias and a block-scope class share the scope's names. */
     //-EXPECT-ERROR: Duplicate declaration
     //Dup(int d_ = 1) { }

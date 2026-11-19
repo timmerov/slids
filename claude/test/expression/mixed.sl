@@ -139,9 +139,9 @@ int32 main() {
     float32 mixp_i32_f32 = bi32 * bf32;   println(String + "mixp_i32_f32= " + mixp_i32_f32);
     float32 mixp_f32_lit = bf32 + 3;      println(String + "mixp_f32_lit= " + mixp_f32_lit);
 
-    // -- negative: ALIAS operands spell label=target, so the bound types show
+    // -- negative: ALIAS operands spell 'label' ('target'), so the bound types show
     //    (a COMPARISON — arithmetic would now convert). --
-    //-EXPECT-ERROR: No common type for 'Integer=int' and 'Flt=float'; use an explicit type conversion.
+    //-EXPECT-ERROR: No common type for 'Integer' ('int') and 'Flt' ('float'); use an explicit type conversion.
     // alias Integer = int;
     // alias Flt = float;
     // Integer bad_al_a = 1;

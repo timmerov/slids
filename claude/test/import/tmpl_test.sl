@@ -243,7 +243,7 @@ int32 main() {
     Rank<Loc> rkl;
     println(String + "rkl = " + rkl.has());
     /* compile error: calling `lt` builds it, and Loc has no op<. */
-    //-EXPECT-ERROR: Operator '<' is not defined on class 'Loc'.
+    //-EXPECT-ERROR: Operator '<' is not defined on class 'T' ('Loc').
     //bool rklt = rkl.lt(rkl);
     //println(String + "rklt = " + rklt);
     Loc lc2(9);

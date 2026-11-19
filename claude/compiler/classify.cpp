@@ -420,13 +420,17 @@ void flexIntLiteralToFloat(parse::Node& n, widen::TypeRef float_side) {
     n.inferred_type = widen::strip(float_side);
 }
 
-// Spell a type for a diagnostic. An ALIAS spells as label AND target —
-// 'T=int', 'Integer=int' — so a message like "No common type for 'T' and 'X'"
-// says what the labels are actually bound to.
-std::string spellForMessage(widen::TypeRef t) {
-    if (t != widen::kNoType && widen::form(t) == widen::Type::Form::kAlias)
-        return widen::spellOrEmpty(t) + "=" + widen::spellOrEmpty(widen::strip(t));
-    return widen::spellOrEmpty(t);
+// THE diagnostic type spelling, quotes included. A type carrying an ALIAS label
+// (a template flavor's `T`, a user alias) also spells what it is bound to —
+// 'T' ('int'), 'Integer' ('int'), 'Rankings^' ('slids:Vector<int>^') — so a
+// message inside a template says the real type. Every classify message that
+// names a type spells it through here.
+widen::TypeRef peelAliases(widen::TypeRef t);
+std::string quoteType(widen::TypeRef t) {
+    std::string as = widen::spellOrEmpty(t);
+    std::string u = widen::spellOrEmpty(peelAliases(t));
+    if (!u.empty() && u != as) return "'" + as + "' ('" + u + "')";
+    return "'" + as + "'";
 }
 
 // These predicates read the STRUCTURE off the handle (form / cat / bits) — no
@@ -1090,8 +1094,6 @@ bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
     widen::TypeRef ss = widen::strip(src);
     F df = widen::form(ds);
     F sf = widen::form(ss);
-    std::string to = widen::spellOrEmpty(dst);
-    std::string from = widen::spellOrEmpty(src);
 
     if (isPtrLikeType(dst)) {
         diagnostic::report(diag, {file_id, tok,
@@ -1100,7 +1102,7 @@ bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
     }
     if (df == F::kVoid) {
         diagnostic::report(diag, {file_id, tok,
-            "Cannot convert to '" + to + "'; the target must be a value type.", {}});
+            "Cannot convert to " + quoteType(dst) + "; the target must be a value type.", {}});
         return true;
     }
     // An array IS a homogeneous tuple — convert array and tuple as the SAME shape at
@@ -1113,14 +1115,14 @@ bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
         bool sAgg = (sf == F::kTuple || sf == F::kArray);
         if (dAgg != sAgg) {                          // aggregate vs scalar — no convert
             diagnostic::report(diag, {file_id, tok,
-                "Cannot convert '" + from + "' to '" + to + "'.", {}});
+                "Cannot convert " + quoteType(src) + " to " + quoteType(dst) + ".", {}});
             return true;
         }
         int dn = aggregateSlotCount(ds);
         int sn = aggregateSlotCount(ss);
         if (dn != sn) {
             diagnostic::report(diag, {file_id, tok,
-                "Cannot convert '" + from + "' to '" + to + "'; slot count differs ("
+                "Cannot convert " + quoteType(src) + " to " + quoteType(dst) + "; slot count differs ("
                 + std::to_string(sn) + " vs " + std::to_string(dn) + ").", {}});
             return true;
         }
@@ -1138,8 +1140,8 @@ bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
         // AGGREGATE slot — the aggregate value walk has no class-leaf arm, so
         // reject cleanly (not a supported conversion shape).
         diagnostic::report(diag, {file_id, tok,
-            "Cannot convert to class type '" + to
-            + "' inside an aggregate; a class conversion must be a top-level "
+            "Cannot convert to class type " + quoteType(dst)
+            + " inside an aggregate; a class conversion must be a top-level "
             "'(Class = src)'.", {}});
         return true;
     }
@@ -1147,15 +1149,15 @@ bool checkConvertCompat(widen::TypeRef dst, widen::TypeRef src,
     if (isPtrLikeType(src)) {
         if (ds != widen::intern("bool") && ds != widen::intern("intptr")) {
             diagnostic::report(diag, {file_id, tok,
-                "Cannot convert '" + from + "' to '" + to
-                + "'; a pointer converts only to 'bool' or 'intptr'.", {}});
+                "Cannot convert " + quoteType(src) + " to " + quoteType(dst)
+                + "; a pointer converts only to 'bool' or 'intptr'.", {}});
             return true;
         }
         return false;
     }
     if (!isNumericType(src)) {
         diagnostic::report(diag, {file_id, tok,
-            "Cannot convert '" + from + "' to '" + to + "'.", {}});
+            "Cannot convert " + quoteType(src) + " to " + quoteType(dst) + ".", {}});
         return true;
     }
     // Both numeric — the value grid permits all such conversions.
@@ -1342,16 +1344,9 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
 bool coerceOperandToClass(parse::Tree& tree, widen::TypeRef cls,
                           parse::Node& operand, diagnostic::Sink& diag);
 
-// The CLASS a diagnostic names: the real class, aliases and const peeled. Inside a
-// template flavor an operand's type is labeled by the TYPE PARAMETER (`T`), which
-// tells the author nothing; the bound class (`Value`) is what lacks the operator.
-std::string diagClassName(widen::TypeRef t) {
-    return widen::spellOrEmpty(widen::deepStrip(t));
-}
-
 // A type with every ALIAS layer peeled — at any depth — and its structure and
-// const kept: what a diagnostic spells, so a template flavor's `T` reads as the
-// bound type (`int^`), not the parameter's name.
+// const kept: the parenthesized half of quoteType, so a template flavor's `T`
+// also reads as the bound type (`int^`).
 widen::TypeRef peelAliases(widen::TypeRef t) {
     using F = widen::Type::Form;
     if (t == widen::kNoType) return t;
@@ -1390,13 +1385,13 @@ widen::TypeRef peelAliases(widen::TypeRef t) {
 std::string noClassOperatorMsg(parse::Tree& tree, std::string const& op,
                                std::vector<std::string> const& opnames,
                                widen::TypeRef cls, widen::TypeRef operand) {
-    std::string msg = "Operator '" + op + "' is not defined on class '"
-                    + diagClassName(cls) + "'";
+    std::string msg = "Operator '" + op + "' is not defined on class "
+                    + quoteType(cls);
     bool declared = false;
     for (auto const& n : opnames)
         if (!declaredMemberOverloads(tree, cls, n).empty()) declared = true;
     if (operand != widen::kNoType && declared)
-        msg += " for type '" + widen::spellOrEmpty(peelAliases(operand)) + "'";
+        msg += " for type " + quoteType(operand);
     return msg + ".";
 }
 
@@ -1444,8 +1439,8 @@ bool rejectAbstractInstantiation(parse::Tree const& tree, widen::TypeRef cls,
                                  int file_id, int tok, diagnostic::Sink& diag) {
     if (!classIsAbstract(tree, cls)) return false;
     diagnostic::report(diag, {file_id, tok,
-        "Cannot instantiate the abstract class '" + widen::spellOrEmpty(widen::strip(cls))
-        + "'; it has an unimplemented (pure) virtual method.", {}});
+        "Cannot instantiate the abstract class " + quoteType(widen::strip(cls))
+        + "; it has an unimplemented (pure) virtual method.", {}});
     return true;
 }
 
@@ -1579,8 +1574,8 @@ void classifyScope(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag)
             if (widen::form(ft) == widen::Type::Form::kSlid
                 && classIsAbstract(tree, ft)) {
                 diagnostic::report(diag, {p->file_id, p->name_tok,
-                    "Field '" + p->name + "' cannot embed the abstract class '"
-                    + widen::spellOrEmpty(ft) + "' by value; use a reference '^'.", {}});
+                    "Field '" + p->name + "' cannot embed the abstract class "
+                    + quoteType(ft) + " by value; use a reference '^'.", {}});
             }
             // A FIELD DEFAULT IS DATA — a foldable constant or an aggregate of
             // foldable constants (canon field.sl/initialize.sl; the globals
@@ -2074,8 +2069,8 @@ void classifyFunctionAddress(parse::Tree& tree, parse::Node& e,
         if (pick < 0 && cands.size() == 1) pick = cands[0];   // the relation reports
         if (pick < 0) {
             diagnostic::report(diag, {operand.file_id, operand.tok,
-                "No overload of '" + name + "' matches '"
-                + widen::spell(peelAliases(context)) + "'.", {}});
+                "No overload of '" + name + "' matches "
+                + quoteType(context) + ".", {}});
             return;
         }
     } else if (cands.size() == 1) {
@@ -2276,7 +2271,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (idx < 0 || idx >= static_cast<long>(slots.size())) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Tuple slot index " + std::to_string(idx)
-                        + " is out of bounds for '" + bt + "'.", {}});
+                        + " is out of bounds for " + quoteType(base.inferred_type) + ".", {}});
                     return;
                 }
                 e.inferred_type = slots[idx];
@@ -2296,20 +2291,20 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         root = root->children[0].get();
                     }
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "Subscript indexes past the last dimension of '"
-                        + widen::spellOrEmpty(root->inferred_type) + "'.", {}});
+                        "Subscript indexes past the last dimension of "
+                        + quoteType(root->inferred_type) + ".", {}});
                     return;
                 }
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "Cannot subscript a non-array value of type '" + bt + "'.",
+                    "Cannot subscript a non-array value of type " + quoteType(base.inferred_type) + ".",
                     {}});
                 return;
             }
             if (index.inferred_type != widen::kNoType
                 && !isIntegerClass(index.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "An array index must be an integer; got '"
-                    + widen::spellOrEmpty(index.inferred_type) + "'.", {}});
+                    "An array index must be an integer; got "
+                    + quoteType(index.inferred_type) + ".", {}});
             }
             // A constant integer index is bounds-checked against a fixed-size
             // array; an iterator has no known length, so no check. char literals
@@ -2323,7 +2318,7 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (idx < 0 || idx >= dim) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "Array index " + std::to_string(idx)
-                        + " is out of bounds for '" + bt + "'.", {}});
+                        + " is out of bounds for " + quoteType(base.inferred_type) + ".", {}});
                 }
             }
             e.inferred_type = bt.empty()  ? widen::kNoType
@@ -2455,8 +2450,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             std::string ot = widen::spellOrEmpty(operand.inferred_type);
             if (!ot.empty() && !isPtrLikeType(operand.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "Cannot dereference a non-pointer value of type '"
-                    + ot + "'.", {}});
+                    "Cannot dereference a non-pointer value of type "
+                    + quoteType(operand.inferred_type) + ".", {}});
                 return;
             }
             e.inferred_type = pointeeType(operand.inferred_type);
@@ -2483,14 +2478,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                         "'" + base.name + "' cannot access field '"
                         + e.name + "'.",
                         {{ent.file_id, ent.tok,
-                          "'" + base.name + "' type '"
-                          + widen::spell(widen::deepStrip(base.inferred_type))
-                          + "' defined here is not a class object."}}});
+                          "'" + base.name + "' type "
+                          + quoteType(widen::deepStrip(base.inferred_type))
+                          + " defined here is not a class object."}}});
                     return;
                 }
                 diagnostic::report(diag, {e.file_id, e.tok,
                     "Cannot access field '" + e.name + "' of non-class value of "
-                    "type '" + widen::spellOrEmpty(base.inferred_type) + "'.", {}});
+                    "type " + quoteType(base.inferred_type) + ".", {}});
                 return;
             }
             auto it = tree.classes.find(bt);
@@ -2714,8 +2709,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (size.inferred_type != widen::kNoType
                     && !isIntegerClass(size.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "An array size must be an integer; got '"
-                        + widen::spellOrEmpty(size.inferred_type) + "'.", {}});
+                        "An array size must be an integer; got "
+                        + quoteType(size.inferred_type) + ".", {}});
                 }
             }
             if (e.children[1]) {
@@ -2725,9 +2720,9 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     && !isBufferClassPtr(addr.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
                         "A placement address must be a buffer-class pointer "
-                        "(void^, int8^, uint8^); got '"
-                        + widen::spellOrEmpty(addr.inferred_type)
-                        + "'.", {}});
+                        "(void^, int8^, uint8^); got "
+                        + quoteType(addr.inferred_type)
+                        + ".", {}});
                 }
             }
             widen::TypeRef es = widen::strip(e.return_type);
@@ -2818,8 +2813,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     if (!isPtrLikeType(operand.inferred_type)) {
                         diagnostic::report(diag, {e.file_id, e.tok,
                             "A '<" + e.text + ">' qualifier cast applies only to a "
-                            "pointer (reference / iterator); got '"
-                            + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
+                            "pointer (reference / iterator); got "
+                            + quoteType(operand.inferred_type) + ".", {}});
                         e.inferred_type = operand.inferred_type;   // recover
                         return;
                     }
@@ -2838,19 +2833,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 wrapArrayAsElemAddr(tree, operand);
                 inferExpr(tree, operand, widen::kNoType, diag);
             }
-            std::string to = widen::spellOrEmpty(e.return_type);
             // An empty operand type means inferExpr already reported an error;
             // skip the rule check (it would cascade a second, misleading
             // diagnostic) but still stamp the target type so downstream stages
             // see a typed node — the cast's type IS the target regardless.
             if (operand.inferred_type != widen::kNoType) {
                 std::string why;
-                std::string ot = widen::spellOrEmpty(operand.inferred_type);
                 if (!ptrExplicitOk(operand.inferred_type, e.return_type, why)
                     && !ptrBaseCastOk(tree, operand.inferred_type, e.return_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "Cannot cast '" + ot + "' to '" + to
-                        + "'; " + why + ".", {}});
+                        "Cannot cast " + quoteType(operand.inferred_type) + " to " + quoteType(e.return_type)
+                        + "; " + why + ".", {}});
                 }
             }
             // The cast's type IS the (resolved) target — keep its handle, don't
@@ -3049,8 +3042,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             if (callee.inferred_type == widen::kNoType) return;   // reported upstream
             if (!widen::isFunctionPointer(callee.inferred_type)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "The called value is not a function pointer; got '"
-                    + widen::spell(peelAliases(callee.inferred_type)) + "'.", {}});
+                    "The called value is not a function pointer; got "
+                    + quoteType(callee.inferred_type) + ".", {}});
                 return;
             }
             widen::TypeRef sig = widen::strip(
@@ -3112,16 +3105,16 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // element), recursively — accepted exactly where its leaves are.
                 if (!isIncDecable(operand.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "Operator '" + e.text + "' is not defined on type '"
-                        + ot + "'.", {}});
+                        "Operator '" + e.text + "' is not defined on type "
+                        + quoteType(operand.inferred_type) + ".", {}});
                 }
             } else if (!ot.empty()
                        && (!isNumericType(operand.inferred_type)
                            || widen::deepStrip(operand.inferred_type)
                                   == widen::intern("bool"))) {
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "Operator '" + e.text + "' is not defined on type '"
-                    + ot + "'.", {}});
+                    "Operator '" + e.text + "' is not defined on type "
+                    + quoteType(operand.inferred_type) + ".", {}});
             }
             // The result type IS the operand's — keep its handle, don't re-intern
             // the spelling (that would clobber an alias operand to a slid).
@@ -3186,8 +3179,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (operand.inferred_type != widen::kNoType
                     && !isCoercibleToBool(operand.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "Operator '!' is not defined on type '"
-                        + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
+                        "Operator '!' is not defined on type "
+                        + quoteType(operand.inferred_type) + ".", {}});
                 }
                 e.inferred_type = widen::intern("bool");
             } else {  // + - ~
@@ -3215,8 +3208,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 // An aggregate's float slot lands here too (the explode re-infers it).
                 else if (op == "~" && isFloatType(operand.inferred_type)) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "Bitwise '~' not defined on floating-point type '"
-                        + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
+                        "Bitwise '~' not defined on floating-point type "
+                        + quoteType(operand.inferred_type) + ".", {}});
                 }
                 e.inferred_type = operand.inferred_type;
                 e.alias_label = operand.alias_label;   // a unary keeps the label
@@ -3247,14 +3240,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 if (lhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(lhs.inferred_type)) {
                     diagnostic::report(diag, {lhs.file_id, lhs.tok,
-                        "Operator '" + op + "' is not defined on type '"
-                        + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
+                        "Operator '" + op + "' is not defined on type "
+                        + quoteType(lhs.inferred_type) + ".", {}});
                 }
                 if (rhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(rhs.inferred_type)) {
                     diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                        "Operator '" + op + "' is not defined on type '"
-                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                        "Operator '" + op + "' is not defined on type "
+                        + quoteType(rhs.inferred_type) + ".", {}});
                 }
                 e.inferred_type = widen::intern("bool");
                 e.op_type = widen::intern("bool");
@@ -3285,14 +3278,14 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                     if (lhs.inferred_type != widen::kNoType
                         && !isNumericType(lhs.inferred_type)) {
                         diagnostic::report(diag, {lhs.file_id, lhs.tok,
-                            "Shift left-hand side must be numeric; got '"
-                            + widen::spellOrEmpty(lhs.inferred_type) + "'.", {}});
+                            "Shift left-hand side must be numeric; got "
+                            + quoteType(lhs.inferred_type) + ".", {}});
                     }
                     if (rhs.inferred_type != widen::kNoType
                         && !isIntegerClass(rhs.inferred_type)) {
                         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                            "Shift count must be integer-class; got '"
-                            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                            "Shift count must be integer-class; got "
+                            + quoteType(rhs.inferred_type) + ".", {}});
                     }
                 }
                 e.inferred_type = lhs.inferred_type;
@@ -3502,8 +3495,6 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
 
             flexBinaryOperands(lhs, rhs);
-            std::string lt = spellForMessage(lhs.inferred_type);   // for the message (an
-            std::string rt = spellForMessage(rhs.inferred_type);   // alias spells 'T=int')
 
             widen::TypeRef optyRef;
             if (!widen::commonType(lhs.inferred_type, rhs.inferred_type, optyRef)) {
@@ -3513,8 +3504,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
                 optyRef = arithFloatMix(lhs.inferred_type, rhs.inferred_type, op);
                 if (optyRef == widen::kNoType) {
                     diagnostic::report(diag, {e.file_id, e.tok,
-                        "No common type for '" + lt + "' and '"
-                        + rt + "'; use an explicit type conversion.",
+                        "No common type for " + quoteType(lhs.inferred_type) + " and "
+                        + quoteType(rhs.inferred_type) + "; use an explicit type conversion.",
                         {}});
                     return;
                 }
@@ -3526,8 +3517,8 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             }
             if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {e.file_id, e.tok,
-                    "Bitwise '" + op + "' not defined on floating-point type '"
-                    + widen::spellOrEmpty(optyRef) + "'.", {}});
+                    "Bitwise '" + op + "' not defined on floating-point type "
+                    + quoteType(optyRef) + ".", {}});
                 return;
             }
 
@@ -4040,9 +4031,9 @@ bool bindTemplateTypeList(parse::Tree& tree, parse::Node& s, int tid,
             } else {
                 diagnostic::report(diag, {s.file_id, err_tok,
                     "Argument " + std::to_string(i + 1) + " of '" + s.name
-                    + "' (type '" + widen::spellOrEmpty(at)
-                    + "') does not match the template pattern '"
-                    + widen::spellOrEmpty(pats[p]) + "'.", {}});
+                    + "' (type " + quoteType(at)
+                    + ") does not match the template pattern "
+                    + quoteType(pats[p]) + ".", {}});
             }
             return false;
         }
@@ -4201,8 +4192,8 @@ bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& d
     }
     if (fit.empty()) {
         diagnostic::report(diag, {s.file_id, s.tok,
-            "No specialization of '" + s.name + "' matches '"
-            + widen::spellOrEmpty(probe) + "'.", {}});
+            "No specialization of '" + s.name + "' matches "
+            + quoteType(probe) + ".", {}});
         return false;
     }
     if (fit.size() > 1) {
@@ -4212,8 +4203,8 @@ bool classifyTemplateCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& d
             notes.push_back({d->file_id, d->name_tok, "matches this arm"});
         }
         diagnostic::report(diag, {s.file_id, s.tok,
-            "Ambiguous specialization: '" + widen::spellOrEmpty(probe)
-            + "' matches more than one arm of '" + s.name + "'.",
+            "Ambiguous specialization: " + quoteType(probe)
+            + " matches more than one arm of '" + s.name + "'.",
             std::move(notes)});
         return false;
     }
@@ -4551,9 +4542,9 @@ void checkPtrAssign(parse::Tree& tree, widen::TypeRef lvalue_type,
     if (ptrImplicitOk(rhs.inferred_type, lvalue_type)) return;
     if (ptrBaseUpcastOk(tree, rhs.inferred_type, lvalue_type)) return;  // derived^ -> base^
     diagnostic::report(diag, {rhs.file_id, rhs.tok,
-        "Cannot implicitly cast '" + widen::spellOrEmpty(peelAliases(rhs.inferred_type))
-        + "' to '" + widen::spellOrEmpty(peelAliases(lvalue_type))
-        + "'; an explicit cast is required.", {}});
+        "Cannot implicitly cast " + quoteType(rhs.inferred_type)
+        + " to " + quoteType(lvalue_type)
+        + "; an explicit cast is required.", {}});
 }
 
 // A class (kSlid) VALUE is assignable only to the SAME class. A class meeting an
@@ -4574,8 +4565,8 @@ void checkSlidAssign(widen::TypeRef lvalue_type, parse::Node const& rhs,
     if (widen::form(l) != F::kSlid && widen::form(r) != F::kSlid) return;
     if (l == r) return;   // same class -> a copy
     diagnostic::report(diag, {rhs.file_id, rhs.tok,
-        "Cannot implicitly convert '" + widen::spellOrEmpty(rhs.inferred_type)
-        + "' to '" + widen::spellOrEmpty(lvalue_type) + "'.", {}});
+        "Cannot implicitly convert " + quoteType(rhs.inferred_type)
+        + " to " + quoteType(lvalue_type) + ".", {}});
 }
 
 // A strong-const LITERAL rhs is a TYPED value, not a flexing literal: assigning it
@@ -4591,20 +4582,18 @@ void checkStrongConstAssign(widen::TypeRef dest, parse::Node const& rhs,
                             diagnostic::Sink& diag) {
     if (rhs.strong_type == widen::kNoType || !isLiteralKind(rhs.kind)
         || dest == widen::kNoType) return;
-    std::string src = widen::spellOrEmpty(rhs.strong_type);
-    std::string dest_s = widen::spellOrEmpty(dest);
     widen::TypeKind st, dt;
     if (!widen::classify(rhs.strong_type, st) || !widen::classify(dest, dt)) return;
     if (st.cat == dt.cat && st.bits == dt.bits) return;          // same type
     using C = widen::Category;
     auto narrow = [&] {
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Cannot implicitly narrow '" + src + "' to '" + dest_s
-            + "'; use an explicit type conversion.", {}});
+            "Cannot implicitly narrow " + quoteType(rhs.strong_type) + " to " + quoteType(dest)
+            + "; use an explicit type conversion.", {}});
     };
     auto convertErr = [&](char const* tail) {
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Cannot implicitly convert '" + src + "' to '" + dest_s + "' (" + tail
+            "Cannot implicitly convert " + quoteType(rhs.strong_type) + " to " + quoteType(dest) + " (" + tail
             + "); use an explicit type conversion.", {}});
     };
     // A strong CHAR value widens out as an 8-bit unsigned (char -> char was the
@@ -4639,23 +4628,21 @@ void checkValueWiden(widen::TypeRef dest, widen::TypeRef src,
     widen::TypeKind st, dt;
     if (!widen::classify(src, st) || !widen::classify(dest, dt)) return;
     if (st.cat == dt.cat && st.bits == dt.bits) return;
-    std::string s = spellForMessage(src);    // an alias spells label=target
-    std::string d = spellForMessage(dest);
     using C = widen::Category;
     auto narrow = [&] {
         diagnostic::report(diag, {file_id, tok,
-            "Cannot implicitly narrow '" + s + "' to '" + d
-            + "'; use an explicit type conversion.", {}});
+            "Cannot implicitly narrow " + quoteType(src) + " to " + quoteType(dest)
+            + "; use an explicit type conversion.", {}});
     };
     auto convertErr = [&](char const* tail) {
         diagnostic::report(diag, {file_id, tok,
-            "Cannot implicitly convert '" + s + "' to '" + d + "' (" + tail
+            "Cannot implicitly convert " + quoteType(src) + " to " + quoteType(dest) + " (" + tail
             + "); use an explicit type conversion.", {}});
     };
     auto convertErrPlain = [&] {
         diagnostic::report(diag, {file_id, tok,
-            "Cannot implicitly convert '" + s + "' to '" + d
-            + "'; use an explicit type conversion.", {}});
+            "Cannot implicitly convert " + quoteType(src) + " to " + quoteType(dest)
+            + "; use an explicit type conversion.", {}});
     };
     if (st.cat == C::kBool) {
         // bool widens to int family (zext); cross-family to float and char.
@@ -4759,8 +4746,8 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
     std::vector<parse::Node*> elems;
     if (!collectArrayElementNodes(rhs, dims, 0, elems)) {
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Array initializer shape does not match the dimensions of '"
-            + widen::spellOrEmpty(declType) + "'.", {}});
+            "Array initializer shape does not match the dimensions of "
+            + quoteType(declType) + ".", {}});
         return;
     }
     // Each node initializes ONE element — re-infer in the element's context (a
@@ -4800,9 +4787,9 @@ void classifyArrayFromTuple(parse::Tree& tree, widen::TypeRef declType,
             if (el->inferred_type != widen::kNoType
                 && widen::deepStrip(el->inferred_type) != widen::deepStrip(elem)) {
                 diagnostic::report(diag, {el->file_id, el->tok,
-                    "Array element type '" + widen::spellOrEmpty(el->inferred_type)
-                    + "' does not match the declared element type '"
-                    + widen::spellOrEmpty(elem) + "'.", {}});
+                    "Array element type " + quoteType(el->inferred_type)
+                    + " does not match the declared element type "
+                    + quoteType(elem) + ".", {}});
             }
         } else {
             // A SCALAR element re-enters the relation against the element type.
@@ -4854,8 +4841,8 @@ void checkAggregateShapeMatch(widen::TypeRef dest, widen::TypeRef src,
     bool sAgg = isAggregateType(ss);
     if (dAgg != sAgg) {
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Cannot assign '" + widen::spellOrEmpty(src) + "' to '"
-            + widen::spellOrEmpty(dest) + "'.", {}});
+            "Cannot assign " + quoteType(src) + " to "
+            + quoteType(dest) + ".", {}});
         return;
     }
     if (!dAgg) {
@@ -4875,12 +4862,12 @@ void checkAggregateShapeMatch(widen::TypeRef dest, widen::TypeRef src,
         bool bothArray = widen::form(ds) == widen::Type::Form::kArray
                       && widen::form(ss) == widen::Type::Form::kArray;
         std::string detail = bothArray
-            ? "'; array shape differs."
-            : "'; slot count differs (" + std::to_string(sn) + " vs "
+            ? "; array shape differs."
+            : "; slot count differs (" + std::to_string(sn) + " vs "
                   + std::to_string(dn) + ").";
         diagnostic::report(diag, {rhs.file_id, rhs.tok,
-            "Cannot assign '" + widen::spellOrEmpty(src) + "' to '"
-            + widen::spellOrEmpty(dest) + detail, {}});
+            "Cannot assign " + quoteType(src) + " to "
+            + quoteType(dest) + detail, {}});
         return;
     }
     for (int i = 0; i < dn; i++) {
@@ -4917,8 +4904,8 @@ void checkTupleLiteralArity(widen::TypeRef dest, parse::Node const& lit,
     int rn = static_cast<int>(lit.children.size());
     if (dn != rn) {
         diagnostic::report(diag, {lit.file_id, lit.tok,
-            "Cannot assign '" + widen::spellOrEmpty(lit.inferred_type) + "' to '"
-            + widen::spellOrEmpty(dest) + "'; slot count differs ("
+            "Cannot assign " + quoteType(lit.inferred_type) + " to "
+            + quoteType(dest) + "; slot count differs ("
             + std::to_string(rn) + " vs " + std::to_string(dn) + ").", {}});
         return;
     }
@@ -5538,7 +5525,7 @@ void classifyConstruction(parse::Tree& tree, parse::Node& s,
     if (it == tree.classes.end()) {
         // An unregistered class — unreachable (resolve validated the target).
         diagnostic::report(diag, {s.file_id, s.tok,
-            "Unknown class type '" + widen::spellOrEmpty(ctype) + "'.", {}});
+            "Unknown class type " + quoteType(ctype) + ".", {}});
         return;
     }
     // A bare `Class` / `Class()` names NO ctor arguments — a DEFAULT construction. Record
@@ -5647,8 +5634,8 @@ std::unique_ptr<parse::Node> classZeroValue(parse::Tree& tree, widen::TypeRef ty
     // Any other field type (void, an unregistered class) has no defined zero
     // here — report rather than silently emit an int 0.
     diagnostic::report(diag, {file_id, tok,
-        "Cannot default-construct a field of type '" + widen::spell(ty)
-        + "'.", {}});
+        "Cannot default-construct a field of type " + quoteType(ty)
+        + ".", {}});
     n->kind = parse::Kind::kIntLiteral;   // placeholder; the error short-circuits codegen
     n->text = "0";
     return n;
@@ -5773,8 +5760,8 @@ void checkValueAssign(parse::Tree& tree, widen::TypeRef dest, parse::Node& rhs,
             // or vice-versa). A kNoType rhs rides an already-reported upstream error.
             if (rhs.inferred_type != widen::kNoType) {
                 diagnostic::report(diag, {rhs.file_id, rhs.tok,
-                    "Cannot assign '" + widen::spellOrEmpty(rhs.inferred_type)
-                    + "' to '" + widen::spellOrEmpty(dest) + "'.", {}});
+                    "Cannot assign " + quoteType(rhs.inferred_type)
+                    + " to " + quoteType(dest) + ".", {}});
             }
         } else {
             // A size-1 `kTupleExpr` into a NUMBER / POINTER target is the construction
@@ -5898,7 +5885,7 @@ void classifyDestructureSlots(parse::Tree& tree, parse::Node& node,
     if (ntargets != slots.size()) {
         diagnostic::report(diag, {node.file_id, node.tok,
             "Destructure has " + std::to_string(ntargets)
-            + " target(s) but the tuple '" + widen::spellOrEmpty(src) + "' has "
+            + " target(s) but the tuple " + quoteType(src) + " has "
             + std::to_string(slots.size()) + " slot(s).", {}});
         return;
     }
@@ -5910,8 +5897,8 @@ void classifyDestructureSlots(parse::Tree& tree, parse::Node& node,
             std::vector<widen::TypeRef> sub = destructureSlots(slot_ty);
             if (sub.empty()) {
                 diagnostic::report(diag, {slot->file_id, slot->tok,
-                    "A nested destructure target needs a tuple or array element; got '"
-                    + widen::spellOrEmpty(slot_ty) + "'.", {}});
+                    "A nested destructure target needs a tuple or array element; got "
+                    + quoteType(slot_ty) + ".", {}});
                 continue;
             }
             classifyDestructureSlots(tree, *slot, sub, slot_ty, diag);
@@ -5929,9 +5916,9 @@ void classifyDestructureSlots(parse::Tree& tree, parse::Node& node,
             if (have != widen::kNoType
                 && widen::deepStrip(have) != widen::deepStrip(slot_ty)) {
                 diagnostic::report(diag, {slot->file_id, slot->name_tok,
-                    "Destructure target '" + slot->name + "' has type '"
-                    + widen::spellOrEmpty(have) + "' but slot " + std::to_string(i)
-                    + " is '" + widen::spellOrEmpty(slot_ty) + "'.", {}});
+                    "Destructure target '" + slot->name + "' has type "
+                    + quoteType(have) + " but slot " + std::to_string(i)
+                    + " is " + quoteType(slot_ty) + ".", {}});
             }
         }
     }
@@ -6112,14 +6099,14 @@ void desugarDestructure(parse::Tree& tree, parse::Node& s,
     std::vector<widen::TypeRef> slots = destructureSlots(srcType);
     if (slots.empty()) {
         diagnostic::report(diag, {s.file_id, s.tok,
-            "The right side of a destructure must be a tuple or array; got '"
-            + widen::spellOrEmpty(srcType) + "'.", {}});
+            "The right side of a destructure must be a tuple or array; got "
+            + quoteType(srcType) + ".", {}});
         return;
     }
     if (ntargets != slots.size()) {
         diagnostic::report(diag, {s.file_id, s.tok,
-            "Destructure has " + std::to_string(ntargets) + " target(s) but the source '"
-            + widen::spellOrEmpty(srcType) + "' has "
+            "Destructure has " + std::to_string(ntargets) + " target(s) but the source "
+            + quoteType(srcType) + " has "
             + std::to_string(slots.size()) + " slot(s).", {}});
         return;
     }
@@ -6522,9 +6509,9 @@ bool explodeAggregateExpr(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
         if (n < 0) { n = cnt; continue; }
         if (cnt != n) {
             diagnostic::report(diag, {e.file_id, e.tok,
-                "Aggregate shapes differ: '"
-                + widen::spellOrEmpty(e.children[0]->inferred_type) + "' vs '"
-                + widen::spellOrEmpty(e.children[1]->inferred_type) + "'.", {}});
+                "Aggregate shapes differ: "
+                + quoteType(e.children[0]->inferred_type) + " vs "
+                + quoteType(e.children[1]->inferred_type) + ".", {}});
             return true;
         }
     }
@@ -6969,8 +6956,8 @@ bool qualifiedMethodReceiver(parse::Tree& tree, parse::Node& s, diagnostic::Sink
     }
     if (chain.empty()) {
         diagnostic::report(diag, {s.file_id, s.tok,
-            "A method call requires a class object; got '"
-            + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
+            "A method call requires a class object; got "
+            + quoteType(recv.inferred_type) + ".", {}});
         return false;
     }
     auto bare = [&](std::size_t i) {
@@ -7025,8 +7012,8 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     if (!(widen::form(rs) == widen::Type::Form::kSlid
           && tree.classes.count(rs) > 0)) {
         diagnostic::report(diag, {s.file_id, s.tok,
-            "A method call requires a class object; got '"
-            + widen::spellOrEmpty(recv.inferred_type) + "'.", {}});
+            "A method call requires a class object; got "
+            + quoteType(recv.inferred_type) + ".", {}});
         return;
     }
     // Gather the same-name method OVERLOAD SET in the receiver's class frame. A
@@ -7038,7 +7025,7 @@ void inferMethodCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
     std::vector<int> cands = declaredMemberOverloads(tree, rs, s.name);
     if (cands.empty()) {
         diagnostic::report(diag, {s.file_id, s.name_tok,
-            "Class '" + widen::spell(rs) + "' has no method '" + s.name + "'.", {}});
+            "Class " + quoteType(rs) + " has no method '" + s.name + "'.", {}});
         return;
     }
     // User args = children[1..] (the receiver children[0] is held out — params[0]
@@ -7224,9 +7211,9 @@ int findClassOperator(parse::Tree& tree, widen::TypeRef cls, parse::Node const& 
     OverloadRank r = rankOverload(tree, cands, args, 1);
     if (r.tied.size() > 1) {
         reportAmbiguity(tree, rhs.file_id, rhs.tok,
-            "Ambiguous operator '" + opname + "': more than one overload of class '"
-            + widen::spellOrEmpty(cls) + "' matches source type '"
-            + widen::spellOrEmpty(rhs.inferred_type) + "' equally well.",
+            "Ambiguous operator '" + opname + "': more than one overload of class "
+            + quoteType(cls) + " matches source type "
+            + quoteType(rhs.inferred_type) + " equally well.",
             r.tied, 1, diag);
         return -2;
     }
@@ -7494,9 +7481,9 @@ void lowerClassConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sink& d
     if (op_id == -2) return;   // ambiguous op= — findClassOperator already reported
     if (op_id < 0) {
         diagnostic::report(diag, {e.file_id, e.tok,
-            "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
-            + "' to class '" + widen::spellOrEmpty(C)
-            + "'; the class has no assignment operator accepting the source.", {}});
+            "Cannot convert " + quoteType(operand.inferred_type)
+            + " to class " + quoteType(C)
+            + "; the class has no assignment operator accepting the source.", {}});
         return;
     }
     auto itc = tree.classes.find(widen::strip(C));
@@ -7638,8 +7625,8 @@ bool stampClassBinary(parse::Tree& tree, parse::Node& e, std::string const& op,
         OverloadRank r = rankOverload(tree, cands, args, 1);
         if (r.tied.size() > 1) {
             reportAmbiguity(tree, e.file_id, e.tok,
-                "Ambiguous operator '" + op + "': more than one overload of class '"
-                + widen::spellOrEmpty(C) + "' matches the operands equally well.",
+                "Ambiguous operator '" + op + "': more than one overload of class "
+                + quoteType(C) + " matches the operands equally well.",
                 r.tied, 1, diag);
             return false;
         }
@@ -7863,8 +7850,8 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
     // The source must be an aggregate (an array IS a homogeneous tuple) of matching arity.
     if (!srcIsLit && !isAggregateType(srcT)) {
         diagnostic::report(diag, {e.file_id, e.tok,
-            "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
-            + "' to '" + widen::spellOrEmpty(T) + "'.", {}});
+            "Cannot convert " + quoteType(operand.inferred_type)
+            + " to " + quoteType(T) + ".", {}});
         return;
     }
     int n = aggregateSlotCount(Ts);
@@ -7872,8 +7859,8 @@ void lowerAggregateConversion(parse::Tree& tree, parse::Node& e, diagnostic::Sin
                       : aggregateSlotCount(srcT);
     if (sn != n) {
         diagnostic::report(diag, {e.file_id, e.tok,
-            "Cannot convert '" + widen::spellOrEmpty(operand.inferred_type)
-            + "' to '" + widen::spellOrEmpty(T) + "'; slot count differs ("
+            "Cannot convert " + quoteType(operand.inferred_type)
+            + " to " + quoteType(T) + "; slot count differs ("
             + std::to_string(sn) + " vs " + std::to_string(n) + ").", {}});
         return;
     }
@@ -7977,8 +7964,8 @@ widen::TypeRef inferReferenceFrom(widen::TypeRef inferred, parse::Node const& s,
     if (widen::form(st) == widen::Type::Form::kIterator)
         return widen::internPointer(widen::get(st).pointee);
     diagnostic::report(diag, {s.file_id, s.name_tok,
-        "Cannot infer a reference for '" + s.name + "': the initializer type '"
-        + widen::spellOrEmpty(inferred) + "' is not an address.", {}});
+        "Cannot infer a reference for '" + s.name + "': the initializer type "
+        + quoteType(inferred) + " is not an address.", {}});
     return widen::kNoType;
 }
 
@@ -8558,7 +8545,6 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 rhs_ptr = s.children[0].get();
             }
             parse::Node& rhs = *rhs_ptr;
-            std::string lvalue_type = widen::spellOrEmpty(s.return_type);
 
             // A class lvalue with a matching user compound operator (`op+=`, …)
             // dispatches to it: `a += b` -> `a.op+=(b)`. The bare-name form maps to
@@ -8639,14 +8625,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 }
                 if (!isNumericType(s.return_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
-                        "Shift left-hand side must be numeric; got '"
-                        + lvalue_type + "'.", {}});
+                        "Shift left-hand side must be numeric; got "
+                        + quoteType(s.return_type) + ".", {}});
                 }
                 if (rhs.inferred_type != widen::kNoType
                     && !isIntegerClass(rhs.inferred_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
-                        "Shift count must be integer-class; got '"
-                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                        "Shift count must be integer-class; got "
+                        + quoteType(rhs.inferred_type) + ".", {}});
                 }
                 s.inferred_type = s.return_type;
                 s.op_type = s.return_type;
@@ -8656,14 +8642,14 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 inferExpr(tree, rhs, widen::kNoType, diag);
                 if (!isCoercibleToBool(s.return_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
-                        "Operator '" + op + "' is not defined on type '"
-                        + lvalue_type + "'.", {}});
+                        "Operator '" + op + "' is not defined on type "
+                        + quoteType(s.return_type) + ".", {}});
                 }
                 if (rhs.inferred_type != widen::kNoType
                     && !isCoercibleToBool(rhs.inferred_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
-                        "Operator '" + op + "' is not defined on type '"
-                        + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                        "Operator '" + op + "' is not defined on type "
+                        + quoteType(rhs.inferred_type) + ".", {}});
                 }
                 s.inferred_type = widen::intern("bool");
                 s.op_type = widen::intern("bool");
@@ -8695,17 +8681,17 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 if (optyRef == widen::kNoType
                     || widen::strip(optyRef) != widen::strip(s.return_type)) {
                     diagnostic::report(diag, {s.file_id, s.tok,
-                        "No common type for '" + spellForMessage(s.return_type) + "' and '"
-                        + spellForMessage(rhs.inferred_type)
-                        + "'; use an explicit type conversion.", {}});
+                        "No common type for " + quoteType(s.return_type) + " and "
+                        + quoteType(rhs.inferred_type)
+                        + "; use an explicit type conversion.", {}});
                     return;
                 }
                 flexIntLiteralToFloat(rhs, optyRef);
             }
             if ((op == "&" || op == "|" || op == "^") && isFloatType(optyRef)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
-                    "Bitwise '" + op + "' not defined on floating-point type '"
-                    + widen::spellOrEmpty(optyRef) + "'.", {}});
+                    "Bitwise '" + op + "' not defined on floating-point type "
+                    + quoteType(optyRef) + ".", {}});
                 return;
             }
             s.inferred_type = optyRef;
@@ -8809,9 +8795,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (a.inferred_type != widen::kNoType && b.inferred_type != widen::kNoType
                 && widen::deepStrip(a.inferred_type) != widen::deepStrip(b.inferred_type)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
-                    "Swap operands must be the same type; got '"
-                    + widen::spellOrEmpty(a.inferred_type) + "' and '"
-                    + widen::spellOrEmpty(b.inferred_type) + "'.", {}});
+                    "Swap operands must be the same type; got "
+                    + quoteType(a.inferred_type) + " and "
+                    + quoteType(b.inferred_type) + ".", {}});
             }
             return;
         }
@@ -8833,7 +8819,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                 if (rhs.inferred_type != widen::kNoType)
                     diagnostic::report(diag, {s.file_id, s.tok,
                         "The right side of a destructure must be a tuple or array; "
-                        "got '" + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+                        "got " + quoteType(rhs.inferred_type) + ".", {}});
                 return;
             }
             classifyDestructureSlots(tree, s, slots, rhs.inferred_type, diag);
@@ -8847,8 +8833,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (operand.inferred_type != widen::kNoType
                 && !isPtrLikeType(operand.inferred_type)) {
                 diagnostic::report(diag, {s.file_id, s.tok,
-                    "Cannot delete a non-pointer value of type '"
-                    + widen::spellOrEmpty(operand.inferred_type) + "'.", {}});
+                    "Cannot delete a non-pointer value of type "
+                    + quoteType(operand.inferred_type) + ".", {}});
             }
             return;
         }
@@ -8871,8 +8857,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (recv.inferred_type != widen::kNoType
                 && !dtor_is_class && !dtor_is_prim) {
                 diagnostic::report(diag, {s.file_id, s.tok,
-                    "A destructor call '.~()' requires a class object; got '"
-                    + spellForMessage(recv.inferred_type) + "'.", {}});
+                    "A destructor call '.~()' requires a class object; got "
+                    + quoteType(recv.inferred_type) + ".", {}});
             } else if (recv.inferred_type != widen::kNoType
                        && recv.kind != parse::Kind::kDerefExpr) {
                 diagnostic::report(diag, {s.file_id, s.tok,
@@ -9058,8 +9044,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
-                    "An if condition must be a condition expression; type '"
-                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
+                    "An if condition must be a condition expression; type "
+                    + quoteType(cond.inferred_type) + " is not.", {}});
             }
             // Constant condition -> the opposite branch is dead: a const-true if
             // never enters the else, a const-false if never enters the then.
@@ -9085,8 +9071,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
-                    "A while condition must be a condition expression; type '"
-                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
+                    "A while condition must be a condition expression; type "
+                    + quoteType(cond.inferred_type) + " is not.", {}});
             }
             // A constant-false pre-condition never runs the body. A constant-true
             // loop is NOT flagged: per 3B there is no constant-true loop special
@@ -9107,8 +9093,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
-                    "A while condition must be a condition expression; type '"
-                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
+                    "A while condition must be a condition expression; type "
+                    + quoteType(cond.inferred_type) + " is not.", {}});
             }
             classifyStmt(tree, *s.children[1], fn_return_type, diag);
             return;
@@ -9130,8 +9116,8 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             if (cond.inferred_type != widen::kNoType
                 && !isCoercibleToBool(cond.inferred_type)) {
                 diagnostic::report(diag, {cond.file_id, cond.tok,
-                    "A for condition must be a condition expression; type '"
-                    + widen::spellOrEmpty(cond.inferred_type) + "' is not.", {}});
+                    "A for condition must be a condition expression; type "
+                    + quoteType(cond.inferred_type) + " is not.", {}});
             }
             // A constant-false pre-condition runs neither the body nor the
             // update (the update runs after a pass; there are no passes). Each
@@ -9352,10 +9338,10 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                         || (elem != widen::removeConst(elem)
                             && pointee == widen::removeConst(pointee))) {
                         diagnostic::report(diag, {var_decl.file_id, var_decl.name_tok,
-                            "Loop variable type '"
-                                + widen::spellOrEmpty(var_decl.return_type)
-                                + "' does not match the " + noun + " element type '"
-                                + widen::spell(elem) + "'.", {}});
+                            "Loop variable type "
+                                + quoteType(var_decl.return_type)
+                                + " does not match the " + noun + " element type "
+                                + quoteType(elem) + ".", {}});
                     }
                 }
                 // A FRESH typeless loop var takes the element (slot 0) type — a
@@ -9390,11 +9376,11 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                     if (!ok) {
                         diagnostic::report(diag, {var_decl.file_id,
                             var_decl.name_tok,
-                            "'" + var_decl.name + "' is declared '"
-                            + widen::spellOrEmpty(rt)
-                            + "'; an infer-as-reference loop variable must reuse "
-                              "a reference to the element type ('"
-                            + widen::spell(widen::internPointer(elem0)) + "').",
+                            "'" + var_decl.name + "' is declared "
+                            + quoteType(rt)
+                            + "; an infer-as-reference loop variable must reuse "
+                              "a reference to the element type ("
+                            + quoteType(widen::internPointer(elem0)) + ").",
                             {}});
                     }
                 }
@@ -9431,9 +9417,9 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
                                          "'" + v.name + "' is defined here."});
                     }
                     diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
-                        "The class type ('"
-                        + widen::spellOrEmpty(widen::strip(it_ref.inferred_type))
-                        + "') of the for-loop container cannot be inferred.",
+                        "The class type ("
+                        + quoteType(widen::strip(it_ref.inferred_type))
+                        + ") of the for-loop container cannot be inferred.",
                         std::move(notes)});
                 } else if (it_ref.kind == parse::Kind::kIdentExpr) {
                     diagnostic::report(diag, {it_ref.file_id, it_ref.tok,
@@ -9465,7 +9451,7 @@ void classifyStmt(parse::Tree& tree, parse::Node& s,
             std::string st = widen::spellOrEmpty(scrut.inferred_type);
             if (!st.empty() && !isIntegerClass(scrut.inferred_type)) {
                 diagnostic::report(diag, {scrut.file_id, scrut.tok,
-                    "A switch value must be integer-class; got '" + st + "'.",
+                    "A switch value must be integer-class; got " + quoteType(scrut.inferred_type) + ".",
                     {}});
             }
             // A constant scrutinee (constfold substituted a const / folded the
@@ -9805,8 +9791,8 @@ void classifyFunctionSignature(parse::Tree& tree, parse::Node& fn,
             // The scalar fit-check as before; a non-scalar constant (a string,
             // an aggregate) is typed at the call site like any filled arg.
             diagnostic::report(diag, {def.file_id, def.tok,
-                "Default value does not fit parameter type '"
-                    + widen::spellOrEmpty(p.return_type) + "'.", {}});
+                "Default value does not fit parameter type "
+                    + quoteType(p.return_type) + ".", {}});
         }
         e.param_defaults[i] = &def;
     }
@@ -9878,8 +9864,8 @@ void explodeAggregateAug(parse::Tree& tree, parse::Node& s, widen::TypeRef fn_re
     if (isAggregateType(rhs.inferred_type)
         && aggregateSlotCount(widen::strip(rhs.inferred_type)) != nslots) {
         diagnostic::report(diag, {s.file_id, s.tok,
-            "Aggregate shapes differ: '" + widen::spellOrEmpty(s.return_type) + "' vs '"
-            + widen::spellOrEmpty(rhs.inferred_type) + "'.", {}});
+            "Aggregate shapes differ: " + quoteType(s.return_type) + " vs "
+            + quoteType(rhs.inferred_type) + ".", {}});
         s.inferred_type = s.return_type;
         s.op_type = s.return_type;
         return;

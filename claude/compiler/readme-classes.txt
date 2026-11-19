@@ -971,7 +971,7 @@ CLASSES: NEW / DELETE / SIZEOF + .~() (landed this phase; spans every stage)
     primitive and pointer flavors of a container template (Vector<T^>) must
     compile and do nothing. Accepted footgun: `pp^.~()` meant as `pp^^.~()` is
     silent. Anything else (a tuple pointee) rejects, the
-    alias operand spelled label=target.
+    alias operand spelled 'label' ('target') (quoteType).
   * FIELD ACCESS through deref / iterator — `.field` lowers to a slot kIndexExpr;
     emitElementAddr's per-segment walk roots on a variable's alloca OR a deref `ptr^`
     (the pointer value), and an ITERATOR step loads the sequence pointer + GEPs by

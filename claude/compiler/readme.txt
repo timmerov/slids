@@ -2056,9 +2056,13 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   aggregated body; `Box<Box<int>>`; the function demand
   `tpick<Vector<int>^>`; and the comma-carrying `Box<TPair<int, int8>>`
   round-trips the .sli (an inner comma must not split the demand — it
-  survives into the mangled symbol). Diagnostic: a commonType failure
-  spells an ALIAS operand as label=target ('T=float', 'Integer=int') — the
-  bound types were unreadable through bare template-param labels.
+  survives into the mangled symbol). Diagnostic: EVERY classify message
+  that names a type spells it through quoteType — an ALIAS-labeled type
+  spells label then target, 'T' ('float'), 'Integer' ('int'),
+  'Rankings^' ('slids:Vector<int>^') (underlying via peelAliases: aliases
+  peeled at any depth, const kept); an unlabeled type spells as before.
+  Bare template-param labels were unreadable alone. resolve.cpp's messages
+  still spell as written.
 
   INSTANCE-QUALIFIED SPELLINGS (canon class.sl, the iq block). An
   instance's members are nameable from outside: `Kit<int>:Sub` (nested

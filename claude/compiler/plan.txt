@@ -4685,6 +4685,21 @@ LOCAL CLASS FIELDS NAME LOCAL ALIASES (2026-11-19, from user/guthrie runner.sl:3
   and alias template after the class), lp3 (nested block); negatives Duplicate
   declaration (alias vs class), Unknown type (bad target; dim target).
 
+ONE DIAGNOSTIC TYPE SPELLING (2026-11-19, from user/guthrie runner.sl:3081)
+  `tail^` on an int reported "Cannot dereference a non-pointer value of type 'T'." —
+  the Vector<int> element carries Vector's parameter label. classify's quoteType
+  is now THE type spelling for every classify message, quotes included: an
+  alias-labeled type spells 'label' ('underlying') — 'T' ('int'), 'Integer' ('int')
+  — else 'type'. Underlying = peelAliases (any depth, const kept). Replaced:
+  spellForMessage ('T=int', deleted), diagClassName (bare class, deleted), and the
+  peelAliases-only sites (cast, operator-not-defined, ...) which now show both
+  halves. Not touched: ##type/##name text, spellCandidate's note signatures, the
+  sizeof/new sizing strings, and resolve.cpp's messages (later).
+  Coverage: test/template class.sl negatives "of type 'T' ('int')" and "of type
+  'Integer' ('int')"; markers re-pinned in expression/mixed.sl ("No common type
+  for 'Integer' ('int') and 'Flt' ('float')"), import/tmpl_test.sl and
+  lib/vector.sl ("not defined on class 'T' ('Loc')" / "('Value')").
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
