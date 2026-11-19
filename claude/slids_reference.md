@@ -260,6 +260,7 @@ Scoping:
 - Top-level aliases live for the rest of the file.
 - An alias declared inside any `{ }` block goes out of scope at the end of that block.
 - An inner alias may shadow an outer alias of the same name; outside the inner block the outer alias is back.
+- An alias to a class or class-template instance qualifies like the type it names: `alias BlocMap = Map<Rankings, Bloc>;` then `BlocMap:MapIter`.
 
 ---
 

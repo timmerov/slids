@@ -299,6 +299,17 @@ Bloc(
 ) { }
 
 alias BlocMap = Map<Rankings, Bloc>;
+alias BlocMapIters = Vector<BlocMap:MapIter>;
+
+Rankings() {
+    String to_string() {
+        String s;
+        for (which : self) {
+            s += g_runner.candidates_[which].name_;
+        }
+        return s;
+    }
+}
 
 /*
 fancy feature unique to slids:
@@ -1312,12 +1323,8 @@ TestRunner(
         n int = bloc_map_.size();
         println(String + "Voter blocs (" + n + "):");
         for (it : bloc_map_) {
-            String ss = " ";
+            ss = String + " " + it^.rankings_.to_string();
             nrankings int = it^.rankings_.size();
-            for (k : 0..nrankings) {
-                int which = it^.rankings_[k];
-                ss += candidates_[which].name_;
-            }
             ss += String + " size: " + it^.bloc_.size_ + " utilities:";
             for (i : 0..nrankings) {
                 ss += String + " " + it^.bloc_.utilities_[i];
@@ -2900,8 +2907,6 @@ ElectoralMethod : InstantRunoffMethod() {
     }
 
     virtual void strategic_voting() {
-        ElectoralMethod:strategic_voting();
-
         /*
         W is the honest winner.
         A is the villain.
@@ -2915,7 +2920,7 @@ ElectoralMethod : InstantRunoffMethod() {
         candidates = ^g_runner.candidates_;
         bloc_map = ^g_runner.bloc_map_;
 
-        Vector<int> order;
+        Rankings order;
         order.reserve(ncandidates);
 
         /*
@@ -2956,6 +2961,124 @@ ElectoralMethod : InstantRunoffMethod() {
                     continue;
                 }
 
+                /* find blocs that prefer: W>A; A>W and A>B; A>W and B>A. */
+                BlocMapIters wa_blocs;
+                BlocMapIters abw_blocs;
+                BlocMapIters baw_blocs;
+                for (it : bloc_map^) {
+                    for (which : it^.rankings_) {
+                        if (which == winner_) {
+                            wa_blocs.append(it);
+                            continue bloc_loop;
+                        }
+                        if (which == a) {
+                            break;
+                        }
+                    }
+                    for (which : it^.rankings_) {
+                        if (which == a) {
+                            abw_blocs.append(it);
+                            continue bloc_loop;
+                        }
+                        if (which == b) {
+                            baw_blocs.append(it);
+                            continue bloc_loop;
+                        }
+                    }
+                } :bloc_loop;
+                println(String + "  B: " + candidates^[b].name_);
+                print("  wa_blocs:");
+                for (it : wa_blocs) {
+                    print(String + " " + it^.rankings_.to_string());
+                }
+                println();
+                print("  abw_blocs:");
+                for (it : abw_blocs) {
+                    print(String + " " + it^.rankings_.to_string());
+                }
+                println();
+                print("  baw_blocs:");
+                for (it : baw_blocs) {
+                    print(String + " " + it^.rankings_.to_string());
+                }
+                println();
+
+                /* generate and separate permutation orders with A>B and B>A. */
+                Vector<Rankings> ab_orders;
+                Vector<Rankings> ba_orders;
+                order.clear();
+                for (c : 0..ncandidates) {
+                    if (c == winner_) {
+                        continue;
+                    }
+                    order.append(c);
+                }
+                while() {
+                    for (c : order) {
+                        if (c == a) {
+                            ab_orders.append(order);
+                            break;
+                        }
+                        if (c == b) {
+                            ba_orders.append(order);
+                            break;
+                        }
+                    }
+                    done = permute(order);
+                    if (done) {
+                        break;
+                    }
+                }
+                print("  ab_orders:");
+                for (perm : ab_orders) {
+                    print(String + " " + perm^.to_string());
+                }
+                println();
+                print("  ba_orders:");
+                for (perm : ba_orders) {
+                    print(String + " " + perm^.to_string());
+                }
+                println();
+
+                /* create lp var names from the abw bloc rankings and the ab/ba permutation orders. */
+                println("  abw_vars:");
+                for (head : abw_blocs) {
+                    print(String + "  ");
+                    for (tail : ab_orders) {
+                        same = true;
+                        for (i : 0..(ncandidates-1)) {
+                            if (head^.rankings_[i] != tail^[i]) {
+                                same = false;
+                                break;
+                            }
+                        }
+                        if (same) {
+                            continue;
+                        }
+                        print(String + " " + head^.rankings_.to_string() + "_" + tail^.to_string());
+                    }
+                    println();
+                }
+                println("  baw_vars:");
+                for (head : baw_blocs) {
+                    print(String + "  ");
+                    for (tail : ba_orders) {
+                        same = true;
+                        for (i : 0..(ncandidates-1)) {
+                            if (head^.rankings_[i] != tail^[i]) {
+                                same = false;
+                                break;
+                            }
+                        }
+                        if (same) {
+                            continue;
+                        }
+                        print(String + " " + head^.rankings_.to_string() + "_" + tail^.to_string());
+                    }
+                    println();
+                }
+
+                /*
                 order.clear();
                 for (c : 0..ncandidates) {
                     if (c == a || c == b) {
@@ -2973,20 +3096,77 @@ ElectoralMethod : InstantRunoffMethod() {
 
                     /*
                     there are n! possible voter blocs.
-                    WAX is every voter bloc ranking W>A - constants. n!/2
-                    ABWX is every voter bloc ranking A>W and A>B - limiter. n!/4
-                    BAWX is every voter bloc ranking A>W and B>A - limiter. n!/4
-                    ABWX_ABY voters from bloc ABWX now voting ABY. n!/4*n!/2
-                    BAWX_BAY voters from bloc BAWX now voting BAY. n!/4*n!/2
+                    assume n=4.
+                    these 12 are constants because they prefer W>A.
+                    {WA} =
+                    WABC WACB WBAC WBCA WCAB WCBA
+                    BWAC BWCA CWAB CWBA
+                    BCWA CBWA
+                    these 8 are constraints that prefer A>W and A>B.
+                    {ABW} =
+                    ABCW ABWC ACBW ACWB AWBC AWCB
+                    CABW CAWB
+                    these 4 are constraints that prefer A>W and B>A.
+                    {BAW} =
+                    BACW BAWC BCAW CBAW
+                    every member of the {ABW} and {BAW} sets re-order their ballots.
+                    there are some restrictions.
+                    they all vote W last.
+                    they change their votes.
+                    they don't flip the order of A and B.
+                    every combination produces a variable.
+                    these need to be generated algorithmically.
+                    {ABW} 21 variables:
+                    ABCW_ACB ABCW_CAB
+                    ABWC_ABC ABWC_ACB ABWC_CAB
+                    ACBW_ABC ACBW_CAB
+                    ACWB_ABC ACWB_ACB ACWB_CAB
+                    AWBC_ABC AWBC_ACB AWBC_CAB
+                    AWCB_ABC AWCB_ACB AWCB_CAB
+                    CABW_ABC CABW_ACB
+                    CAWB_ABC CAWB_ACB CAWB_CAB
+                    {BAW} 9 variables:
+                    BACW_BCA BACW_CBA
+                    BAWC_BAC BAWC_BCA BAWC_CBA
+                    BCAW_BAC BCAW_CBA
+                    CBAW_BAC CBAW_BCA
+                    each member of {ABW} and {BAW} has a limiting equation.
+                    sum ABCW_* <= ABCW
+                    we need an expression for every member of {ABW} and {BAW} that don't shift.
+                    ABCW_fixed = ABCW - sum ABCW_*
+                    ...
+                    with those expressions we can rewrite the limiting equations.
+                    ABCW_fixed >= 0
+                    ...
+                    8+4=12 equations.
 
-                    constraints:
-                    sum ABWX_ABY <= ABWX
-                    sum BAWX_BAY <= BAWX
 
-                    first to be eliminated is C.
-                    C = sum CWA + sum ABWX_C* + sum BAWX_C*
-                    X = sum XWA + sum ABWX_X* + sum BAWX_X*
-                    C < X
+                    there are (n-2)! elimination orders: CW WC
+                    assume CW.
+                    every candidate gets an expression: A B C W
+                    set the initial vote totals.
+                    for each member of {WA}
+                        candate[member.first] += member.value
+                    for each member of {ABW}_fixed and {BAW}_fixed
+                        candidate[member.first] += member.expr
+                    for each member of {ABW} and {BAW}
+                        candidate[member.shift_first] += member.var
+                    C < A
+                    C < B
+                    C < W
+                    +3=15 equations
+
+                    next to be eliminated is W.
+                    ===you are here===
+
+
+                    A,B,W pick up votes from C.
+                    A += CABW + CAWB + sum {ABW}_CA* + sum {BAW}_CA*
+                    B += CBWA + CBAW + sum {ABW}_CB* + sum {BAW}_CB*
+                    W += CWAB + CWBA
+                    W < A
+                    W < B
+                    +2=17 equations
                     */
 
                     done = permute(order);
@@ -2994,6 +3174,7 @@ ElectoralMethod : InstantRunoffMethod() {
                         break;
                     }
                 }
+                */
             }
         }
 

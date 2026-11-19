@@ -1458,6 +1458,17 @@ int resolveNamespaceSegments(parse::Tree& tree,
                              int file_id, diagnostic::Sink& diag) {
     // The qualified-prefix spelling through segment `upto`, resolved as a type
     // (`Spc:Kit<int>` -> the flavor's kSlid), then bridged to its frame.
+    // The one type -> frame bridge: resolve `t` as a type use (a template
+    // instance MINTS its flavor here) and return the class frame it names, or
+    // -1. `reported` is set when the resolve itself diagnosed.
+    auto typeFrame = [&](widen::TypeRef t, std::size_t at, bool& reported) -> int {
+        std::set<std::string> visiting;
+        widen::TypeRef r = resolveTypeRef(tree, t, visiting, reported,
+                                          file_id, toks[at], diag);
+        if (reported) return -1;
+        int cid = parse::classEntryForType(tree, widen::deepStrip(r));
+        return cid < 0 ? -1 : tree.entries[cid].ns_frame_id;
+    };
     auto instanceFrame = [&](std::size_t upto) -> int {
         std::string spelling;
         if (global) spelling = "::";
@@ -1466,17 +1477,28 @@ int resolveNamespaceSegments(parse::Tree& tree,
             spelling += segments[k];
         }
         bool reported = false;
-        std::set<std::string> visiting;
-        widen::TypeRef t = resolveTypeRef(tree, widen::intern(spelling), visiting,
-                                          reported, file_id, toks[upto], diag);
+        int frame = typeFrame(widen::intern(spelling), upto, reported);
         if (reported) return -1;
-        int cid = parse::classEntryForType(tree, widen::deepStrip(t));
-        if (cid < 0) {
+        if (frame < 0) {
             diagnostic::report(diag, {file_id, toks[upto],
                 "'" + spelling + "' is not a class-template instance.", {}});
             return -1;
         }
-        return tree.entries[cid].ns_frame_id;
+        return frame;
+    };
+    // A segment naming an ALIAS whose target is not a plain class/namespace
+    // name — `alias BlocMap = Map<K, V>; BlocMap:MapIter` — resolves the alias's
+    // type through the same bridge, so an aliased instance qualifies exactly
+    // like its spelled-out list. -2 = diagnosed; -1 = not a frame (caller
+    // reports).
+    auto aliasFrame = [&](int entry_id, std::size_t i) -> int {
+        if (entry_id < 0
+            || tree.entries[entry_id].kind != parse::EntryKind::kAlias) {
+            return -1;
+        }
+        bool reported = false;
+        int frame = typeFrame(tree.entries[entry_id].slids_type, i, reported);
+        return reported ? -2 : frame;
     };
     // A segment naming a class-template PATTERN owns no frame: only a FLAVOR
     // has members to look inside, so a pattern qualifier must carry a list —
@@ -1508,6 +1530,8 @@ int resolveNamespaceSegments(parse::Tree& tree,
     } else {
         int id = resolveName(tree, segments[0]);
         int frame = entryNamespaceFrame(tree, id);
+        if (frame < 0) frame = aliasFrame(id, 0);
+        if (frame == -2) return -1;
         if (frame < 0) {
             if (!patternRejects(id, 0) && !diagnostic::hasErrors(diag)) {
                 diagnostic::report(diag, {file_id, toks[0],
@@ -1526,6 +1550,8 @@ int resolveNamespaceSegments(parse::Tree& tree,
         }
         int id = findMemberLiveOrInstance(tree, cur, segments[i]);
         int frame = entryNamespaceFrame(tree, id);
+        if (frame < 0) frame = aliasFrame(id, i);
+        if (frame == -2) return -1;
         if (frame < 0) {
             if (!patternRejects(id, i) && !diagnostic::hasErrors(diag)) {
                 if (!reportListlessStripped(tree, cur, segments[i],

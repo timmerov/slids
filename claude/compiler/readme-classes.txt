@@ -995,7 +995,9 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     `Time:Count` (type) and `Time:Count:kZero` (value) both resolve). `alias
     Space;` (bare namespace import) is REJECTED — a class is a type, not an
     importable namespace. resolveNamespaceSegments accepts a class frame and
-    follows an alias to it; resolveQualifiedType accepts a member alias as a type
+    follows an alias to it — including an alias to a template INSTANCE
+    (`alias BlocMap = Map<K, V>; BlocMap:MapIter`), which resolves the alias's
+    type as a type use (minting the flavor) and continues in its frame; resolveQualifiedType accepts a member alias as a type
     leaf; a member type names itself qualified for ##type (memberQualifiedName).
   * LOCAL CLASSES — a class may be defined in ANY function body, and in any nested
     block within one (if / else / loop / switch case). resolveStmtList runs a

@@ -2077,7 +2077,13 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   resolves a '<'-bearing segment's qualified prefix as a TYPE USE — the
   same kTmplUse arm as any use site, memoized, so a qualifier MINTS the
   flavor on demand — and continues in the instance's member frame; the
-  spelling-level `:` splits are angle-aware (splitQualifiedSpelling). The
+  spelling-level `:` splits are angle-aware (splitQualifiedSpelling). An
+  ALIAS segment whose target is not a plain class/namespace name (an alias
+  to an instance: `alias TI = Kit<int>; TI:Y`, any position in the chain)
+  rides the same bridge: aliasFrame resolves the alias's slids_type through
+  typeFrame — the one type -> frame helper instanceFrame also uses — so an
+  aliased instance qualifies exactly like its spelled-out list. A target
+  that names no class (`alias P = Kit<int>^;`) keeps "is not a namespace". The
   bypass matches an ancestor by BARE name; a qualifier that spells a
   template list must name that flavor, compared by resolved TYPE
   (resolve classMatchesQualifier / probeClassSpelling; baseClassDepth has

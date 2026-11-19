@@ -4660,6 +4660,17 @@ THE INSTANTIATION STAGE (2026-11-16; landing plan steps 1-4)
   math:abs's swapped branches (user fixed). Holds only while linpro uses abs/max<int>.
   Every Makefile's scan comment rewritten (no SLIDS_INST, no ordering).
 
+AN ALIAS TO A TEMPLATE INSTANCE QUALIFIES (2026-11-18, from user/guthrie runner.sl:2965)
+  `alias BlocMap = Map<Rankings, Bloc>;` then `Vector<BlocMap:MapIter>` reported
+  "'BlocMap' is not a namespace." while the spelled-out `Map<Rankings, Bloc>:MapIter`
+  resolved. entryNamespaceFrame sees through an alias only to a plain class/namespace
+  NAME (`alias Time = Space; Time:Count`); an instance's flavor has no name to look up.
+  resolveNamespaceSegments now falls back, for an alias segment (first or later), to
+  resolving the alias's type as a TYPE USE — the bridge instanceFrame already used,
+  factored out as typeFrame — and continues in the flavor's frame. entryNamespaceFrame
+  is unchanged (const tree, no diagnostics; its enum-facet caller is unaffected).
+  Coverage: no test file named yet; probed `TI:Y`, `Ns:TJ:Y`, and guthrie builds.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
