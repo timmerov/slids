@@ -48,3 +48,6 @@ Meth in_block(5) = 506
 Meth op+= nested = 17
 ns-class method nested = 10
 local_class_method(5) = 110
+store_cap() = 7
+class_cap() = 222
+prim_cap(5) = 12

@@ -94,10 +94,6 @@ BUGS
     able to do this:
     Format fmt(/*String*/, kLeft, /*fixed*/, /*pad*/, /*plus*/, 10);
 
-  * definite assignment misfires on a compound assign to a captured local in a nested
-    function: int count = 0; void bump(int by) { count += by; } reports "Use of
-    uninitialized variable 'count'". count = count + by; compiles.
-
   * a typeless const at file scope fails: const int kSize = 4; const kTwice = 2 * kSize;
     reports "Unknown type ''". the same line inside a function works.
 

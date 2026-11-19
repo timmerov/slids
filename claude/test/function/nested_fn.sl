@@ -83,6 +83,7 @@ claude says:
 
 /* a nested function using only its own parameter (no capture). */
 import slids.string;
+import+ slids.vector;
 alias slids;
 
 int basic(int x) {
@@ -454,6 +455,55 @@ int local_class_method(int x) {
     return hd.run(x);
 }
 
+/* a store THROUGH a capture -- an element store and an element compound assign --
+   captures the base like a read does. The array is set by its elements only, which
+   counts as set at the call (the read path's rule). */
+int store_cap() {
+    int arr[3];
+    arr[0] = 0;
+    arr[1] = 0;
+    arr[2] = 0;
+    void put(int i) {
+        arr[i] = 5;
+        arr[i] += 2;
+    }
+    put(1);
+    return arr[0] + arr[1] + arr[2];
+}
+
+/* a quiet class with a compound operator. */
+Tally(int t_ = 0) {
+    op+=(int k) { t_ += k; }
+}
+
+/* a compound assign on a captured CLASS: bare name, array element, and Vector
+   element (op[] then op+=). */
+int class_cap() {
+    Tally a;
+    Tally ta[2];
+    Vector<Tally> tv;
+    tv.resize(2);
+    void bump(int i) {
+        a += 1;
+        ta[i] += 10;
+        tv[i] += 100;
+    }
+    bump(0);
+    bump(1);
+    return a.t_ + ta[0].t_ + ta[1].t_ + tv[0].t_ + tv[1].t_;
+}
+
+/* a bare-name compound assign on a captured primitive. */
+int prim_cap(int x) {
+    int total = x;
+    void add(int k) {
+        total += k;
+    }
+    add(3);
+    add(4);
+    return total;
+}
+
 int32 main() {
     println(String + "basic(5) = " + basic(5));              // 10
     println(String + "read_cap(5) = " + read_cap(5));        // 15
@@ -500,6 +550,11 @@ int32 main() {
     Space:Inner si(7);
     println(String + "ns-class method nested = " + si.go(3));               // 7 + 3 = 10
     println(String + "local_class_method(5) = " + local_class_method(5));   // 5 + 5 + 100 = 110
+
+    // stores and compound assigns THROUGH a capture.
+    println(String + "store_cap() = " + store_cap());        // 7
+    println(String + "class_cap() = " + class_cap());        // 2 + 20 + 200 = 222
+    println(String + "prim_cap(5) = " + prim_cap(5));        // 12
     return 0;
 }
 
@@ -548,6 +603,28 @@ int32 main() {
 //        return v + 1;
 //    }
 //    return a(x);
+//}
+
+/* a bare-name compound assign reads its capture: it must be set at the call. */
+//-EXPECT-ERROR: Use of uninitialized variable 'y'.
+//int neg_cap_aug_uninit() {
+//    int y;
+//    void bar() {
+//        y += 1;
+//    }
+//    bar();
+//    return 0;
+//}
+
+/* an array stored through by a nested function is still unset at the call. */
+//-EXPECT-ERROR: Use of uninitialized variable 'arr'.
+//int neg_cap_arr_uninit() {
+//    int arr[2];
+//    int bar() {
+//        arr[0] += 1;
+//        return arr[0];
+//    }
+//    return bar();
 //}
 
 /* a captured host variable must be definitely-assigned at the call. */

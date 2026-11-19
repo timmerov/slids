@@ -95,8 +95,8 @@ const float64 kDispersion = 0.7;
 //const float64 kDispersion = 0.3;
 
 /* option to use a fixed seed for testing. */
-const uint64 kSeedChoice = 0;
-//const uint64 kSeedChoice = 1794963838930484536;
+//const uint64 kSeedChoice = 0;
+const uint64 kSeedChoice = 1795130231044930701;
 
 /*
 option to use approval votes to find guthrie winner.

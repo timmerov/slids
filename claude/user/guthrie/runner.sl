@@ -3131,7 +3131,59 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 add_constraints(ab_minions);
                 add_constraints(ba_minions);
+
+                /* we need to know the vote totals for all of the candidates. */
+                Vector<LP:Expr> votes;
+                votes.resize(ncandidates);
+
+                /* candidates always get votes from the W>A voters. */
+                for (it : wa_blocs) {
+                    first = it^.rankings_[0];
+                    votes[first] += it^.bloc_.size_;
+                }
+
+                /* add honest and strategic votes from minion blocs. */
+                void add_votes(
+                    MinionBlocs^ minion_blocs
+                ) {
+                    for (minion_bloc : minion_blocs^) {
+                        /* honest votes. */
+                        honest = minion_bloc^.honest_rankings_[0];
+                        votes[honest] += minion_bloc^.expr_;
+
+                        for (minion : minion_bloc^.minions_) {
+                            /* strategic votes. */
+                            strategic = minion^.strategic_rankings_[0];
+                            votes[strategic] += minion^.var_;
+                        }
+                    }
+                }
+                add_votes(ab_minions);
+                add_votes(ba_minions);
+
+                /*
+                at this point we need to pick a candidate to eliminate first.
+                it can't be A or B.
+                let's arbitrarily pick W.
+                for now.
+                this is work in progress.
+                */
+                eliminee = winner_;
+
+                /*
+                the eliminated candidate must lose to all others.
+                add those equations.
+                */
+                for (c : 0..ncandidates) {
+                    if (c == eliminee) {
+                        continue;
+                    }
+                    row = votes[eliminee] + LP:lt + votes[c];
+                    lp.add_row(row);
+                }
                 lp.print();
+
+                /* now we need to re-count the votes without the eliminated candidate. */
 
                 /*
                 so next steps...
@@ -3149,6 +3201,10 @@ ElectoralMethod : InstantRunoffMethod() {
                 redistribute E votes to all other candidates.
                 smells like recursion.
                 */
+
+                lp.solve();
+                lp.solve_integral();
+                lp.print();
             }
         }
 

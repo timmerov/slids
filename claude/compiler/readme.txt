@@ -2773,6 +2773,16 @@ STAGE FILES (.h / .cpp pairs)
             method INHERITS `self` if it needs it (a bare field name rewrites to
             `self.field`, and `self` is an ordinary local of the method's frame, so
             both capture like any other host local). Canon test/function/nested_fn.sl.
+            WHAT CAPTURES: noteCapture runs at every host-local touch in the body — a
+            read (resolveExpr), a bare-name write (resolveAssignTarget), and a store
+            THROUGH the local (resolveStoreTarget: `arr[i] = v`, `v[i] += x`, which
+            classify may rewrite to `^v`'s op[] + op+=). A missed site leaves the
+            nested function without the address (codegen asserts "not in SymTab").
+            DEFINITE ASSIGNMENT: inside the body a captured local is never DA-checked
+            (read, bare-name `x += v`); each HOST-level call is checked instead
+            (nested_call_checks) against the set state there — initialized_locals
+            UNION assigned_arrays (an array/tuple set by slot counts, the read
+            path's rule).
             [Both pre-passes used to scan a function body's DIRECT children only — a
             block-nested function was then never registered: calling it said "Unknown
             function", and NOT calling it left its body entirely unresolved and

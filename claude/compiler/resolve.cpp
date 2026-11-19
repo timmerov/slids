@@ -3920,8 +3920,13 @@ void resolveUserCall(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag) 
             // Host-level call to a nested function: every captured host variable
             // must be definitely-assigned here. Deferred — the callee's captures
             // are known only after its body resolves (it may be defined later).
+            // "Set" is the read path's rule: an in-place aggregate (array / tuple)
+            // also counts when a slot was stored (assigned_arrays, the may-set,
+            // which holds only aggregates) — so the snapshot is the union.
+            std::set<int> set_here = tree.initialized_locals;
+            set_here.insert(tree.assigned_arrays.begin(), tree.assigned_arrays.end());
             tree.nested_call_checks.push_back(
-                {s.resolved_entry_id, tree.initialized_locals, s.file_id, s.tok});
+                {s.resolved_entry_id, std::move(set_here), s.file_id, s.tok});
         }
         // Count same-name free-function overloads in the callee's scope (file scope
         // for an unqualified call, or the callee's NAMESPACE however it is reached).
@@ -4976,6 +4981,10 @@ void resolveStoreTarget(parse::Tree& tree, parse::Node& lv,
         // A global has static storage — always initialized, never swept — so it needs
         // no definite-assignment / unused tracking; an element/field store just stands.
         if (entry.kind == parse::EntryKind::kGlobalVar) return;
+        // A host local stored THROUGH (`arr[i] = v`, `v[i] += x`) from a nested function
+        // is a capture like a read or a bare-name write — else the nested function has
+        // no address for it.
+        noteCapture(tree, id);
         if (isInPlaceAggregate(entry.slids_type)) {
             // An array/tuple slot store assigns the aggregate (monotonic may-set).
             tree.assigned_arrays.insert(id);
@@ -5447,8 +5456,11 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
                 // already be initialized (`x += 1` on an uninitialized x is an
                 // error). resolveAssignTarget doesn't route through resolveExpr,
                 // so check here, then mark written.
+                // A CAPTURED host local is checked at the nested function's call
+                // sites instead (nested_call_checks), as the read path does.
                 int id = s.resolved_entry_id;
                 if (tree.entries[id].kind == parse::EntryKind::kLocalVar
+                    && !isCaptureLocal(tree, id)
                     && tree.initialized_locals.count(id) == 0) {
                     diagnostic::report(diag, {s.file_id, s.name_tok,
                         "Use of uninitialized variable '" + s.name + "'.", {}});
