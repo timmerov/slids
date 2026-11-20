@@ -3245,7 +3245,7 @@ ElectoralMethod : InstantRunoffMethod() {
                     lp.solve();
                     lp.solve_integral(min_minions);
 
-                    /* save the best solution. */
+                    /* every solution is better. save it. */
                     if (lp.solved_) {
                         villain = a;
                         min_minions = lp.get_minimum();
@@ -3270,6 +3270,29 @@ ElectoralMethod : InstantRunoffMethod() {
 
         ++nvillains_;
         nminions_ += min_minions;
+    }
+
+    virtual void print_strategic_results() {
+        Format fmt;
+        fmt.float_style_ = kFixedPoint;
+        fmt.precision_ = 1;
+
+        ntrials float64 = g_runner.ntrials_;
+        nvillains float64 = nvillains_;
+        wins = 100.0 * nvillains / ntrials;
+        coalition_size float64 = 0.0;
+        coalition_pct float64 = 0.0;
+        if (nvillains_ > 0) {
+            nvoters float64 = g_runner.electorate_.nvoters_;
+            coalition_size = nminions_ / nvillains;
+            coalition_pct = 100.0 * coalition_size / nvoters;
+        }
+
+        println(String + " " + name_ + ": " + fmt*wins + "% (" + nvillains_ + ")"
+            + " strategic voters: " + fmt*coalition_pct + "% (" + coalition_size + ")");
+        if (kExplainStrategies) { void;
+            println("  W>A pairwise. BC+ voters who prefer A>W eliminate W early.");
+        }
     }
 }
 
