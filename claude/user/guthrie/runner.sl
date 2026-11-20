@@ -3054,25 +3054,6 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 println();
 
-                /*
-                change of plans.
-
-                1. choose an elimination order - include W.
-                separate A>B and B>A blocs.
-                rewrite bloc rankings to be a vote schedule.
-                merge blocs with the same schedule.
-                reduces the number of blocs.
-
-                2. construct all possible strategic rankings.
-                separate into A>B and B>A.
-                rewrite permutations to voting schedules.
-                remove duplicates.
-                create one variable for each minion bloc voting honestly.
-                create one variable for each voting schedule.
-                add constraint:
-                minion pool = honest minions + strategic minions
-                */
-
                 /* generate and separate permutation orders with A>B and B>A. */
                 alias Orders = Vector<Rankings>;
                 Orders ab_orders;
@@ -3137,6 +3118,12 @@ ElectoralMethod : InstantRunoffMethod() {
                         }
                     }
                 }
+                /*
+                wa_schedules holds this size of the bloc. no variable.
+                abw_schedules and baw_schedules hold both the size of the bloc
+                and the variable which is number of minions who vote strategically.
+                note: *not* the number of minions who vote honestly.
+                */
                 ScheduleMap wa_schedules;
                 ScheduleMap abw_schedules;
                 ScheduleMap baw_schedules;
@@ -3159,7 +3146,11 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 println();
 
-                /* convert orders to schedule map. */
+                /*
+                convert orders to schedule map.
+                ab_schedules and ba_schedules hold the variable which is the number
+                of minions who vote strategically.
+                */
                 void orders_to_schedule(
                     Orders^ orders,
                     ScheduleMap^ schedule_map
@@ -3207,173 +3198,106 @@ ElectoralMethod : InstantRunoffMethod() {
                     name = String + "s" + it^.schedule_.to_string();
                     it^.sv_.var_ = lp.add_var(name);
                 }
-                lp.print();
-
-
-/***************************************
-                /* a minion is A>W voter who votes strategically. */
-                Minion(
-                    LP:Var var_,
-                    Rankings strategic_rankings_
-                ) {
-                }
-                alias Minions = Vector<Minion>;
 
                 /*
-                a bloc of minions share the same honest rankings.
-                who vote strategically in different ways.
-                the expression is the minions who still vote honestly.
+                constraint: abw and baw are limited by the bloc size.
+                constraint: total minions defecting from all honest blocks
+                equals total minions landing on all strategic blocks.
+                since that's an equality, we need to add it twice with >= and <=.
                 */
-                MinionBloc(
-                    Rankings honest_rankings_,
-                    int bloc_size_,
-                    Minions minions_,
-                    LP:Expr expr_
-                ) {
-                }
-                alias MinionBlocs = Vector<MinionBloc>;
-                MinionBlocs ab_minions;
-                MinionBlocs ba_minions;
-
-                /* create lp var names from the abw bloc rankings and the ab permutation orders. */
-                void add_minions(
-                    MinionBlocs^ minion_blocs,
-                    BlocMapIters^ voter_blocs,
-                    Orders^ orders
-                ) {
-                    for (head : voter_blocs^) {
-                        Minions minions;
-                        expr = LP:Expr + head^.bloc_.size_;
-
-                        for (tail : orders^) {
-                            same = true;
-                            for (i : 0..(ncandidates-1)) {
-                                if (head^.rankings_[i] != tail^[i]) {
-                                    same = false;
-                                    break;
-                                }
-                            }
-                            if (same) {
-                                continue;
-                            }
-                            name = String + head^.rankings_.to_string() + "_" + tail^.to_string();
-                            if (minions.size() == 0) {
-                                print("  ");
-                            }
-                            print(String + " " + name);
-
-                            minion = minions.append();
-                            minion^.var_ = lp.add_var(name);
-                            minion^.strategic_rankings_ = tail^;
-                            expr -= minion^.var_;
-                        }
-                        if (minions.size() > 0) {
-                            println();
-                        }
-
-                        /* append the minion bloc - even when there are no minions. */
-                        minion_bloc = minion_blocs^.append();
-                        minion_bloc^.honest_rankings_ = head^.rankings_;
-                        minion_bloc^.bloc_size_ = head^.bloc_.size_;
-                        minion_bloc^.minions_ <-- minions;
-                        minion_bloc^.expr_ <-- expr;
-                    }
-                }
-                println("  abw_vars:");
-                add_minions(ab_minions, abw_blocs, ab_orders);
-                println("  baw_vars:");
-                add_minions(ba_minions, baw_blocs, ba_orders);
-
-                /* add the equations for the constraints. */
-                void add_constraints(
-                    MinionBlocs^ minion_blocs
-                ) {
-                    for (minion_bloc : minion_blocs^) {
-                        /* ignore blocks with no minions. */
-                        if (minion_bloc^.minions_.size() == 0) {
-                            continue;
-                        }
-                        row = minion_bloc^.expr_ + LP:gte + 0;
-                        lp.add_row(row);
-                    }
-                }
-                add_constraints(ab_minions);
-                add_constraints(ba_minions);
-
-                /* we need to know the vote totals for all of the candidates. */
-                Vector<LP:Expr> votes;
-                votes.resize(ncandidates);
-
-                /* candidates always get votes from the W>A voters. */
-                for (it : wa_blocs) {
-                    first = it^.rankings_[0];
-                    votes[first] += it^.bloc_.size_;
-                }
-
-                /* add honest and strategic votes from minion blocs. */
-                void add_votes(
-                    MinionBlocs^ minion_blocs
-                ) {
-                    for (minion_bloc : minion_blocs^) {
-                        /* honest votes. */
-                        honest = minion_bloc^.honest_rankings_[0];
-                        votes[honest] += minion_bloc^.expr_;
-
-                        for (minion : minion_bloc^.minions_) {
-                            /* strategic votes. */
-                            strategic = minion^.strategic_rankings_[0];
-                            votes[strategic] += minion^.var_;
-                        }
-                    }
-                }
-                add_votes(ab_minions);
-                add_votes(ba_minions);
-
-                /*
-                at this point we need to pick a candidate to eliminate first.
-                it can't be A or B.
-                let's arbitrarily pick W.
-                for now.
-                this is work in progress.
-                */
-                eliminee = winner_;
-
-                /*
-                the eliminated candidate must lose to all others.
-                add those equations.
-                */
-                for (c : 0..ncandidates) {
-                    if (c == eliminee) {
-                        continue;
-                    }
-                    row = votes[eliminee] + LP:lt + votes[c];
+                LP:Expr ab_expr;
+                LP:Expr ba_expr;
+                for (it : abw_schedules) {
+                    row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
                     lp.add_row(row);
+                    ab_expr += it^.sv_.var_;
                 }
-                lp.print();
+                for (it : baw_schedules) {
+                    row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
+                    lp.add_row(row);
+                    ba_expr += it^.sv_.var_;
+                }
+                for (it : ab_schedules) {
+                    ab_expr -= it^.sv_.var_;
+                }
+                for (it : ba_schedules) {
+                    ba_expr -= it^.sv_.var_;
+                }
+                ab_row = ab_expr + LP:lte + 0;
+                ba_row = ba_expr + LP:lte + 0;
+                lp.add_row(ab_row);
+                lp.add_row(ba_row);
+                ab_row = ab_expr + LP:gte + 0;
+                ba_row = ba_expr + LP:gte + 0;
+                lp.add_row(ab_row);
+                lp.add_row(ba_row);
 
-                /* now we need to re-count the votes without the eliminated candidate. */
+                /* for each round */
+                elligible = (1<<ncandidates) - 1;
+                for (round : 0..(ncandidates-1)) {
+                    /* vote totals */
+                    Vector<LP:Expr> votes;
+                    votes.resize(ncandidates);
+                    for (it : wa_schedules) {
+                        which = it^.schedule_[round];
+                        votes[which] += it^.sv_.size_;
+                    }
+                    for (it : abw_schedules) {
+                        which = it^.schedule_[round];
+                        /* minions defect from this honest bloc. */
+                        votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                    }
+                    for (it : baw_schedules) {
+                        which = it^.schedule_[round];
+                        /* minions defect from this honest bloc. */
+                        votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                    }
+                    for (it : ab_schedules) {
+                        which = it^.schedule_[round];
+                        /* minions land in this strategic bloc. */
+                        votes[which] += it^.sv_.var_;
+                    }
+                    for (it : ba_schedules) {
+                        which = it^.schedule_[round];
+                        /* minions land in this strategic bloc. */
+                        votes[which] += it^.sv_.var_;
+                    }
+
+                    /* remove the eliminated candidate. */
+                    eliminated = elimination_order[round];
+                    bit = 1 << eliminated;
+                    elligible &= ~bit;
+
+                    /* add the vote total equations. */
+                    for (i : 0..ncandidates) {
+                        bit = 1<<i;
+                        if (bit & elligible) {
+                            expr = votes[eliminated] + LP:lt + votes[i];
+                            lp.add_row(expr);
+                        }
+                    }
+                }
 
                 /*
-                so next steps...
-                every abw_bloc and baw_bloc needs an lp:expr = bloc.size - all of the associated variables.
-                this is the number of voters in the bloc who could vote strategically but don't.
-                lp:add_row expr >= 0
-                every candidate C needs an lp:expr = vote count =
-                    wa voters for C (constant)
-                    + abw and baw voters who vote honestly for C (expr)
-                    + abw and baw voters who vote strategically for C (var)
-                at this point we need to decide which candidate E gets eliminated first.
-                so maybe continue working on a copy.
-                lp:add_row E < all other candidates.
-                if not feasible, go to next candidate to eliminate.
-                redistribute E votes to all other candidates.
-                smells like recursion.
+                note:
+                defecting minions are counted twice.
+                once when they leave the honest voting bloc.
+                and again when they land in the strategic voting bloc.
+                must divide the lp result by 2.
                 */
-
+                lp.print();
                 lp.solve();
                 lp.solve_integral();
                 lp.print();
-***************************************/
+
+
+                /*
+                still to do:
+                save results.
+                remember use Z/2.
+                iterate over all elimination orders.
+                handle ties.
+                */
             }
         }
 
