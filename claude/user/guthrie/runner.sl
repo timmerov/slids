@@ -326,6 +326,16 @@ MapNode<Key=Rankings, Value=Bloc>(
 }
 
 /*
+can convert candidate rankings to voting schedule.
+*/
+alias ScheduleMap = Map<Rankings, int>;
+MapNode<Key=Rankings, Value=int>(
+    alias schedule_ = key_,
+    alias size_ = value_
+) {
+}
+
+/*
 utility method to return the margin of victory.
 this is the number of votes A can surrender and still beat B.
 */
@@ -2797,6 +2807,31 @@ bool permute(Vector<int>^ order) {
 }
 
 /*
+convert rankings to voting schedule given an elimination order.
+*/
+Rankings rankings_to_schedule(
+    Rankings^ rankings,
+    Rankings^ elimination_order
+) {
+    nc int = rankings^.size();
+    Rankings schedule;
+    schedule.reserve(nc);
+    elligible uint = (1<<nc) - 1;
+    for (i : 0..nc) {
+        for (which : rankings^) {
+            uint bit = 1 << which;
+            if (bit & elligible) {
+                schedule.append(which);
+                break;
+            }
+        }
+        uint bit = 1 << elimination_order^[i];
+        elligible &= ~bit;
+    }
+    return schedule;
+}
+
+/*
 instant runoff voting.
 */
 ElectoralMethod : InstantRunoffMethod() {
@@ -2923,6 +2958,8 @@ ElectoralMethod : InstantRunoffMethod() {
 
         Rankings order;
         order.reserve(ncandidates);
+        Rankings elimination_order;
+        elimination_order.reserve(ncandidates);
 
         /*
         we're looking for the minimum number of strategic
@@ -3012,15 +3049,31 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 println();
 
+                /*
+                change of plans.
+
+                1. choose an elimination order - include W.
+                separate A>B and B>A blocs.
+                rewrite bloc rankings to be a vote schedule.
+                merge blocs with the same schedule.
+                reduces the number of blocs.
+
+                2. construct all possible strategic rankings.
+                separate into A>B and B>A.
+                rewrite permutations to voting schedules.
+                remove duplicates.
+                create one variable for each minion bloc voting honestly.
+                create one variable for each voting schedule.
+                add constraint:
+                minion pool = honest minions + strategic minions
+                */
+
                 /* generate and separate permutation orders with A>B and B>A. */
                 alias Orders = Vector<Rankings>;
                 Orders ab_orders;
                 Orders ba_orders;
                 order.clear();
                 for (c : 0..ncandidates) {
-                    if (c == winner_) {
-                        continue;
-                    }
                     order.append(c);
                 }
                 while() {
@@ -3050,6 +3103,85 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 println();
 
+                /* establish an elimination order. */
+                elimination_order.clear();
+                for (c : 0..ncandidates) {
+                    if (c == a || c == b) {
+                        continue;
+                    }
+                    elimination_order.append(c);
+                }
+                elimination_order.append(b);
+                elimination_order.append(a);
+                println(String + "  elimination order: " + elimination_order.to_string());
+
+                /* convert the bloc map to a schedule map. */
+                void bloc_map_to_schedule(
+                    BlocMapIters^ bloc_map,
+                    ScheduleMap^ schedule_map
+                ) {
+                    for (it : bloc_map^) {
+                        schedule = rankings_to_schedule(it^.rankings_, elimination_order);
+                        found_it = schedule_map^.find(schedule);
+                        if (found_it == schedule_map^.end()) {
+                            schedule_map^.insert(schedule, it^.bloc_.size_);
+                        } else {
+                            found_it^.size_ += it^.bloc_.size_;
+                        }
+                    }
+                }
+                ScheduleMap wa_schedules;
+                ScheduleMap abw_schedules;
+                ScheduleMap baw_schedules;
+                bloc_map_to_schedule(wa_blocs, wa_schedules);
+                bloc_map_to_schedule(abw_blocs, abw_schedules);
+                bloc_map_to_schedule(baw_blocs, baw_schedules);
+                print("  wa_schedules:");
+                for (it : wa_schedules) {
+                    print(String + " " + it^.schedule_.to_string() + ":" + it^.size_);
+                }
+                println();
+                print("  abw_schedules:");
+                for (it : abw_schedules) {
+                    print(String + " " + it^.schedule_.to_string() + ":" + it^.size_);
+                }
+                println();
+                print("  baw_schedules:");
+                for (it : baw_schedules) {
+                    print(String + " " + it^.schedule_.to_string() + ":" + it^.size_);
+                }
+                println();
+
+                /* convert orders to schedule map. */
+                void orders_to_schedule(
+                    Orders^ orders,
+                    ScheduleMap^ schedule_map
+                ) {
+                    for (it : orders^) {
+                        schedule = rankings_to_schedule(it, elimination_order);
+                        found_it = schedule_map^.find(schedule);
+                        if (found_it == schedule_map^.end()) {
+                            schedule_map^.insert(schedule, 0);
+                        }
+                    }
+                }
+                ScheduleMap ab_schedules;
+                ScheduleMap ba_schedules;
+                orders_to_schedule(ab_orders, ab_schedules);
+                orders_to_schedule(ba_orders, ba_schedules);
+                print("  ab_schedules:");
+                for (it : ab_schedules) {
+                    print(String + " " + it^.schedule_.to_string());
+                }
+                println();
+                print("  ba_schedules:");
+                for (it : ba_schedules) {
+                    print(String + " " + it^.schedule_.to_string());
+                }
+                println();
+
+
+/***************************************
                 /* begin linear programming. */
                 LP lp;
 
@@ -3215,6 +3347,7 @@ ElectoralMethod : InstantRunoffMethod() {
                 lp.solve();
                 lp.solve_integral();
                 lp.print();
+***************************************/
             }
         }
 

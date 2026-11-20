@@ -1555,6 +1555,10 @@ RE-OPENING CLASSES + THE EXTERNAL FORM (landed; spans grammar / resolve; non-vir
   class in two aliased namespaces: "qualify the re-open". A FIELD-bearing opening is not
   re-open-shaped and stays a separate file-scope class — which a bare name never reaches,
   because the open-namespace chain (alias imports included) is searched before file scope.
+  "No local sibling" means no same-scope opening that DECLARES (a field or a base): any number
+  of bare re-open-shaped openings of the aliased class are not siblings of each other — each is
+  rewritten (2026-11-19; two `MapNode<..>` alias filters under `alias slids;` used to make both
+  local, "A constrained re-open needs the class template 'MapNode' declared before it").
 
   A RE-OPEN THROUGH AN ALIAS (2026-11-02, user). A re-open-shaped opening whose name is an alias
   is the opening of the alias's target. rewriteAliasReopens runs in relocation right after

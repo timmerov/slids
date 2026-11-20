@@ -107,13 +107,6 @@ BUGS
   * swapping const values compiles: void swap(int a[2]) { a[0] <--> a[1]; } (a is a const
     array param). the const-lvalue wall skips swap (classify.cpp says swap is deferred).
 
-  * two bare re-opens of a class through `alias Ns;` silently make a new local class:
-    Al { Abox(int v_) { } } alias Al;
-    Abox() { int one() { return v_ + 1; } } Abox() { int two() { return v_ + 2; } }
-    use: "Class 'Abox' has no method 'one'." qualifyAliasedReopens reads the second opening
-    as a same-scope class, so neither reaches Al. an alias re-open of a class that also has
-    bare re-opens in the file meets the same local class.
-
   * a qualified and a bare template flavor are different parameter types:
     int rd(slids:Vector<int>^ v);  alias slids;  int rd(Vector<int>^ v) { ... }
     says "'rd' is declared but never defined". the flavor keeps its label as written.

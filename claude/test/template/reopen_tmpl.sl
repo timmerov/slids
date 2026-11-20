@@ -95,6 +95,9 @@ Cbox<T=bool>() { bool op==(int v) { return v == 1; } }        // an operator
 Gm { Gnode<Key, Value>(Key key_, Value value_) { } }
 alias Gm;
 Gnode<Key=int, Value=bool>(alias rank_ = key_, alias flag_ = value_) { }
+/* a SECOND bare filter of the same template: the two are not local siblings of each
+   other, both re-open Gm's Gnode. */
+Gnode<Key=int, Value=int8>(alias hops_ = value_) { }
 
 /* the same namespace aliased TWICE is one namespace. */
 Dgm { Dnode<Key, Value>(Key key_, Value value_) { } }
@@ -145,6 +148,8 @@ int32 main() {
     println(String + "cbox<bool> = " + cb.pick() + " " + cb.first + " " + (cb == 1));  // 8 true true
     Gnode<int, bool> g = (5, true);
     println(String + "gnode = " + g.rank_ + " " + g.flag_);                          // 5 true
+    Gnode<int, int8> g8 = (2, 3);
+    println(String + "gnode<int8> = " + g8.hops_);                                    // 3
     Dnode<int, int> dn = (1, 6);
     println(String + "dnode = " + dn.val_);                                          // 6
     Vbox<int> vi = (1);

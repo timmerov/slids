@@ -9612,11 +9612,18 @@ void qualifyAliasedReopens(std::vector<std::unique_ptr<parse::Node>>& children,
         std::vector<parse::Node*> local;
         collectScopeOpenings(children, ch->name, local);
         // A same-scope class wins. A QUALIFIED sibling is headed elsewhere, so it is
-        // not one.
-        std::size_t same_scope = 0;
-        for (parse::Node* n : local)
-            if (n->qualifier.empty()) same_scope++;
-        if (same_scope > 1) continue;
+        // not one — and neither is another re-open-shaped opening: two re-opens of
+        // the aliased class are not local siblings of each other. Only an opening
+        // that DECLARES (a field or a base) makes the name local.
+        bool declared_here = false;
+        for (parse::Node* n : local) {
+            if (n == ch.get() || !n->qualifier.empty()) continue;
+            if (n->kind != parse::Kind::kClassDef) { declared_here = true; break; }
+            for (auto& p : n->params)
+                if (p && p->name != "_$vptr") { declared_here = true; break; }
+            if (declared_here) break;
+        }
+        if (declared_here) continue;
         std::vector<std::vector<std::string> const*> hits;
         for (auto const& path : paths) {
             std::vector<parse::Node*> level;

@@ -4715,6 +4715,16 @@ STORES THROUGH A CAPTURE (2026-11-19, from user/guthrie runner.sl add_votes)
   array element / Vector element op+=), prim_cap (12); negatives neg_cap_aug_uninit
   ('y'), neg_cap_arr_uninit ('arr').
 
+TWO BARE RE-OPENS THROUGH `alias Ns;` (2026-11-19, from user/guthrie runner.sl:322/332)
+  Two aliases-only filters of slids:MapNode at file scope under `alias slids;` failed
+  the FIRST with "A constrained re-open needs the class template 'MapNode' declared
+  before it." qualifyAliasedReopens counted every unqualified same-name opening as a
+  local sibling, so two re-opens disqualified each other and both registered as local
+  templates. A sibling now counts only if it DECLARES (a field or a base); field
+  aliases are not fields. Plain classes too: the todo item "two bare re-opens of a
+  class through `alias Ns;` silently make a new local class" closed by the same change.
+  Coverage: test/template reopen_tmpl.sl second Gnode filter (`gnode<int8> = 3`).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
