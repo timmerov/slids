@@ -3290,20 +3290,34 @@ ElectoralMethod : InstantRunoffMethod() {
                 lp.solve_integral();
                 lp.print();
 
+                if (lp.solved_) {
+                    /* strategic minions are double counted. */
+                    minions = lp.get_minimum() / 2;
+                    if (min_minions < 0 || min_minions > minions) {
+                        villain = a;
+                        min_minions = minions;
+                    }
+                }
 
                 /*
                 still to do:
-                save results.
-                remember use Z/2.
                 iterate over all elimination orders.
                 handle ties.
                 */
             }
         }
 
-        bloc_map;
-        villain;
-        min_minions;
+        /* no villain. */
+        if (villain < 0) {
+            return;
+        }
+
+        namev = candidates^[villain].name_;
+        println(String + " " + name_ + " needs " + min_minions +
+            " voters for " + namev + " to vote strategically.");
+
+        ++nvillains_;
+        nminions_ += min_minions;
     }
 }
 
