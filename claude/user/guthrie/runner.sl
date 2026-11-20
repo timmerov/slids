@@ -3710,22 +3710,17 @@ ElectoralMethod : PluralityRunoffMethod() {
                     lp.add_row(rowxab);
                 }
                 lp.solve();
-                lp.solve_integral();
+                lp.solve_integral(min_minions);
 
                 /* check no solution. */
                 if (lp.solved_ == false) {
                     continue;
                 }
 
-                /* check better solution. */
-                nminions = lp.get_minimum();
-                if (min_minions > 0 && min_minions < nminions) {
-                    continue;
-                }
-
+                /* every solution is better. */
                 villaina = a;
                 villainb = b;
-                min_minions = nminions;
+                min_minions = lp.get_minimum();
                 min_ab = lp.get_value(ab);
                 min_ba = lp.get_value(ba);
                 min_xa = 0;
