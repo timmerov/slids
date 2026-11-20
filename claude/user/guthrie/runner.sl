@@ -2793,8 +2793,10 @@ ElectoralMethod : GuthrieMethod() {
 cycle through all possible permutations.
 assume it starts in ascending order.
 */
-bool permute(Vector<int>^ order) {
-    n int = order^.size();
+bool permute(Vector<int>^ order, int n = -1) {
+    if (n < 0) {
+        n = (int=order^.size());
+    }
     for (i : (n-2)..>=0 -1) {
         if (order^[i] < order^[i+1]) {
             for (k : (n-1)..>i -1) {
@@ -2989,8 +2991,10 @@ ElectoralMethod : InstantRunoffMethod() {
                 continue;
             }
 
+            /*
             println(String + " " + name_ + ": " + candidates^[a].name_ +
                 " is a potential villain over " + candidates^[winner_].name_ + "." );
+            */
 
             /*
             find a finalist B who loses to A in the final round head to head.
@@ -3037,6 +3041,7 @@ ElectoralMethod : InstantRunoffMethod() {
                         }
                     }
                 } :bloc_loop;
+                /*
                 println(String + "  B: " + candidates^[b].name_);
                 print("  wa_blocs:");
                 for (it : wa_blocs) {
@@ -3053,6 +3058,7 @@ ElectoralMethod : InstantRunoffMethod() {
                     print(String + " " + it^.rankings_.to_string());
                 }
                 println();
+                */
 
                 /* generate and separate permutation orders with A>B and B>A. */
                 alias Orders = Vector<Rankings>;
@@ -3078,6 +3084,7 @@ ElectoralMethod : InstantRunoffMethod() {
                         break;
                     }
                 }
+                /*
                 print("  ab_orders:");
                 for (perm : ab_orders) {
                     print(String + " " + perm^.to_string());
@@ -3088,6 +3095,7 @@ ElectoralMethod : InstantRunoffMethod() {
                     print(String + " " + perm^.to_string());
                 }
                 println();
+                */
 
                 /* establish an elimination order. */
                 elimination_order.clear();
@@ -3099,211 +3107,227 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 elimination_order.append(b);
                 elimination_order.append(a);
-                println(String + "  elimination order: " + elimination_order.to_string());
 
-                /* convert the bloc map to a schedule map. */
-                void bloc_map_to_schedule(
-                    BlocMapIters^ bloc_map,
-                    ScheduleMap^ schedule_map
-                ) {
-                    for (it : bloc_map^) {
-                        schedule = rankings_to_schedule(it^.rankings_, elimination_order);
-                        found_it = schedule_map^.find(schedule);
-                        if (found_it == schedule_map^.end()) {
-                            SizeVar sv;
-                            sv.size_ = it^.bloc_.size_;
-                            schedule_map^.insert(schedule, sv);
-                        } else {
-                            found_it^.sv_.size_ += it^.bloc_.size_;
+                while () {
+                    //println(String + "  elimination order: " + elimination_order.to_string());
+
+                    /* convert the bloc map to a schedule map. */
+                    void bloc_map_to_schedule(
+                        BlocMapIters^ bloc_map,
+                        ScheduleMap^ schedule_map
+                    ) {
+                        for (it : bloc_map^) {
+                            schedule = rankings_to_schedule(it^.rankings_, elimination_order);
+                            found_it = schedule_map^.find(schedule);
+                            if (found_it == schedule_map^.end()) {
+                                SizeVar sv;
+                                sv.size_ = it^.bloc_.size_;
+                                schedule_map^.insert(schedule, sv);
+                            } else {
+                                found_it^.sv_.size_ += it^.bloc_.size_;
+                            }
                         }
                     }
-                }
-                /*
-                wa_schedules holds this size of the bloc. no variable.
-                abw_schedules and baw_schedules hold both the size of the bloc
-                and the variable which is number of minions who vote strategically.
-                note: *not* the number of minions who vote honestly.
-                */
-                ScheduleMap wa_schedules;
-                ScheduleMap abw_schedules;
-                ScheduleMap baw_schedules;
-                bloc_map_to_schedule(wa_blocs, wa_schedules);
-                bloc_map_to_schedule(abw_blocs, abw_schedules);
-                bloc_map_to_schedule(baw_blocs, baw_schedules);
-                print("  wa_schedules:");
-                for (it : wa_schedules) {
-                    print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
-                }
-                println();
-                print("  abw_schedules:");
-                for (it : abw_schedules) {
-                    print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
-                }
-                println();
-                print("  baw_schedules:");
-                for (it : baw_schedules) {
-                    print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
-                }
-                println();
-
-                /*
-                convert orders to schedule map.
-                ab_schedules and ba_schedules hold the variable which is the number
-                of minions who vote strategically.
-                */
-                void orders_to_schedule(
-                    Orders^ orders,
-                    ScheduleMap^ schedule_map
-                ) {
-                    for (it : orders^) {
-                        schedule = rankings_to_schedule(it, elimination_order);
-                        found_it = schedule_map^.find(schedule);
-                        if (found_it == schedule_map^.end()) {
-                            schedule_map^.insert(schedule, SizeVar);
-                        }
-                    }
-                }
-                ScheduleMap ab_schedules;
-                ScheduleMap ba_schedules;
-                orders_to_schedule(ab_orders, ab_schedules);
-                orders_to_schedule(ba_orders, ba_schedules);
-                print("  ab_schedules:");
-                for (it : ab_schedules) {
-                    print(String + " " + it^.schedule_.to_string());
-                }
-                println();
-                print("  ba_schedules:");
-                for (it : ba_schedules) {
-                    print(String + " " + it^.schedule_.to_string());
-                }
-                println();
-
-                /* begin linear programming. */
-                LP lp;
-
-                /* add variables. */
-                for (it : abw_schedules) {
-                    name = String + "h" + it^.schedule_.to_string();
-                    it^.sv_.var_ = lp.add_var(name);
-                }
-                for (it : baw_schedules) {
-                    name = String + "h" + it^.schedule_.to_string();
-                    it^.sv_.var_ = lp.add_var(name);
-                }
-                for (it : ab_schedules) {
-                    name = String + "s" + it^.schedule_.to_string();
-                    it^.sv_.var_ = lp.add_var(name);
-                }
-                for (it : ba_schedules) {
-                    name = String + "s" + it^.schedule_.to_string();
-                    it^.sv_.var_ = lp.add_var(name);
-                }
-
-                /*
-                constraint: abw and baw are limited by the bloc size.
-                constraint: total minions defecting from all honest blocks
-                equals total minions landing on all strategic blocks.
-                since that's an equality, we need to add it twice with >= and <=.
-                */
-                LP:Expr ab_expr;
-                LP:Expr ba_expr;
-                for (it : abw_schedules) {
-                    row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
-                    lp.add_row(row);
-                    ab_expr += it^.sv_.var_;
-                }
-                for (it : baw_schedules) {
-                    row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
-                    lp.add_row(row);
-                    ba_expr += it^.sv_.var_;
-                }
-                for (it : ab_schedules) {
-                    ab_expr -= it^.sv_.var_;
-                }
-                for (it : ba_schedules) {
-                    ba_expr -= it^.sv_.var_;
-                }
-                ab_row = ab_expr + LP:lte + 0;
-                ba_row = ba_expr + LP:lte + 0;
-                lp.add_row(ab_row);
-                lp.add_row(ba_row);
-                ab_row = ab_expr + LP:gte + 0;
-                ba_row = ba_expr + LP:gte + 0;
-                lp.add_row(ab_row);
-                lp.add_row(ba_row);
-
-                /* for each round */
-                elligible = (1<<ncandidates) - 1;
-                for (round : 0..(ncandidates-1)) {
-                    /* vote totals */
-                    Vector<LP:Expr> votes;
-                    votes.resize(ncandidates);
+                    /*
+                    wa_schedules holds this size of the bloc. no variable.
+                    abw_schedules and baw_schedules hold both the size of the bloc
+                    and the variable which is number of minions who vote strategically.
+                    note: *not* the number of minions who vote honestly.
+                    */
+                    ScheduleMap wa_schedules;
+                    ScheduleMap abw_schedules;
+                    ScheduleMap baw_schedules;
+                    bloc_map_to_schedule(wa_blocs, wa_schedules);
+                    bloc_map_to_schedule(abw_blocs, abw_schedules);
+                    bloc_map_to_schedule(baw_blocs, baw_schedules);
+                    /*
+                    print("  wa_schedules:");
                     for (it : wa_schedules) {
-                        which = it^.schedule_[round];
-                        votes[which] += it^.sv_.size_;
+                        print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
                     }
+                    println();
+                    print("  abw_schedules:");
                     for (it : abw_schedules) {
-                        which = it^.schedule_[round];
-                        /* minions defect from this honest bloc. */
-                        votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                        print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
+                    }
+                    println();
+                    print("  baw_schedules:");
+                    for (it : baw_schedules) {
+                        print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
+                    }
+                    println();
+                    */
+
+                    /*
+                    convert orders to schedule map.
+                    ab_schedules and ba_schedules hold the variable which is the number
+                    of minions who vote strategically.
+                    */
+                    void orders_to_schedule(
+                        Orders^ orders,
+                        ScheduleMap^ schedule_map
+                    ) {
+                        for (it : orders^) {
+                            schedule = rankings_to_schedule(it, elimination_order);
+                            found_it = schedule_map^.find(schedule);
+                            if (found_it == schedule_map^.end()) {
+                                schedule_map^.insert(schedule, SizeVar);
+                            }
+                        }
+                    }
+                    ScheduleMap ab_schedules;
+                    ScheduleMap ba_schedules;
+                    orders_to_schedule(ab_orders, ab_schedules);
+                    orders_to_schedule(ba_orders, ba_schedules);
+                    /*
+                    print("  ab_schedules:");
+                    for (it : ab_schedules) {
+                        print(String + " " + it^.schedule_.to_string());
+                    }
+                    println();
+                    print("  ba_schedules:");
+                    for (it : ba_schedules) {
+                        print(String + " " + it^.schedule_.to_string());
+                    }
+                    println();
+                    */
+
+                    /* begin linear programming. */
+                    LP lp;
+
+                    /* add variables. */
+                    for (it : abw_schedules) {
+                        name = String + "h" + it^.schedule_.to_string();
+                        it^.sv_.var_ = lp.add_var(name);
                     }
                     for (it : baw_schedules) {
-                        which = it^.schedule_[round];
-                        /* minions defect from this honest bloc. */
-                        votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                        name = String + "h" + it^.schedule_.to_string();
+                        it^.sv_.var_ = lp.add_var(name);
                     }
                     for (it : ab_schedules) {
-                        which = it^.schedule_[round];
-                        /* minions land in this strategic bloc. */
-                        votes[which] += it^.sv_.var_;
+                        name = String + "s" + it^.schedule_.to_string();
+                        it^.sv_.var_ = lp.add_var(name);
                     }
                     for (it : ba_schedules) {
-                        which = it^.schedule_[round];
-                        /* minions land in this strategic bloc. */
-                        votes[which] += it^.sv_.var_;
+                        name = String + "s" + it^.schedule_.to_string();
+                        it^.sv_.var_ = lp.add_var(name);
                     }
 
-                    /* remove the eliminated candidate. */
-                    eliminated = elimination_order[round];
-                    bit = 1 << eliminated;
-                    elligible &= ~bit;
+                    /*
+                    constraint: abw and baw are limited by the bloc size.
+                    constraint: total minions defecting from all honest blocks
+                    equals total minions landing on all strategic blocks.
+                    since that's an equality, we need to add it twice with >= and <=.
+                    */
+                    LP:Expr ab_expr;
+                    LP:Expr ba_expr;
+                    for (it : abw_schedules) {
+                        row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
+                        lp.add_row(row);
+                        ab_expr += it^.sv_.var_;
+                    }
+                    for (it : baw_schedules) {
+                        row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
+                        lp.add_row(row);
+                        ba_expr += it^.sv_.var_;
+                    }
+                    for (it : ab_schedules) {
+                        ab_expr -= it^.sv_.var_;
+                    }
+                    for (it : ba_schedules) {
+                        ba_expr -= it^.sv_.var_;
+                    }
+                    ab_row = ab_expr + LP:lte + 0;
+                    ba_row = ba_expr + LP:lte + 0;
+                    lp.add_row(ab_row);
+                    lp.add_row(ba_row);
+                    ab_row = ab_expr + LP:gte + 0;
+                    ba_row = ba_expr + LP:gte + 0;
+                    lp.add_row(ab_row);
+                    lp.add_row(ba_row);
 
-                    /* add the vote total equations. */
-                    for (i : 0..ncandidates) {
-                        bit = 1<<i;
-                        if (bit & elligible) {
-                            expr = votes[eliminated] + LP:lt + votes[i];
-                            lp.add_row(expr);
+                    /* for each round */
+                    elligible = (1<<ncandidates) - 1;
+                    for (round : 0..(ncandidates-1)) {
+                        /* vote totals */
+                        Vector<LP:Expr> votes;
+                        votes.resize(ncandidates);
+                        for (it : wa_schedules) {
+                            which = it^.schedule_[round];
+                            votes[which] += it^.sv_.size_;
+                        }
+                        for (it : abw_schedules) {
+                            which = it^.schedule_[round];
+                            /* minions defect from this honest bloc. */
+                            votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                        }
+                        for (it : baw_schedules) {
+                            which = it^.schedule_[round];
+                            /* minions defect from this honest bloc. */
+                            votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                        }
+                        for (it : ab_schedules) {
+                            which = it^.schedule_[round];
+                            /* minions land in this strategic bloc. */
+                            votes[which] += it^.sv_.var_;
+                        }
+                        for (it : ba_schedules) {
+                            which = it^.schedule_[round];
+                            /* minions land in this strategic bloc. */
+                            votes[which] += it^.sv_.var_;
+                        }
+
+                        /* remove the eliminated candidate. */
+                        eliminated = elimination_order[round];
+                        bit = 1 << eliminated;
+                        elligible &= ~bit;
+
+                        /* add the vote total equations. */
+                        for (i : 0..ncandidates) {
+                            bit = 1<<i;
+                            if (bit & elligible) {
+                                expr = votes[eliminated] + LP:lt + votes[i];
+                                lp.add_row(expr);
+                            }
                         }
                     }
-                }
 
-                /*
-                note:
-                defecting minions are counted twice.
-                once when they leave the honest voting bloc.
-                and again when they land in the strategic voting bloc.
-                must divide the lp result by 2.
-                */
-                lp.print();
-                lp.solve();
-                lp.solve_integral();
-                lp.print();
+                    /*
+                    note:
+                    defecting minions are counted twice.
+                    once when they leave the honest voting bloc.
+                    and again when they land in the strategic voting bloc.
+                    must divide the lp result by 2.
+                    */
+                    //lp.print();
+                    lp.solve();
+                    lp.solve_integral();
+                    //lp.print();
 
-                if (lp.solved_) {
-                    /* strategic minions are double counted. */
-                    minions = lp.get_minimum() / 2;
-                    if (min_minions < 0 || min_minions > minions) {
-                        villain = a;
-                        min_minions = minions;
+                    if (lp.solved_) {
+                        /* strategic minions are double counted. */
+                        minions = lp.get_minimum() / 2;
+                        if (min_minions < 0 || min_minions > minions) {
+                            villain = a;
+                            min_minions = minions;
+
+                            /*
+                            println(String + "   " + candidates^[villain].name_ +
+                                " needs " + min_minions + " voters to vote strategically.");
+                            */
+                        }
                     }
-                }
 
-                /*
-                still to do:
-                iterate over all elimination orders.
-                handle ties.
-                */
+                    done = permute(elimination_order, ncandidates-2);
+                    if (done) {
+                        break;
+                    }
+
+                    /*
+                    still to do:
+                    handle ties.
+                    */
+                }
             }
         }
 
@@ -3313,8 +3337,8 @@ ElectoralMethod : InstantRunoffMethod() {
         }
 
         namev = candidates^[villain].name_;
-        println(String + " " + name_ + " needs " + min_minions +
-            " voters for " + namev + " to vote strategically.");
+        println(String + " " + name_ + ": " + namev + " needs " + min_minions
+            + " voters to vote strategically.");
 
         ++nvillains_;
         nminions_ += min_minions;
