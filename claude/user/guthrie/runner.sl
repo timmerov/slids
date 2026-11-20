@@ -3094,8 +3094,7 @@ ElectoralMethod : InstantRunoffMethod() {
                     /*
                     wa_schedules holds this size of the bloc. no variable.
                     abw_schedules and baw_schedules hold both the size of the bloc
-                    and the variable which is number of minions who vote strategically.
-                    note: *not* the number of minions who vote honestly.
+                    and the variable which is number of minions who vote honestly.
                     */
                     ScheduleMap wa_schedules;
                     ScheduleMap abw_schedules;
@@ -3129,22 +3128,30 @@ ElectoralMethod : InstantRunoffMethod() {
                     /* begin linear programming. */
                     LP lp;
 
-                    /* add variables. */
+                    /*
+                    add variables.
+                    we want to minimize the number of strategic minions.
+                    honest minions are free ie no cost ie is_costly=false.
+                    */
                     for (it : abw_schedules) {
                         name = String + "h" + it^.schedule_.to_string();
-                        it^.sv_.var_ = lp.add_var(name);
+                        /* honest minion. */
+                        it^.sv_.var_ = lp.add_var(name, false);
                     }
                     for (it : baw_schedules) {
                         name = String + "h" + it^.schedule_.to_string();
-                        it^.sv_.var_ = lp.add_var(name);
+                        /* honest minion. */
+                        it^.sv_.var_ = lp.add_var(name, false);
                     }
                     for (it : ab_schedules) {
                         name = String + "s" + it^.schedule_.to_string();
-                        it^.sv_.var_ = lp.add_var(name);
+                        /* strategic minion. */
+                        it^.sv_.var_ = lp.add_var(name, true);
                     }
                     for (it : ba_schedules) {
                         name = String + "s" + it^.schedule_.to_string();
-                        it^.sv_.var_ = lp.add_var(name);
+                        /* strategic minion. */
+                        it^.sv_.var_ = lp.add_var(name, true);
                     }
 
                     /*
@@ -3153,30 +3160,40 @@ ElectoralMethod : InstantRunoffMethod() {
                     equals total minions landing on all strategic blocks.
                     since that's an equality, we need to add it twice with >= and <=.
                     */
+                    ab_pool = 0;
+                    ba_pool = 0;
                     LP:Expr ab_expr;
                     LP:Expr ba_expr;
                     for (it : abw_schedules) {
+                        /* constraint: honest minions <= bloc size. */
                         row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
                         lp.add_row(row);
+                        ab_pool += it^.sv_.size_;
                         ab_expr += it^.sv_.var_;
                     }
                     for (it : baw_schedules) {
+                        /* constraint: honest minions <= bloc size. */
                         row = LP:Expr + it^.sv_.var_ + LP:lte + it^.sv_.size_;
                         lp.add_row(row);
+                        ba_pool += it^.sv_.size_;
                         ba_expr += it^.sv_.var_;
                     }
                     for (it : ab_schedules) {
-                        ab_expr -= it^.sv_.var_;
+                        ab_expr += it^.sv_.var_;
                     }
                     for (it : ba_schedules) {
-                        ba_expr -= it^.sv_.var_;
+                        ba_expr += it^.sv_.var_;
                     }
-                    ab_row = ab_expr + LP:lte + 0;
-                    ba_row = ba_expr + LP:lte + 0;
+                    /*
+                    constraint: honest minions + strategic minions = pool size.
+                    since this is an equality, it must be added twice.
+                    */
+                    ab_row = ab_expr + LP:lte + ab_pool;
+                    ba_row = ba_expr + LP:lte + ba_pool;
                     lp.add_row(ab_row);
                     lp.add_row(ba_row);
-                    ab_row = ab_expr + LP:gte + 0;
-                    ba_row = ba_expr + LP:gte + 0;
+                    ab_row = ab_expr + LP:gte + ab_pool;
+                    ba_row = ba_expr + LP:gte + ba_pool;
                     lp.add_row(ab_row);
                     lp.add_row(ba_row);
 
@@ -3192,13 +3209,11 @@ ElectoralMethod : InstantRunoffMethod() {
                         }
                         for (it : abw_schedules) {
                             which = it^.schedule_[round];
-                            /* minions defect from this honest bloc. */
-                            votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                            votes[which] += LP:Expr + it^.sv_.var_;
                         }
                         for (it : baw_schedules) {
                             which = it^.schedule_[round];
-                            /* minions defect from this honest bloc. */
-                            votes[which] += LP:Expr + it^.sv_.size_ - it^.sv_.var_;
+                            votes[which] += LP:Expr + it^.sv_.var_;
                         }
                         for (it : ab_schedules) {
                             which = it^.schedule_[round];
@@ -3226,23 +3241,14 @@ ElectoralMethod : InstantRunoffMethod() {
                         }
                     }
 
-                    /*
-                    note:
-                    defecting minions are counted twice.
-                    once when they leave the honest voting bloc.
-                    and again when they land in the strategic voting bloc.
-                    must divide the lp result by 2.
-                    */
+                    /* find a solution. */
                     lp.solve();
-                    lp.solve_integral();
+                    lp.solve_integral(min_minions);
 
+                    /* save the best solution. */
                     if (lp.solved_) {
-                        /* strategic minions are double counted. */
-                        minions = lp.get_minimum() / 2;
-                        if (min_minions < 0 || min_minions > minions) {
-                            villain = a;
-                            min_minions = minions;
-                        }
+                        villain = a;
+                        min_minions = lp.get_minimum();
                     }
 
                     done = permute(elimination_order, ncandidates-2);
