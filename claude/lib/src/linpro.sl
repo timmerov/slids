@@ -385,8 +385,8 @@ LP(
         cfmt.float_style_ = kFixedPoint;
         cfmt.precision_ = precision;
 
-        /* find the width of the constants. */
-        coeff_width = 0;
+        /* find the width of the constants and coefficients. */
+        coeff_width = name_width;
         for (row : rows_) {
             int get_string_length(Rational^ x) {
                 konst = x^.fvalue();
@@ -407,6 +407,9 @@ LP(
         }
         cfmt.justify_ = kRightJustify;
         cfmt.min_width_ = coeff_width;
+
+        /* ensure the column formats are the same width. */
+        nfmt.min_width_ = coeff_width;
 
         /* print the column headers. */
         s.clear();

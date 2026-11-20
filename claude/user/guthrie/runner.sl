@@ -326,12 +326,17 @@ MapNode<Key=Rankings, Value=Bloc>(
 }
 
 /*
-can convert candidate rankings to voting schedule.
+convert candidate rankings to voting schedule.
 */
-alias ScheduleMap = Map<Rankings, int>;
-MapNode<Key=Rankings, Value=int>(
+SizeVar(
+    int size_,
+    LP:Var var_
+) {
+}
+alias ScheduleMap = Map<Rankings, SizeVar>;
+MapNode<Key=Rankings, Value=SizeVar>(
     alias schedule_ = key_,
-    alias size_ = value_
+    alias sv_ = value_
 ) {
 }
 
@@ -3124,9 +3129,11 @@ ElectoralMethod : InstantRunoffMethod() {
                         schedule = rankings_to_schedule(it^.rankings_, elimination_order);
                         found_it = schedule_map^.find(schedule);
                         if (found_it == schedule_map^.end()) {
-                            schedule_map^.insert(schedule, it^.bloc_.size_);
+                            SizeVar sv;
+                            sv.size_ = it^.bloc_.size_;
+                            schedule_map^.insert(schedule, sv);
                         } else {
-                            found_it^.size_ += it^.bloc_.size_;
+                            found_it^.sv_.size_ += it^.bloc_.size_;
                         }
                     }
                 }
@@ -3138,17 +3145,17 @@ ElectoralMethod : InstantRunoffMethod() {
                 bloc_map_to_schedule(baw_blocs, baw_schedules);
                 print("  wa_schedules:");
                 for (it : wa_schedules) {
-                    print(String + " " + it^.schedule_.to_string() + ":" + it^.size_);
+                    print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
                 }
                 println();
                 print("  abw_schedules:");
                 for (it : abw_schedules) {
-                    print(String + " " + it^.schedule_.to_string() + ":" + it^.size_);
+                    print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
                 }
                 println();
                 print("  baw_schedules:");
                 for (it : baw_schedules) {
-                    print(String + " " + it^.schedule_.to_string() + ":" + it^.size_);
+                    print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
                 }
                 println();
 
@@ -3161,7 +3168,7 @@ ElectoralMethod : InstantRunoffMethod() {
                         schedule = rankings_to_schedule(it, elimination_order);
                         found_it = schedule_map^.find(schedule);
                         if (found_it == schedule_map^.end()) {
-                            schedule_map^.insert(schedule, 0);
+                            schedule_map^.insert(schedule, SizeVar);
                         }
                     }
                 }
@@ -3180,11 +3187,30 @@ ElectoralMethod : InstantRunoffMethod() {
                 }
                 println();
 
-
-/***************************************
                 /* begin linear programming. */
                 LP lp;
 
+                /* add variables. */
+                for (it : abw_schedules) {
+                    name = String + "h" + it^.schedule_.to_string();
+                    it^.sv_.var_ = lp.add_var(name);
+                }
+                for (it : baw_schedules) {
+                    name = String + "h" + it^.schedule_.to_string();
+                    it^.sv_.var_ = lp.add_var(name);
+                }
+                for (it : ab_schedules) {
+                    name = String + "s" + it^.schedule_.to_string();
+                    it^.sv_.var_ = lp.add_var(name);
+                }
+                for (it : ba_schedules) {
+                    name = String + "s" + it^.schedule_.to_string();
+                    it^.sv_.var_ = lp.add_var(name);
+                }
+                lp.print();
+
+
+/***************************************
                 /* a minion is A>W voter who votes strategically. */
                 Minion(
                     LP:Var var_,
