@@ -21,6 +21,9 @@ SL_SRCS = $(wildcard *.sl)
 SL_STEMS = $(SL_SRCS:.sl=)
 SL_OBJS = $(addprefix $(BUILD_DIR)/,$(SL_SRCS:.sl=.o))
 
+# The one binary, for `make print-bins` (lib/slids.mk).
+BINS = guthrie
+
 .PHONY: all clean guthrie
 
 # The .ll files are chained-pattern intermediates; without this make deletes
@@ -39,7 +42,7 @@ guthrie: $(BIN_DIR)/guthrie
 # slids_inst.o among them).
 # Included BEFORE the link rule so its prerequisites can read the variables;
 # a missing fragment is generated and make restarts itself.
-ifneq ($(MAKECMDGOALS),clean)
+ifeq ($(filter clean print-bins,$(MAKECMDGOALS)),)
 -include $(SL_STEMS:%=$(BUILD_DIR)/%.deps.mk)
 endif
 

@@ -14,7 +14,7 @@ SUBDIRS = \
 	template \
 	tuple
 
-.PHONY: all clean test negatives positives $(SUBDIRS) libslids
+.PHONY: all clean print-bins test negatives positives $(SUBDIRS) libslids
 
 all: $(SUBDIRS)
 
@@ -36,3 +36,7 @@ positives: libslids
 
 clean:
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d clean; done
+
+# Every subdirectory's binaries, for make.sh's name-clash check.
+print-bins:
+	@for d in $(SUBDIRS); do $(MAKE) -s --no-print-directory -C $$d print-bins; done

@@ -101,8 +101,11 @@ LP(
     /* print the matrix. */
     void print();
 
-    /* add a user variable. */
-    Var add_var(String^ name);
+    /*
+    add a user variable.
+    it contributes to the minimum iff is_costly is true.
+    */
+    Var add_var(String^ name, bool is_costly = true);
 
     /* add a user row. */
     void add_row(Expr^ expr);
@@ -110,8 +113,13 @@ LP(
     /* find a solution - possibly fractional. */
     void solve();
 
-    /* find an integral solution from a fractional solution. */
-    void solve_integral();
+    /*
+    find an integral solution from a fractional solution.
+    if a non-negative threshold is given...
+    look for a solution strictly better than the threshold.
+    the search is stopped when the threshold is reached.
+    */
+    void solve_integral(int threshold = -1);
 
     /* return the minimized sum of the user variables. */
     int get_minimum();

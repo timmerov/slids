@@ -10,7 +10,7 @@ SRCS      = main.cpp lex.cpp numeric.cpp grammar.cpp resolve.cpp constfold.cpp c
 OBJS      = $(addprefix $(BUILD_DIR)/, $(SRCS:.cpp=.o))
 DEPS      = $(OBJS:.o=.d)
 
-.PHONY: all clean
+.PHONY: all clean print-bins
 
 all: $(BUILD_DIR) $(BIN_DIR) $(TARGET)
 
@@ -28,5 +28,10 @@ $(BUILD_DIR)/%.o: %.cpp
 
 clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET)
+
+# One line per binary, "<absolute path> <directory>", for make.sh's
+# name-clash check (the same format as lib/slids.mk's print-bins).
+print-bins:
+	@echo "$(abspath $(TARGET)) $(CURDIR)"
 
 -include $(DEPS)

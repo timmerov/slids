@@ -2992,11 +2992,6 @@ ElectoralMethod : InstantRunoffMethod() {
             }
 
             /*
-            println(String + " " + name_ + ": " + candidates^[a].name_ +
-                " is a potential villain over " + candidates^[winner_].name_ + "." );
-            */
-
-            /*
             find a finalist B who loses to A in the final round head to head.
             */
             for (b : 0..ncandidates) {
@@ -3041,24 +3036,6 @@ ElectoralMethod : InstantRunoffMethod() {
                         }
                     }
                 } :bloc_loop;
-                /*
-                println(String + "  B: " + candidates^[b].name_);
-                print("  wa_blocs:");
-                for (it : wa_blocs) {
-                    print(String + " " + it^.rankings_.to_string());
-                }
-                println();
-                print("  abw_blocs:");
-                for (it : abw_blocs) {
-                    print(String + " " + it^.rankings_.to_string());
-                }
-                println();
-                print("  baw_blocs:");
-                for (it : baw_blocs) {
-                    print(String + " " + it^.rankings_.to_string());
-                }
-                println();
-                */
 
                 /* generate and separate permutation orders with A>B and B>A. */
                 alias Orders = Vector<Rankings>;
@@ -3084,18 +3061,6 @@ ElectoralMethod : InstantRunoffMethod() {
                         break;
                     }
                 }
-                /*
-                print("  ab_orders:");
-                for (perm : ab_orders) {
-                    print(String + " " + perm^.to_string());
-                }
-                println();
-                print("  ba_orders:");
-                for (perm : ba_orders) {
-                    print(String + " " + perm^.to_string());
-                }
-                println();
-                */
 
                 /* establish an elimination order. */
                 elimination_order.clear();
@@ -3109,8 +3074,6 @@ ElectoralMethod : InstantRunoffMethod() {
                 elimination_order.append(a);
 
                 while () {
-                    //println(String + "  elimination order: " + elimination_order.to_string());
-
                     /* convert the bloc map to a schedule map. */
                     void bloc_map_to_schedule(
                         BlocMapIters^ bloc_map,
@@ -3140,23 +3103,6 @@ ElectoralMethod : InstantRunoffMethod() {
                     bloc_map_to_schedule(wa_blocs, wa_schedules);
                     bloc_map_to_schedule(abw_blocs, abw_schedules);
                     bloc_map_to_schedule(baw_blocs, baw_schedules);
-                    /*
-                    print("  wa_schedules:");
-                    for (it : wa_schedules) {
-                        print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
-                    }
-                    println();
-                    print("  abw_schedules:");
-                    for (it : abw_schedules) {
-                        print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
-                    }
-                    println();
-                    print("  baw_schedules:");
-                    for (it : baw_schedules) {
-                        print(String + " " + it^.schedule_.to_string() + ":" + it^.sv_.size_);
-                    }
-                    println();
-                    */
 
                     /*
                     convert orders to schedule map.
@@ -3179,18 +3125,6 @@ ElectoralMethod : InstantRunoffMethod() {
                     ScheduleMap ba_schedules;
                     orders_to_schedule(ab_orders, ab_schedules);
                     orders_to_schedule(ba_orders, ba_schedules);
-                    /*
-                    print("  ab_schedules:");
-                    for (it : ab_schedules) {
-                        print(String + " " + it^.schedule_.to_string());
-                    }
-                    println();
-                    print("  ba_schedules:");
-                    for (it : ba_schedules) {
-                        print(String + " " + it^.schedule_.to_string());
-                    }
-                    println();
-                    */
 
                     /* begin linear programming. */
                     LP lp;
@@ -3286,7 +3220,7 @@ ElectoralMethod : InstantRunoffMethod() {
                         for (i : 0..ncandidates) {
                             bit = 1<<i;
                             if (bit & elligible) {
-                                expr = votes[eliminated] + LP:lt + votes[i];
+                                expr = votes[i] + gt_or_gte(i,eliminated) + votes[eliminated];
                                 lp.add_row(expr);
                             }
                         }
@@ -3299,10 +3233,8 @@ ElectoralMethod : InstantRunoffMethod() {
                     and again when they land in the strategic voting bloc.
                     must divide the lp result by 2.
                     */
-                    //lp.print();
                     lp.solve();
                     lp.solve_integral();
-                    //lp.print();
 
                     if (lp.solved_) {
                         /* strategic minions are double counted. */
@@ -3310,11 +3242,6 @@ ElectoralMethod : InstantRunoffMethod() {
                         if (min_minions < 0 || min_minions > minions) {
                             villain = a;
                             min_minions = minions;
-
-                            /*
-                            println(String + "   " + candidates^[villain].name_ +
-                                " needs " + min_minions + " voters to vote strategically.");
-                            */
                         }
                     }
 
@@ -3322,11 +3249,6 @@ ElectoralMethod : InstantRunoffMethod() {
                     if (done) {
                         break;
                     }
-
-                    /*
-                    still to do:
-                    handle ties.
-                    */
                 }
             }
         }

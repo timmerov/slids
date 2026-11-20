@@ -76,7 +76,7 @@ LP(
 ) {
     _() {
         /* add the column for constants. */
-        z = add_var("Z", false);
+        z = add_var("Z", false, false);
 
         /* add the cost row. */
         row = Expr + z + gte + 0;
@@ -448,12 +448,19 @@ LP(
     }
 
     /* add a user variable. */
-    Var add_var(String^ name) {
-        return add_var(name, true);
+    Var add_var(
+        String^ name,
+        bool is_costly
+    ) {
+        return add_var(name, true, is_costly);
     }
 
     /* add a user variable. */
-    Var add_var(String^ name, bool user) {
+    Var add_var(
+        String^ name,
+        bool user,
+        bool is_costly
+    ) {
         idx int = vars_.size();
         vi = vars_.append();
         vi^.idx_ = idx;
@@ -470,7 +477,11 @@ LP(
             /* add user var to z row. */
             term = rows_[0].terms_.append();
             term^.var_idx_ = idx;
-            term^.coeff_ = 1;
+            if (is_costly) {
+                term^.coeff_ = 1;
+            } else {
+                term^.coeff_ = 0;
+            }
 
             /* add user var to columns. */
             col = cols_.append();
@@ -486,7 +497,7 @@ LP(
     ) {
         nrows int = rows_.size();
         name = String + "R" + nrows;
-        row_var = add_var(name, false);
+        row_var = add_var(name, false, false);
         add_row(row_var, expr);
     }
 
@@ -643,7 +654,7 @@ LP(
         solved_ = true;
     }
 
-    void solve_integral() {
+    void solve_integral(int threshold) {
         /* solve failed. */
         if (solved_ == false) {
             return;
@@ -652,7 +663,15 @@ LP(
         /* get the stop value. */
         z = rows_[0].constant_.fvalue();
         stop_value int = math:ceil(z);
-        solve_branches(stop_value, -1);
+
+        /* abort if the stop value is the threshold. */
+        if (threshold >= 0 && stop_value >= threshold) {
+            solved_ = false;
+            return;
+        }
+
+        /* try the two branches. */
+        solve_branches(stop_value, threshold);
     }
 
     void solve_branches(
@@ -660,6 +679,12 @@ LP(
         int prune_value
     ) {
         solved_ = false;
+
+        /* locals. */
+        return_ceil = false;
+        return_floor = false;
+        nrows int = rows_.size();
+        ncols int = cols_.size();
 
         /* find a fractional user variable. */
         frac_row_idx = find_fractional_user_variable();
@@ -673,61 +698,6 @@ LP(
         frac_konst = frac_row^.constant_.fvalue();
         konst_floor int = math:floor(frac_konst);
         konst_ceil int = math:ceil(frac_konst);
-
-        /*
-        add a row to a copy of the matrix.
-        var <= floor(value)
-        must add it by hand. sigh.
-        it's the negative of the branch row.
-        with the constant being the remainder.
-        */
-        lp_floor = self;
-        nrows int = lp_floor.rows_.size();
-        lp_floor.add_row(Expr + lte);
-        added_row = ^lp_floor.rows_[nrows];
-        ncols int = lp_floor.cols_.size();
-        added_row^.constant_ = - frac_row^.constant_ + konst_floor;
-        for (col_idx : 0..ncols) {
-            frac_term = ^frac_row^.terms_[col_idx];
-            added_term = ^added_row^.terms_[col_idx];
-            added_term^.var_idx_ = frac_term^.var_idx_;
-            added_term^.coeff_ = - frac_term^.coeff_;
-        }
-        //println("floor branch:");
-        //lp_floor.print();
-
-        lp_floor.solve();
-        //println("floor solve:");
-        //lp_floor.print();
-
-        return_floor = false;
-        if (lp_floor.solved_) {
-            /* check if we can prune the search down this branch. */
-            z_ceil int = math:ceil(lp_floor.rows_[0].constant_.fvalue());
-            if (prune_value < 0 || z_ceil < prune_value) {
-
-                lp_floor.solve_branches(stop_value, prune_value);
-                //println("floor solve integral:");
-                //lp_floor.print();
-
-                if (lp_floor.solved_) {
-                    /* we're done if we hit the stop value. */
-                    z = lp_floor.rows_[0].constant_.numer_;
-                    if (z == stop_value) {
-                        //println(String + "floor hit stop value " + stop_value);
-                        self <-- lp_floor;
-                        return;
-                    }
-
-                    /* update the prune value. */
-                    z = lp_floor.rows_[0].constant_.numer_;
-                    if (prune_value < 0 || z < prune_value) {
-                        prune_value = z;
-                        return_floor = true;
-                    }
-                }
-            }
-        }
 
         /*
         add a row to a copy of the matrix.
@@ -752,62 +722,158 @@ LP(
         //println("ceil solve:");
         //lp_ceil.print();
 
-        return_ceil = false;
+        /*
+        add a row to a copy of the matrix.
+        var <= floor(value)
+        must add it by hand. sigh.
+        it's the negative of the branch row.
+        with the constant being the remainder.
+        */
+        lp_floor = self;
+        lp_floor.add_row(Expr + lte);
+        added_row = ^lp_floor.rows_[nrows];
+        added_row^.constant_ = - frac_row^.constant_ + konst_floor;
+        for (col_idx : 0..ncols) {
+            frac_term = ^frac_row^.terms_[col_idx];
+            added_term = ^added_row^.terms_[col_idx];
+            added_term^.var_idx_ = frac_term^.var_idx_;
+            added_term^.coeff_ = - frac_term^.coeff_;
+        }
+        //println("floor branch:");
+        //lp_floor.print();
+
+        lp_floor.solve();
+        //println("floor solve:");
+        //lp_floor.print();
+
+        /* decide which to check first: ceil or floor. */
+        check_ceil = false;
+        check_floor = false;
+        check_floor_first = false;
+        z_ceil float64 = 0.0;
+        z_floor float64 = 0.0;
         if (lp_ceil.solved_) {
             /* check if we can prune the search down this branch. */
-            z_ceil int = math:ceil(lp_ceil.rows_[0].constant_.fvalue());
-            if (prune_value < 0 || z_ceil < prune_value) {
+            z_ceil = lp_ceil.rows_[0].constant_.fvalue();
+            z = (int= math:ceil(z_ceil) );
+            if (prune_value < 0 || z < prune_value) {
+                check_ceil = true;
+            }
+        }
+        if (lp_floor.solved_) {
+            /* check if we can prune the search down this branch. */
+            z_floor = lp_floor.rows_[0].constant_.fvalue();
+            z = (int= math:ceil(z_floor) );
+            if (prune_value < 0 || z < prune_value) {
+                check_floor = true;
+            }
+        }
+        if (check_floor && check_ceil) {
+            check_floor_first = (z_floor < z_ceil);
+        }
 
-                lp_ceil.solve_branches(stop_value, prune_value);
-                //println("ceil solve integral:");
-                //lp_ceil.print();
+        /* check the chosen one. then the other. */
+        while (check_ceil || check_floor) {
+            if (check_ceil && check_floor_first == false) {
+                check_ceil = false;
 
-                if (lp_ceil.solved_) {
-                    /* we're done if we hit the stop value. */
-                    z = lp_ceil.rows_[0].constant_.numer_;
-                    if (z == stop_value) {
-                        //println(String + "ceil hit stop value " + stop_value);
-                        self <-- lp_ceil;
-                        return;
+                /* the prune value may have changed. recheck it. */
+                z = (int= math:ceil(z_ceil) );
+                if (prune_value < 0 || z < prune_value) {
+
+                    lp_ceil.solve_branches(stop_value, prune_value);
+                    //println("ceil solve integral:");
+                    //lp_ceil.print();
+
+                    if (lp_ceil.solved_) {
+                        /* we're done if we hit the stop value. */
+                        z = lp_ceil.rows_[0].constant_.numer_;
+                        if (z == stop_value) {
+                            //println(String + "ceil hit stop value " + stop_value);
+                            self <-- lp_ceil;
+                            return;
+                        }
+
+                        /* update the prune value. */
+                        z = lp_ceil.rows_[0].constant_.numer_;
+                        if (prune_value < 0 || z < prune_value) {
+                            prune_value = z;
+                            return_ceil = true;
+                            return_floor = false;
+                        }
                     }
+                }
+            }
+            if (check_floor) {
+                check_floor = false;
+                check_floor_first = false;
 
-                    /* update the prune value. */
-                    z = lp_ceil.rows_[0].constant_.numer_;
-                    if (prune_value < 0 || z < prune_value) {
-                        prune_value = z;
-                        return_floor = false;
-                        return_ceil = true;
+                /* the prune value may have changed. recheck it. */
+                z = (int= math:ceil(z_floor) );
+                if (prune_value < 0 || z < prune_value) {
+
+                    lp_floor.solve_branches(stop_value, prune_value);
+                    //println("floor solve integral:");
+                    //lp_floor.print();
+
+                    if (lp_floor.solved_) {
+                        /* we're done if we hit the stop value. */
+                        z = lp_floor.rows_[0].constant_.numer_;
+                        if (z == stop_value) {
+                            //println(String + "floor hit stop value " + stop_value);
+                            self <-- lp_floor;
+                            return;
+                        }
+
+                        /* update the prune value. */
+                        z = lp_floor.rows_[0].constant_.numer_;
+                        if (prune_value < 0 || z < prune_value) {
+                            prune_value = z;
+                            return_ceil = false;
+                            return_floor = true;
+                        }
                     }
                 }
             }
         }
 
-        if (return_floor) {
-            self <-- lp_floor;
-            return;
-        }
         if (return_ceil) {
             self <-- lp_ceil;
+            return;
+        }
+        if (return_floor) {
+            self <-- lp_floor;
             return;
         }
     }
 
     /*
-    return the row index of the first fractional user variable.
+    return the row index of the most fractional user variable.
+    ie closest to 0.5.
     or -1.
     */
     int find_fractional_user_variable() {
         nrows int = rows_.size();
+        max_row = -1;
+        max_fraction float64 = 0.0;
         for (row_idx : 0..nrows) {
             row = ^rows_[row_idx];
             owner = row^.owner_;
-            if (vars_[owner].user_) {
-                if (row^.constant_.denom_ != 1) {
-                    return row_idx;
-                }
+            if (vars_[owner].user_ == false) {
+                continue;
+            }
+            if (row^.constant_.denom_ == 1) {
+                continue;
+            }
+            konst = row^.constant_.fvalue();
+            fraction = konst - math:floor(konst);
+            fraction = math:min(fraction, 1.0 - fraction);
+            if (max_row < 0 || fraction > max_fraction) {
+                max_row = row_idx;
+                max_fraction = fraction;
             }
         }
-        return -1;
+        return max_row;
     }
 
     int get_minimum() {

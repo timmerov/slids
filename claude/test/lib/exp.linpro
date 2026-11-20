@@ -1,0 +1,72 @@
+---integral: x >= 3, y >= 2---
+solved: true z: 5
+ x = 3
+ y = 2
+---strict: x > 3, x < 10---
+solved: true z: 4
+ x = 4
+---both sides: 5 + x - y >= 9, y >= 1 + 0---
+solved: true z: 6
+ x = 5
+ y = 1
+---one branch: 2x + 2y >= 3---
+solved: true z: 2
+ x + y = 2
+---parity: x == y, x + y >= 3---
+solved: true z: 4
+ x = 2
+ y = 2
+---two fractions: 2x >= 3, 2y >= 5---
+solved: true z: 5
+ x = 2
+ y = 3
+---infeasible: x <= 2, x >= 5---
+solved: false z: -1
+ x = -1
+---unused: x >= 2, w in no row---
+solved: true z: 2
+ x = 2
+ w = 0
+---vote: the header example---
+solved: true z: 77
+ xa = 34
+ xb = 43
+ ab = 0
+ ba = 0
+---free: x + s >= 5, s <= 3, s not costly---
+solved: true z: 2
+ x = 2
+ s = 3
+---parity fixed: h == s, h + s >= 3, s not costly---
+solved: true z: 2
+ h = 2
+ s = 2
+---no cost: x >= 2, x not costly---
+solved: true z: 0
+ x = 2
+---free still integral: 2s >= 3, x - s >= 0, s not costly---
+solved: true z: 2
+ x = 2
+ s = 2
+---threshold 3: 2x + 2y >= 3---
+solved: true z: 2
+---threshold 2: 2x + 2y >= 3---
+solved: false z: -1
+---threshold 1: 2x + 2y >= 3---
+solved: false z: -1
+---threshold 0: 2x + 2y >= 3---
+solved: false z: -1
+---threshold 5: x == y, x + y >= 3---
+solved: true z: 4
+---threshold 4: x == y, x + y >= 3---
+solved: false z: -1
+---threshold 78: the header example---
+solved: true z: 77
+---threshold 77: the header example---
+solved: false z: -1
+---threshold 10: x <= 2, x >= 5---
+solved: false z: -1
+---threshold 6: x >= 3, y >= 2---
+solved: true z: 5
+---threshold 5: x >= 3, y >= 2---
+solved: false z: -1

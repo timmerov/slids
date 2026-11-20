@@ -49,7 +49,7 @@ run: all
 # so make generates it and RESTARTS itself with full knowledge — the first
 # build links right with no hand-maintained library lists. (Guarded so
 # `make clean` doesn't generate fragments just to delete them.)
-ifneq ($(MAKECMDGOALS),clean)
+ifeq ($(filter clean print-bins,$(MAKECMDGOALS)),)
 -include $(SAMPLES:%=$(BUILD_DIR)/%.deps.mk)
 endif
 

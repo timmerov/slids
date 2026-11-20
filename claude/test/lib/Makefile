@@ -18,6 +18,7 @@ include ../../lib/slids.mk
 # One test per library, named after it.
 SAMPLES = \
 	algorithm \
+	linpro \
 	map \
 	string \
 	tree \
@@ -44,7 +45,7 @@ positives: all
 # link needs (t_<name>_TMPL_OBJS, slids_inst.o among them). Included BEFORE
 # the test rules so the link prerequisites can read the variables; a missing
 # fragment is generated and make restarts itself.
-ifneq ($(MAKECMDGOALS),clean)
+ifeq ($(filter clean print-bins,$(MAKECMDGOALS)),)
 -include $(SAMPLES:%=$(BUILD_DIR)/t_%.deps.mk)
 endif
 

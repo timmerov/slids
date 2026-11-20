@@ -72,7 +72,7 @@ positives: all
 # objects the link needs (<sample>_TMPL_OBJS, slids_inst.o among them).
 # Included BEFORE the sample rules so the link prerequisites can read the
 # variables; a missing fragment is generated and make restarts itself.
-ifneq ($(MAKECMDGOALS),clean)
+ifeq ($(filter clean print-bins,$(MAKECMDGOALS)),)
 -include $(SAMPLES:%=$(BUILD_DIR)/%.deps.mk)
 endif
 

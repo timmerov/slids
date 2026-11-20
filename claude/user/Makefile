@@ -2,10 +2,9 @@
 SUBDIRS = \
 	galaxy \
 	guthrie \
-	linpro \
 	puzzles
 
-.PHONY: all clean test $(SUBDIRS) libslids
+.PHONY: all clean print-bins test $(SUBDIRS) libslids
 
 all: $(SUBDIRS)
 
@@ -21,3 +20,7 @@ $(SUBDIRS): libslids
 
 clean:
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d clean; done
+
+# Every subdirectory's binaries, for make.sh's name-clash check.
+print-bins:
+	@for d in $(SUBDIRS); do $(MAKE) -s --no-print-directory -C $$d print-bins; done

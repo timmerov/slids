@@ -18,6 +18,12 @@
 # the fragments are remade in the same pass, possibly in parallel.
 #
 # `make clean` skips all of this (no lib/ build just to delete files).
+#
+# `make print-bins` skips it too: it prints one line per binary this directory
+# links, "<absolute path> <directory>", for make.sh's name-clash check. BINS
+# defaults to $(SAMPLES); a Makefile whose binaries are named otherwise sets
+# BINS itself. The consumer's --scan-deps fragment include must skip
+# print-bins as it skips clean, so listing names never compiles anything.
 
 _slids_goal := $(.DEFAULT_GOAL)
 
@@ -27,9 +33,15 @@ SLIDS_INSTALL := $(SLIDS_REPO)/build/install
 SLIDS_MK      := $(SLIDS_INSTALL)/slids.mk
 SLIDSC        := $(SLIDS_REPO)/bin/slidsc
 
-ifeq ($(filter clean,$(MAKECMDGOALS)),)
+ifeq ($(filter clean print-bins,$(MAKECMDGOALS)),)
 include $(SLIDS_MK)
 endif
+
+BINS ?= $(SAMPLES)
+
+.PHONY: print-bins
+print-bins:
+	@for b in $(abspath $(addprefix $(BIN_DIR)/,$(BINS))); do echo "$$b $(CURDIR)"; done
 
 $(SLIDS_MK): SLIDS_FORCE
 	$(MAKE) -C $(SLIDS_SOURCE)
