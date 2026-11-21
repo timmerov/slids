@@ -2505,6 +2505,11 @@ ElectoralMethod : CoombsMethod() {
     the elimination order has a length: X, XY, XYZ, ...
     we check A for a strict majority when there are 3+ candidates.
     we already know A beats B head to head (by construction).
+
+    the schedule key is the forward schedule followed by the reverse schedule.
+    for both the W>A honest voters.
+    and the A>W honest voting minions.
+
     */
     virtual void strategic_voting() {
         /*
@@ -2628,6 +2633,54 @@ ElectoralMethod : CoombsMethod() {
                 elimination_order.append(b);
                 elimination_order.append(a);
 
+                /* build the schedule maps wa, abw, baw */
+                /* for each elimination stage: */
+                /* begin linear programming. */
+                /* add variables (many) for abw, baw honest minions - free. */
+                /* add variables (2) for abw, baw strategic minions - costly. */
+                /* add constraints: abw, baw honest minions <= bloc size. */
+                /* add constraints: honest minions + strategic minions <= pool size. */
+                /* add equations for each round. */
+                /* abw strategic minions always vote A first and eliminatee last. */
+                /* baw strategic minions always vote B first and eliminatee last. */
+                /* stage 0: strict majority A from round 0. */
+                /* stage 1: eliminate C from round 0 votes. strict majority A from round 1. */
+                /* stage 2: eliminate C..D from round 0..1 votes. strict majority A from round 2. */
+                /* stage 3: eliminate C..E from round 0..2 votes. */
+                /* no majority required in last stage. only A,B remain. from construction A>B. */
+                /* we could add the tie breaker majority check in the last round. */
+
+                println(String + " " + name_ + ": a=" + candidates^[a].name_
+                    + " b=" + candidates^[b].name_ + " w=" + candidates^[winner_].name_);
+
+                println(String + "  " + elimination_order.to_string());
+
+                ScheduleMap schedule_map;
+                for (it : bloc_map^) {
+                    forward = rankings_to_schedule(it^.rankings_, elimination_order);
+                    backward = rankings_to_last_first_schedule(it^.rankings_, elimination_order);
+                    Rankings key;
+                    key.reserve(forward.size() + backward.size());
+                    for (r : forward) {
+                        key.append(r);
+                    }
+                    for (r : backward) {
+                        key.append(r);
+                    }
+                    found_it = schedule_map.find(key);
+                    if (found_it == schedule_map.end()) {
+                        SizeVar sv;
+                        sv.size_ = it^.bloc_.size_;
+                        schedule_map.insert(key, sv);
+                    } else {
+                        found_it^.sv_.size_ += it^.bloc_.size_;
+                    }
+                }
+                for (it : schedule_map) {
+                    println(String + "   " + it^.schedule_.to_string() + " : " + it^.sv_.size_);
+                }
+
+                /*
                 while () {
                     /* convert the bloc map to a schedule map. */
                     void bloc_map_to_schedule(
@@ -2811,6 +2864,7 @@ ElectoralMethod : CoombsMethod() {
                         break;
                     }
                 }
+                */
             }
         }
 
