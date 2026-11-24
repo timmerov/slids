@@ -89,6 +89,7 @@ LP(
     VarInfo(
         int idx_,
         bool user_,
+        bool is_costly_,
         String name_
     ) {
     }
@@ -465,6 +466,7 @@ LP(
         vi = vars_.append();
         vi^.idx_ = idx;
         vi^.user_ = user;
+        vi^.is_costly_ = is_costly;
         vi^.name_ = name^;
 
         if (user) {
@@ -856,21 +858,31 @@ LP(
         nrows int = rows_.size();
         max_row = -1;
         max_fraction float64 = 0.0;
-        for (row_idx : 0..nrows) {
-            row = ^rows_[row_idx];
-            owner = row^.owner_;
-            if (vars_[owner].user_ == false) {
-                continue;
+        for (pass : 0..<=1) {
+            for (row_idx : 0..nrows) {
+                row = ^rows_[row_idx];
+                owner = row^.owner_;
+                var = ^vars_[owner];
+                if (var^.user_ == false) {
+                    continue;
+                }
+                if (row^.constant_.denom_ == 1) {
+                    continue;
+                }
+                /* skip not-costly variables on the first pass. */
+                if (pass == 0 && var^.is_costly_ == false) {
+                    continue;
+                }
+                konst = row^.constant_.fvalue();
+                fraction = konst - math:floor(konst);
+                fraction = math:min(fraction, 1.0 - fraction);
+                if (max_row < 0 || fraction > max_fraction) {
+                    max_row = row_idx;
+                    max_fraction = fraction;
+                }
             }
-            if (row^.constant_.denom_ == 1) {
-                continue;
-            }
-            konst = row^.constant_.fvalue();
-            fraction = konst - math:floor(konst);
-            fraction = math:min(fraction, 1.0 - fraction);
-            if (max_row < 0 || fraction > max_fraction) {
-                max_row = row_idx;
-                max_fraction = fraction;
+            if (max_row >= 0) {
+                break;
             }
         }
         return max_row;
