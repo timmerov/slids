@@ -255,7 +255,7 @@ star - range plus automatic runoff of the top two.
 cumulative voting - split 1.0 votes among candidates.
 */
 
-import+ slids.algorithm;
+import slids.algorithm;
 import slids.dump;
 import slids.linpro;
 import+ slids.map;
@@ -264,6 +264,7 @@ import slids.string;
 import+ slids.vector;
 import candidate;
 import electorate;
+import method;
 import random;
 import runner;
 import settings;
@@ -360,70 +361,28 @@ int victory_margin(
     return margin;
 }
 
-/*
-base class for electoral methods.
-every derived class must define find_winner.
-*/
-ElectoralMethod(
-    String name_,
-    int winner_ = -1,
-    int is_winner_ = 0,
-    float64 total_utility_ = 0.0,
-    float64 satisfaction_ = 0.0,
-    float64 correlation_ = 0.0,
-    int nvillains_ = 0,
-    int nminions_ = 0
+/* meh, this needs to be here until we can move it. */
+void ElectoralMethod:calculate_results(
 ) {
-    global int g_nmethods = 0;
-    const int kWidth = 30;
+    /* calculate satisfaction. */
+    ntrials float64 = g_runner.ntrials_;
+    float64 average_utility = total_utility_ / ntrials;
+    satisfaction_ = g_runner.calculate_satisfaction(average_utility, g_runner.accumulated_);
 
-    _() {
-        ++g_nmethods;
-    }
-    virtual ~() {}
-
-    /* find the winner. */
-    virtual void find_winner(bool quiet = kQuiet) = delete;
-
-    /* pretty print the winner. */
-    virtual void print_winner() {
-        Format fmt;
-        fmt.min_width_ = kWidth;
-        str = String + " " + name_;
-        result = result_to_string(g_runner.guthrie_.winner_, winner_);
-        winner_name = g_runner.candidates_[winner_].name_;
-        println(String + fmt*str + ": " + winner_name + " " + result);
-    }
-
-    /* calculate satisfaction and correlation. */
-    void calculate_results();
-
-    /* pretty print the line. */
-    virtual void print_satisfaction() {
-        Format fmt;
-        fmt.min_width_ = kWidth;
-        str = String + " " + name_;
-        println(String + fmt*str + ": " + satisfaction_);
-    }
-
-    /* pretty print the line. */
-    virtual void print_correlation() {
-        Format fmt;
-        fmt.min_width_ = kWidth;
-        str = String + " " + name_;
-        println(String + fmt*str + ": " + correlation_ + "%");
-    }
-
-    /* strategic voting. */
-    virtual void strategic_voting() {
-        /* do nothing. */
-    }
-
-    virtual void print_strategic_results() {
-        /* do nothing. */
-    }
+    /* calculate correlation. */
+    correlation_ = 100.0 * (float64=is_winner_) / ntrials;
 }
-alias ElectoralMethods = Vector<ElectoralMethod^>;
+
+/* meh, this needs to be here until we can move it. */
+/* pretty print the winner. */
+virtual void ElectoralMethod:print_winner() {
+    Format fmt;
+    fmt.min_width_ = kWidth;
+    str = String + " " + name_;
+    result = result_to_string(g_runner.guthrie_.winner_, winner_);
+    winner_name = g_runner.candidates_[winner_].name_;
+    println(String + fmt*str + ": " + winner_name + " " + result);
+}
 
 /*
 correlation class.
@@ -1850,27 +1809,6 @@ TestRunner(
             method^.print_strategic_results();
         }
     }
-}
-
-(const char)[] result_to_string(int winner, int expected) {
-    if (expected < 0) {
-        return "n/a";
-    }
-    if (winner == expected) {
-        return "pass";
-    }
-    return "=FAIL=";
-}
-
-void ElectoralMethod:calculate_results(
-) {
-    /* calculate satisfaction. */
-    ntrials float64 = g_runner.ntrials_;
-    float64 average_utility = total_utility_ / ntrials;
-    satisfaction_ = g_runner.calculate_satisfaction(average_utility, g_runner.accumulated_);
-
-    /* calculate correlation. */
-    correlation_ = 100.0 * (float64=is_winner_) / ntrials;
 }
 
 /*

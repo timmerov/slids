@@ -337,8 +337,8 @@ them (above) is legal. this file is the sibling, and it is still not allowed.
 //-EXPECT-ERROR: may not add the new virtual method
 //Animal() { virtual void late_v() {} }
 
-/* the EXTERNAL member form cannot even carry `virtual` — the grammar admits it only
-   inside a class body, so this spelling is stopped a stage earlier than the one above.
-   both roads are closed, by different mechanisms. */
-//-EXPECT-ERROR: Expected type.
+/* the EXTERNAL member form carries `virtual` (it must: `virtual` matches on every
+   declaration and definition), and it is a re-open spelling — so it is held to the same
+   rule as the block above. both roads are closed by the same check. */
+//-EXPECT-ERROR: may not add the new virtual method
 //virtual void Animal:late_v() { }

@@ -3500,6 +3500,7 @@ struct Parser {
     // A namespace member: the universal definition vocabulary, minus ctor/dtor
     // (method-shaped, legal only in a class body).
     std::unique_ptr<parse::Node> parseNamespaceMember() {
+        if (peek().kind == token::Kind::kVirtual) return parseOutOfLineVirtual();
         if (peek().kind == token::Kind::kBitNot
             || (peek().kind == token::Kind::kIdentifier && peek().text == "_"
                 && peekKind(1) == token::Kind::kLParen)) {
@@ -3507,6 +3508,45 @@ struct Parser {
             return nullptr;
         }
         return parseDefinitionMember(/*in_class=*/false, /*recv_type=*/"");
+    }
+
+    // `virtual` OUTSIDE a class body — the out-of-line spelling of a virtual method or
+    // destructor: `virtual T Class:m(...) { }`, `virtual Class:~() { }` (and their bodyless
+    // declarations). `virtual` must match on EVERY declaration and definition of a member
+    // (resolve validateVirtualClass enforces the match), so every spelling that can define
+    // one must be able to say it. Only a QUALIFIED head is accepted: an unqualified one is a
+    // free function, which has no vtable. The class-body loop owns the in-class spelling.
+    // Positioned at the `virtual` token.
+    std::unique_ptr<parse::Node> parseOutOfLineVirtual() {
+        int virt_tok = pos;
+        advance();   // virtual
+        if (peek().kind == token::Kind::kBitNot
+            || (peek().kind == token::Kind::kIdentifier && peek().text == "_"
+                && peekKind(1) == token::Kind::kLParen)) {
+            error("A constructor or destructor may only appear in a class body.");
+            return nullptr;
+        }
+        if (!looksLikeFunctionDef(/*in_class=*/true)) {
+            errorAt(virt_tok, "'virtual' may modify only a method or the destructor.");
+            return nullptr;
+        }
+        auto m = parseFunctionDef();
+        if (!m) return nullptr;
+        if (m->qualifier.empty()) {
+            errorAt(virt_tok, "'virtual' outside a class body requires a qualified method "
+                              "name ('Class:method'); a free function cannot be virtual.");
+            return nullptr;
+        }
+        if (m->name == "_$ctor") {
+            errorAt(virt_tok, "A constructor cannot be virtual.");
+            return nullptr;
+        }
+        if (!m->type_params.empty()) {
+            errorAt(m->name_tok, "A template method may not be virtual.");
+            return nullptr;
+        }
+        m->is_virtual = true;
+        return m;
     }
 
     // Name { members } — open or reopen a namespace. No trailing semicolon.
@@ -4104,6 +4144,8 @@ struct Parser {
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();
         if (t.kind == token::Kind::kGlobal) return parseGlobalStmt();
+        // `virtual T Local:m() { }` — the out-of-line virtual member of a local class.
+        if (t.kind == token::Kind::kVirtual) return parseOutOfLineVirtual();
         // An external qualified SCOPE def — `C:Ns { }` (a namespace member) or
         // `C:R() { }` (a hoisted-class re-open, EMPTY parens) — of a class declared in
         // THIS scope, out of line. Checked before the function / class / name-led

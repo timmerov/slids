@@ -8482,38 +8482,114 @@ void validateVirtualClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink
     parse::ClassInfo const& info = it->second;
     widen::TypeRef base = parse::baseTypeOf(info);
 
+    // `virtual` MATCHES on every declaration and definition of a member — the primary
+    // body, a re-open, the out-of-line `Class:m` form, a header and its source alike.
+    // Checked BEFORE the not-a-virtual-class early return: a mismatched spelling can be
+    // exactly what leaves an opening looking non-virtual.
+    //
+    // A method: its same-signature entries in the class's OWN frame (a class frame keeps
+    // a separate entry per declaration / definition). Each entry is compared with the
+    // EARLIER ones only, so one mismatched pair reports once, at the later spelling.
+    std::vector<int> own_frames = parse::classAndBaseFrames(tree, cls);
+    int own_frame = own_frames.empty() ? -1 : own_frames.front();
+    for (auto& m : node.children) {
+        if (!m || m->resolved_entry_id < 0 || own_frame < 0) continue;
+        if (m->kind != parse::Kind::kFunctionDef && m->kind != parse::Kind::kFunctionDecl)
+            continue;
+        if (parse::isImplicitMember(m->name)) continue;
+        parse::Entry const& em = tree.entries[m->resolved_entry_id];
+        if (em.kind != parse::EntryKind::kFunction || em.owner_ns_frame != own_frame)
+            continue;
+        for (int id = 0; id < m->resolved_entry_id; id++) {
+            parse::Entry const& ep = tree.entries[id];
+            if (ep.kind != parse::EntryKind::kFunction || ep.owner_ns_frame != own_frame
+                || ep.name != em.name || ep.is_virtual == m->is_virtual
+                || !parse::userParamsEqual(ep.param_types, em.param_types))
+                continue;
+            diagnostic::report(diag, {m->file_id, m->name_tok,
+                "'" + m->name + "' is " + (m->is_virtual ? "" : "not ") + "'virtual' "
+                "here but is " + (ep.is_virtual ? "" : "not ") + "'virtual' where it is "
+                "first declared; 'virtual' must match on every declaration and "
+                "definition.", {{ep.file_id, ep.tok, "first declared here"}}});
+            break;
+        }
+    }
+    // The destructor is a hook, not an entry: compare every opening's `~` at once, from
+    // the PRIMARY node (its children, then the re-opens' pending_hooks) — once per class.
+    if (!node.is_reopen) {
+        std::vector<parse::Node const*> dtors;
+        for (auto& m : node.children)
+            if (m && m->name == "_$dtor") dtors.push_back(m.get());
+        for (parse::Node const* m : info.pending_hooks)
+            if (m && m->name == "_$dtor") dtors.push_back(m);
+        bool mismatch = false;
+        for (std::size_t i = 1; i < dtors.size(); i++) {
+            if (dtors[i]->is_virtual == dtors[0]->is_virtual) continue;
+            mismatch = true;
+            diagnostic::report(diag, {dtors[i]->file_id, dtors[i]->name_tok,
+                std::string("The destructor is ") + (dtors[i]->is_virtual ? "" : "not ")
+                + "'virtual' here but is " + (dtors[0]->is_virtual ? "" : "not ")
+                + "'virtual' where it is first declared; 'virtual' must match on every "
+                "declaration and definition.",
+                {{dtors[0]->file_id, dtors[0]->name_tok, "first declared here"}}});
+        }
+        // A virtual destructor spelled ONLY outside the primary body (a re-open or the
+        // out-of-line `Class:~()`) would make a non-virtual class virtual after the fact —
+        // the vtable pointer is placed by the class's original declaration.
+        bool in_primary_body = false;
+        for (auto& m : node.children)
+            if (m && m->name == "_$dtor" && !m->out_of_line) in_primary_body = true;
+        if (!mismatch && !in_primary_body && !dtors.empty() && dtors[0]->is_virtual
+            && !parse::classIsVirtual(tree, cls)) {
+            diagnostic::report(diag, {dtors[0]->file_id, dtors[0]->name_tok,
+                "Class '" + node.name + "' may not add a virtual destructor in a re-open "
+                "or an out-of-line definition; every virtual member must be in the "
+                "original declaration (the first one places a vtable pointer at offset "
+                "0).", {}});
+        }
+    }
+
     // Own declared virtual-ness (from this node's members — a re-open node carries only
-    // its own segment's members).
+    // its own segment's members). An OUT-OF-LINE member relocated here is a re-open
+    // spelling, not part of this body: it never makes the class virtual (`added_virtual`
+    // only keeps the override / new-virtual checks below running for it), and its `~`
+    // is the match check's business above, not the explicit-dtor rule's.
     bool has_own_virtual = false;
+    bool added_virtual = false;
     parse::Node* dtor = nullptr;
     for (auto& m : node.children) {
         if (!m) continue;
         if (m->kind != parse::Kind::kFunctionDef && m->kind != parse::Kind::kFunctionDecl)
             continue;
-        if (m->name == "_$dtor") { dtor = m.get(); if (m->is_virtual) has_own_virtual = true; }
-        else if (m->name == "_$ctor") continue;
-        else if (m->is_virtual) has_own_virtual = true;
+        if (m->name == "_$ctor") continue;
+        if (m->out_of_line) { if (m->is_virtual) added_virtual = true; continue; }
+        if (m->name == "_$dtor") dtor = m.get();
+        if (m->is_virtual) has_own_virtual = true;
     }
     bool base_virtual = (base != widen::kNoType) && parse::classIsVirtual(tree, base);
-    if (!has_own_virtual && !base_virtual) return;   // not a virtual class
+    bool is_virtual_class = has_own_virtual || base_virtual;
+    if (!is_virtual_class && !added_virtual) return;   // nothing virtual to check
 
-    // A virtual class ALWAYS needs construction (to stamp its vtable pointer at offset 0)
-    // and destruction (its vtable dtor slot + the field/base chain), even with no user
-    // ctor/dtor and no hook fields — so the construct/destruct hooks are emitted for it.
-    it->second.needs_ctor = true;
-    it->second.needs_dtor = true;
-    widen::setSlidNeeds(cls, true, true);
+    if (is_virtual_class) {
+        // A virtual class ALWAYS needs construction (to stamp its vtable pointer at
+        // offset 0) and destruction (its vtable dtor slot + the field/base chain), even
+        // with no user ctor/dtor and no hook fields — so the construct/destruct hooks are
+        // emitted for it.
+        it->second.needs_ctor = true;
+        it->second.needs_dtor = true;
+        widen::setSlidNeeds(cls, true, true);
 
-    // The base of a virtual class must itself be virtual. (Checked on the PRIMARY node —
-    // a re-open carries the same base and would only double-report.)
-    if (!node.is_reopen && has_own_virtual && base != widen::kNoType && !base_virtual) {
-        diagnostic::report(diag, {node.file_id, node.name_tok,
-            "The base class of a virtual class must itself be virtual.", {}});
-    }
-    // An explicitly declared destructor of a virtual class must be virtual.
-    if (dtor && !dtor->is_virtual) {
-        diagnostic::report(diag, {dtor->file_id, dtor->name_tok,
-            "The destructor of a virtual class must be virtual.", {}});
+        // The base of a virtual class must itself be virtual. (Checked on the PRIMARY
+        // node — a re-open carries the same base and would only double-report.)
+        if (!node.is_reopen && has_own_virtual && base != widen::kNoType && !base_virtual) {
+            diagnostic::report(diag, {node.file_id, node.name_tok,
+                "The base class of a virtual class must itself be virtual.", {}});
+        }
+        // An explicitly declared destructor of a virtual class must be virtual.
+        if (dtor && !dtor->is_virtual) {
+            diagnostic::report(diag, {dtor->file_id, dtor->name_tok,
+                "The destructor of a virtual class must be virtual.", {}});
+        }
     }
 
     std::vector<int> base_frames = (base != widen::kNoType)
@@ -8542,7 +8618,7 @@ void validateVirtualClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink
                     "The return type of override '" + m->name + "' must match the "
                     "inherited method.", {}});
             }
-        } else if (m->is_virtual && node.is_reopen) {
+        } else if (m->is_virtual && (node.is_reopen || m->out_of_line)) {
             // A re-open may implement/override an existing slot (found above) but not
             // introduce a NEW virtual method — unless a matching slot was declared in the
             // class's PRIMARY body (same frame, a different entry).
@@ -8556,7 +8632,8 @@ void validateVirtualClass(parse::Tree& tree, parse::Node& node, diagnostic::Sink
                                    m->resolved_entry_id) < 0) {
                 diagnostic::report(diag, {m->file_id, m->name_tok,
                     "Class '" + node.name + "' may not add the new virtual method '"
-                    + m->name + "' in a re-open; every virtual method must be in the "
+                    + m->name + "' in a re-open or an out-of-line definition; every "
+                    "virtual method must be in the "
                     "original declaration (the first one places a vtable pointer at "
                     "offset 0 and fixes the slot layout).", {}});
             }
@@ -9985,6 +10062,13 @@ void relocateOutOfLineMembers(parse::Tree& tree,
                 "A constructor or destructor may only appear in a class body.", {}});
             continue;
         }
+        // `virtual` names a vtable slot — a namespace function has none.
+        if (is_fn && ch->is_virtual && target->kind != parse::Kind::kClassDef) {
+            diagnostic::report(diag, {ch->file_id, ch->name_tok,
+                "'" + ch->name + "' is not a method; only a method or the destructor "
+                "can be virtual.", {}});
+            continue;
+        }
         // The out-of-line head spelled the owner's list under its own names:
         // re-spell the member to the pattern's names (positional binding)
         // before it joins the pattern — from here it is an ordinary member.
@@ -10001,6 +10085,7 @@ void relocateOutOfLineMembers(parse::Tree& tree,
             ch->params.insert(ch->params.begin(),
                 parse::makeReceiverParam(widen::internOrNone(recv_name + "^"),
                                          ch->file_id, ch->name_tok));
+            ch->out_of_line = true;   // a re-open for the virtual rules (validateVirtualClass)
         }
         ch->qualifier.clear();
         ch->qualifier_toks.clear();

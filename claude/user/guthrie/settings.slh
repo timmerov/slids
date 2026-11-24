@@ -6,6 +6,8 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 configuration settings.
 */
 
+import electorate;
+
 /* number of trials. */
 //const int kNTrials = 1;
 //const int kNTrials = 10;

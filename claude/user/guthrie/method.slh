@@ -1,0 +1,59 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+electoral method base class.
+*/
+
+import slids.string;
+import slids.vector;
+import settings;
+alias slids;
+
+/*
+base class for electoral methods.
+every derived class must define find_winner.
+*/
+ElectoralMethod(
+    String name_,
+    int winner_ = -1,
+    int is_winner_ = 0,
+    float64 total_utility_ = 0.0,
+    float64 satisfaction_ = 0.0,
+    float64 correlation_ = 0.0,
+    int nvillains_ = 0,
+    int nminions_ = 0
+) {
+    /* meh. this has to be here until we can move functions. */
+    const int kWidth = 30;
+    global int g_nmethods = 0;
+
+    _();
+    virtual ~();
+
+    /* find the winner. */
+    virtual void find_winner(bool quiet = kQuiet) = delete;
+
+    /* pretty print the winner. */
+    virtual void print_winner();
+
+    /* calculate satisfaction and correlation. */
+    void calculate_results();
+
+    /* pretty print satisfaction. */
+    virtual void print_satisfaction();
+
+    /* pretty print correlation. */
+    virtual void print_correlation();
+
+    /* analyze strategic voting. */
+    virtual void strategic_voting();
+
+    /* pretty print strategic voting summary. */
+    virtual void print_strategic_results();
+}
+alias ElectoralMethods = Vector<ElectoralMethod^>;
+
+/* if winner is expected then "pass" otherwise "=FAIL=" or "n/a". */
+(const char)[] result_to_string(int winner, int expected);

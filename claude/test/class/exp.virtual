@@ -97,3 +97,10 @@ DtField:dtor 4
 DtBase:dtor 3
 DtField:dtor 6
 DtBase:dtor 5
+-- out-of-line virtual --
+OolD:who
+val = 4
+twice = 2
+OolD:dtor
+Ool:dtor
+Lv:hi 9

@@ -298,6 +298,7 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
     c->is_mutable = n.is_mutable;
     c->tmpl_value_param = n.tmpl_value_param;
     c->is_virtual = n.is_virtual;
+    c->out_of_line = n.out_of_line;
     c->is_pure = n.is_pure;
     c->is_foreign = n.is_foreign;
     c->bypass_virtual = n.bypass_virtual;

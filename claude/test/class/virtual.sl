@@ -400,6 +400,39 @@ DtBase : DtDer(DtField fld_) {
 }
 DtBase : DtSyn(DtField sfld_) { }       /* no dtor declared: synthesized, still dispatches */
 
+/* COVERAGE — `virtual` MATCHES on every declaration and definition: the OUT-OF-LINE
+   form (`virtual T Class:m()`, `virtual Class:~()`) and a block re-open spell it too. */
+Ool(int o_) {
+    _() {}
+    virtual ~();
+    virtual void who();
+    virtual int val(int k);
+    virtual int twice();
+}
+virtual Ool:~() { println(String + "Ool:dtor"); }
+virtual void Ool:who() { println(String + "Ool:who"); }
+virtual int Ool:val(int k) { return o_ + k; }
+Ool() { virtual int twice() { return o_ * 2; } }     /* block re-open defines a declared slot */
+Ool : OolD(int d_) {
+    _() {}
+    virtual ~();
+    virtual void who();
+}
+virtual OolD:~() { println(String + "OolD:dtor"); }
+virtual void OolD:who() { println(String + "OolD:who"); }
+
+/* the out-of-line virtual member of a LOCAL class. */
+void local_virtual() {
+    Lv(int l_) {
+        _() {}
+        virtual ~() {}
+        virtual void hi();
+    }
+    virtual void Lv:hi() { println(String + "Lv:hi " + l_); }
+    Lv lv(9);
+    lv.hi();
+}
+
 int32 main() {
     {
         Vc v(7);
@@ -597,6 +630,17 @@ int32 main() {
         delete ds;                         // DtField:dtor 6, DtBase:dtor 5
     }
 
+    /* COVERAGE — out-of-line + re-open virtual definitions dispatch. */
+    {
+        println(String + "-- out-of-line virtual --");
+        Ool^ oo = new OolD(1, 2);
+        oo^.who();                         // OolD:who
+        println(String + "val = " + oo^.val(3));   // 4 (inherited Ool:val)
+        println(String + "twice = " + oo^.twice()); // 2 (defined in the re-open)
+        delete oo;                         // OolD:dtor, Ool:dtor
+        local_virtual();                   // Lv:hi 9
+    }
+
     return 0;
 }
 
@@ -682,3 +726,58 @@ int32 main() {
 //-EXPECT-ERROR: return type of override
 //NcvB(int x_) { _() {} virtual ~() {} virtual NcvB^ me() { return ^self; } }
 //NcvB : NcvD(int y_) { _() {} virtual ~() {} virtual NcvD^ me() { return ^self; } }
+
+/* `virtual` must match on every declaration and definition — an out-of-line definition
+   that omits it. */
+//-EXPECT-ERROR: 'm' is not 'virtual' here but is 'virtual' where it is first declared
+//NmA(int x_) { _() {} virtual ~() {} virtual void m(); }
+//void NmA:m() {}
+
+/* ...an out-of-line definition that adds it. */
+//-EXPECT-ERROR: 'm' is 'virtual' here but is not 'virtual' where it is first declared
+//NmB(int x_) { _() {} virtual ~() {} void m(); }
+//virtual void NmB:m() {}
+
+/* ...a block re-open that omits it. */
+//-EXPECT-ERROR: 'm' is not 'virtual' here but is 'virtual' where it is first declared
+//NmC(int x_) { _() {} virtual ~() {} virtual void m(); }
+//NmC() { void m() {} }
+
+/* ...an out-of-line destructor that omits it. */
+//-EXPECT-ERROR: The destructor is not 'virtual' here but is 'virtual' where it is first declared
+//NmD(int x_) { _() {} virtual ~(); virtual void m() {} }
+//NmD:~() {}
+
+/* ...a re-opened destructor that omits it. */
+//-EXPECT-ERROR: The destructor is not 'virtual' here but is 'virtual' where it is first declared
+//NmE(int x_) { _() {} virtual ~(); }
+//NmE() { ~() {} }
+
+/* an out-of-line definition may not add a NEW virtual method (it is a re-open spelling). */
+//-EXPECT-ERROR: may not add the new virtual method
+//NoA(int x_) { _() {} virtual ~() {} }
+//virtual void NoA:extra() {}
+
+/* a re-open may not make a class virtual through its destructor either. */
+//-EXPECT-ERROR: may not add a virtual destructor
+//NvdA(int x_) { _() {} }
+//NvdA() { virtual ~() {} }
+
+/* ...nor may the out-of-line destructor. */
+//-EXPECT-ERROR: may not add a virtual destructor
+//NvdB(int x_) { _() {} }
+//virtual NvdB:~() {}
+
+/* `virtual` outside a class body needs a qualified method — a free function has no vtable. */
+//-EXPECT-ERROR: requires a qualified method name
+//virtual void nfree() {}
+
+/* a namespace function is not a method. */
+//-EXPECT-ERROR: 'f' is not a method
+//NsV { }
+//virtual void NsV:f() {}
+
+/* the out-of-line constructor cannot be virtual either. */
+//-EXPECT-ERROR: A constructor cannot be virtual
+//Nvc(int x_) { _(); ~() {} }
+//virtual Nvc:_() {}

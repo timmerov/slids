@@ -437,7 +437,11 @@ struct Node {
                                  // `_$dtor`): declared with leading `virtual` — dispatched
                                  // through the vtable. A class with >=1 virtual method is
                                  // a virtual class.
-    bool is_pure = false;        // kFunctionDecl: a pure virtual (`virtual T m() = delete;`)
+    bool out_of_line = false;    // kFunctionDef/kFunctionDecl: relocated into its class from
+                                 // the out-of-line `T Class:m()` spelling (resolve
+                                 // relocateOutOfLineMembers) — a re-open for the virtual
+                                 // rules, though it may land in the primary's children.
+    bool is_pure = false;       // kFunctionDecl: a pure virtual (`virtual T m() = delete;`)
                                  // — no body; a class with a pure method is abstract (not
                                  // instantiable). Always accompanies is_virtual.
     bool is_foreign = false;     // kFunctionDecl: a foreign C function (`T f(...) = import;`
