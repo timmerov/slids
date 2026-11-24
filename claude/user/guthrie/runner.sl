@@ -2371,8 +2371,10 @@ ElectoralMethod : CoombsMethod() {
         int ncandidates = g_runner.ncandidates_;
         candidates = ^g_runner.candidates_;
         bloc_map = ^g_runner.bloc_map_;
+        nvoters = g_runner.electorate_.nvoters_;
 
         winner_ = -1;
+        majority = nvoters/2 + 1;
 
         /* copy the voter blocs. */
         nblocs int = bloc_map^.size();
@@ -2399,6 +2401,26 @@ ElectoralMethod : CoombsMethod() {
 
         /* repeat until we have a winner. */
         for (nc : ncandidates..>1-1) {
+            /* clear the vote counts. */
+            for (i : 0..ncandidates) {
+                counts[i] = 0;
+            }
+
+            /* count the first place votes. */
+            for (rc : ranked_choices) {
+                int which = rc^.rankings_[0];
+                counts[which] += rc^.size_;
+            }
+
+            /* check for a strict majority. */
+            for (which : elligible) {
+                int count = counts[which];
+                if (count >= majority) {
+                    elligible[0] = which;
+                    break winner_loop;
+                }
+            }
+
             /* clear the vote counts. */
             for (i : 0..ncandidates) {
                 counts[i] = 0;
@@ -2443,9 +2465,9 @@ ElectoralMethod : CoombsMethod() {
                     break;
                 }
             }
-        }
+        } :winner_loop;
 
-        /* winner is the last elligible candidate. */
+        /* winner has a majority or is the last elligible candidate. */
         winner_ = elligible[0];
 
         /* accumulate the utility. */
@@ -2458,33 +2480,6 @@ ElectoralMethod : CoombsMethod() {
         }
     }
 
-    /*
-    ==tsc==
-    the strategy is wrong.
-    A wins when they get a majority of first place votes.
-    we don't check this.
-    we need to.
-    otherwise A can be eliminated.
-    despite A's majority.
-
-    also an optimization:
-    all A>W minions should adopt the same elimination order strategy
-    until the last round.
-    A>B minions should use the strategy ABXYZ.
-    B>A minions should use the strategy BAXYZ.
-    we don't need a combinatorial number of variables.
-
-    the coombs schedule needs the first place voting schedule as well
-    as the last place voting schedule.
-    the elimination order has a length: X, XY, XYZ, ...
-    we check A for a strict majority when there are 3+ candidates.
-    we already know A beats B head to head (by construction).
-
-    the schedule key is the forward schedule followed by the reverse schedule.
-    for both the W>A honest voters.
-    and the A>W honest voting minions.
-
-    */
     virtual void strategic_voting() {
         /*
         W is the honest winner.
@@ -2496,6 +2491,7 @@ ElectoralMethod : CoombsMethod() {
         ncandidates = g_runner.ncandidates_;
         candidates = ^g_runner.candidates_;
         bloc_map = ^g_runner.bloc_map_;
+        nvoters = g_runner.electorate_.nvoters_;
 
         Rankings order;
         order.reserve(ncandidates);
@@ -2503,6 +2499,8 @@ ElectoralMethod : CoombsMethod() {
         Rankings elimination_order;
         elimination_pool.reserve(ncandidates);
         elimination_order.reserve(ncandidates);
+        Vector<LP:Expr> votes;
+        votes.reserve(ncandidates);
 
         /*
         we're looking for the minimum number of strategic
@@ -2511,6 +2509,7 @@ ElectoralMethod : CoombsMethod() {
         */
         villain = -1;
         min_minions = -1;
+        majority = nvoters/2 + 1;
 
         for (a : 0..ncandidates) {
             if (a == winner_) {
@@ -2598,9 +2597,6 @@ ElectoralMethod : CoombsMethod() {
                     }
                 }
 
-                println(String + " " + name_ + ": a=" + candidates^[a].name_
-                    + " b=" + candidates^[b].name_ + " w=" + candidates^[winner_].name_);
-
                 /*
                 establish an elimination order.
                 this is a bit complex.
@@ -2623,98 +2619,27 @@ ElectoralMethod : CoombsMethod() {
                 elimination_bitfield = 0;
                 elimination_order.clear();
                 while() {
-                    /* how many rounds until A must have a majority? */
-                    nrounds int = elimination_order.size();
-                    nrounds;
-
-                    /* do the things here. */
-                    if (elimination_order.size() == 0) {
-                        println("  _");
-                    } else {
-                        println(String + "  " + elimination_order.to_string());
-                    }
-
-                    /* cycle through all possible permutations. */
-                    done = permute(elimination_order);
-                    if (done == false) {
-                        continue;
-                    }
-
-                    /* update the "in" candidates. */
-                    ++elimination_bitfield;
-                    if (elimination_bitfield >= elimination_limit) {
-                        break;
-                    }
-
-                    /* copy the new "in" candidates to the order. */
-                    elimination_order.clear();
-                    for (i : 0..elimination_pool_size) {
-                        bit = 1 << i;
-                        if (elimination_bitfield & bit) {
-                            which = elimination_pool[i];
-                            elimination_order.append(which);
-                        }
-                    }
-                }
-
-                /* build the schedule maps wa, abw, baw */
-                /* for each elimination stage: */
-                /* begin linear programming. */
-                /* add variables (many) for abw, baw honest minions - free. */
-                /* add variables (2) for abw, baw strategic minions - costly. */
-                /* add constraints: abw, baw honest minions <= bloc size. */
-                /* add constraints: honest minions + strategic minions <= pool size. */
-                /* add equations for each round. */
-                /* abw strategic minions always vote A first and eliminatee last. */
-                /* baw strategic minions always vote B first and eliminatee last. */
-                /* stage 0: strict majority A from round 0. */
-                /* stage 1: eliminate C from round 0 votes. strict majority A from round 1. */
-                /* stage 2: eliminate C..D from round 0..1 votes. strict majority A from round 2. */
-                /* stage 3: eliminate C..E from round 0..2 votes. */
-                /* no majority required in last stage. only A,B remain. from construction A>B. */
-                /* we could add the tie breaker majority check in the last round. */
-
-                /*
-                ScheduleMap schedule_map;
-                for (it : bloc_map^) {
-                    forward = rankings_to_schedule(it^.rankings_, elimination_order);
-                    backward = rankings_to_last_first_schedule(it^.rankings_, elimination_order);
-                    Rankings key;
-                    key.reserve(forward.size() + backward.size());
-                    for (r : forward) {
-                        key.append(r);
-                    }
-                    for (r : backward) {
-                        key.append(r);
-                    }
-                    found_it = schedule_map.find(key);
-                    if (found_it == schedule_map.end()) {
-                        SizeVar sv;
-                        sv.size_ = it^.bloc_.size_;
-                        schedule_map.insert(key, sv);
-                    } else {
-                        found_it^.sv_.size_ += it^.bloc_.size_;
-                    }
-                }
-                for (it : schedule_map) {
-                    println(String + "   " + it^.schedule_.to_string() + " : " + it^.sv_.size_);
-                }
-                */
-
-                /*
-                while () {
                     /* convert the bloc map to a schedule map. */
                     void bloc_map_to_schedule(
                         BlocMapIters^ bloc_map,
                         ScheduleMap^ schedule_map
                     ) {
                         for (it : bloc_map^) {
-                            schedule = rankings_to_last_first_schedule(it^.rankings_, elimination_order);
-                            found_it = schedule_map^.find(schedule);
+                            forward = rankings_to_schedule(it^.rankings_, elimination_order);
+                            backward = rankings_to_last_first_schedule(it^.rankings_, elimination_order);
+                            Rankings key;
+                            key.reserve(forward.size() + backward.size());
+                            for (r : forward) {
+                                key.append(r);
+                            }
+                            for (r : backward) {
+                                key.append(r);
+                            }
+                            found_it = schedule_map^.find(key);
                             if (found_it == schedule_map^.end()) {
                                 SizeVar sv;
                                 sv.size_ = it^.bloc_.size_;
-                                schedule_map^.insert(schedule, sv);
+                                schedule_map^.insert(key, sv);
                             } else {
                                 found_it^.sv_.size_ += it^.bloc_.size_;
                             }
@@ -2732,28 +2657,6 @@ ElectoralMethod : CoombsMethod() {
                     bloc_map_to_schedule(abw_blocs, abw_schedules);
                     bloc_map_to_schedule(baw_blocs, baw_schedules);
 
-                    /*
-                    convert orders to schedule map.
-                    ab_schedules and ba_schedules hold the variable which is the number
-                    of minions who vote strategically.
-                    */
-                    void orders_to_schedule(
-                        Orders^ orders,
-                        ScheduleMap^ schedule_map
-                    ) {
-                        for (it : orders^) {
-                            schedule = rankings_to_last_first_schedule(it, elimination_order);
-                            found_it = schedule_map^.find(schedule);
-                            if (found_it == schedule_map^.end()) {
-                                schedule_map^.insert(schedule, SizeVar);
-                            }
-                        }
-                    }
-                    ScheduleMap ab_schedules;
-                    ScheduleMap ba_schedules;
-                    orders_to_schedule(ab_orders, ab_schedules);
-                    orders_to_schedule(ba_orders, ba_schedules);
-
                     /* begin linear programming. */
                     LP lp;
 
@@ -2764,24 +2667,18 @@ ElectoralMethod : CoombsMethod() {
                     */
                     for (it : abw_schedules) {
                         name = String + "h" + it^.schedule_.to_string();
-                        /* honest minion. */
+                        /* honest minions. */
                         it^.sv_.var_ = lp.add_var(name, false);
                     }
                     for (it : baw_schedules) {
                         name = String + "h" + it^.schedule_.to_string();
-                        /* honest minion. */
+                        /* honest minions. */
                         it^.sv_.var_ = lp.add_var(name, false);
                     }
-                    for (it : ab_schedules) {
-                        name = String + "s" + it^.schedule_.to_string();
-                        /* strategic minion. */
-                        it^.sv_.var_ = lp.add_var(name, true);
-                    }
-                    for (it : ba_schedules) {
-                        name = String + "s" + it^.schedule_.to_string();
-                        /* strategic minion. */
-                        it^.sv_.var_ = lp.add_var(name, true);
-                    }
+                    /* strategic minions. */
+                    name = String + "s" + elimination_order.to_string();
+                    ab_var = lp.add_var(name + "AB", true);
+                    ba_var = lp.add_var(name + "BA", true);
 
                     /*
                     constraint: abw and baw are limited by the bloc size.
@@ -2807,12 +2704,9 @@ ElectoralMethod : CoombsMethod() {
                         ba_pool += it^.sv_.size_;
                         ba_expr += it^.sv_.var_;
                     }
-                    for (it : ab_schedules) {
-                        ab_expr += it^.sv_.var_;
-                    }
-                    for (it : ba_schedules) {
-                        ba_expr += it^.sv_.var_;
-                    }
+                    ab_expr += ab_var;
+                    ba_expr += ba_var;
+
                     /*
                     constraint: honest minions + strategic minions = pool size.
                     since this is an equality, it must be added twice.
@@ -2826,46 +2720,111 @@ ElectoralMethod : CoombsMethod() {
                     lp.add_row(ab_row);
                     lp.add_row(ba_row);
 
-                    /* for each round */
-                    elligible = (1<<ncandidates) - 1;
-                    for (round : 0..(ncandidates-1)) {
-                        /* vote totals */
-                        Vector<LP:Expr> votes;
-                        votes.resize(ncandidates);
-                        for (it : wa_schedules) {
-                            which = it^.schedule_[round];
-                            votes[which] += it^.sv_.size_;
-                        }
-                        for (it : abw_schedules) {
-                            which = it^.schedule_[round];
-                            votes[which] += LP:Expr + it^.sv_.var_;
-                        }
-                        for (it : baw_schedules) {
-                            which = it^.schedule_[round];
-                            votes[which] += LP:Expr + it^.sv_.var_;
-                        }
-                        for (it : ab_schedules) {
-                            which = it^.schedule_[round];
-                            /* minions land in this strategic bloc. */
-                            votes[which] += it^.sv_.var_;
-                        }
-                        for (it : ba_schedules) {
-                            which = it^.schedule_[round];
-                            /* minions land in this strategic bloc. */
-                            votes[which] += it^.sv_.var_;
+                    /* how many rounds until A must have a majority? */
+                    nrounds int = elimination_order.size();
+
+                    /*
+                    n+1 rounds.
+                    A must have a strict majority in the last round.
+                    no other eligible candidate may have a majority in any other round.
+                    */
+                    eligible = (1<<ncandidates) - 1;
+                    for (round : 0..<=nrounds) {
+                        /* last round. */
+                        if (round == nrounds) {
+                            /* count A votes. */
+                            LP:Expr expr;
+                            for (it : wa_schedules) {
+                                which = it^.schedule_[round];
+                                if (which == a) {
+                                    expr += it^.sv_.size_;
+                                }
+                            }
+                            for (it : abw_schedules) {
+                                which = it^.schedule_[round];
+                                if (which == a) {
+                                    expr += LP:Expr + it^.sv_.var_;
+                                }
+                            }
+                            /* A must have strict majority. */
+                            row = expr + ab_var + LP:gte + majority;
+                            lp.add_row(row);
+                        } else {
+                            /* count all other votes. */
+                            votes.clear();
+                            votes.resize(ncandidates);
+                            for (it : wa_schedules) {
+                                which = it^.schedule_[round];
+                                if (which != a) {
+                                    votes[which] += it^.sv_.size_;
+                                }
+                            }
+                            for (it : abw_schedules) {
+                                which = it^.schedule_[round];
+                                if (which != a) {
+                                    votes[which] += LP:Expr + it^.sv_.var_;
+                                }
+                            }
+                            for (it : baw_schedules) {
+                                which = it^.schedule_[round];
+                                if (which != a) {
+                                    votes[which] += LP:Expr + it^.sv_.var_;
+                                }
+                            }
+                            votes[b] += ba_var;
+
+                            /* no eligible candidate may have a majority. */
+                            for (c : 0..ncandidates) {
+                                if (c == a) {
+                                    continue;
+                                }
+                                bit = 1 << c;
+                                if (eligible & bit) {
+                                    row = votes[c] + LP:lt + majority;
+                                    lp.add_row(row);
+                                }
+                            }
                         }
 
-                        /* remove the eliminated candidate. */
-                        eliminated = elimination_order[round];
-                        bit = 1 << eliminated;
-                        elligible &= ~bit;
+                        /* the first round does not eliminate a candidate. */
+                        if (round > 0) {
+                            /* the vote against schedule is after the vote for schedule. */
+                            eround = round - 1;
+                            idx = eround + ncandidates;
 
-                        /* add the vote total equations. */
-                        for (i : 0..ncandidates) {
-                            bit = 1<<i;
-                            if (bit & elligible) {
-                                expr = votes[i] + lt_or_lte(i,eliminated) + votes[eliminated];
-                                lp.add_row(expr);
+                            /* count all against votes. */
+                            eliminated = elimination_order[eround];
+                            votes.clear();
+                            votes.resize(ncandidates);
+                            for (it : wa_schedules) {
+                                which = it^.schedule_[idx];
+                                votes[which] += it^.sv_.size_;
+                            }
+                            for (it : abw_schedules) {
+                                which = it^.schedule_[idx];
+                                votes[which] += LP:Expr + it^.sv_.var_;
+                            }
+                            for (it : baw_schedules) {
+                                which = it^.schedule_[idx];
+                                votes[which] += LP:Expr + it^.sv_.var_;
+                            }
+                            votes[eliminated] += ab_var;
+                            votes[eliminated] += ba_var;
+
+                            /* remove the eliminated candidate. */
+                            bit = 1 << eliminated;
+                            eligible &= ~bit;
+
+                            /*
+                            the eliminated candidate must have more votes against
+                            than any other elligible candidate.
+                            */
+                            for (c : 0..ncandidates) {
+                                bit = 1 << c;
+                                if (eligible & bit) {
+                                    row = votes[c] + lt_or_lte(c, eliminated) + votes[eliminated];
+                                    lp.add_row(row);
+                                }
                             }
                         }
                     }
@@ -2880,12 +2839,28 @@ ElectoralMethod : CoombsMethod() {
                         min_minions = lp.get_minimum();
                     }
 
-                    done = permute(elimination_order, ncandidates-2);
-                    if (done) {
+                    /* cycle through all possible permutations. */
+                    done = permute(elimination_order);
+                    if (done == false) {
+                        continue;
+                    }
+
+                    /* update the "in" candidates. */
+                    ++elimination_bitfield;
+                    if (elimination_bitfield >= elimination_limit) {
                         break;
                     }
+
+                    /* copy the new "in" candidates to the order. */
+                    elimination_order.clear();
+                    for (i : 0..elimination_pool_size) {
+                        bit = 1 << i;
+                        if (elimination_bitfield & bit) {
+                            which = elimination_pool[i];
+                            elimination_order.append(which);
+                        }
+                    }
                 }
-                */
             }
         }
 
