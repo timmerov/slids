@@ -1820,6 +1820,27 @@ VIRTUAL CLASSES (landed; spans grammar / resolve / classify / desugar / codegen)
   (inherited or original) slot but may NOT add a NEW virtual method. Multiple inheritance is
   not supported.
 
+  `virtual` MATCHES EVERYWHERE (user, 2026-11-24). Every declaration and definition of a
+  member spells `virtual` or none does — the primary body, a block re-open, the out-of-line
+  form, a header and its source alike. The OUT-OF-LINE spelling exists for this:
+  `virtual T Class:m(...) { }` / `virtual Class:~() { }` (and bodyless declarations) at file,
+  namespace and statement scope (grammar parseOutOfLineVirtual; qualified heads only — an
+  unqualified one is a free function, rejected; a ctor or template method rejected as in a
+  body; a namespace target rejected at relocation, "is not a method"). Relocation marks the
+  node Node.out_of_line: it is a RE-OPEN spelling even when it lands in the primary's
+  children — it never makes a class virtual (validateVirtualClass counts it apart, so the
+  explicit-dtor rule is not tripped by it) and it is held to "no new virtual method".
+  The MATCH (validateVirtualClass, before the not-virtual early return — a missing keyword
+  can be exactly what makes an opening look non-virtual): a METHOD is compared against the
+  earlier same-signature entries of its class's OWN frame (a class frame keeps an entry per
+  declaration/definition), so a mismatched pair reports once, at the later spelling, with a
+  "first declared here" note. The DESTRUCTOR is a hook, not an entry: the PRIMARY node
+  compares every opening's `~` (its children + ClassInfo.pending_hooks). A virtual `~`
+  spelled only outside the primary body on a class with no vptr is "may not add a virtual
+  destructor" (a re-open cannot place the vptr). Canon virtual.sl (Ool/OolD, local Lv; 11
+  negatives); import/library.sl's out-of-line `virtual void Animal:late_v()` now reaches
+  "may not add the new virtual method".
+
   BYPASS. A `:` before the method is a STATIC dispatch bypass (parse.h bypass_virtual, set by
   classify qualifiedMethodReceiver): `X:m()`, `self.X:m()`, `obj.X:m()`, `A:B:X:m()` — X the
   own class or any ancestor (see INHERITANCE, "`.` SELECTS, `:` CHANGES CONTEXT"). A qualifier

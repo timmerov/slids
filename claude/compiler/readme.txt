@@ -1399,7 +1399,9 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   (addClassTemplateFilter -> TemplateInfo::filter_reopens on the head): it
   joins every flavor, of any arm of its arity, whose arguments it admits —
   cloned after the arm's own openings and re-spelled positionally to the
-  arm's names (admittedFilters). A filter adds aliases, methods, operators,
+  arm's names (admittedFilters — every filter of the arity has ALL its
+  constraints resolved at its first test, whatever flavor asks; see the
+  LOADED-SOURCE rule below). A filter adds aliases, methods, operators,
   and may implement a declared virtual; never fields, never a `...`; a
   duplicate member is caught as the flavor builds; its alias roots must
   name a field of some arm of its arity (checkTemplateAliasRoots). A
@@ -1413,6 +1415,19 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   re-opening (exact join / filter) and may NOT add an arm ("must be declared
   in its header"); a consumer may add an aliases-only filter or re-open
   (readme-classes.txt FIELD ALIASES, CONSUMER ALIAS RE-OPENS).
+  THE LOADED-SOURCE RULE (2026-11-24, from user/guthrie runner.sl:296): a
+  filter in a LOADED template source of ANOTHER module's template — the
+  family's definition in neither that source nor its paired header
+  (file_imported_by) — is NOT registered (addClassTemplateFilter). It is the
+  source's own TU's business (aliases are names; methods are TU-internal,
+  tu_local_instance), and where the source is merely loaded the strip kept it
+  for its template list while dropping the private classes its constraints
+  name — so the stage's first flavor of that family failed "Unknown type".
+  The trigger is ordinary: a header holding a filter DECLARES A TEMPLATE
+  lexically, so the stage loads its `.sl`. A source's filter of its OWN
+  module's template is module content and stays. Canon test/import:
+  library.slh's MapNode filter makes the stage load library.sl, whose own
+  MapNode filter names the private LibVal (map_probe = 11055).
   OUT-OF-LINE MEMBERS OF A TEMPLATE (2026-07-26 — the todo item, landed):
   the owner SPELLS its template list — the definition's binder surface
   ("how do we know what T is") — for methods, method templates, hooks, and
@@ -1724,6 +1739,16 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   file has no owner, or its owner IS the access file, or both files sit in
   the SAME zone (which also covers decl_file == access_file, and lets a
   privately imported module's own `.sl` see its own `.slh`).
+  A NAMESPACE is ONE name however many files open it: visible iff ANY
+  opening's file is (2026-11-24). Entry.file_id is the first opener; a
+  re-opening's file joins Entry.opening_files (openNamespace), and
+  parse::entryVisibleAt — the entry form of declVisibleAt, used by
+  resolve's entryVisible and reportPrivateImport — tries them all. Without
+  it the first opener decided: in test/import's stage, `slids` was first
+  opened by slids/string.slh, reached only through tmpl_lib.sl's private
+  import, so library.sl's `alias slids;` read "'slids' is not a namespace"
+  though the root imports slids.map publicly (import order decided it).
+  Members stay gated by their own files.
   The USE SITE is Tree::access_file, maintained by resolve's AccessFileScope
   at every entry point that takes a node or a file_id (resolveDeclType,
   resolveExpr, resolveUserCall, resolveStoreTarget, resolveFunctionBody,
@@ -3729,7 +3754,8 @@ PRODUCT FILES (.h / .cpp pairs)
             Entry vector + frame stack + pushFrame / popFrame / addEntry /
             findInFrame / entryType APIs that resolve
             calls. Also owns declVisibleAt — THE VISIBILITY RULE as one
-            predicate over file_private_owner, shared by resolve's name
+            predicate over file_private_owner (entryVisibleAt: its entry
+            form, a namespace visible via any opening), shared by resolve's name
             lookups and classify's overload gathering (its FIELD sibling,
             classify's fieldVisibleAt, keys on the same use-site file). Function entries carry param_types alongside their
             return type, plus num_required (optional-param boundary) and a

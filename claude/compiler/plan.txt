@@ -4725,6 +4725,34 @@ TWO BARE RE-OPENS THROUGH `alias Ns;` (2026-11-19, from user/guthrie runner.sl:3
   class through `alias Ns;` silently make a new local class" closed by the same change.
   Coverage: test/template reopen_tmpl.sl second Gnode filter (`gnode<int8> = 3`).
 
+`virtual` MATCHES EVERYWHERE + THE OUT-OF-LINE VIRTUAL (2026-11-24, from user/guthrie runner.sl:377)
+  User rule: "virtual when used is required everywhere. open, out-of-line, re-open, etc
+  declarations and definition must match everywhere." Before: `virtual void C:m() { }`
+  was "Expected type." (grammar admitted `virtual` only in a class body), and NOTHING
+  compared a member's declarations with its definitions — a re-open or out-of-line def
+  could drop the keyword silently. Now: grammar parseOutOfLineVirtual (file / namespace /
+  statement scope, qualified heads only); Node.out_of_line set at relocation (a re-open
+  spelling: never makes a class virtual, "no new virtual" applies); validateVirtualClass
+  matches every method entry of the class's own frame and every opening's `~`, and
+  rejects a virtual `~` added only outside the primary body. readme-classes.txt VIRTUAL
+  CLASSES has the detail. Coverage: test/class virtual.sl Ool/OolD + local Lv, 11
+  negatives; import/library.sl's out-of-line negative re-pinned.
+
+A LOADED SOURCE'S FILTER OF ANOTHER MODULE'S TEMPLATE (2026-11-24, from user/guthrie runner.sl:296)
+  The stage failed "Unknown type 'SizeVar'" in runner.sl: runner.slh's MapNode filter
+  made it a template header, the stage loaded runner.sl, the strip kept runner.sl's
+  `MapNode<Key=Rankings, Value=SizeVar>` filter (template list) and dropped SizeVar, and
+  admittedFilters resolved that filter's constraints at the first MapNode flavor. Such a
+  filter is no longer registered (readme.txt THE LOADED-SOURCE RULE). Coverage:
+  test/import library.slh/library.sl MapNode filters + map_probe (11055).
+
+A NAMESPACE IS VISIBLE VIA ANY OPENING (2026-11-24, found writing the test above)
+  The namespace entry carried only its FIRST opener's file, so THE VISIBILITY RULE was
+  import-order dependent: in test/import's stage `slids` first came from string.slh via
+  tmpl_lib.sl's private import, and library.sl's `alias slids;` failed "'slids' is not a
+  namespace". Entry.opening_files + parse::entryVisibleAt (readme.txt THE VISIBILITY
+  RULE). Coverage: the same test/import build (it cannot reach the stage without it).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).
