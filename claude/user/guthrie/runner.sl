@@ -2362,32 +2362,6 @@ ElectoralMethod : CondorcetMethod() {
 }
 
 /*
-convert rankings to last-first voting schedule given an elimination order.
-*/
-Rankings rankings_to_last_first_schedule(
-    Rankings^ rankings,
-    Rankings^ elimination_order
-) {
-    nc int = rankings^.size();
-    Rankings schedule;
-    schedule.reserve(nc);
-    elligible uint = (1<<nc) - 1;
-    for (i : 0..nc) {
-        for (k : (nc-1)..>=0 -1) {
-            which = rankings^[k];
-            uint bit = 1 << which;
-            if (bit & elligible) {
-                schedule.append(which);
-                break;
-            }
-        }
-        uint bit = 1 << elimination_order^[i];
-        elligible &= ~bit;
-    }
-    return schedule;
-}
-
-/*
 find the coombs winner.
 */
 ElectoralMethod : CoombsMethod() {
@@ -2525,7 +2499,9 @@ ElectoralMethod : CoombsMethod() {
 
         Rankings order;
         order.reserve(ncandidates);
+        Rankings elimination_pool;
         Rankings elimination_order;
+        elimination_pool.reserve(ncandidates);
         elimination_order.reserve(ncandidates);
 
         /*
@@ -2622,16 +2598,64 @@ ElectoralMethod : CoombsMethod() {
                     }
                 }
 
-                /* establish an elimination order. */
-                elimination_order.clear();
+                println(String + " " + name_ + ": a=" + candidates^[a].name_
+                    + " b=" + candidates^[b].name_ + " w=" + candidates^[winner_].name_);
+
+                /*
+                establish an elimination order.
+                this is a bit complex.
+                put all of the not-a not-b candidates into a pool.
+                a bitfield determines which candidates are "in" this stage.
+                we cycle through all possible permutations of the currently "in" candidates.
+                then increment the bitfield.
+                which runs from 0 to 2^N.
+                */
+                elimination_pool.clear();
                 for (c : 0..ncandidates) {
                     if (c == a || c == b) {
                         continue;
                     }
-                    elimination_order.append(c);
+                    elimination_pool.append(c);
                 }
-                elimination_order.append(b);
-                elimination_order.append(a);
+                elimination_pool_size = ncandidates - 2;
+                elimination_limit = 1 << elimination_pool_size;
+
+                elimination_bitfield = 0;
+                elimination_order.clear();
+                while() {
+                    /* how many rounds until A must have a majority? */
+                    nrounds int = elimination_order.size();
+                    nrounds;
+
+                    /* do the things here. */
+                    if (elimination_order.size() == 0) {
+                        println("  _");
+                    } else {
+                        println(String + "  " + elimination_order.to_string());
+                    }
+
+                    /* cycle through all possible permutations. */
+                    done = permute(elimination_order);
+                    if (done == false) {
+                        continue;
+                    }
+
+                    /* update the "in" candidates. */
+                    ++elimination_bitfield;
+                    if (elimination_bitfield >= elimination_limit) {
+                        break;
+                    }
+
+                    /* copy the new "in" candidates to the order. */
+                    elimination_order.clear();
+                    for (i : 0..elimination_pool_size) {
+                        bit = 1 << i;
+                        if (elimination_bitfield & bit) {
+                            which = elimination_pool[i];
+                            elimination_order.append(which);
+                        }
+                    }
+                }
 
                 /* build the schedule maps wa, abw, baw */
                 /* for each elimination stage: */
@@ -2650,11 +2674,7 @@ ElectoralMethod : CoombsMethod() {
                 /* no majority required in last stage. only A,B remain. from construction A>B. */
                 /* we could add the tie breaker majority check in the last round. */
 
-                println(String + " " + name_ + ": a=" + candidates^[a].name_
-                    + " b=" + candidates^[b].name_ + " w=" + candidates^[winner_].name_);
-
-                println(String + "  " + elimination_order.to_string());
-
+                /*
                 ScheduleMap schedule_map;
                 for (it : bloc_map^) {
                     forward = rankings_to_schedule(it^.rankings_, elimination_order);
@@ -2679,6 +2699,7 @@ ElectoralMethod : CoombsMethod() {
                 for (it : schedule_map) {
                     println(String + "   " + it^.schedule_.to_string() + " : " + it^.sv_.size_);
                 }
+                */
 
                 /*
                 while () {
@@ -3266,11 +3287,13 @@ Rankings rankings_to_schedule(
     Rankings^ rankings,
     Rankings^ elimination_order
 ) {
-    nc int = rankings^.size();
+    /* there may be more rankings than elimination orders. */
+    nr int = rankings^.size();
+    neo int = elimination_order^.size();
     Rankings schedule;
-    schedule.reserve(nc);
-    elligible uint = (1<<nc) - 1;
-    for (i : 0..nc) {
+    schedule.reserve(nr);
+    elligible uint = (1<<nr) - 1;
+    for (i : 0..nr) {
         for (which : rankings^) {
             uint bit = 1 << which;
             if (bit & elligible) {
@@ -3278,8 +3301,40 @@ Rankings rankings_to_schedule(
                 break;
             }
         }
-        uint bit = 1 << elimination_order^[i];
-        elligible &= ~bit;
+        if (i < neo) {
+            uint bit = 1 << elimination_order^[i];
+            elligible &= ~bit;
+        }
+    }
+    return schedule;
+}
+
+/*
+convert rankings to last-first voting schedule given an elimination order.
+*/
+Rankings rankings_to_last_first_schedule(
+    Rankings^ rankings,
+    Rankings^ elimination_order
+) {
+    /* there may be more rankings than elimination orders. */
+    nr int = rankings^.size();
+    neo int = elimination_order^.size();
+    Rankings schedule;
+    schedule.reserve(nr);
+    elligible uint = (1<<nr) - 1;
+    for (i : 0..nr) {
+        for (k : (nr-1)..>=0 -1) {
+            which = rankings^[k];
+            uint bit = 1 << which;
+            if (bit & elligible) {
+                schedule.append(which);
+                break;
+            }
+        }
+        if (i < neo) {
+            uint bit = 1 << elimination_order^[i];
+            elligible &= ~bit;
+        }
     }
     return schedule;
 }
