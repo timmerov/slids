@@ -559,6 +559,9 @@ int32 main() {
     PackBox pbx;
     println(String + "packbox = " + (pbx.p_.total() + pbx.q_));
 
+    // library.slh's MapNode filter + library.sl's private one, read in library.sl.
+    println(String + "map probe = " + map_probe());   // 11055
+
     return 0;
 }
 

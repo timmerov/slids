@@ -49,6 +49,7 @@ because the model requires it.
 import slids.string;
 
 import library;
+import+ slids.map;
 alias slids;
 
 /* PRIVATE to this TU — same names as consumer.sl's, distinct bodies: a free function, a
@@ -289,6 +290,30 @@ Hyb(int hid_ = 41) {
     _() {}
     ~() {}
     int total() { return pub_ * 100 + hid_; }
+}
+
+/* THIS FILE'S OWN FILTER of slids.map's MapNode, over LibVal — a class PRIVATE to this
+   file. Both belong to this TU (library.slh's filter is the public one). The
+   instantiation stage loads this file as library.slh's template source: the strip keeps
+   the filter (it has a template list) but drops LibVal, so the stage must not register a
+   loaded source's filter of ANOTHER module's template — else the first MapNode flavor it
+   builds (map_probe's MapNode<int, int>) resolves `Value=LibVal` and fails
+   "Unknown type 'LibVal'". Here, in this file's own compile, the filter is live. */
+LibVal(int lv_ = 0) { }
+slids { MapNode<Key=int, Value=LibVal>(alias lk_ = key_, alias lval_ = value_) { } }
+
+int map_probe() {
+    Map<int, int> m;                   // a public flavor: built by the stage
+    m.insert(2, 20);
+    m.insert(1, 10);
+    it = m.begin();                    // the smallest key
+    int pub = it^.mk_ + it^.mv_;       // library.slh's filter: 1 + 10
+    Map<int, LibVal> p;                // a private-class flavor: built here
+    LibVal v(50);
+    p.insert(5, v);
+    pt = p.begin();
+    int priv = pt^.lk_ + pt^.lval_.lv_;   // this file's filter: 5 + 50
+    return pub * 1000 + priv;          // 11055
 }
 
 /*

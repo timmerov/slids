@@ -139,7 +139,7 @@ int resolveName(parse::Tree const& tree, std::string const& name);
 // collides — it is only unnameable from outside.
 bool entryVisible(parse::Tree const& tree, int id) {
     if (id < 0) return true;
-    return parse::declVisibleAt(tree, tree.entries[id].file_id, tree.access_file);
+    return parse::entryVisibleAt(tree, tree.entries[id], tree.access_file);
 }
 
 // THE ACCESS FILE, scoped. Every resolve entry point that takes a node (or a
@@ -174,7 +174,7 @@ bool reportPrivateImport(parse::Tree const& tree, std::string const& name,
     if (name.empty()) return false;
     for (parse::Entry const& e : tree.entries) {
         if (e.name != name) continue;
-        if (parse::declVisibleAt(tree, e.file_id, tree.access_file)) return false;
+        if (parse::entryVisibleAt(tree, e, tree.access_file)) return false;
     }
     for (parse::Entry const& e : tree.entries) {
         if (e.name != name || e.file_id < 0) continue;
@@ -1912,7 +1912,20 @@ int openNamespace(parse::Tree& tree, std::string const& name, int name_tok,
                   std::string const& enum_underlying = "") {
     bool collision = false;
     int existing = findExistingNamespace(tree, name, parent_ns, collision);
-    if (existing >= 0) return existing;
+    if (existing >= 0) {
+        // A re-opening: record its file, so the namespace is visible wherever ANY
+        // opening is (parse::entryVisibleAt) — not only where the first opener is.
+        if (file_id >= 0)
+            for (auto& e : tree.entries)
+                if (e.kind == parse::EntryKind::kNamespace && e.ns_frame_id == existing) {
+                    if (e.file_id != file_id
+                        && std::find(e.opening_files.begin(), e.opening_files.end(),
+                                     file_id) == e.opening_files.end())
+                        e.opening_files.push_back(file_id);
+                    break;
+                }
+        return existing;
+    }
     if (collision) {
         diagnostic::report(diag, {file_id, name_tok,
             "'" + name + "' is already declared and is not a namespace.", {}});
@@ -7542,6 +7555,19 @@ void addClassTemplateArm(parse::Tree& tree, parse::Node& node, int head,
 void addClassTemplateFilter(parse::Tree& tree, parse::Node& node, int head,
                             diagnostic::Sink& diag) {
     parse::Node const* hdef = tree.templates.at(head).def;
+    // A LOADED template source's filter of ANOTHER module's template is that source's
+    // own TU's business: its aliases are names, its methods are TU-internal
+    // (consumerFilterOpening, tu_local_instance) and emitted by that TU. Where the
+    // source is merely loaded (the instantiation stage, an `import+`), the strip kept
+    // it only for its template list — while dropping the private classes its
+    // constraints may name. Not registered: no flavor here admits it, and its
+    // constraints are never resolved. A filter of the source's OWN module's template
+    // (defined in the source or its paired header) is module content and stays.
+    if (fileIsTemplateSource(tree, node.file_id)) {
+        int paired = node.file_id < static_cast<int>(tree.file_imported_by.size())
+            ? tree.file_imported_by[node.file_id] : -1;
+        if (hdef->file_id != node.file_id && hdef->file_id != paired) return;
+    }
     // A header template's filters: its header declares them (the members every TU
     // sees), its template source defines their bodies. A CONSUMER's source file may add
     // a filter of field aliases and TU-internal methods; ANOTHER header, aliases only,

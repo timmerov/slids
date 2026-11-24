@@ -6,8 +6,78 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 analyze guthrie voting.
 */
 
+import slids.map;
+import slids.vector;
+import candidate;
+import settings;
+
+alias Approvals = slids:Vector<int>;
+
+Bloc(
+    /* voters in this bloc. */
+    int size_ = 0,
+
+    /* distances to candidates in ranked order. */
+    Utilities utilities_,
+
+    /* total approvals of voters in the bloc. */
+    int napprovals_ = 0,
+    Approvals approvals_
+) { }
+
+alias BlocMap = slids:Map<Rankings, Bloc>;
+alias BlocMapIter = BlocMap:MapIter;
+alias BlocMapIters = slids:Vector<BlocMapIter>;
+
+/*
+fancy feature unique to slids:
+MapNode has generic fields key_ and value_.
+alias them for the MapNode associated with BlocMap
+to rankings_ and bloc_ to make the code that iterates
+over a BlocMap more readable.
+*/
+/* ==tsc== known issue. slids:MapNode is rejected. */
+slids {
+    MapNode<Key=Rankings, Value=Bloc>(
+        alias rankings_ = key_,
+        alias bloc_ = value_
+    ) {
+    }
+}
+
+SatisfactionMetrics(
+    /* candidate with the best utility. */
+    int which_ = 0,
+
+    /* utility of the best candidate. */
+    float64 best_ = 0.0,
+
+    /* average utility of the average candidate. */
+    float64 average_ = 0.0
+) {
+}
+
 /* the class called by main. */
-TestRunner(...) {
+TestRunner(
+    /* "constants" */
+    int ntrials_ = kNTrials,
+    int ncandidates_ = kNCandidates,
+    int canddiate_method_ = kCandidateMethod,
+    float64 dispersion_ = kDispersion,
+
+    /* the electorate and the candidates. */
+    Electorate electorate_,
+    Candidates candidates_,
+    BlocMap bloc_map_,
+    int total_support_ = 0,
+
+    /* results from the trial. */
+    SatisfactionMetrics theoretical_,
+    SatisfactionMetrics actual_,
+    SatisfactionMetrics accumulated_,
+
+    ...
+) {
     void run();
 }
 

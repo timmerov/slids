@@ -274,35 +274,6 @@ stdc import {
     void exit(int status);
 }
 
-SatisfactionMetrics(
-    /* candidate with the best utility. */
-    int which_ = 0,
-
-    /* utility of the best candidate. */
-    float64 best_ = 0.0,
-
-    /* average utility of the average candidate. */
-    float64 average_ = 0.0
-) { }
-
-alias Approvals = Vector<int>;
-
-Bloc(
-    /* voters in this bloc. */
-    int size_ = 0,
-
-    /* distances to candidates in ranked order. */
-    Utilities utilities_,
-
-    /* total approvals of voters in the bloc. */
-    int napprovals_ = 0,
-    Approvals approvals_
-) { }
-
-alias BlocMap = Map<Rankings, Bloc>;
-alias BlocMapIter = BlocMap:MapIter;
-alias BlocMapIters = Vector<BlocMapIter>;
-
 Rankings() {
     String to_string() {
         String s;
@@ -311,19 +282,6 @@ Rankings() {
         }
         return s;
     }
-}
-
-/*
-fancy feature unique to slids:
-MapNode has generic fields key_ and value_.
-alias them for the MapNode associated with BlocMap
-to rankings_ and bloc_ to make the code that iterates
-over a BlocMap more readable.
-*/
-MapNode<Key=Rankings, Value=Bloc>(
-    alias rankings_ = key_,
-    alias bloc_ = value_
-) {
 }
 
 /*
@@ -548,23 +506,6 @@ PairwiseCounts(
 global TestRunner g_runner;
 
 TestRunner(
-    /* "constants" */
-    int ntrials_ = kNTrials,
-    int ncandidates_ = kNCandidates,
-    int canddiate_method_ = kCandidateMethod,
-    float64 dispersion_ = kDispersion,
-
-    /* the electorate and the candidates. */
-    Electorate electorate_,
-    Candidates candidates_,
-    BlocMap bloc_map_,
-    int total_support_ = 0,
-
-    /* results from the trial. */
-    SatisfactionMetrics theoretical_,
-    SatisfactionMetrics actual_,
-    SatisfactionMetrics accumulated_,
-
     /* analyzed electoral methods. */
     AntiPluralityMethod anti_plurality_,
     ApprovalMethod approval_,

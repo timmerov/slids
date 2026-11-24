@@ -52,6 +52,14 @@ bool declVisibleAt(Tree const& t, int decl_file, int access_file) {
     return false;
 }
 
+bool entryVisibleAt(Tree const& t, Entry const& e, int access_file) {
+    if (declVisibleAt(t, e.file_id, access_file)) return true;
+    // A namespace is visible when ANY of its openings is (Entry::opening_files).
+    for (int f : e.opening_files)
+        if (declVisibleAt(t, f, access_file)) return true;
+    return false;
+}
+
 int findInFrame(Tree const& t, int frame_id, std::string const& name) {
     for (int idx : t.live_entry_ids) {
         Entry const& e = t.entries[idx];

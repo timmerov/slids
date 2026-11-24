@@ -251,6 +251,17 @@ Hyb(int pub_, ...) {
     int total();
 }
 
+/* A HEADER FILTER of ANOTHER module's class template (slids.map's MapNode) — aliases
+   only, the one thing another header may add. It also makes this header DECLARE A
+   TEMPLATE (lexically: a name, a `<...>`, a `(`), so the instantiation stage loads
+   library.sl as this header's template source. library.sl carries a filter of its own
+   over a class PRIVATE to it — see there for what the stage must do with it. */
+import slids.map;
+slids { MapNode<Key=int, Value=int>(alias mk_ = key_, alias mv_ = value_) { } }
+
+/* reads both filters' aliases; defined in library.sl. */
+int map_probe();
+
 /* no definitions in a header file. a declaration and its definition are separable for
    a function / method / hook / operator, so the header may only declare them. (For a
    const / enum / alias the declaration IS the definition, so those stay.) each case

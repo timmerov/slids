@@ -713,6 +713,11 @@ struct Entry {
     // kNamespace: identity of its member set (members carry owner_ns_frame ==
     // this). A persistent id, distinct from any lexical frame; reopens reuse it.
     int ns_frame_id = -1;
+    // kNamespace: the file of every LATER opening (file_id is the first). A namespace
+    // is ONE name however many files open it, so THE VISIBILITY RULE asks whether ANY
+    // opening is visible — the first opener may be a header reached only through some
+    // template source while a public header opens the same namespace (entryVisibleAt).
+    std::vector<int> opening_files;
     // Members (kConst / kFunction / kNamespace declared inside a namespace):
     // the ns_frame_id of the owning namespace. -1 for ordinary (non-member)
     // entries. The entry still lives at parent_frame_id for lifetime.
@@ -1271,6 +1276,8 @@ int  findMethodInFrame(Tree const& t, int ns_frame, std::string const& name,
 // use-site file for the same reason: a cloned template body keeps its source's
 // file_id, so it passes the test from inside a consumer TU.
 bool declVisibleAt(Tree const& t, int decl_file, int access_file);
+// declVisibleAt for an ENTRY: its declaring file, or for a namespace any opening's.
+bool entryVisibleAt(Tree const& t, Entry const& e, int access_file);
 // True if `info` declares a field named `name`. The synthetic base slot `_$base`
 // is included, but a user field name never collides with it (the `_$` prefix is
 // reserved), so callers checking a user name need no special-case.
