@@ -57,6 +57,46 @@ SatisfactionMetrics(
 ) {
 }
 
+/*
+correlation class.
+*/
+Correlation(
+    int n_,
+    slids:Vector<int> counts_
+) {
+    /* allocate and initialize to 0. */
+    void init();
+
+    /* increment count for pair a,b. */
+    void increment(int a, int b);
+
+    /* get count for pair a,b. */
+    int count(int a, int b);
+}
+
+/*
+store the results of head to head matchups between all candidates.
+the vote totals are stored: winner is positive, loser is negative.
+*/
+PairwiseCounts(
+    int n_,
+    slids:Vector<int> counts_
+) {
+    void init();
+
+    /* find all pairwise winners. */
+    void find_winners();
+
+    /* return positive vote count for a versus b. */
+    int count(int a, int b);
+
+    /* set count for a versus b. */
+    void set_count(int a, int b, int count);
+
+    /* return true if a beats b. */
+    bool is_winner(int a, int b);
+}
+
 /* the class called by main. */
 TestRunner(
     /* "constants" */
@@ -75,6 +115,21 @@ TestRunner(
     SatisfactionMetrics theoretical_,
     SatisfactionMetrics actual_,
     SatisfactionMetrics accumulated_,
+
+    /* summary */
+    float64 total_utility_ = 0.0,
+    float64 total_utility_strategic_ = 0.0,
+    float64 total_utility_ordering_ = 0.0,
+    int majority_winners_ = 0,
+    int winner_maximizes_satisfaction_ = 0,
+    int condorcet_loser_ = 0,
+    int condorcet_is_loser_ = 0,
+    int condorcet_cycles_ = 0,
+    int candidate_cycles_ = 0,
+    int independence_ = 0,
+    int irv_is_condorcet_ = 0,
+    Correlation correlation_,
+    PairwiseCounts pairwise_,
 
     ...
 ) {

@@ -345,10 +345,7 @@ virtual void ElectoralMethod:print_winner() {
 /*
 correlation class.
 */
-Correlation(
-    int n_,
-    Vector<int> counts_
-) {
+Correlation() {
     /* allocate and initialize to 0. */
     void init() {
         n_ = ElectoralMethod:g_nmethods;
@@ -445,10 +442,7 @@ HeadToHead(
 store the results of head to head matchups between all candidates.
 the vote totals are stored: winner is positive, loser is negative.
 */
-PairwiseCounts(
-    int n_,
-    Vector<int> counts_
-) {
+PairwiseCounts() {
     void init() {
         n_ = g_runner.ncandidates_;
         size = n_ * n_;
@@ -522,22 +516,7 @@ TestRunner(
     RangeMethod range_,
     StarMethod star_,
     ElectoralMethods methods_,
-    ElectoralMethods methods_sorted_,
-
-    /* summary */
-    float64 total_utility_ = 0.0,
-    float64 total_utility_strategic_ = 0.0,
-    float64 total_utility_ordering_ = 0.0,
-    int majority_winners_ = 0,
-    int winner_maximizes_satisfaction_ = 0,
-    int condorcet_loser_ = 0,
-    int condorcet_is_loser_ = 0,
-    int condorcet_cycles_ = 0,
-    int candidate_cycles_ = 0,
-    int independence_ = 0,
-    int irv_is_condorcet_ = 0,
-    Correlation correlation_,
-    PairwiseCounts pairwise_
+    ElectoralMethods methods_sorted_
 ) {
     _() {} ~() {}
 
