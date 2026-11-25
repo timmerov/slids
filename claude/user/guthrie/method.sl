@@ -117,6 +117,26 @@ int victory_margin(
 }
 
 /*
+utility method to return the margin of loss.
+this is the number of votes A can gain and still lose to B.
+*/
+int loss_margin(
+    int a,
+    int b,
+    int votesa,
+    int votesb
+) {
+    margin = votesb - votesa;
+
+    /* apply the tie-breaker rule. */
+    if (a < b) {
+        --margin;
+    }
+
+    return margin;
+}
+
+/*
 cycle through all possible permutations.
 assume it starts in ascending order.
 */

@@ -21,6 +21,7 @@ ElectoralMethod : PluralityMethod() {
 
     _() { }
     virtual ~() { }
+
     virtual void find_winner(
         bool quiet = kQuiet
     ) {

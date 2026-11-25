@@ -93,6 +93,9 @@ alias RankedChoices = slids:Vector<RankedChoice>;
 /* the number of votes A can surrender and still beat B. */
 int victory_margin(int a, int b, int votesa, int votesb);
 
+/* the number of votes A can gain and still lose to B. */
+int loss_margin(int a, int b, int votesa, int votesb);
+
 /* cycle through all possible permutations. */
 bool permute(slids:Vector<int>^ order, int n = -1);
 

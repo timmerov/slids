@@ -2,6 +2,9 @@
 # .ll/.o is never left looking up-to-date on the next build.
 .DELETE_ON_ERROR:
 
+# Build in parallel by default: every TU compiles independently.
+MAKEFLAGS += -j$(shell nproc)
+
 LLC       = llc
 CXX       = g++
 LLCFLAGS  = --filetype=obj --relocation-model=pic
