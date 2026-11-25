@@ -258,7 +258,7 @@ cumulative voting - split 1.0 votes among candidates.
 import slids.algorithm;
 import slids.dump;
 import slids.linpro;
-import+ slids.map;
+import slids.map;
 import slids.math;
 import slids.string;
 import+ slids.vector;
@@ -272,41 +272,6 @@ alias slids;
 
 stdc import {
     void exit(int status);
-}
-
-/*
-convert candidate rankings to voting schedule.
-*/
-SizeVar(
-    int size_,
-    LP:Var var_
-) {
-}
-alias ScheduleMap = Map<Rankings, SizeVar>;
-MapNode<Key=Rankings, Value=SizeVar>(
-    alias schedule_ = key_,
-    alias sv_ = value_
-) {
-}
-
-/*
-utility method to return the margin of victory.
-this is the number of votes A can surrender and still beat B.
-*/
-int victory_margin(
-    int a,
-    int b,
-    int votesa,
-    int votesb
-) {
-    margin = votesa - votesb;
-
-    /* apply the tie-breaker rule. */
-    if (a > b) {
-        --margin;
-    }
-
-    return margin;
 }
 
 /*
@@ -335,13 +300,6 @@ Correlation() {
         return counts_[idx];
     }
 }
-
-RankedChoice(
-    Rankings rankings_,
-    int size_
-) {
-}
-alias RankedChoices = Vector<RankedChoice>;
 
 /* define the global object. */
 global TestRunner g_runner;
@@ -2546,89 +2504,6 @@ ElectoralMethod : CoombsMethod() {
 }
 
 /*
-cycle through all possible permutations.
-assume it starts in ascending order.
-*/
-bool permute(Vector<int>^ order, int n = -1) {
-    if (n < 0) {
-        n = (int=order^.size());
-    }
-    for (i : (n-2)..>=0 -1) {
-        if (order^[i] < order^[i+1]) {
-            for (k : (n-1)..>i -1) {
-                if (order^[k] > order^[i]) {
-                    order^[k] <--> order^[i];
-                    for (p=i+1, q=n-1) (p < q) {++p; --q;} {
-                        order^[p] <--> order^[q];
-                    }
-                    return false;
-                }
-            }
-        }
-    }
-    return true;
-}
-
-/*
-convert rankings to voting schedule given an elimination order.
-*/
-Rankings rankings_to_schedule(
-    Rankings^ rankings,
-    Rankings^ elimination_order
-) {
-    /* there may be more rankings than elimination orders. */
-    nr int = rankings^.size();
-    neo int = elimination_order^.size();
-    Rankings schedule;
-    schedule.reserve(nr);
-    elligible uint = (1<<nr) - 1;
-    for (i : 0..nr) {
-        for (which : rankings^) {
-            uint bit = 1 << which;
-            if (bit & elligible) {
-                schedule.append(which);
-                break;
-            }
-        }
-        if (i < neo) {
-            uint bit = 1 << elimination_order^[i];
-            elligible &= ~bit;
-        }
-    }
-    return schedule;
-}
-
-/*
-convert rankings to last-first voting schedule given an elimination order.
-*/
-Rankings rankings_to_last_first_schedule(
-    Rankings^ rankings,
-    Rankings^ elimination_order
-) {
-    /* there may be more rankings than elimination orders. */
-    nr int = rankings^.size();
-    neo int = elimination_order^.size();
-    Rankings schedule;
-    schedule.reserve(nr);
-    elligible uint = (1<<nr) - 1;
-    for (i : 0..nr) {
-        for (k : (nr-1)..>=0 -1) {
-            which = rankings^[k];
-            uint bit = 1 << which;
-            if (bit & elligible) {
-                schedule.append(which);
-                break;
-            }
-        }
-        if (i < neo) {
-            uint bit = 1 << elimination_order^[i];
-            elligible &= ~bit;
-        }
-    }
-    return schedule;
-}
-
-/*
 instant runoff voting.
 */
 ElectoralMethod : InstantRunoffMethod() {
@@ -3266,40 +3141,6 @@ ElectoralMethod : PluralityMethod() {
             println("  W>A pairwise. BC+ voters who prefer A>W switch to A.");
         }
     }
-}
-
-/*
-utility functions for breaking ties in linear programming.
-*/
-LP:Comparison gt_or_gte(int a, int b) {
-    /*
-    a wants to win this contest.
-    a wins ties iff a<b.
-    */
-    if (a < b) {
-        /* a wins ties. */
-        return LP:gte.Comparison;
-    }
-    /* a loses ties. */
-    return LP:gt.Comparison;
-}
-
-/*
-utility functions for breaking losing ties in linear programming.
-*/
-LP:Comparison lt_or_lte(int a, int b) {
-    /*
-    this is used by coombs.
-    the candidate with the most votes loses.
-
-    if a votes < b votes then b loses.
-    if a<b and a votes == b votes then choose b to lose.
-    if a>b and a votes == b votes then choose a to lose.
-    */
-    if (a < b) {
-        return LP:lte.Comparison;
-    }
-    return LP:lt.Comparison;
 }
 
 /*

@@ -6,8 +6,11 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 electoral method base class.
 */
 
+import slids.linpro;
+import slids.map;
 import slids.string;
 import slids.vector;
+import candidate;
 import settings;
 
 /*
@@ -58,3 +61,47 @@ float64 calculate_satisfaction(float64 utility, SatisfactionMetrics^ metric);
 
 /* if winner is expected then "pass" otherwise "=FAIL=" or "n/a". */
 (const char)[] result_to_string(int winner, int expected);
+
+/*
+helpers shared by the electoral methods.
+*/
+
+/*
+convert candidate rankings to voting schedule.
+*/
+SizeVar(
+    int size_,
+    slids:LP:Var var_
+) {
+}
+alias ScheduleMap = slids:Map<Rankings, SizeVar>;
+slids {
+    MapNode<Key=Rankings, Value=SizeVar>(
+        alias schedule_ = key_,
+        alias sv_ = value_
+    ) {
+    }
+}
+
+RankedChoice(
+    Rankings rankings_,
+    int size_
+) {
+}
+alias RankedChoices = slids:Vector<RankedChoice>;
+
+/* the number of votes A can surrender and still beat B. */
+int victory_margin(int a, int b, int votesa, int votesb);
+
+/* cycle through all possible permutations. */
+bool permute(slids:Vector<int>^ order, int n = -1);
+
+/* convert rankings to voting schedule given an elimination order. */
+Rankings rankings_to_schedule(Rankings^ rankings, Rankings^ elimination_order);
+
+/* convert rankings to last-first voting schedule given an elimination order. */
+Rankings rankings_to_last_first_schedule(Rankings^ rankings, Rankings^ elimination_order);
+
+/* breaking ties in linear programming. */
+slids:LP:Comparison gt_or_gte(int a, int b);
+slids:LP:Comparison lt_or_lte(int a, int b);
