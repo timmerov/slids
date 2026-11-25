@@ -96,5 +96,7 @@ HmDer:foo 10
 Home:Base:foo 9
 Space:Base:foo 8
 Home:Base:foo 9
+== re-opened derived ==
+head 127, bare 1127
 Derived:dtor: 10 11
 Base:dtor: 1

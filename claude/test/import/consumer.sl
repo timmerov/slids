@@ -337,6 +337,7 @@ int32 main() {
     // over there. The base kept slot 0, so the receiver needs no adjustment at all.
     tg.set("derived");
     println(String + "tagged base: " + tg.get() + " " + tg.tag() + " " + tg.basetag());
+    println(String + "tagged reach: " + tg.basereach());   // 114
 
     // UPCAST across the seam: a Tagged passed where a Rope^ is wanted. Free for the same
     // reason — slot 0 — which is why the layout keeps the base FIRST and pays for the

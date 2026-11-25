@@ -246,6 +246,9 @@ Rope : Tagged() {
     /* a BASE field read from a DERIVED method — resolved through the base chain in the TU
        that can see it. An importer gets the same answer by calling this. */
     int basetag() { return tag_; }
+    /* this opening is a RE-OPEN of the header's Tagged (its head restated): it still
+       opens Rope's chain — bare kRopeStep, the `Rope:` qualifier, the base field. */
+    int basereach() { return kRopeStep + Rope:tag() + tag_; }   // 114
 }
 
 /* the base by reference: consumer.sl calls this with a Tagged. */

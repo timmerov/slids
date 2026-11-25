@@ -1328,6 +1328,13 @@ SINGLE INHERITANCE (landed; spans grammar / resolve / classify; non-virtual)
   MEMBER ACCESS. A derived OPENS its whole base chain — resolve.pushBaseChain pushes
   every ancestor's member frame onto open_ns_frames (deepest-first, so a nearer class
   shadows a farther one), making inherited STATICS (const/alias/enum) resolve BARE.
+  EVERY OPENING opens the same chain (2026-11-24): a re-open states no base of its own
+  — `Base : Der() { }` restating an existing derived head becomes a bare `Der() { }`
+  re-open (the A:B ambiguity's base step) — so pushBaseChain and the `Base:` reframe
+  (current_base_name) read the PRIMARY's head through ClassInfo::base_spelling
+  (openingBaseSpelling), falling back to the class's resolved base (baseTypeOf).
+  Before, a re-open body saw no inherited statics ("needs a namespace qualifier") and
+  no `Base:` qualifier. Canon: inheritance.sl Rb/Rd; test/import Tagged::basereach.
   Inherited FIELDS resolve bare too (resolve.baseFieldDepth rewrites a bare base field
   to `self._$base...(_$base).field`), and inherited METHODS via classify.inferMethodCall
   gathering the receiver's class frame + base chain (first frame with the name wins, so

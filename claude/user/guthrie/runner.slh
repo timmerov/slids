@@ -12,8 +12,12 @@ import candidate;
 import pairwise;
 import settings;
 
+/* methods */
+import guthrie;
+
 alias Approvals = slids:Vector<int>;
 
+/* a bloc of voters who all vote the same way. */
 Bloc(
     /* voters in this bloc. */
     int size_ = 0,
@@ -24,7 +28,8 @@ Bloc(
     /* total approvals of voters in the bloc. */
     int napprovals_ = 0,
     Approvals approvals_
-) { }
+) {
+}
 
 alias BlocMap = slids:Map<Rankings, Bloc>;
 alias BlocMapIter = BlocMap:MapIter;
@@ -109,6 +114,8 @@ TestRunner(
     Correlation correlation_,
     PairwiseCounts pairwise_,
 
+    /* analyzed electoral methods. */
+    GuthrieMethod guthrie_,
     ...
 ) {
     void run();

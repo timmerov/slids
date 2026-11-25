@@ -342,6 +342,22 @@ HomeBaseInt : HmDer(int a_) {
     }
 }
 
+/* claude says: a RE-OPEN of a derived class opens the same base chain as its primary —
+   a bare base const, the `Base:` method qualifier, and a bare base field all resolve in
+   a re-open body. Both re-open spellings: the head restated (`Rb : Rd() { }`) and bare
+   (`Rd() { }`). The header-then-source shape is in test/import (Tagged). */
+Rb(int rv_ = 4) {
+    const int kRb = 100;
+    int rm() { return 20; }
+}
+Rb : Rd(int dv_ = 3) { }
+Rb : Rd() {
+    int viahead() { return kRb + Rb:rm() + rv_ + dv_; }          // 127
+}
+Rd() {
+    int viabare() { return kRb + Rb:rm() + rv_ + dv_ + 1000; }   // 1127
+}
+
 int32 main() {
 
     {
@@ -481,6 +497,13 @@ int32 main() {
         sp.foo();
         HmDer hm = (8, 0, 9, 10);    // Space:Base:a_=8, Mid2:m_=0, Home:Base:a_=9, a_=10
         hm.calls();
+    }
+
+    // claude says: a re-open of a derived class sees the base chain (see Rd).
+    println(String + "== re-opened derived ==");
+    {
+        Rd rd;
+        println(String + "head " + rd.viahead() + ", bare " + rd.viabare());
     }
 
     return 0;

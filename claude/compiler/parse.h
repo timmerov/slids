@@ -758,6 +758,10 @@ struct ClassInfo {
     widen::TypeRef type = widen::kNoType; // the interned kSlid{name, slots}
     int def_file_id = -1;                // the class def's location (for the
     int def_tok = -1;                    // "first defined here" dup note)
+    // The PRIMARY opening's base spelling (its node.text; "" if not derived). A
+    // re-open carries no base of its own — every opening's body still opens the base
+    // chain and the `Base:` reframe through this one spelling.
+    std::string base_spelling;
     bool needs_ctor = false;             // layout: false in the trivial bucket
     bool needs_dtor = false;
     // INCOMPLETE class: `is_open` is true while the class still carries a trailing

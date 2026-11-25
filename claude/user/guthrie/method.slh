@@ -24,7 +24,6 @@ ElectoralMethod(
     int nvillains_ = 0,
     int nminions_ = 0
 ) {
-    /* meh. this has to be here until we can move functions. */
     const int kWidth = 30;
     global int g_nmethods = 0;
 

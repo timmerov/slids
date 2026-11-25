@@ -1976,16 +1976,39 @@ bool isScopeMember(parse::Node const& m) {
 // own frame so derived members shadow base members; the WHOLE base chain (immediate
 // base, its base, ...) is opened, deepest-ancestor-first so a nearer base shadows a
 // farther one. Returns the number of frames pushed (to pop).
+// A RE-OPEN's class (it spells no base of its own), else null.
+parse::ClassInfo const* reopenedClass(parse::Tree const& tree, parse::Node const& node) {
+    if (node.kind != parse::Kind::kClassDef || !node.is_reopen || !node.text.empty())
+        return nullptr;
+    auto it = tree.classes.find(widen::strip(node.return_type));
+    return it == tree.classes.end() ? nullptr : &it->second;
+}
+
+// The base spelling an opening's bodies resolve under: its own head's, or — for a
+// re-open, which states none — the class's PRIMARY head's. Every opening of a derived
+// class sees the same base chain (bare inherited statics, the `Base:` reframe).
+std::string openingBaseSpelling(parse::Tree const& tree, parse::Node const& node) {
+    if (parse::ClassInfo const* ci = reopenedClass(tree, node)) return ci->base_spelling;
+    return node.text;
+}
+
 int pushBaseChain(parse::Tree& tree, parse::Node const& node) {
-    if (node.kind != parse::Kind::kClassDef || node.text.empty()) return 0;
+    if (node.kind != parse::Kind::kClassDef) return 0;
+    parse::ClassInfo const* reopened = reopenedClass(tree, node);
+    std::string const spelling = openingBaseSpelling(tree, node);
+    if (spelling.empty()) return 0;
     widen::TypeRef base_type = widen::kNoType;
     // A USURPER is registered under the very name it derives from, so resolving the
     // base SPELLING here would find the usurper itself — read the pre-resolved
     // `_$base` handle instead (the else arm below).
-    int id = node.is_usurper ? -1 : resolveName(tree, node.text);
+    int id = node.is_usurper ? -1 : resolveName(tree, spelling);
     if (id >= 0 && tree.entries[id].kind == parse::EntryKind::kClass
         && !tree.entries[id].is_template) {
         base_type = tree.entries[id].slids_type;
+    } else if (reopened) {
+        // A re-open has no `_$base` param: read the class's own (resolved) base.
+        base_type = widen::strip(parse::baseTypeOf(*reopened));
+        if (widen::form(base_type) != widen::Type::Form::kSlid) return 0;
     } else {
         // A template-INSTANCE base (`Vec<int> : Der`): the spelling is no entry
         // name — read the `_$base` field's RESOLVED type instead (kNoType until
@@ -2301,7 +2324,8 @@ void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
         // Bare field names in a method/ctor/dtor body resolve via a kField frame pushed in
         // resolveFunctionBody (see collectMethodFields); current_base_name/class_name below
         // still drive the `Base:` reframe and base-class depth.
-        tree.current_base_name = node.text;   // base name for the `Base:` reframe (or "")
+        // base name for the `Base:` reframe (or "") — a re-open's is the primary's
+        tree.current_base_name = openingBaseSpelling(tree, node);
         tree.current_class_name = (it != tree.classes.end()) ? it->second.name : "";
         // Synthesize the default copy/move/swap ops NOW — the SINGLE choke point every
         // class-body pass funnels through (file-scope via run(), local via
@@ -8193,6 +8217,7 @@ void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& d
     info.name = node.name;           // bare; def_id carries the scope distinction
     info.def_file_id = node.file_id;
     info.def_tok = node.name_tok;
+    info.base_spelling = node.text;      // every opening opens THIS base chain
     info.type = type;
     info.is_open = node.is_incomplete;   // an INCOMPLETE primary accepts appended fields
     info.declared_incomplete = node.is_incomplete;   // persistent (see ClassInfo)
@@ -11896,7 +11921,7 @@ bool resolveLazyMethod(parse::Tree& tree, int entry_id, int use_file, int use_to
         tree.open_ns_frames.push_back(frame);
         std::string saved_base = tree.current_base_name;
         std::string saved_class = tree.current_class_name;
-        tree.current_base_name = cls.text;
+        tree.current_base_name = openingBaseSpelling(tree, cls);
         auto ci = tree.classes.find(widen::strip(cls.return_type));
         tree.current_class_name = ci != tree.classes.end() ? ci->second.name : "";
         resolveFunctionBody(tree, *lm.fn, diag, /*nested=*/false,

@@ -4753,6 +4753,16 @@ A NAMESPACE IS VISIBLE VIA ANY OPENING (2026-11-24, found writing the test above
   namespace". Entry.opening_files + parse::entryVisibleAt (readme.txt THE VISIBILITY
   RULE). Coverage: the same test/import build (it cannot reach the stage without it).
 
+A RE-OPEN OPENS THE BASE CHAIN (2026-11-24, from guthrie.sl:318 — bare kWidth in a
+GuthrieMethod re-open: "'kWidth' needs a namespace qualifier")
+  pushBaseChain and current_base_name read the OPENING's head (node.text), and a re-open
+  has none: a restated `Base : Der() { }` head becomes a bare `Der() { }` re-open (the
+  A:B base step). So a re-open body lost bare inherited statics and the `Base:` method
+  qualifier (inherited fields worked — they resolve through the class). Now every opening
+  uses the primary's spelling (ClassInfo::base_spelling via openingBaseSpelling), else
+  the class's resolved base. readme-classes.txt MEMBER ACCESS. Coverage: inheritance.sl
+  Rb/Rd (both re-open spellings); test/import Tagged::basereach (header then source).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

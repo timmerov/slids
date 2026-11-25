@@ -57,6 +57,7 @@ tagged mark=3 pad=! extra=0
 tagged wrote mark=40 extra=7
 tagged bumped=50
 tagged base: derived 7 7
+tagged reach: 114
 tagged upcast tag: 7
 Tagged:ctor: 3
 tagged new: 99

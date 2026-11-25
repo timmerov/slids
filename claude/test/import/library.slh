@@ -169,6 +169,7 @@ int mismatch_ = 2;
 
 /* incomplete class */
 Rope(...) {
+    const int kRopeStep = 100;   /* read BARE by Tagged's re-open in library.sl */
     _(); ~();
     void set(char[] s);
     char[] get();
@@ -205,6 +206,7 @@ Rope : Tagged(
     int mark();
     void bump();
     int basetag();     /* reaches a BASE field from a derived method */
+    int basereach();   /* a base const, `Rope:` method, base field — from the re-open */
 }
 
 /* takes the BASE by reference: calling it with a Tagged proves the upcast, which is a
