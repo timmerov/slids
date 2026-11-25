@@ -563,6 +563,10 @@ int32 main() {
     // library.slh's MapNode filter + library.sl's private one, read in library.sl.
     println(String + "map probe = " + map_probe());   // 11055
 
+    // library.slh's filter DECLARES methods on Map<int, int>; library.sl defines and
+    // calls them (extra.slh declares its own lib_sum on the same flavor).
+    println(String + "lib map probe = " + lib_map_probe());   // 770
+
     return 0;
 }
 
@@ -643,3 +647,13 @@ be runtime-sized, so the symbol holds a pointer to a heap object built on first 
    the error names the path it looked for. */
 //-EXPECT-ERROR: Cannot find 'slids/no_such_module.slh' on the import path.
 //import slids.no_such_module;
+
+/* A method library.slh's filter DECLARES on Map<int, int> is library.sl's to define: a
+   filter in any other file defining the same signature is rejected (one definition). */
+//-EXPECT-ERROR: only that header's source file may define it
+//LibMap() { int lib_scaled(int k) { return k; } }
+
+/* library.slh and extra.slh EACH declare lib_sum on Map<int, int>: two methods (two
+   symbols, both linked). Here both headers are visible, so the call cannot pick. */
+//-EXPECT-ERROR: Ambiguous call to 'lib_sum'; multiple overloads match.
+//int neg_two_owners() { LibMap m; return m.lib_sum(); }

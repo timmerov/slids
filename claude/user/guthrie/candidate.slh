@@ -12,6 +12,11 @@ import slids.vector;
 alias Rankings = slids:Vector<int>;
 alias Utilities = slids:Vector<float64>;
 
+Rankings() {
+    /* candidate names in ranked order. */
+    slids:String to_string();
+}
+
 Candidate(
     /* generated name */
     char name_ = '?',

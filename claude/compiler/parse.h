@@ -666,6 +666,18 @@ struct Entry {
                                   // duplicate of the target overload registered under the
                                   // alias name so it joins the overload set; it emits the
                                   // TARGET's symbol (symbolFor follows this to that entry).
+    bool header_filter = false;   // kFunction: a method a HEADER's filter adds to ANOTHER
+                                  // module's template flavor (declared there, bodyless),
+                                  // or its definition in that header's own source file.
+                                  // Owned by the declaring module, not the template's:
+                                  // never a demand on the instantiation stage, never
+                                  // lazy (the owning TU defines it, external), never
+                                  // tu_local_instance.
+    int header_filter_file = -1;  // kFunction with header_filter: the DECLARING
+                                  // header's file_id (for its definition too). Its
+                                  // module joins the symbol (symbolFor), so two
+                                  // modules adding one name to one flavor never
+                                  // collide at link.
     bool tu_local_instance = false;  // kFunction: a template INSTANCE whose type-list
                                   // names a TU-LOCAL type. The flavor is unspellable
                                   // anywhere else, so it emits HERE, `define internal` —
@@ -1099,6 +1111,11 @@ struct Tree {
     // HEADER — the same module's public half — which the field-privacy gate treats
     // as library-side (synthesized members carry the class def's header position).
     std::vector<int> file_imported_by;
+
+    // Indexed by file_id: the file's MODULE IDENTITY (token::File::module —
+    // `slids.vector` for vector.slh and vector.sl alike). symbolFor reads it for a
+    // HEADER-FILTER method, whose symbol names its declaring module.
+    std::vector<std::string> file_module;
 
     // `import` / `import+` (token::List::import_stmts, copied by grammar): every import
     // statement the lexer consumed, its keyword token parked past kEndOfInput.

@@ -27,3 +27,14 @@ Pack(int a_ = 1, ...) {
     _(); ~();
     int total();
 }
+
+/* a SECOND module's header filter declaring a method of the SAME name and signature on
+   the SAME flavor as library.slh's LibMap:lib_sum. Its symbol names this module
+   (`lib_sum$in$extra`), so both definitions link into one binary. extra.sl defines it;
+   nothing calls it unambiguously (extra.sl imports library too), so the link — and nm —
+   is the proof. */
+import slids.map;
+alias ExtraMap = slids:Map<int, int>;
+ExtraMap() {
+    int lib_sum();
+}

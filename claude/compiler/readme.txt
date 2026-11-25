@@ -1414,7 +1414,10 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   the template source's bodies); the template source defines the bodies by
   re-opening (exact join / filter) and may NOT add an arm ("must be declared
   in its header"); a consumer may add an aliases-only filter or re-open
-  (readme-classes.txt FIELD ALIASES, CONSUMER ALIAS RE-OPENS).
+  (readme-classes.txt FIELD ALIASES, CONSUMER ALIAS RE-OPENS); another
+  module's HEADER filter may also declare methods its own source defines
+  (Entry::header_filter: no demand, eager, exported, the symbol names the
+  declaring module — readme-classes.txt HEADER-FILTER METHODS).
   THE LOADED-SOURCE RULE (2026-11-24, from user/guthrie runner.sl:296): a
   filter in a LOADED template source of ANOTHER module's template — the
   family's definition in neither that source nor its paired header

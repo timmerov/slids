@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <memory>
 #include <string>
 
@@ -476,6 +477,24 @@ std::string symbolFor(parse::Entry const& e, parse::Tree const& tree, int entry_
     std::string out = "_Z";
     std::vector<std::string> segs = scopeSegments(tree, e.owner_ns_frame);
     std::string uq = unqualifiedName(e.name);
+    // A HEADER-FILTER method (a header's declaration on ANOTHER module's template
+    // flavor, defined by that header's source) belongs to its DECLARING module, not to
+    // the flavor's: the name carries `$in$<module>` (non-identifier characters as
+    // `$<code>`, the classSymbol convention), so two modules adding the same method to
+    // one flavor link side by side. The same in every TU — the module is the declaring
+    // HEADER's, read for the definition too.
+    if (e.header_filter && e.header_filter_file >= 0
+        && e.header_filter_file < static_cast<int>(tree.file_module.size())
+        && !tree.file_module[e.header_filter_file].empty()) {
+        std::string mod;
+        for (char c : tree.file_module[e.header_filter_file]) {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') mod += c;
+            else mod += "$" + std::to_string(static_cast<int>(static_cast<unsigned char>(c)));
+        }
+        std::string op = itaniumOpCode(e.name);
+        std::string s = (op.empty() ? sanitizeSymbolName(e.name) : op) + "$in$" + mod;
+        uq = std::to_string(s.size()) + s;
+    }
     if (!e.tmpl_args.empty()) {
         uq += "I";
         for (widen::TypeRef t : e.tmpl_args) uq += mangleTmplArg(t);

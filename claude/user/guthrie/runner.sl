@@ -274,16 +274,6 @@ stdc import {
     void exit(int status);
 }
 
-Rankings() {
-    String to_string() {
-        String s;
-        for (which : self) {
-            s += g_runner.candidates_[which].name_;
-        }
-        return s;
-    }
-}
-
 /*
 convert candidate rankings to voting schedule.
 */

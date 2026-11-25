@@ -5589,6 +5589,7 @@ void run(token::List& in, parse::Tree& out, diagnostic::Sink& diag) {
     out.file_sibling.resize(in.files.size());
     out.file_template_source.resize(in.files.size());
     out.file_imported_by.resize(in.files.size());
+    out.file_module.resize(in.files.size());
     out.file_private_owner.resize(in.files.size());
     std::string self = in.files.empty() ? std::string() : in.files[0].path;
     for (size_t i = 0; i < in.files.size(); i++) {
@@ -5597,6 +5598,7 @@ void run(token::List& in, parse::Tree& out, diagnostic::Sink& diag) {
             && token::samePath(token::templateSourcePath(in.files[i].path), self);
         out.file_template_source[i] = in.files[i].template_source;
         out.file_imported_by[i] = in.files[i].imported_by;
+        out.file_module[i] = in.files[i].module;
         out.file_private_owner[i] = in.files[i].private_owner;
     }
     out.import_stmts = in.import_stmts;

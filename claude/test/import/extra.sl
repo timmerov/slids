@@ -38,3 +38,9 @@ Pack(Rope r_, LPack p_, int z_ = 100) {
     ~() {}
     int total() { return a_ + r_.tag() + p_.n_ + z_; }
 }
+
+/* defines extra.slh's ExtraMap:lib_sum — this file's own header's declaration, though
+   library.slh's same-signature one is visible here too. */
+ExtraMap() {
+    int lib_sum() { return -1; }
+}

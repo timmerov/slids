@@ -1669,6 +1669,28 @@ FIELD ALIASES (landed 2026-10-23; spans grammar / resolve / constfold / classify
     and two TUs may define the same method differently. A plain unconstrained consumer re-open
     still adds aliases only. Canon test/import tmpl_test.sl, tmpl_test2.sl (who, the link
     proof), test/template/reopen_tmpl.sl (twice).
+  - HEADER-FILTER METHODS (2026-11-24). A HEADER's filter of ANOTHER
+    module's template (`alias LibMap = slids:Map<int,int>; LibMap() { int lib_sum(); }`)
+    may DECLARE methods (headerFilterOpening: bodyless — every header already — non-
+    virtual, not the implicit five, not a template method; fields/consts/aliases-of-other-
+    kinds keep the generic rejection). The header's own source file DEFINES them in its
+    filter of the same flavor; resolve.stampHeaderFilterMethods (after the flavor's TYPES
+    phase) stamps Entry::header_filter on the header clone's declarations and on the
+    sibling .sl clone's same-name same-param_types definitions (clearing
+    tu_local_instance). header_filter means: no .sli demand (classify), never lazy
+    (lazyEligible — the owning TU exports it used or not), and the ordinary decl/def
+    linkage does the rest (importers `declare`, the owning TU `define`s external under the
+    kDeclare owner). The definition pairs with the declaration of ITS OWN header (the
+    sibling) even when another module's same-signature one is visible; a definition
+    matching only another header's: "only that header's source file may define it".
+    THE SYMBOL NAMES THE DECLARING MODULE: Entry::header_filter_file (the declaring
+    header, for the definition too) + Tree::file_module; symbolFor spells the name
+    `<name>$in$<module>` (non-identifier chars `$<code>`), e.g.
+    `_ZN5slids21Map$60int$44$32int$6218lib_sum$in$libraryE...`. Two modules may add the
+    same method to one flavor and link side by side; a file seeing both gets the ordinary
+    "Ambiguous call" (both declarations noted). Canon test/import: library.slh/library.sl
+    LibMap (lib_map_probe, `lib map probe = 770`), extra.slh/extra.sl ExtraMap:lib_sum
+    (the second module; nm shows both T), consumer.sl negatives.
   - OPEN (todo.txt FIELD ALIAS REOPENS): the explicit qualified spellings with a non-empty
     list (`Ns:X<.>(alias ..)` is still inheritance from Ns).
 

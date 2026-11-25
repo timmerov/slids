@@ -4763,6 +4763,30 @@ GuthrieMethod re-open: "'kWidth' needs a namespace qualifier")
   the class's resolved base. readme-classes.txt MEMBER ACCESS. Coverage: inheritance.sl
   Rb/Rd (both re-open spellings); test/import Tagged::basereach (header then source).
 
+HEADER-FILTER METHODS — LANDING i (2026-11-24, from guthrie's Rankings:to_string, which a
+header could not declare: "A template declared in a header is defined by its module's
+source file")
+  A header's filter of another module's template may declare non-virtual methods; the
+  header's own .sl defines them; every importer calls the one exported definition. No user
+  canon on point (the "defined by its module" rule was a Claude-era limit). Pieces:
+  headerFilterOpening (the gate in addClassTemplateFilter, virtual / implicit-five
+  messages), stampHeaderFilterMethods (pairing by name + param_types after the flavor's
+  TYPES phase; "only that header's source file may define it"), Entry::header_filter
+  (classify skips the .sli demand; lazyEligible false — eager). Linkage needed nothing
+  new. Symbol = the flavor method's (option i, ODR). Coverage: test/import LibMap
+  (library.slh declares lib_sum/lib_scaled on Map<int,int>, library.sl defines, consumer.sl
+  calls: `lib ints = 7 70`; nm: T in library.o, U in consumer.o, absent from the stage)
+  + 4 negatives. Note: test/import first used slids.vector and broke tmpl_test.sl
+  (library.slh's public import + `alias slids;` made `Vector` slids's) — Map instead.
+  LANDING ii (2026-11-24): the symbol names the DECLARING module. Entry::header_filter_file
+  (the declaring header — the definition reads its own header's) + Tree::file_module
+  (token::File::module, copied by grammar); symbolFor: `<name>$in$<module>` inside the
+  flavor's nested name. Pairing now prefers the definition's OWN header's declaration
+  (extra.sl sees library.slh's same-signature declaration too). Coverage: extra.slh/
+  extra.sl declare+define ExtraMap:lib_sum on Map<int,int> beside library's — both T in
+  nm, one binary; consumer.sl negative "Ambiguous call to 'lib_sum'" (existing overload
+  machinery, no new code); library's calls moved into library.sl's lib_map_probe (770).
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

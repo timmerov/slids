@@ -264,6 +264,35 @@ slids { MapNode<Key=int, Value=int>(alias mk_ = key_, alias mv_ = value_) { } }
 /* reads both filters' aliases; defined in library.sl. */
 int map_probe();
 
+/* A HEADER FILTER that DECLARES METHODS on another module's template flavor (here
+   slids.map's Map<int, int>, re-opened through an alias). Bodyless, non-virtual, no
+   hooks, no template methods: library.sl (this header's source) defines them, exported
+   — one definition every importer calls; the instantiation stage never sees a demand
+   for them. Their symbols carry THIS module (`lib_sum$in$library`): extra.slh adds its
+   own lib_sum to the same flavor and both link into one binary. library.sl calls these
+   (it sees only this header's); consumer.sl, which sees both, would be ambiguous. */
+alias LibMap = slids:Map<int, int>;
+LibMap() {
+    int lib_sum();
+    int lib_scaled(int k);
+}
+
+/* calls LibMap's lib_sum / lib_scaled; defined in library.sl. */
+int lib_map_probe();
+
+/* a body or a template method is rejected for every header, a filter's included. */
+//-EXPECT-ERROR: A header file holds declarations only.
+//LibMap() { int lib_bad() { return 0; } }
+
+//-EXPECT-ERROR: cannot add a virtual method
+//LibMap() { virtual int lib_bad(); }
+
+//-EXPECT-ERROR: cannot add a constructor, destructor or transfer operator
+//LibMap() { _(); }
+
+//-EXPECT-ERROR: may not contain a template method
+//LibMap() { int lib_bad<U>(U u); }
+
 /* no definitions in a header file. a declaration and its definition are separable for
    a function / method / hook / operator, so the header may only declare them. (For a
    const / enum / alias the declaration IS the definition, so those stay.) each case

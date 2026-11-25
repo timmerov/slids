@@ -319,6 +319,29 @@ int map_probe() {
     return pub * 1000 + priv;          // 11055
 }
 
+/* DEFINES the methods library.slh's filter declares on Map<int, int> (through the
+   same alias). Built eagerly and exported: consumer.sl calls them with no body of its
+   own. */
+LibMap() {
+    int lib_sum() {
+        int s = 0;
+        it = begin();
+        while (it != end()) {
+            s += it^.mv_;
+            it = next(it);
+        }
+        return s;
+    }
+    int lib_scaled(int k) { return lib_sum() * k; }
+}
+
+int lib_map_probe() {
+    LibMap li;
+    li.insert(1, 3);
+    li.insert(2, 4);
+    return li.lib_sum() * 100 + li.lib_scaled(10);   // 7 * 100 + 70
+}
+
 /*
 in a source file, we cannot add a ctor/dtor or copy, move, swap operator to a class
 first declared in a header file. these five are IMPLICITLY invoked, so every importing

@@ -2304,7 +2304,10 @@ bool lazyEligible(parse::Tree const& tree, parse::Node const& m) {
     if (m.resolved_entry_id < 0
         || m.resolved_entry_id >= static_cast<int>(tree.entries.size())) return false;
     parse::Entry const& e = tree.entries[m.resolved_entry_id];
-    return e.kind == parse::EntryKind::kFunction && !e.is_virtual && !e.synthesized;
+    // A HEADER-FILTER method's definition is built eagerly: importers call the symbol
+    // this TU exports, whether or not this TU uses it.
+    return e.kind == parse::EntryKind::kFunction && !e.is_virtual && !e.synthesized
+        && !e.header_filter;
 }
 
 void resolveScopeBodies(parse::Tree& tree, parse::Node& node, bool isClass,
@@ -7475,6 +7478,40 @@ bool consumerFilterOpening(parse::Node const& n) {
     return true;
 }
 
+// A HEADER's filter of ANOTHER module's template may DECLARE methods: non-virtual,
+// non-template, not an implicitly-invoked member, and bodyless (the last two hold for
+// every header already) — the header's own
+// source file defines them (a .sl filter of the same flavor), exported, so every
+// importer of the header calls one definition. Layout, vtable and the flavor's own
+// symbols stay the template module's. Returns false (after reporting the first
+// offending member) when the opening holds anything else; a member of another kind
+// (const, alias, enum, class) is left to the caller's generic rejection.
+bool headerFilterOpening(parse::Node const& n, diagnostic::Sink& diag, bool& reported) {
+    reported = false;
+    for (auto const& p : n.params)
+        if (p && p->name != "_$vptr") return false;
+    for (auto const& m : n.children) {
+        if (!m) continue;
+        bool fn = m->kind == parse::Kind::kFunctionDef
+               || m->kind == parse::Kind::kFunctionDecl;
+        if (!fn) return false;
+        std::string why;
+        if (parse::isImplicitMember(m->name))
+            why = "cannot add a constructor, destructor or transfer operator: those "
+                  "belong to the template's module.";
+        else if (m->is_virtual)
+            why = "cannot add a virtual method: the template's module owns its vtable.";
+        // (A body — "A header file holds declarations only." — and a template method
+        // are rejected for every header before a filter registers.)
+        if (why.empty()) continue;
+        diagnostic::report(diag, {m->file_id, m->name_tok >= 0 ? m->name_tok : m->tok,
+            "A header's re-open of another module's template " + why, {}});
+        reported = true;
+        return false;
+    }
+    return true;
+}
+
 // The opening would COMPLETE `def`'s incomplete header template outside its module
 // (no trailing `...`): that file is not the template's to close.
 void reportForeignCompletion(diagnostic::Sink& diag, parse::Node const& node,
@@ -7594,17 +7631,22 @@ void addClassTemplateFilter(parse::Tree& tree, parse::Node& node, int head,
     }
     // A header template's filters: its header declares them (the members every TU
     // sees), its template source defines their bodies. A CONSUMER's source file may add
-    // a filter of field aliases and TU-internal methods; ANOTHER header, aliases only,
-    // since a member declared there would reach every importer with nothing defining it.
+    // a filter of field aliases and TU-internal methods; ANOTHER header, field aliases
+    // and method DECLARATIONS its own source file defines (headerFilterOpening).
     if (fileIsImported(tree, hdef->file_id)) {
         bool rejected = false;
         if (!fileIsImported(tree, node.file_id)) {
             rejected = !fileIsTemplateSource(tree, node.file_id)
                     && !fileIsSibling(tree, hdef->file_id)
                     && !consumerFilterOpening(node);
-        } else if (node.file_id != hdef->file_id) {
-            rejected = !fileIsTemplateSource(tree, node.file_id)
-                    && !aliasesOnlyOpening(node);
+        } else if (node.file_id != hdef->file_id
+                   && !fileIsTemplateSource(tree, node.file_id)
+                   && !aliasesOnlyOpening(node)) {
+            bool reported = false;
+            if (!headerFilterOpening(node, diag, reported)) {
+                if (reported) return;
+                rejected = true;
+            }
         }
         if (rejected) {
             diagnostic::report(diag, {node.file_id, node.name_tok,
@@ -11414,6 +11456,62 @@ int selectClassArm(parse::Tree& tree, int tid, std::vector<widen::TypeRef> const
     return -1;
 }
 
+// HEADER-FILTER METHODS of one flavor (headerFilterOpening). A clone of a foreign
+// header's filter (an imported file that is neither the template's header nor a
+// template source) holds DECLARATIONS: each entry is stamped header_filter — no demand
+// on the stage. A method the compiling file's own filter DEFINES with the same name and
+// signature is that declaration's definition: only the declaring header's source file
+// (its sibling) may supply it; there it is stamped header_filter too (eager, exported —
+// not tu_local_instance). Runs after the TYPES phase, when param_types are known.
+void stampHeaderFilterMethods(parse::Tree& tree, parse::Node const& def,
+                              std::vector<std::unique_ptr<parse::Node>> const& clones,
+                              diagnostic::Sink& diag) {
+    struct Decl { int id; parse::Node const* node; };
+    std::vector<Decl> decls;
+    for (auto const& c : clones) {
+        if (!c || c->file_id == def.file_id || !fileIsImported(tree, c->file_id)
+            || fileIsTemplateSource(tree, c->file_id)) continue;
+        for (auto const& m : c->children) {
+            if (!m || m->kind != parse::Kind::kFunctionDecl || m->resolved_entry_id < 0)
+                continue;
+            tree.entries[m->resolved_entry_id].header_filter = true;
+            tree.entries[m->resolved_entry_id].header_filter_file = c->file_id;
+            decls.push_back({m->resolved_entry_id, m.get()});
+        }
+    }
+    if (decls.empty()) return;
+    for (auto const& c : clones) {
+        if (!c || fileIsImported(tree, c->file_id) || fileIsTemplateSource(tree, c->file_id))
+            continue;
+        for (auto const& m : c->children) {
+            if (!m || m->kind != parse::Kind::kFunctionDef || m->resolved_entry_id < 0)
+                continue;
+            parse::Entry& e = tree.entries[m->resolved_entry_id];
+            // This file's OWN header's declaration claims the definition; another
+            // module's same-signature declaration (both headers visible here) is its
+            // own method — distinct symbol — and no conflict.
+            Decl const* own = nullptr;
+            Decl const* other = nullptr;
+            for (Decl const& d : decls) {
+                parse::Entry const& de = tree.entries[d.id];
+                if (de.name != e.name || de.param_types != e.param_types) continue;
+                if (fileIsSibling(tree, d.node->file_id)) { if (!own) own = &d; }
+                else if (!other) other = &d;
+            }
+            if (own) {
+                e.header_filter = true;
+                e.header_filter_file = own->node->file_id;
+                e.tu_local_instance = false;
+            } else if (other) {
+                diagnostic::report(diag, {m->file_id, m->name_tok,
+                    "'" + m->name + "' is declared by another header's re-open of "
+                    "this template; only that header's source file may define it.",
+                    {{other->node->file_id, other->node->name_tok, "declared here"}}});
+            }
+        }
+    }
+}
+
 int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
                              std::vector<widen::TypeRef> const& args,
                              int file_id, int tok, diagnostic::Sink& diag) {
@@ -11715,6 +11813,7 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // and its synthesized transfer ops emitted twice (invalid IR at llc).
     tree.entries[iid].owner_ns_frame = tree.entries[tmpl_entry_id].owner_ns_frame;
     for (auto& c : clones) resolveScopeTypes(tree, *c, /*isClass=*/true, diag);
+    stampHeaderFilterMethods(tree, *def, clones, diag);
     // Eager sub-pattern snapshots: a nested class template's outer parameters
     // bind from THIS flavor's live T-alias frame — captured now, because a use
     // may instantiate the sub-pattern before the drain's body phase gets there.
