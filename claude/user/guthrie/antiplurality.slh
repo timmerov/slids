@@ -1,0 +1,30 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+anti-plurality electoral method.
+*/
+
+import method;
+import settings;
+
+ElectoralMethod : AntiPluralityMethod() {
+    _();
+    virtual ~();
+
+    /* find the winner. */
+    virtual void find_winner(bool quiet = kQuiet);
+
+    /* pretty print satisfaction. */
+    //virtual void print_satisfaction();
+
+    /* pretty print correlation. */
+    //virtual void print_correlation();
+
+    /* analyze strategic voting. */
+    //virtual void strategic_voting();
+
+    /* pretty print strategic voting summary. */
+    //virtual void print_strategic_results();
+}

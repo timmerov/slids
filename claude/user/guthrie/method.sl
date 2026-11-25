@@ -25,6 +25,16 @@ ElectoralMethod() {
     }
     virtual ~() {}
 
+    /* pretty print the winner. */
+    virtual void print_winner() {
+        Format fmt;
+        fmt.min_width_ = kWidth;
+        str = String + " " + name_;
+        result = result_to_string(g_runner.guthrie_.winner_, winner_);
+        winner_name = g_runner.candidates_[winner_].name_;
+        println(String + fmt*str + ": " + winner_name + " " + result);
+    }
+
     /* calculate and correlation. */
     void calculate_results(
     ) {

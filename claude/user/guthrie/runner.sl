@@ -319,17 +319,6 @@ int victory_margin(
     return margin;
 }
 
-/* meh, this needs to be here until we can move it. */
-/* pretty print the winner. */
-virtual void ElectoralMethod:print_winner() {
-    Format fmt;
-    fmt.min_width_ = kWidth;
-    str = String + " " + name_;
-    result = result_to_string(g_runner.guthrie_.winner_, winner_);
-    winner_name = g_runner.candidates_[winner_].name_;
-    println(String + fmt*str + ": " + winner_name + " " + result);
-}
-
 /*
 correlation class.
 */
@@ -369,7 +358,6 @@ global TestRunner g_runner;
 
 TestRunner(
     /* analyzed electoral methods. */
-    AntiPluralityMethod anti_plurality_,
     ApprovalMethod approval_,
     ApprovalRunoffMethod approval_runoff_,
     BordaMethod borda_,
@@ -1584,55 +1572,6 @@ TestRunner(
         println("Strategic voting results: opportunities %, average minimum strategic voters: %");
         for (ElectoralMethod^ method : methods_) {
             method^.print_strategic_results();
-        }
-    }
-}
-
-/*
-find the anti-plurality winner.
-*/
-ElectoralMethod : AntiPluralityMethod() {
-    virtual void find_winner(
-        bool quiet = kQuiet
-    ) {
-        int ncandidates = g_runner.ncandidates_;
-        candidates = ^g_runner.candidates_;
-        bloc_map = ^g_runner.bloc_map_;
-
-        Vector<int> counts;
-        counts.reserve(ncandidates);
-        counts.resize(ncandidates);
-
-        /* clear the counts. */
-        for (i : 0..ncandidates) {
-            counts[i] = 0;
-        }
-
-        /* sum the votes. */
-        int pos = ncandidates - 1;
-        for (it : bloc_map^) {
-            int last = it^.rankings_[pos];
-            counts[last] += it^.bloc_.size_;
-        }
-
-        /* find the winner. */
-        winner_ = 0;
-        int votes = 0x7FFFFFFF;
-        for (i : 0..ncandidates) {
-            int count = counts[i];
-            if (count <= votes) {
-                winner_ = i;
-                votes = count;
-            }
-        }
-
-        /* accumulate the utility. */
-        candidate = ^candidates^[winner_];
-        total_utility_ += candidate^.utility_;
-
-        /* accumulate correlations. */
-        if (winner_ == g_runner.guthrie_.winner_) {
-            ++is_winner_;
         }
     }
 }

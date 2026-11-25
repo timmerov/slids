@@ -13,6 +13,7 @@ import pairwise;
 import settings;
 
 /* methods */
+import antiplurality;
 import guthrie;
 
 alias Approvals = slids:Vector<int>;
@@ -116,6 +117,7 @@ TestRunner(
 
     /* analyzed electoral methods. */
     GuthrieMethod guthrie_,
+    AntiPluralityMethod anti_plurality_,
     ...
 ) {
     void run();
