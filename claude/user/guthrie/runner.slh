@@ -12,9 +12,21 @@ import candidate;
 import pairwise;
 import settings;
 
-/* methods */
-import antiplurality;
+/* election methods */
+import anti_plurality;
+import approval;
+import approval_runoff;
+import borda;
+import bucklin;
+import candidate_method;
+import condorcet;
+import coombs;
 import guthrie;
+import instant_runoff;
+import plurality;
+import plurality_runoff;
+import range;
+import star;
 
 alias Approvals = slids:Vector<int>;
 
@@ -114,12 +126,27 @@ TestRunner(
     int irv_is_condorcet_ = 0,
     Correlation correlation_,
     PairwiseCounts pairwise_,
+    ElectoralMethods methods_,
+    ElectoralMethods methods_sorted_,
 
     /* analyzed electoral methods. */
-    GuthrieMethod guthrie_,
     AntiPluralityMethod anti_plurality_,
-    ...
+    ApprovalMethod approval_,
+    ApprovalRunoffMethod approval_runoff_,
+    BordaMethod borda_,
+    BucklinMethod bucklin_,
+    CandidateMethod candidate_,
+    CondorcetMethod condorcet_,
+    CoombsMethod coombs_,
+    GuthrieMethod guthrie_,
+    InstantRunoffMethod instant_runoff_,
+    PluralityMethod plurality_,
+    PluralityRunoffMethod plurality_runoff_,
+    RangeMethod range_,
+    StarMethod star_
 ) {
+    _(); ~();
+
     void run();
 }
 

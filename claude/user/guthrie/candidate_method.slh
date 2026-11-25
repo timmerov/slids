@@ -1,0 +1,27 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+candidate satisfaction electoral method.
+*/
+
+import method;
+import settings;
+
+ElectoralMethod : CandidateMethod() {
+    _();
+    virtual ~();
+
+    /* find the winner. */
+    virtual void find_winner(bool quiet = kQuiet);
+
+    /* pretty print the winner. */
+    virtual void print_winner();
+
+    /* pretty print satisfaction. */
+    virtual void print_satisfaction();
+
+    /* pretty print correlation. */
+    virtual void print_correlation();
+}

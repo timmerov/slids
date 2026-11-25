@@ -1,0 +1,18 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+range (score) electoral method.
+*/
+
+import method;
+import settings;
+
+ElectoralMethod : RangeMethod() {
+    _();
+    virtual ~();
+
+    /* find the winner. */
+    virtual void find_winner(bool quiet = kQuiet);
+}
