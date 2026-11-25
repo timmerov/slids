@@ -4787,6 +4787,34 @@ source file")
   nm, one binary; consumer.sl negative "Ambiguous call to 'lib_sum'" (existing overload
   machinery, no new code); library's calls moved into library.sl's lib_map_probe (770).
 
+A TEMPLATE FLAVOR IS ONE TYPE, NAMED LIKE A CLASS (2026-11-24, from guthrie method.sl —
+`permute(slids:Vector<int>^)` declared, `permute(Vector<int>^)` under `alias slids;` defined:
+undefined at link; was the todo "a qualified and a bare template flavor")
+  - THE LABEL. resolveTypeRef's class-template arm wrapped the flavor in a kAlias named AS
+    WRITTEN, and an alias is a distinct parameter type (overload_fn.sl canon) that mangles by
+    name — so `slids:Vector<int>`, `Vector<int>` and `Vector<Integer>` were three types and
+    three symbols. Now a FLAVOR LABEL (Type::flavor_label, widen::internFlavorLabel): keyed
+    by the flavor alone (structKey "F"), one handle for every spelling; mangleType mangles the
+    flavor; widen::rebuildAlias keeps the flag at every alias rebuild (removeConst, deepConst,
+    materializeDeepConst, constfold's refreshAliasType / bakeDimsWalk). Display: the label is
+    the first spelling interned; ##type(var) keeps the as-declared spelling (classify prefers
+    the entry's alias_label for a flavor label) — exp.class `t2: Vec<Integer>` unchanged.
+    Named aliases are untouched (still distinct overloads).
+  - THE SYMBOL. A cross-TU flavor's class symbol was its spelling alone (`Vector$60int$62`,
+    the documented "a template flavor keeps its canonical spelling"); now the class rule:
+    its template's scope path (`slids.Vector$60int$62`, like `slids.String`), set in
+    instantiateClassTemplate after registration (the flavor registers in a transient frame,
+    its owner stamped later, so registerClassName's member rule never fired).
+  - THE IDENTITY (found by the test). Keyed by spelling with def_id -1, `la:Twin<int>` and
+    `lb:Twin<int>` were ONE handle — the second registration re-added its fields and the
+    duplicate-field note indexed past field_locs (an assert). registerClassName's new
+    scope_def_id: a cross-TU flavor's def_id is its template's owner frame (per-TU identity;
+    the symbol path keeps the symbol stable).
+  Coverage: test/import map_count (qualified decl, bare def) + map_count_keyed (alias-
+  argument def) — one symbol each; la/lb Twin<int> copied in consumer.sl (`twins = 101 202`,
+  nm: la.Twin… / lb.Twin… hooks, ops, methods); test/template/class.sl vlen (Vec<Integer>
+  decl, Vec<int> def). Guthrie builds and runs. Every flavor symbol changed: rebuild all.
+
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's
 stage-by-stage descriptions; readme.txt is the maintained source).

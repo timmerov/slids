@@ -309,6 +309,11 @@ std::string mangleType(widen::TypeRef ref) {
         // `aov(Integer)`), so it must mangle distinctly — the leaf `spell()` gives the
         // alias NAME. So DON'T deepStrip (it drops both); handle each explicitly.
         case widen::Type::Form::kConst:  return mangleType(t.underlying);
+        // A class-template use's LABEL is display only: mangle the flavor, so every
+        // spelling of it — and every TU — mints one symbol.
+        case widen::Type::Form::kAlias:
+            if (t.flavor_label) return mangleType(t.underlying);
+            break;
         case widen::Type::Form::kVoid:   return "v";
         case widen::Type::Form::kAnyptr: return "Pv";
         // The two slids pointer-like types take DISTINCT Itanium codes so they never
@@ -344,9 +349,9 @@ std::string mangleType(widen::TypeRef ref) {
         // injective (int vs int32, int32 vs an Integer alias) and demangler-readable.
         // (kConst is handled above; it never reaches here. A kTmplUse is expanded at
         // resolve and never reaches desugar; the vendor spelling is its safe fallback.)
+        // (A named alias reaches here from its own arm above.)
         case widen::Type::Form::kNone:
         case widen::Type::Form::kPrimitive:
-        case widen::Type::Form::kAlias:
         case widen::Type::Form::kTmplUse: break;
     }
     std::string s = symbolSafe(widen::spell(ref));

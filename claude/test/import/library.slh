@@ -280,6 +280,21 @@ LibMap() {
 /* calls LibMap's lib_sum / lib_scaled; defined in library.sl. */
 int lib_map_probe();
 
+/* A TEMPLATE FLAVOR IS ONE TYPE HOWEVER IT IS SPELLED. Declared here QUALIFIED (no
+   `alias slids;` in a header); library.sl defines them BARE under `alias slids;` and
+   with an alias argument. Every spelling is the same parameter type and the same symbol
+   (the flavor's class symbol), so the declaration pairs and consumer.sl links. */
+alias LibKey = int;
+int map_count(slids:Map<int, int>^ m);
+int map_count_keyed(slids:Map<int, int>^ m);
+
+/* TWO SAME-NAMED TEMPLATES IN TWO NAMESPACES. A flavor's class symbol carries its
+   template's scope path (`la.Twin<int>`, like `slids.String`), so la:Twin<int> and
+   lb:Twin<int> get distinct hooks / transfer ops / __$sizeof in one binary. library.sl
+   defines the bodies; consumer.sl copies one of each. */
+la { Twin<T>(T v_ = 0) { _(); ~(); T get(); } }
+lb { Twin<T>(T v_ = 0) { _(); ~(); T get(); } }
+
 /* a body or a template method is rejected for every header, a filter's included. */
 //-EXPECT-ERROR: A header file holds declarations only.
 //LibMap() { int lib_bad() { return 0; } }

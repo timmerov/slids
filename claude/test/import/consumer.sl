@@ -567,6 +567,19 @@ int32 main() {
     // calls them (extra.slh declares its own lib_sum on the same flavor).
     println(String + "lib map probe = " + lib_map_probe());   // 770
 
+    // one flavor, three spellings across the seam: qualified decl, bare def, alias arg.
+    Map<int, int> mcount;
+    mcount.insert(1, 1);
+    mcount.insert(2, 2);
+    println(String + "map count = " + map_count(^mcount) + " " + map_count_keyed(^mcount));   // 2 20
+
+    // two same-named templates in two namespaces: distinct class symbols.
+    la:Twin<int> twa(1);
+    lb:Twin<int> twb(2);
+    la:Twin<int> twa2 = twa;
+    lb:Twin<int> twb2 = twb;
+    println(String + "twins = " + twa2.get() + " " + twb2.get());   // 101 202
+
     return 0;
 }
 

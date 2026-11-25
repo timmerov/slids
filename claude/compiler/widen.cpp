@@ -887,7 +887,9 @@ std::string structKey(Type const& t) {
                                 + (t.def_id == kTmplParamDefId ? "#tp"
                                    : t.def_id < 0 ? ""
                                    : "#" + std::to_string(t.def_id));
-        case F::kAlias:     return "L" + t.name + "=" + std::to_string(t.underlying);
+        // A FLAVOR LABEL keys the flavor alone: every spelling shares one handle.
+        case F::kAlias:     return t.flavor_label ? "F" + std::to_string(t.underlying)
+                                 : "L" + t.name + "=" + std::to_string(t.underlying);
         case F::kTmplUse: {
             std::string k = "U" + t.name + "<";
             for (TypeRef s : t.slots) k += std::to_string(s) + ",";
@@ -1172,6 +1174,21 @@ TypeRef internAlias(std::string const& name, TypeRef underlying) {
     t.name = name;
     t.underlying = underlying;
     return internStruct(std::move(t));
+}
+
+TypeRef internFlavorLabel(std::string const& label, TypeRef flavor) {
+    Type t;
+    t.form = Type::Form::kAlias;
+    t.name = label;
+    t.underlying = flavor;
+    t.flavor_label = true;
+    return internStruct(std::move(t));
+}
+
+TypeRef rebuildAlias(TypeRef orig, TypeRef underlying) {
+    Type const& t = get(orig);
+    std::string n = t.name;
+    return t.flavor_label ? internFlavorLabel(n, underlying) : internAlias(n, underlying);
 }
 
 TypeRef internConst(TypeRef underlying) {
@@ -1545,9 +1562,8 @@ TypeRef removeConst(TypeRef ref) {
             return internTuple(s);
         }
         case Type::Form::kAlias: {
-            std::string n = t.name;
             TypeRef u = t.underlying;
-            return internAlias(n, removeConst(u));
+            return rebuildAlias(ref, removeConst(u));
         }
         case Type::Form::kPrimitive:
         case Type::Form::kVoid:
@@ -1582,9 +1598,8 @@ TypeRef deepConst(TypeRef ref) {
         case Type::Form::kPointer:  { TypeRef p = t.pointee; return internConst(internPointer(deepConst(p))); }
         case Type::Form::kIterator: { TypeRef p = t.pointee; return internConst(internIterator(deepConst(p))); }
         case Type::Form::kAlias: {
-            std::string n = t.name;
             TypeRef u = t.underlying;
-            return internAlias(n, deepConst(u));
+            return rebuildAlias(ref, deepConst(u));
         }
         case Type::Form::kConst:    return internConst(deepConst(t.underlying));
         // A leaf (primitive / class) const-qualifies directly. void / anyptr / none

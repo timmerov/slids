@@ -1063,7 +1063,11 @@ CLASSES: AS A NAMESPACE + LOCAL (defined in a function body) (landed; spans stag
     PATH instead: Type::symbol_path (`slids.String`), set by registerClassName
     via memberSymbolPath and preferred by classSymbol. def_id (identity) is
     unchanged. A namespace opened in a function body, or a local host class,
-    keeps the TU-local `.<frame>`; a template flavor keeps its canonical spelling.
+    keeps the TU-local `.<frame>`. A CROSS-TU template flavor follows the same rule
+    (2026-11-24): symbol_path = its template's scope path + the canonical spelling
+    (`slids.Vector<int>`), set in instantiateClassTemplate once the flavor registers,
+    and def_id = the template's owner frame — before, a flavor was keyed and named by
+    its spelling alone, so same-named templates in two namespaces shared ONE handle.
   * TWO-PHASE REGISTRATION (so a field may FORWARD-reference a sibling class).
     registerClassName (Phase 1) makes every class name a known type — a kClass
     entry + a SLOTLESS interned handle + a placeholder ClassInfo — then

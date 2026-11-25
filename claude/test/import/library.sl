@@ -335,6 +335,14 @@ LibMap() {
     int lib_scaled(int k) { return lib_sum() * k; }
 }
 
+/* map_count: declared `slids:Map<int, int>^`, defined bare; map_count_keyed: defined
+   through the alias argument LibKey. One type each — they pair with the header. */
+int map_count(Map<int, int>^ m) { return (int=m^.size()); }
+int map_count_keyed(Map<LibKey, int>^ m) { return (int=m^.size()) * 10; }
+
+la { Twin<T>() { _() { } ~() { } T get() { return v_ + 100; } } }
+lb { Twin<T>() { _() { } ~() { } T get() { return v_ + 200; } } }
+
 int lib_map_probe() {
     LibMap li;
     li.insert(1, 3);

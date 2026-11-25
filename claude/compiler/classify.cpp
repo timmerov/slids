@@ -3007,9 +3007,17 @@ void inferExpr(parse::Tree& tree, parse::Node& e,
             // The alias label is the type itself when it's a (scalar) alias —
             // drives binaryLabel's sticky-alias rule; the kAlias type is the
             // source of truth, this label is derived from it.
-            e.alias_label = (widen::form(e.inferred_type) == widen::Type::Form::kAlias)
-                ? widen::spell(e.inferred_type)
-                : tree.entries[e.resolved_entry_id].alias_label;
+            // A class-template FLAVOR LABEL is one handle for every spelling, so its
+            // name is merely the first spelling seen: the variable's own as-declared
+            // spelling (resolve's alias_label) wins when it has one.
+            {
+                std::string const& declared = tree.entries[e.resolved_entry_id].alias_label;
+                bool alias = widen::form(e.inferred_type) == widen::Type::Form::kAlias;
+                bool flavor = alias && widen::get(e.inferred_type).flavor_label;
+                e.alias_label = alias && !(flavor && !declared.empty())
+                    ? widen::spell(e.inferred_type)
+                    : declared;
+            }
             return;
         }
         case parse::Kind::kCallExpr: {

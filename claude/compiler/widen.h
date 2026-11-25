@@ -79,6 +79,12 @@ struct Type {
     TypeRef pointee = kNoType;             // kPointer / kIterator
     TypeRef elem = kNoType;                // kArray element
     TypeRef underlying = kNoType;          // kAlias — the type it transparently names
+    bool flavor_label = false;             // kAlias: the LABEL a class-template use
+                                           // carries over its flavor (`Vec<Integer>`,
+                                           // `slids:Vector<int>`). Display only: one
+                                           // handle per flavor whatever the spelling
+                                           // (structKey keys the flavor alone), and
+                                           // mangleType mangles the flavor itself.
     std::vector<int> dims;                 // kArray dims, source order
     std::vector<TypeRef> slots;            // kTuple / kSlid (field types)
     int def_id = -1;                       // kSlid: scope disambiguator — the
@@ -183,6 +189,13 @@ TypeRef internArray(TypeRef elem, std::vector<int> const& dims);
 // for every structural query (cat/bits/llvm/size/known/predicates). Minted only
 // by resolve (which has the symbol table that knows name -> underlying).
 TypeRef internAlias(std::string const& name, TypeRef underlying);
+// A class-template use's LABEL over its flavor (Type::flavor_label). Every spelling of
+// one flavor — qualified or bare, `Vec<Integer>` or `Vec<int>` — is ONE handle: the
+// same parameter type, the same symbol. The first spelling interned is the label shown.
+TypeRef internFlavorLabel(std::string const& label, TypeRef flavor);
+// Re-intern alias `orig` over a new underlying, keeping its kind (a flavor label stays
+// one). Every alias REBUILD (const strip / deep const / constfold refresh) uses this.
+TypeRef rebuildAlias(TypeRef orig, TypeRef underlying);
 
 // A const-qualified type wrapping `underlying`. Transparent for matching
 // (strip/deepStrip/classify see through it), VISIBLE in spell(). Collapses

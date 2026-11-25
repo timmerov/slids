@@ -1477,7 +1477,7 @@ widen::TypeRef refreshAliasType(widen::TypeRef t, std::vector<AliasRefresh> cons
             widen::TypeRef u = refreshAliasType(orig_u, rs);
             for (auto const& r : rs)
                 if (r.name == name && r.old_u == orig_u) u = r.new_u;
-            return widen::internAlias(name, u);
+            return widen::rebuildAlias(t, u);
         }
         case F::kPointer:
             return widen::internPointer(refreshAliasType(widen::get(t).pointee, rs));
@@ -1561,8 +1561,7 @@ widen::TypeRef bakeDimsWalk(widen::TypeRef t,
             return widen::internIterator(
                 bakeDimsWalk(widen::get(t).pointee, des, idx, failed, diag));
         case F::kAlias: {
-            std::string name = widen::get(t).name;
-            return widen::internAlias(name,
+            return widen::rebuildAlias(t,
                 bakeDimsWalk(widen::get(t).underlying, des, idx, failed, diag));
         }
         case F::kTuple: {

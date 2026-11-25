@@ -369,6 +369,12 @@ Spec<T>(T t_ = 2) {
 //-EXPECT-ERROR: Expected a type-parameter name
 //int Vec<int>:oolBad4(int v) { return v; }
 
+/* claude says: a flavor is ONE type however its use is spelled — an alias argument
+   names the same parameter type, so this declaration and definition pair (they were
+   "declared but never defined" while a use's label was a distinct alias). */
+int vlen(Vec<Integer>^ v);
+int vlen(Vec<int>^ v) { return v^.x_ + v^.y_; }
+
 int32 main() {
 
     /* construction with arguments; methods read and write T fields. */
@@ -405,6 +411,7 @@ int32 main() {
     println(String + "szd = " + szd);
     println(String + "t1: " + ##type(a));
     println(String + "t2: " + ##type(d2));
+    println(String + "vlen = " + vlen(^d2));
 
     /* two type parameters. */
     Pair<int, int8> p1(400, 5);

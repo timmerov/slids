@@ -120,7 +120,7 @@ int victory_margin(
 cycle through all possible permutations.
 assume it starts in ascending order.
 */
-bool permute(slids:Vector<int>^ order, int n = -1) {
+bool permute(Vector<int>^ order, int n = -1) {
     if (n < 0) {
         n = (int=order^.size());
     }

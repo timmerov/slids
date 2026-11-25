@@ -548,7 +548,9 @@ widen::TypeRef resolveTypeRef(parse::Tree& tree, widen::TypeRef t,
                 int iid = instantiateClassTemplate(tree, id, args, file_id, tok,
                                                    diag);
                 if (iid < 0) { reported = true; return t; }
-                return widen::internAlias(label, tree.entries[iid].slids_type);
+                // A LABEL, not an alias: every spelling of this flavor is one type
+                // (one parameter type, one symbol); the label is display only.
+                return widen::internFlavorLabel(label, tree.entries[iid].slids_type);
             }
             if (tree.entries[id].kind == parse::EntryKind::kClass) {
                 reported = true;
@@ -733,11 +735,8 @@ widen::TypeRef materializeDeepConst(widen::TypeRef t) {
     switch (widen::form(t)) {
         case F::kConst:
             return widen::internConst(widen::deepConst(widen::get(t).underlying));
-        case F::kAlias: {
-            std::string n = widen::get(t).name;
-            return widen::internAlias(
-                n, materializeDeepConst(widen::get(t).underlying));
-        }
+        case F::kAlias:
+            return widen::rebuildAlias(t, materializeDeepConst(widen::get(t).underlying));
         case F::kPointer:
             return widen::internPointer(
                 materializeDeepConst(widen::get(t).pointee));
@@ -7390,7 +7389,8 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
 }
 
 void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,
-                       int member_of = -1, bool file_scope_def_id = false);
+                       int member_of = -1, bool file_scope_def_id = false,
+                       int scope_def_id = -1);
 void registerClassBody(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag);
 void checkClassByValueAcyclic(parse::Tree& tree, parse::Node& node,
                               diagnostic::Sink& diag);
@@ -8133,13 +8133,15 @@ std::string memberSymbolPath(parse::Tree const& tree, int frame) {
 }
 
 void registerClassName(parse::Tree& tree, parse::Node& node, diagnostic::Sink& diag,
-                       int member_of, bool file_scope_def_id) {
+                       int member_of, bool file_scope_def_id, int scope_def_id) {
     int decl_frame = parse::currentFrameId(tree);
     // file_scope_def_id: a cross-TU template INSTANCE registers in a transient
-    // frame but its symbol must be STABLE across every TU that names the
-    // flavor — the canonical spelling alone identifies it, so it takes the
-    // file-scope def_id (no `.frame` suffix) regardless of the current frame.
-    int def_id = file_scope_def_id ? -1
+    // frame, not there: its def_id is scope_def_id — -1 for a file-scope template,
+    // else its template's OWNER frame, so same-named templates in two namespaces
+    // (`la:Twin<int>`, `lb:Twin<int>`) are two types. Its SYMBOL stays stable across
+    // TUs through the scope path the caller sets (Type::symbol_path), as a member
+    // class's does.
+    int def_id = file_scope_def_id ? scope_def_id
                : member_of >= 0 ? member_of
                : (decl_frame == kGlobalFrame) ? -1 : decl_frame;
     // A REFINEMENT's usurper is spelled `$Class` (a distinct type) but ENTERS the
@@ -11751,13 +11753,27 @@ int instantiateClassTemplate(parse::Tree& tree, int tmpl_entry_id,
     // file-scope def_id, the canonical spelling alone. An INLINE-local flavor
     // keeps the frame def_id — it is this TU's private class.)
     registerClassName(tree, *clones[0], diag, /*member_of=*/-1,
-                      /*file_scope_def_id=*/header_tmpl && !inline_local);
+                      /*file_scope_def_id=*/header_tmpl && !inline_local,
+                      /*scope_def_id=*/header_tmpl && !inline_local
+                          ? tree.entries[tmpl_entry_id].owner_ns_frame : -1);
     int iid = clones[0]->resolved_entry_id;
     if (iid < 0) {
         parse::popFrame(tree);
         if (installed) restoreResolveState(tree, saved);
         tree.tmpl_instantiation_depth--;
         return -1;
+    }
+    // A cross-TU flavor's SYMBOL follows the class rule: the template's scope path
+    // (`slids.Vector<int>`, like `slids.String`), so same-named templates in two
+    // namespaces never share a class symbol (hooks, transfer ops, __$sizeof). Stable
+    // across TUs — the path is names, never frame ids. (registerClassName could not
+    // set it: the flavor registers in a transient frame, its owner stamped later.)
+    if (header_tmpl && !inline_local) {
+        int owner = tree.entries[tmpl_entry_id].owner_ns_frame;
+        std::string path = owner >= 0 ? memberSymbolPath(tree, owner) : std::string();
+        if (!path.empty())
+            widen::setSlidSymbolPath(widen::strip(tree.entries[iid].slids_type),
+                                     path + "." + clones[0]->name);
     }
     // From here the template's bare name means THE INSTANCE (the receiver
     // `Vec^`, a self-typed member, self-construction) via the stack redirect.

@@ -1289,7 +1289,8 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   `dump<T>(DumpTuple<T>^)` composes with zero cross-template code — then
   widen::substituteTypeParams swaps the markers and the expansion wraps in a
   transparent kAlias labeled with the use AS WRITTEN (##type says `Ref<int>`, or
-  `Ref<Integer>` through an alias argument; two labels, one underlying). A kTmplUse
+  `Ref<Integer>` through an alias argument; two labels, one underlying — an ALIAS
+  template's expansion; a CLASS template's use is a flavor label, below). A kTmplUse
   never survives resolve. Diagnostics: bare use (unqualified kSlid arm AND
   resolveQualifiedType — without the qualified guard the plain-alias path leaks the
   marker pattern), wrong arity, args on a non-template, cycles via the alias
@@ -1461,12 +1462,22 @@ each flavor is compiled ONCE per project, by the template's own source TU)
   construction spelling (`Vec<int>(args)`, resolveUserCall's construction
   branch retargets at the instance) and sizeof's identifier gate. Arguments
   canonicalize (removeConst∘deepStrip) for the memo, so `Vec<Integer>` IS
-  `Vec<int>`; the result wraps in a kAlias labeled AS WRITTEN for ##type.
+  `Vec<int>`; the result wraps in a FLAVOR LABEL (widen::internFlavorLabel,
+  Type::flavor_label, 2026-11-24): a kAlias keyed by the flavor ALONE, so every
+  spelling — qualified or bare, `Vec<Integer>` or `Vec<int>` — is ONE handle (one
+  parameter type, one symbol: mangleType mangles the flavor). Its name is the first
+  spelling interned (what a diagnostic shows); ##type(var) keeps each variable's
+  as-declared spelling (resolve's alias_label, which classify prefers for a flavor
+  label). Every alias REBUILD goes through widen::rebuildAlias, which keeps the flag.
   Instantiation runs the registerLocalClasses FOUR-PHASE shape over a clone of
   EVERY OPENING — primary, then each re-open, source order — all renamed to
   the canonical spelling ("Vec<int>" — the def_id from the transient frame
   disambiguates same-spelled instances of same-named templates in different
-  scopes; widen::classSymbol $-escapes `<`/`>`/`,`/space at the ONE place
+  scopes — a CROSS-TU flavor takes its template's OWNER frame as def_id instead,
+  registerClassName's scope_def_id, plus its template's scope path as
+  Type::symbol_path, `slids.Vector<int>`, the class rule: `la:Twin<int>` and
+  `lb:Twin<int>` are two types with two symbol sets, stable across TUs;
+  widen::classSymbol $-escapes `<`/`>`/`,`/space at the ONE place
   class symbols mint): the primary clone registers, each re-open clone then
   hits registerClassName's ordinary plain-class MERGE arm under the instance
   name (is_reopen, pending_fields, pending_hooks), so appended fields,
@@ -3377,7 +3388,9 @@ STAGE FILES (.h / .cpp pairs)
             QUALIFIED CLASS NAME is not an alias: `ns:C` resolves to the class handle,
             exactly as bare `C` does through `alias ns;`, so the two spellings are one
             type, one overload and one symbol (resolveTypeRef's kSlid arm, 2026-11-02).
-            A qualified template flavor still carries its label as written (todo). A
+            A class-template USE is one type too: its label is display only
+            (Type::flavor_label), and mangleType mangles the flavor — whose class
+            symbol is its template's scope path (`u21slids.Vector$60int$62`). A
             spelling can carry chars illegal in an unquoted LLVM identifier (a qualified
             member alias has a `:`), so `symbolSafe` encodes them (`:`->`$58`).
             EXCEPTIONS keep a fixed name: `main` (the C entry

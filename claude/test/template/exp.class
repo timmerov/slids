@@ -11,6 +11,7 @@ e9 = 17
 szd = 0
 t1: Vec<int>
 t2: Vec<Integer>
+vlen = 17
 e10 = 400
 e11 = 5
 e12 = 0
