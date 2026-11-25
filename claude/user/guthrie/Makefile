@@ -2,8 +2,11 @@
 # .ll/.o is never left looking up-to-date on the next build.
 .DELETE_ON_ERROR:
 
-# Build in parallel by default: every TU compiles independently.
+# Build in parallel by default: every TU compiles independently. Only at the
+# top level: under a parent make, a forced -j would reset its jobserver.
+ifeq ($(MAKELEVEL),0)
 MAKEFLAGS += -j$(shell nproc)
+endif
 
 LLC       = llc
 CXX       = g++
