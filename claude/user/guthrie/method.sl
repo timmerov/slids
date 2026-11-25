@@ -8,6 +8,7 @@ electoral method base class.
 
 import slids.string;
 import method;
+import runner;
 import settings;
 alias slids;
 
@@ -23,6 +24,18 @@ ElectoralMethod() {
         ++g_nmethods;
     }
     virtual ~() {}
+
+    /* calculate and correlation. */
+    void calculate_results(
+    ) {
+        /* calculate satisfaction. */
+        ntrials float64 = g_runner.ntrials_;
+        float64 average_utility = total_utility_ / ntrials;
+        satisfaction_ = calculate_satisfaction(average_utility, g_runner.accumulated_);
+
+        /* calculate correlation. */
+        correlation_ = 100.0 * (float64=is_winner_) / ntrials;
+    }
 
     /* pretty print satisfaction. */
     virtual void print_satisfaction() {
@@ -60,4 +73,15 @@ ElectoralMethod() {
         return "pass";
     }
     return "=FAIL=";
+}
+
+/* calculate satisfaction from utility and metrics. */
+float64 calculate_satisfaction(
+    float64 utility,
+    SatisfactionMetrics^ metric
+) {
+    float64 best = metric^.best_;
+    float64 average = metric^.average_;
+    float64 satisfaction = (utility - average) / (best - average);
+    return satisfaction;
 }

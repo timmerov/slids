@@ -320,18 +320,6 @@ int victory_margin(
 }
 
 /* meh, this needs to be here until we can move it. */
-void ElectoralMethod:calculate_results(
-) {
-    /* calculate satisfaction. */
-    ntrials float64 = g_runner.ntrials_;
-    float64 average_utility = total_utility_ / ntrials;
-    satisfaction_ = g_runner.calculate_satisfaction(average_utility, g_runner.accumulated_);
-
-    /* calculate correlation. */
-    correlation_ = 100.0 * (float64=is_winner_) / ntrials;
-}
-
-/* meh, this needs to be here until we can move it. */
 /* pretty print the winner. */
 virtual void ElectoralMethod:print_winner() {
     Format fmt;
@@ -375,126 +363,6 @@ RankedChoice(
 ) {
 }
 alias RankedChoices = Vector<RankedChoice>;
-
-HeadToHead(
-    int winner_ = 0,
-    int loser_ = 0,
-    int winner_votes_ = 0,
-    int loser_votes_ = 0
-) {
-    _() {}
-    ~() {}
-
-    /* find the winner in a head to head election. */
-    void resolve(
-        int a,
-        int b
-    ) {
-        bloc_map = ^g_runner.bloc_map_;
-
-        /* init vote counts. */
-        int avotes = 0;
-        int bvotes = 0;
-
-        /* for each voter bloc. */
-        for (it : bloc_map^) {
-            /* give the votes to whichever is first. */
-            for (which : it^.rankings_) {
-                if (which == a) {
-                    avotes += it^.bloc_.size_;
-                    break;
-                }
-                if (which == b) {
-                    bvotes += it^.bloc_.size_;
-                    break;
-                }
-            }
-        }
-
-        /*
-        we assume that a comes before b in the candidate list.
-        and that we're looking for a winner.
-        in which case, by the rules, a wins ties.
-        */
-        if (avotes >= bvotes) {
-            winner_ = a;
-            loser_ = b;
-            winner_votes_ = avotes;
-            loser_votes_ = bvotes;
-        } else {
-            winner_ = b;
-            loser_ = a;
-            winner_votes_ = bvotes;
-            loser_votes_ = avotes;
-        }
-
-        /* correct the a first assumption. */
-        if (avotes == bvotes) {
-            if (a > b) {
-                winner_ <--> loser_;
-                winner_votes_ <--> loser_votes_;
-            }
-        }
-    }
-}
-
-/*
-store the results of head to head matchups between all candidates.
-the vote totals are stored: winner is positive, loser is negative.
-*/
-PairwiseCounts() {
-    void init() {
-        n_ = g_runner.ncandidates_;
-        size = n_ * n_;
-        counts_.resize(size);
-        for (i : 0..size) {
-            counts_[i] = 0;
-        }
-    }
-
-    /* find all pairwise winners. */
-    void find_winners() {
-        HeadToHead matchup;
-        for (a : 0..n_) {
-            for (b : (a+1)..n_) {
-                matchup.resolve(a, b);
-                set_count(
-                    matchup.winner_,
-                    matchup.loser_,
-                    matchup.winner_votes_
-                );
-                set_count(
-                    matchup.loser_,
-                    matchup.winner_,
-                    - matchup.loser_votes_
-                );
-            }
-        }
-    }
-
-    /* return positive vote count for a versus b. */
-    int count(int a, int b) {
-        idx = a * n_ + b;
-        votes = counts_[idx];
-        if (votes < 0) {
-            votes = - votes;
-        }
-        return votes;
-    }
-
-    /* set count for a versus b. */
-    void set_count(int a, int b, int count) {
-        idx = a * n_ + b;
-        counts_[idx] = count;
-    }
-
-    /* return true if a beats b. */
-    bool is_winner(int a, int b) {
-        idx = a * n_ + b;
-        votes = counts_[idx];
-        return (votes > 0);
-    }
-}
 
 /* define the global object. */
 global TestRunner g_runner;
@@ -1332,16 +1200,6 @@ TestRunner(
             println(String + " " + candidate^.name_ + ": " + satisfaction
                 + " (" + dutility + ")");
         }
-    }
-
-    float64 calculate_satisfaction(
-        float64 utility,
-        SatisfactionMetrics^ metric
-    ) {
-        float64 best = metric^.best_;
-        float64 average = metric^.average_;
-        float64 satisfaction = (utility - average) / (best - average);
-        return satisfaction;
     }
 
     void check_criteria() {
@@ -2198,7 +2056,7 @@ ElectoralMethod : CondorcetMethod() {
         condorcet_cycles float64 = g_runner.condorcet_cycles_;
         non_cycle_trials float64 = ntrials - condorcet_cycles;
         float64 average_utility_ordering = g_runner.total_utility_ordering_ / non_cycle_trials;
-        float64 satisfaction_ordering = g_runner.calculate_satisfaction(average_utility_ordering, g_runner.accumulated_);
+        float64 satisfaction_ordering = calculate_satisfaction(average_utility_ordering, g_runner.accumulated_);
 
         /* pretty print the line. */
         Format fmt;
@@ -3056,7 +2914,7 @@ ElectoralMethod : GuthrieMethod() {
         /* calculate strategic voting total utility. */
         ntrials float64 = g_runner.ntrials_;
         float64 average_utility_strategic = g_runner.total_utility_strategic_ / ntrials;
-        float64 satisfaction_strategic = g_runner.calculate_satisfaction(average_utility_strategic, g_runner.accumulated_);
+        float64 satisfaction_strategic = calculate_satisfaction(average_utility_strategic, g_runner.accumulated_);
 
         /* pretty print the line. */
         Format fmt;

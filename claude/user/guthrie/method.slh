@@ -9,14 +9,13 @@ electoral method base class.
 import slids.string;
 import slids.vector;
 import settings;
-alias slids;
 
 /*
 base class for electoral methods.
 every derived class must define find_winner.
 */
 ElectoralMethod(
-    String name_,
+    slids:String name_,
     int winner_ = -1,
     int is_winner_ = 0,
     float64 total_utility_ = 0.0,
@@ -53,7 +52,10 @@ ElectoralMethod(
     /* pretty print strategic voting summary. */
     virtual void print_strategic_results();
 }
-alias ElectoralMethods = Vector<ElectoralMethod^>;
+alias ElectoralMethods = slids:Vector<ElectoralMethod^>;
+
+/* calculate satisfaction from utility and metrics. */
+float64 calculate_satisfaction(float64 utility, SatisfactionMetrics^ metric);
 
 /* if winner is expected then "pass" otherwise "=FAIL=" or "n/a". */
 (const char)[] result_to_string(int winner, int expected);

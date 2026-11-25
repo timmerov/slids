@@ -1,0 +1,32 @@
+/*
+Copyright (C) 2012-2026 tim cotter. All rights reserved.
+*/
+
+/*
+pairwise results.
+*/
+
+import slids.vector;
+
+/*
+store the results of head to head matchups between all candidates.
+the vote totals are stored: winner is positive, loser is negative.
+*/
+PairwiseCounts(
+    int n_,
+    slids:Vector<int> counts_
+) {
+    void init();
+
+    /* find all pairwise winners. */
+    void find_winners();
+
+    /* return positive vote count for a versus b. */
+    int count(int a, int b);
+
+    /* set count for a versus b. */
+    void set_count(int a, int b, int count);
+
+    /* return true if a beats b. */
+    bool is_winner(int a, int b);
+}
