@@ -9,12 +9,12 @@ configuration settings.
 import electorate;
 
 /* number of trials. */
-const int kNTrials = 1;
+//const int kNTrials = 1;
 //const int kNTrials = 10;
 //const int kNTrials = 30;
 //const int kNTrials = 100;
 //const int kNTrials = 300;
-//const int kNTrials = 1000;
+const int kNTrials = 1000;
 //const int kNTrials = 10*1000;
 //const int kNTrials = 30*1000;
 
@@ -98,7 +98,7 @@ const float64 kDispersion = 0.7;
 
 /* option to use a fixed seed for testing. */
 const uint64 kSeedChoice = 0;
-//const uint64 kSeedChoice = 1795499586339904942;
+//const uint64 kSeedChoice = 1795663729605013248;
 
 /*
 option to use approval votes to find guthrie winner.

@@ -6,6 +6,7 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 borda count electoral method.
 */
 
+import+ slids.algorithm;
 import slids.string;
 import+ slids.vector;
 import borda;
@@ -108,7 +109,38 @@ ElectoralMethod : BordaMethod() {
         villain = -1;
         min_minions = -1;
 
-        for (a : 0..ncandidates) {
+        /*
+        search candidates by lowest borda count.
+        the almost-won candidate is most likely to be the cheapest villain.
+        */
+        SearchOrder(
+            int count_,
+            int idx_
+        ) {
+            bool op<(SearchOrder^ rhs) {
+                return (count_ < rhs^.count_);
+            }
+        }
+        Vector<SearchOrder> search;
+        search.resize(ncandidates);
+        for (i : 0..ncandidates) {
+            search[i].idx_ = i;
+        }
+
+        /* compute the borda counts. */
+        for (it : bloc_map^) {
+            for (i : 1..ncandidates) {
+                c = it^.rankings_[i];
+                search[c].count_ += i * it^.bloc_.size_;
+            }
+        }
+
+        /* sort them. */
+        quicksort(search);
+
+        /* try every candidate in the search order. */
+        for (srch : search) {
+            a = srch^.idx_;
             if (a == winner_) {
                 continue;
             }
@@ -124,6 +156,12 @@ ElectoralMethod : BordaMethod() {
             honest + strategic minions = pool size.
             borda count for A <? borda count for all other candidates.
             minimize strategic minions.
+
+            claude says this is an inefficient method.
+            use a N-1 x N-1 table of strategic minions instead.
+            one dimension is rank order.
+            the other dimension is the candidate.
+            rows and columns sum to the number of strategic voters.
             */
 
             /* clear the borda counts. */
@@ -145,15 +183,15 @@ ElectoralMethod : BordaMethod() {
                         /* A>W, add a variable and save the size. */
                         minion = honest_minions.append();
                         name = String + "h" + it^.rankings_.to_string();
-                        minion^.var_ = lp.add_var(name);
+                        minion^.var_ = lp.add_var(name, false);
                         minion^.bmit_ = it;
                         break;
                     }
                     if (which == winner_) {
                         /* W>A, add the borda counts to the candidates. */
-                        for (i : 0..ncandidates) {
+                        for (i : 1..ncandidates) {
                             c = it^.rankings_[i];
-                            counts[i] += i * c;
+                            counts[c] += i * it^.bloc_.size_;
                         }
                         break;
                     }
@@ -179,7 +217,7 @@ ElectoralMethod : BordaMethod() {
                     minion^.rankings_.append(c);
                 }
                 name = String + candidates^[a].name_ + order.to_string();
-                minion^.var_ = lp.add_var(name);
+                minion^.var_ = lp.add_var(name, true);
 
                 done = permute(order, ncandidates-1);
                 if (done) {
@@ -194,19 +232,21 @@ ElectoralMethod : BordaMethod() {
                 lp.add_row(row);
             }
 
-            /* constraint: honest minions = strategic minions. */
+            /* constraint: honest minions + strategic minions = pool size. */
             LP:Expr honest_expr;
+            pool_size = 0;
             for (minion : honest_minions) {
                 honest_expr += minion^.var_;
+                pool_size += minion^.bmit_^.bloc_.size_;
             }
             LP:Expr strategic_expr;
-            for (minion : honest_minions) {
+            for (minion : strategic_minions) {
                 strategic_expr += minion^.var_;
             }
             /* add twice cause equality. */
-            row = honest_expr + LP:lte + strategic_expr;
+            row = honest_expr + strategic_expr + LP:lte + pool_size;
             lp.add_row(row);
-            row = honest_expr + LP:gte + strategic_expr;
+            row = honest_expr + strategic_expr + LP:gte + pool_size;
             lp.add_row(row);
 
             /* compute the borda counts. */
