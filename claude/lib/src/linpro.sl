@@ -58,6 +58,19 @@ example usage:
     println(String + "xb = " + xb_val);
     println(String + "ab = " + ab_val);
     println(String + "ba = " + ba_val);
+
+optimization:
+currently:
+Z: X1 + X2 + X3 >= 0
+we can spend a lot of time pivoting on the X's without changing Z.
+which can be terribly inefficient.
+so the idea is to introduce S.
+Z = S >= 0
+S = X1 + X2 + X3 >= 0
+conceptually correct.
+implemtationally wrong.
+Z = S >= 0
+R1 = S - X1 - X2 - X3 >= 0
 */
 
 import slids.algorithm;
@@ -78,9 +91,35 @@ LP(
         /* add the column for constants. */
         z = add_var("Z", false, false);
 
-        /* add the cost row. */
-        row = Expr + z + gte + 0;
+        /* add an empty Z row. */
+        row = Expr + 0 + gte + 0;
         add_row(z, row);
+        /*
+        Z: 0 >= 0
+        */
+
+        /* add the S variable. */
+        s = add_var("S", true, true);
+        /*
+               S
+        Z: 0 + 1 >= 0
+        */
+
+        /* add the mostly empty S row. */
+        row = Expr + s + gte + 0;
+        add_row(row);
+        /*
+                S
+        Z:  0 + 1 >= 0
+        R1: 0 + 1 >= 0
+        */
+
+        /*
+        in the future when we add costly user variables.
+                S   A   B   C
+        Z:  0 + 1             >= 0
+        R1: 0 + 1 - 1 - 1 - 1 >= 0
+        */
     }
     ~() {
     }
@@ -472,19 +511,31 @@ LP(
         vi^.name_ = name^;
 
         if (user) {
-            if (rows_.size() > 1) {
+            nrows int = rows_.size();
+            if (nrows > 2) {
                 println("**Error** add variables before adding rows.");
             }
 
             ++nuser_vars_;
 
-            /* add user var to z row. */
+            /* add the user var to the Z row. */
             term = rows_[0].terms_.append();
             term^.var_idx_ = idx;
-            if (is_costly) {
+            if (nrows == 1) {
                 term^.coeff_ = 1;
             } else {
                 term^.coeff_ = 0;
+            }
+
+            /* subtract the user var from the S row. */
+            if (nrows > 1) {
+                term = rows_[1].terms_.append();
+                term^.var_idx_ = idx;
+                if (is_costly) {
+                    term^.coeff_ = -1;
+                } else {
+                    term^.coeff_ = 0;
+                }
             }
 
             /* add user var to columns. */
@@ -566,17 +617,9 @@ LP(
             //println(String + "iteration " + iter);
 
             /* find the row with the most negative constant. */
-            pivot_row_idx = -1;
-            min_konst float64 = 0.0;
-            for (i : 0..nrows) {
-                row = ^rows_[i];
-                konst = row^.constant_.fvalue();
-                if (min_konst > konst) {
-                    pivot_row_idx = i;
-                    min_konst = konst;
-                }
-            }
-            if (min_konst >= 0.0) {
+            //pivot_row_idx = find_most_negative_row();
+            pivot_row_idx = find_blands_row();
+            if (pivot_row_idx < 0) {
                 //println("no rows have a negative constant.");
                 break iter_loop;
             }
@@ -705,14 +748,6 @@ LP(
         return_floor = false;
         nrows int = rows_.size();
         ncols int = cols_.size();
-
-        /*
-        ==tsc== need to use the other half of bland's rule here.
-        maybe some hybrid:
-        use fractional until Z doesn't improve for X pivots.
-        then switch to bland's until Z improves.
-        then switch back to fractional.
-        */
 
         /* find a fractional user variable. */
         frac_row_idx = find_most_fractional_row();
@@ -876,37 +911,102 @@ LP(
     }
 
     /*
+    return the row index of the most negative row.
+    or -1.
+    */
+    int find_most_negative_row() {
+        nrows int = rows_.size();
+        pivot_row_idx = -1;
+        min_konst float64 = 0.0;
+        min_owner = -1;
+        /* skip the Z row. */
+        for (i : 1..nrows) {
+            row = ^rows_[i];
+            konst = row^.constant_.fvalue();
+            owner = row^.owner_;
+
+            /* not negative. */
+            if (konst >= 0.0) {
+                continue;
+            }
+
+            /* worse. */
+            if (konst > min_konst) {
+                continue;
+            }
+
+            /*
+            use var index to break ties.
+            not actually bland's rule but similar.
+            */
+            save_it = false;
+            if (pivot_row_idx < 0) {
+                save_it = true;
+            } else if (min_konst == konst) {
+                if (owner < min_owner) {
+                    save_it = true;
+                }
+            }
+            if (save_it) {
+                pivot_row_idx = i;
+                min_konst = konst;
+                min_owner = owner;
+            }
+        }
+        return pivot_row_idx;
+    }
+
+    /*
+    return the row index of the negative row with the lowest var index.
+    or -1.
+    */
+    int find_blands_row() {
+        nrows int = rows_.size();
+        pivot_row_idx = -1;
+        min_owner = -1;
+        /* skip the Z row. */
+        for (i : 1..nrows) {
+            row = ^rows_[i];
+            konst = row^.constant_.fvalue();
+            owner = row^.owner_;
+
+            /* not negative. */
+            if (konst >= 0.0) {
+                continue;
+            }
+
+            /* bland's rule. */
+            if (pivot_row_idx < 0 || owner < min_owner) {
+                pivot_row_idx = i;
+                min_owner = owner;
+            }
+        }
+        return pivot_row_idx;
+    }
+
+    /*
     return the row index of the most fractional user variable.
     ie closest to 0.5.
     or -1.
     */
     int find_most_fractional_row() {
         nrows int = rows_.size();
-
-        /* check for fractional Z first. */
-        /*
-        for (row_idx : 0..nrows) {
-            row = ^rows_[row_idx];
-            if (row^.owner_ != 0) {
-                continue;
-            }
-            if (row^.constant_.denom_ == 1) {
-                continue;
-            }
-            return row_idx;
-        }
-        */
-
         max_row = -1;
         max_fraction float64 = 0.0;
         for (pass : 0..<=1) {
             /* skip the Z row. */
             for (row_idx : 1..nrows) {
                 row = ^rows_[row_idx];
+                /* not fractional */
                 if (row^.constant_.denom_ == 1) {
                     continue;
                 }
+                /* S is always the most fractional. */
                 owner = row^.owner_;
+                if (owner == 1) {
+                    return row_idx;
+                }
+                /* not user variable. */
                 var = ^vars_[owner];
                 if (var^.user_ == false) {
                     continue;
