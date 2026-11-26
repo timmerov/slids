@@ -4,6 +4,15 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 
 /*
 borda count electoral method.
+
+claude says these seeds hang:
+13629 16494 24038
+and this one is long:
+18030
+
+and seed 1 prints:
+Borda: B needs 0 voters to vote strategically
+which is wrong and should be investigated.
 */
 
 import+ slids.algorithm;

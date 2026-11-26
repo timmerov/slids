@@ -590,6 +590,7 @@ LP(
             row = ^rows_[pivot_row_idx];
             nterms int = row^.terms_.size();
             pivot_col_idx = -1;
+            pivot_owner = -1;
             float64 min_ratio = 0.0;
             for (col_idx : 0..nterms) {
                 term = ^row^.terms_[col_idx];
@@ -600,8 +601,22 @@ LP(
                 termz = ^rowz^.terms_[col_idx];
                 konstz = termz^.coeff_.fvalue();
                 ratio = konstz / konst;
-                if (pivot_col_idx < 0 || ratio < min_ratio) {
+                owner = termz^.var_idx_;
+
+                /* apply bland's rule to avoid degenerate cycles. */
+                save_it = false;
+                if (pivot_col_idx < 0) {
+                    save_it = true;
+                } else if (ratio < min_ratio) {
+                    save_it = true;
+                } else if (ratio == min_ratio) {
+                    if (owner < pivot_owner) {
+                        save_it = true;
+                    }
+                }
+                if (save_it) {
                     pivot_col_idx = col_idx;
+                    pivot_owner = owner;
                     min_ratio = ratio;
                 }
             }
@@ -689,6 +704,14 @@ LP(
         return_floor = false;
         nrows int = rows_.size();
         ncols int = cols_.size();
+
+        /*
+        ==tsc== need to use the other half of bland's rule here.
+        maybe some hybrid:
+        use fractional until Z doesn't improve for X pivots.
+        then switch to bland's until Z improves.
+        then switch back to fractional.
+        */
 
         /* find a fractional user variable. */
         frac_row_idx = find_fractional_user_variable();
@@ -876,12 +899,12 @@ LP(
         for (pass : 0..<=1) {
             for (row_idx : 0..nrows) {
                 row = ^rows_[row_idx];
+                if (row^.constant_.denom_ == 1) {
+                    continue;
+                }
                 owner = row^.owner_;
                 var = ^vars_[owner];
                 if (var^.user_ == false) {
-                    continue;
-                }
-                if (row^.constant_.denom_ == 1) {
                     continue;
                 }
                 /* skip not-costly variables on the first pass. */
