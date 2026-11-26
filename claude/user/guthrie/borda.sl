@@ -201,16 +201,14 @@ ElectoralMethod : BordaMethod() {
                 }
             }
 
-            /*
-            add strategic minion variables.
-            only the first row is added to the cost.
-            all others are free.
-            */
+            /* add strategic minion variables. */
             for (i : 0..nstrategic_minions) {
                 name = String + "s" + i;
-                is_costly = (i < ncols);
-                strategic_minions[i] = lp.add_var(name, is_costly);
+                strategic_minions[i] = lp.add_var(name, false);
             }
+
+            /* add the only costly variable S */
+            s = lp.add_var("S", true);
 
             /* build expressions for the rows and columns of strategic minions. */
             row_exprs.clear();
@@ -232,12 +230,12 @@ ElectoralMethod : BordaMethod() {
             }
 
             /* constraint: all rows and cols = strategic minions. */
-            for (i : 0..(nrows+ncols-1)) {
-                row = LP:Expr + row_exprs[i] + LP:gte + row_exprs[i+1];
+            for (i : 0..nrows+ncols) {
+                row = row_exprs[i] + LP:gte + s;
+                lp.add_row(row);
+                row = row_exprs[i] + LP:lte + s;
                 lp.add_row(row);
             }
-            row = LP:Expr + row_exprs[nrows+ncols-1] + LP:gte + row_exprs[0];
-            lp.add_row(row);
 
             /* constraint: honest minions + strategic minions = pool size. */
             LP:Expr expr = row_exprs[0];
