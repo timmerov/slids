@@ -80,8 +80,6 @@ ElectoralMethod : BordaMethod() {
         candidates = ^g_runner.candidates_;
         bloc_map = ^g_runner.bloc_map_;
 
-        Rankings order;
-        order.reserve(ncandidates);
         Vector<int> counts;
         counts.resize(ncandidates);
         Vector<LP:Expr> borda_expr;
@@ -94,12 +92,14 @@ ElectoralMethod : BordaMethod() {
         }
         Vector<HonestMinion> honest_minions;
 
-        StrategicMinion(
-            LP:Var var_,
-            Rankings rankings_
-        ) {
-        }
-        Vector<StrategicMinion> strategic_minions;
+        Vector<LP:Var> strategic_minions;
+        nrows = ncandidates - 1;
+        ncols = nrows;
+        nstrategic_minions = nrows * ncols;
+        strategic_minions.resize(nstrategic_minions);
+
+        Vector<LP:Expr> row_exprs;
+        row_exprs.reserve(nrows + ncols);
 
         /*
         we're looking for the minimum number of strategic
@@ -201,30 +201,26 @@ ElectoralMethod : BordaMethod() {
                 }
             }
 
-            /* initialize the order */
-            order.clear();
-            for (c : 0..ncandidates) {
-                if (c == a) {
-                    continue;
-                }
-                order.append(c);
+            /*
+            add strategic minion variables.
+            only the first row is added to the cost.
+            all others are free.
+            */
+            for (i : 0..nstrategic_minions) {
+                name = String + "s" + i;
+                is_costly = (i < ncols);
+                strategic_minions[i] = lp.add_var(name, is_costly);
             }
 
-            /* add strategic minion variables. */
-            strategic_minions.clear();
-            while() {
-                minion = strategic_minions.append();
-                minion^.rankings_.reserve(ncandidates);
-                minion^.rankings_.append(a);
-                for (c : order) {
-                    minion^.rankings_.append(c);
-                }
-                name = String + candidates^[a].name_ + order.to_string();
-                minion^.var_ = lp.add_var(name, true);
-
-                done = permute(order, ncandidates-1);
-                if (done) {
-                    break;
+            /* build expressions for the rows and columns of strategic minions. */
+            row_exprs.clear();
+            row_exprs.resize(nrows + ncols);
+            idx = 0;
+            for (i : 0..ncols) {
+                for (k : 0..nrows) {
+                    row_exprs[i] += strategic_minions[idx];
+                    row_exprs[nrows + k] += strategic_minions[idx];
+                    ++idx;
                 }
             }
 
@@ -235,21 +231,25 @@ ElectoralMethod : BordaMethod() {
                 lp.add_row(row);
             }
 
+            /* constraint: all rows and cols = strategic minions. */
+            for (i : 0..(nrows+ncols-1)) {
+                row = LP:Expr + row_exprs[i] + LP:gte + row_exprs[i+1];
+                lp.add_row(row);
+            }
+            row = LP:Expr + row_exprs[nrows+ncols-1] + LP:gte + row_exprs[0];
+            lp.add_row(row);
+
             /* constraint: honest minions + strategic minions = pool size. */
-            LP:Expr honest_expr;
+            LP:Expr expr = row_exprs[0];
             pool_size = 0;
             for (minion : honest_minions) {
-                honest_expr += minion^.var_;
+                expr += minion^.var_;
                 pool_size += minion^.bmit_^.bloc_.size_;
             }
-            LP:Expr strategic_expr;
-            for (minion : strategic_minions) {
-                strategic_expr += minion^.var_;
-            }
             /* add twice cause equality. */
-            row = honest_expr + strategic_expr + LP:lte + pool_size;
+            row = expr + LP:lte + pool_size;
             lp.add_row(row);
-            row = honest_expr + strategic_expr + LP:gte + pool_size;
+            row = expr + LP:gte + pool_size;
             lp.add_row(row);
 
             /* compute the borda counts. */
@@ -269,11 +269,16 @@ ElectoralMethod : BordaMethod() {
                 }
             }
             /* add the strategic minion contributions. */
-            for (minion : strategic_minions) {
-                for (i : 1..ncandidates) {
-                    which = minion^.rankings_[i];
-                    expr = LP:Expr + minion^.var_;
+            idx = 0;
+            for (i : 1..<=ncols) {
+                for (k : 0..nrows) {
+                    which = k;
+                    if (which >= a) {
+                        ++which;
+                    }
+                    expr = LP:Expr + strategic_minions[idx];
                     borda_expr[which] += expr * i;
+                    ++idx;
                 }
             }
             /* add the equations. */
