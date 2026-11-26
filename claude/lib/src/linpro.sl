@@ -858,6 +858,19 @@ LP(
     */
     int find_fractional_user_variable() {
         nrows int = rows_.size();
+
+        /* check for fractional Z first. */
+        for (row_idx : 0..nrows) {
+            row = ^rows_[row_idx];
+            if (row^.owner_ != 0) {
+                continue;
+            }
+            if (row^.constant_.denom_ == 1) {
+                continue;
+            }
+            return row_idx;
+        }
+
         max_row = -1;
         max_fraction float64 = 0.0;
         for (pass : 0..<=1) {
