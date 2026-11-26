@@ -159,9 +159,12 @@ ElectoralMethod : BordaMethod() {
 
             claude says this is an inefficient method.
             use a N-1 x N-1 table of strategic minions instead.
-            one dimension is rank order.
+            one dimension is rank order - 1,2,3...
             the other dimension is the candidate.
             rows and columns sum to the number of strategic voters.
+            row1 >= row2 >= col1 >= col2 >= row1.
+            honest minions + row1 = pool size
+            minimize row1.
             */
 
             /* clear the borda counts. */
