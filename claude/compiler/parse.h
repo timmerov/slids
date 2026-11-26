@@ -462,6 +462,14 @@ struct Node {
                                  // = the kStoreStmt [name(args), rhs] (the VALUE reading,
                                  // a nameless assignment). Resolve keeps one by what the
                                  // group's names ARE (types vs values).
+    bool ambiguous_decl = false;         // kAssignStmt: `L T = e;` that parsed BOTH as a
+                                 // declaration (type L, name T) and as the conversion
+                                 // shorthand (lvalue L, conv type T) — children[0] = the
+                                 // decl reading (kVarDeclStmt), children[1] = the
+                                 // shorthand reading (kAssignStmt / kStoreStmt /
+                                 // kVarDeclStmt, its last child the conversion). Settled
+                                 // at the head of its scope (settleDeclOrConvShorthand):
+                                 // L names a type -> the decl, else the shorthand.
     bool construction_init = false;      // kVarDeclStmt: the `Type name(args)` paren-init
                                  // form (vs `= init`) — a FIELD-LIST construction that
                                  // is ALWAYS built in place, never value-init. Both forms

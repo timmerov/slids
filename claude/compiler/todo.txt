@@ -9,6 +9,10 @@ these entries need to be concise plain english - not overburdened with details.
 
 BUGS
 
+  * assigning to a class-typed namespace global fails: Bank { Amt acct; }  Bank:acct = a;
+    and Bank:acct = (Amt = 30); say "'Bank' in 'Bank:op=' is not 'Amt' or one of its
+    ancestors." the variable's qualifier leaks onto the op= call.
+
   * a global can't hold a string literal: global (const char)[] g_ = "glob"; and
     global grp(h_ = "grp") { } say "has a string initializer, which does not match declared
     type". the initializer should capture the literal's address. untyped globals should then
@@ -117,6 +121,12 @@ BUGS
     the const argument can't go to the mutable parameter, so one overload should win.
 
 UNBLOCKED FEATURES
+
+  * the conversion shorthand doesn't work at file scope: `g int = 3.5;` says
+    "Expected function name." canon says it applies to all lvalues.
+
+  * the conversion shorthand doesn't reach destructure slots or for-loop variable
+    heads: `(a Amt, b) = tpl;`, `for (x int : floats)`. decide whether canon means them.
 
   * `d = b;` (Derived d, Base b) is an error today: Derived's synthesized op=(Derived^)
     hides Base's op=. option: fall back to Base's op= when Derived has none taking b

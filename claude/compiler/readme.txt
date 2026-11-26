@@ -2387,11 +2387,22 @@ STAGE FILES (.h / .cpp pairs)
             kAssignStmt flagged ambiguous_group carrying both readings, and
             resolve keeps the one the names fit (all types / all values; a mix
             is an error). The value reading COPIES the statement's name — the
-            `stamp` lambda MOVES it. THE DECL SHAPE WINS every collision:
-            `x Amt = e` is `ident ident` (a decl with type x — an EXISTING
-            variable x doesn't flip it: "'x' is a variable, not a type"), and
-            `p^ Amt = e` / `arr[i] Amt = e` are suffix-run decl shapes; the
-            long form is the escape hatch (canon's ambiguity clause). ONE
+            `stamp` lambda MOVES it. THE DECL-OR-SHORTHAND FORK (2026-11-25):
+            a decl-shaped statement — `x Amt = e` (`T name`), `p^ Amt = e`
+            (`T^ name`), `Ns:g Amt = e`, `const c Amt = e` — is also the
+            shorthand, and only names tell them apart (the decl needs its lead
+            to be a TYPE, the shorthand needs it not to be one), so
+            parseDeclOrConvShorthand parses BOTH readings with the same rewind.
+            One parses -> that one (`arr[i] Amt = e`: a sized dim on a decl's
+            type is a grammar error); neither -> the decl, re-parsed for its
+            diagnostics; both, same end token -> a kAssignStmt flagged
+            ambiguous_decl [decl, shorthand]. Resolve's
+            settleDeclOrConvShorthand keeps one at the HEAD of every scope
+            (resolveFunctionBody and resolveStmtList, before relocation, the
+            local-class and const pre-passes): the lead names a type -> the
+            decl; else the conv type names a type -> the shorthand; else the
+            decl (its diagnostic). A class / alias / enum defined in the same
+            scope is matched by name (not yet registered there). ONE
             decl-gate carve-out: `v Vec<int> = e` — `ident ident` whose SECOND
             ident carries a type-arg group whose closer is followed by `=` —
             routes to the shorthand, since a declared NAME never carries

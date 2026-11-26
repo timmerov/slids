@@ -479,9 +479,10 @@ CLASSES + CTOR/DTOR (landed this phase; spans every stage)
     desugars to a tuple of per-slot sub-conversions), so a class leaf at any depth / form /
     cross-form / same-class reshape / spilled source reuses this path. The statement-level
     SHORTHAND `lvalue type = expr;` (convention of convenience #2) desugars AT PARSE to
-    this same conversion — a class target rides it wherever the shape isn't a decl's
-    (readme.txt, THE DECL SHAPE WINS): a field store `nc.part Amt = 77;`, the decl-init
-    slot `Wrap w Amt = 6;` — while `x Amt = e` stays a decl spelling (long form there).
+    this same conversion — a class target rides it in every lvalue slot: a field store
+    `nc.part Amt = 77;`, the decl-init slot `Wrap w Amt = 6;`, and the decl-shaped
+    `x Amt = e` / `p^ Amt = e` (readme.txt, THE DECL-OR-SHORTHAND FORK — resolve keeps the
+    shorthand reading when the lead names no type).
     A chain's INTERIOR link may be identifier-led too (`(Wrap = Amt = 9)` — the temp of
     the inner class conversion feeds the outer op=(Amt^)). test/assign/typeconv.sl.
   * THE TWO INSTANTIATION SHAPES ARE TWO OPERATIONS (2026-10-15). `Class c(args)` initializes

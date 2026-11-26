@@ -133,12 +133,17 @@ no new shape. recognized in three slots: the name-led assign (a primitive
 keyword, a tuple-led `(...)` IMMEDIATELY followed by `=`, or a template-instance
 lead), the chained-lvalue store (field / index / deref — identifier-led types
 work here too), and the decl init (`decl-type name conv-type = expr` — ident /
-alias / qualified / class conv types all reachable). THE DECL SHAPE WINS every
-collision: `x Amt = e` (ident ident), `p^ Amt = e` (`T^ name`), and
-`arr[i] Amt = e` (`T[i] name`) all read as declarations, and a SUFFIXED paren
-lead after a field (`obj.m(a)^ = e`, `obj.m(a)[2] = e`) stays a method-call
-chain — the long form is the escape hatch everywhere (canon lines 66-68).
-chains ride parseConvertChain unchanged; interior links may now be
+alias / qualified / class conv types all reachable). a statement that reads
+BOTH as a declaration and as the shorthand — `x Amt = e` (`T name`), `p^ Amt =
+e` (`T^ name`), `Ns:g Amt = e`, `const c Amt = e` — is not ambiguous once names
+are known: the decl needs its lead to be a TYPE, the shorthand needs it NOT to
+be one. the grammar keeps both readings (each the long form's exact shape) and
+resolve settles each at the head of its scope, before any pre-pass: the lead
+names a type -> the decl; else the conv type names a type -> the shorthand;
+else the decl (its diagnostic). a shape whose decl reading is a grammar error
+(`arr[i] Amt = e` — a sized dim belongs on the name) is the shorthand outright.
+a SUFFIXED paren lead after a field (`obj.m(a)^ = e`, `obj.m(a)[2] = e`) stays
+a method-call chain. chains ride parseConvertChain unchanged; interior links may now be
 IDENTIFIER-led (`(Wrap = Amt = 9)`), and looksLikeConvTarget accepts
 template-instance targets — both shared with the paren form. shorthand
 coverage: shx/shy (assign / infer-new), vol/shw (decl-type form: the canon
@@ -146,8 +151,13 @@ example + convert-then-widen), shc (const), sharr/shp (index / deref), shch
 (chain), shtp/shia (tuple lead + sized array + const dim), sha/shwr/shd/shq
 (class / cross-class / alias / qualified via the decl-init slot), ncp/hldp
 (field lvalues, ident + tuple leads), shcv (template instance), shck (interior
-ident link). negatives: a pointer target, strong-result narrowing, and the
-decl-wins adjudication (Unknown type 'shdw').
+ident link), shna/shea/shnq/shnd (new / existing variable, qualified / alias
+conv type, bare-name slot), sharc/shpc/shpa (index / deref / deref-index with a
+class conv type), shcc (chain led by a class), shkc (const), acct (qualified
+variable lead), shtf (a template parameter as the conv type), shdc (a type
+lead stays a decl). negatives: a pointer target, strong-result narrowing, and
+the settle's decl fallback (neither reading names a type; a variable lead with
+a non-type conv spelling).
 
 addresses are nondeterministic, so the pointer->intptr cases print a stable
 projection (a null address, or the bool of a non-null one) rather than the raw
@@ -192,6 +202,12 @@ Money {
     Cents(int c_) { _() {} ~() {} op=(int r) { c_ = r; } }
 }
 alias Dollars = Amt;
+/* a namespace GLOBAL — a qualified variable lead for the shorthand — and an alias
+   to a primitive, an identifier conv type for it. */
+Bank {
+    int acct = 0;
+}
+alias Whole = int;
 Vshape(int s_) { _() {} virtual ~() {} op=(int r) { s_ = r; } virtual int area() { return s_; } }
 Abs(int a_) { _() {} virtual ~() {} op=(int r) { a_ = r; } virtual int f() = delete; }
 /* a class with a CLASS-TYPED field — same-class copy must recurse into the inner class. */
@@ -208,6 +224,13 @@ Holder( (int, int) pr_ ) { _() {} ~() {} }
    `<args>` group breaks the decl shape, so the bare-lvalue SHORTHAND spelling
    (`shcv Cell<int> = 5`) works where a bare class name would read as a decl. */
 Cell<T>(T v_) { _() {} ~() {} op=(T r) { v_ = r; } }
+
+/* a function TEMPLATE whose body uses its parameter as the shorthand's conv type:
+   no type is named shtv, so once T is bound `shtv T = v` is the shorthand. */
+void shtf<T>(int v) {
+    shtv T = v;
+    println(String + "shtf = " + shtv.cents_);
+}
 
 Amt amt_from(int n) { return (Amt = n); }               // a conversion at a RETURN
 int amt_pair(Amt^ a, Amt^ b) {
@@ -631,9 +654,7 @@ int32 main() {
     shia int[kC] = ch_kc;
     println(String + "shia = " + shia[0] + " " + shia[1] + " " + shia[2]);  // 65 66 67
 
-    /* class targets through the DECL-INIT slot. (The bare-assign slot's
-       `x Amt = e` is token-identical to a decl — the decl shape WINS there;
-       the long form is the escape hatch. See the shdw negative below.) */
+    /* class targets through the DECL-INIT slot. */
     Amt sha int = 5;                            // Amt filled from the converted int
     println(String + "sha = " + sha.cents_);    // 5
     Wrap shwr Amt = 6;                          // an ident conv type; Wrap <- Amt temp
@@ -660,6 +681,37 @@ int32 main() {
        (Wrap = temp) dispatches op=(Amt^). */
     Wrap shck = (Wrap = Amt = 9);
     println(String + "shck = " + shck.w_);      // 9
+
+    /* an IDENTIFIER-led conv type in the bare-lvalue slots. `L T = e` reads as a
+       DECL (type L, name T) or the shorthand (lvalue L, conv type T); the decl
+       needs L to be a type, the shorthand needs L not to be one — resolve picks. */
+    shna Amt = 21;                              // a NEW variable
+    println(String + "shna = " + shna.cents_);  // 21
+    Amt shea;
+    shea Amt = 22;                              // an EXISTING variable
+    println(String + "shea = " + shea.cents_);  // 22
+    shnq Money:Cents = 23;                      // a QUALIFIED conv type
+    println(String + "shnq = " + shnq.c_);      // 23
+    shnd Dollars = 24;                          // an ALIAS conv type
+    println(String + "shnd = " + shnd.cents_);  // 24
+    Amt sharc[2];
+    sharc[1] Amt = 25;                          // an INDEX lvalue
+    println(String + "sharc = " + sharc[1].cents_);   // 25
+    Amt^ shpc = ^shea;
+    shpc^ Amt = 26;                             // a DEREF lvalue
+    println(String + "shpc = " + shea.cents_);  // 26
+    shpa = ^sharc;
+    shpa^[0] Amt = 27;                          // deref then index
+    println(String + "shpa = " + sharc[0].cents_);    // 27
+    shcc Amt = int = 28.7;                      // a chain LED by a class conv type
+    println(String + "shcc = " + shcc.cents_);  // 28
+    const shkc Amt = 29;                        // const + a class conv type
+    println(String + "shkc = " + shkc.cents_);  // 29
+    Bank:acct Whole = 30.7;                     // a QUALIFIED variable lead
+    println(String + "acct = " + Bank:acct);    // 30
+    shtf<Amt>(31);                              // a template parameter conv type
+    Amt shdc = 32;                              // the lead IS a type: a decl
+    println(String + "shdc = " + shdc.cents_);  // 32
 
     /* compile errors — each uncommented in isolation by the negative runner. */
 
@@ -805,14 +857,19 @@ int32 main() {
     //int8 shen int = 5;
     //println(String + "x= " + shen);
 
-    /* `name Class = e` is token-identical to a DECL (`Class name = e` reversed):
-       THE DECL SHAPE WINS — even an EXISTING variable `shdw` does not flip the
-       reading; it is diagnosed as a variable misused as a type. The long form
-       `shdw = (Amt = 5);` is the escape hatch (canon lines 66-68). */
-    //-EXPECT-ERROR: 'shdw' is a variable, not a type
-    //int shdw = 1;
-    //shdw Amt = 5;
-    //println(String + "x= " + shdw);
+    /* neither reading names a type: the settle falls back to the decl, whose
+       diagnostic names the lead. */
+    //-EXPECT-ERROR: Unknown type 'shzz'
+    //shzz Zork = 5;
+    //println(String + "x= " + shzz);
+
+    /* a variable lead with a conv spelling that is not a type: the decl's
+       diagnostic again. */
+    //-EXPECT-ERROR: 'shvv' is a variable, not a type
+    //int shvv = 1;
+    //int shvw = 2;
+    //shvv shvw = 5;
+    //println(String + "x= " + shvv + shvw);
 
     return 0;
 }

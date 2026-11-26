@@ -96,6 +96,8 @@ LP(
         op-=(Var^ rhs);
         op+=(Comparison^ rhs);
         op+=(Expr^ rhs);
+        op*=(int rhs);
+        op/=(int rhs);
     }
 
     /* print the matrix. */

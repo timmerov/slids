@@ -5311,6 +5311,7 @@ Completion resolveStmt(parse::Tree& tree, parse::Node& s, diagnostic::Sink& diag
             // The group's names decide: all TYPES -> the shorthand; all VALUES (or names
             // that don't resolve — the value path reports them) -> the nameless
             // assignment; a MIX is neither.
+            assert(!s.ambiguous_decl && "decl-or-shorthand reached the walk unsettled");
             if (s.ambiguous_group) {
                 assert(s.children.size() == 2 && s.children[1]
                        && s.children[1]->kind == parse::Kind::kStoreStmt
@@ -7046,9 +7047,76 @@ void resolveNestedFunctionBodies(parse::Tree& tree,
     }
 }
 
+// Does the type spelling `t` name a type in the current scope? `scope` is the
+// statement list being settled: a class / alias / enum defined DIRECTLY in it is not
+// registered yet (the local-class pre-pass runs after the settle), so it is matched
+// by name. Otherwise resolve the spelling on a copy with the diagnostics discarded.
+static bool spellsTypeHere(parse::Tree& tree,
+                           std::vector<std::unique_ptr<parse::Node>> const& scope,
+                           widen::TypeRef t, std::vector<int> const& seg_toks,
+                           int file_id, int tok, diagnostic::Sink& diag) {
+    if (t == widen::kNoType) return false;
+    using F = widen::Type::Form;
+    widen::TypeRef leaf = t;
+    for (;;) {
+        widen::Type const& ty = widen::get(leaf);
+        if (ty.form == F::kConst) { leaf = ty.underlying; continue; }
+        if (ty.form == F::kPointer || ty.form == F::kIterator) { leaf = ty.pointee; continue; }
+        if (ty.form == F::kArray) { leaf = ty.elem; continue; }
+        break;
+    }
+    if (widen::get(leaf).form == F::kSlid) {
+        std::string const& name = widen::get(leaf).name;
+        for (auto const& st : scope) {
+            if (!st || !st->qualifier.empty() || st->name != name) continue;
+            if (st->kind == parse::Kind::kClassDef || st->kind == parse::Kind::kAliasDecl
+                || st->kind == parse::Kind::kEnumDecl) return true;
+        }
+    }
+    std::size_t before = diag.records.size();
+    widen::TypeRef probe = t;
+    std::vector<int> toks = seg_toks;
+    resolveDeclType(tree, probe, file_id, tok, diag, &toks);
+    bool ok = diag.records.size() == before;
+    diag.records.resize(before);
+    return ok;
+}
+
+// THE DECL-OR-SHORTHAND SETTLE (canon assign/typeconv.sl, convention of convenience
+// #2). An ambiguous_decl statement carries both readings of `L T = e;` — children[0]
+// the declaration (type L, name T), children[1] the conversion shorthand (lvalue L,
+// conv type T; its last child the conversion). They are exclusive once names are
+// known: the decl needs L to be a TYPE, the shorthand needs L not to be one. So: L
+// names a type -> the decl; else T names a type -> the shorthand; else the decl, whose
+// diagnostic stands. Runs at the HEAD of every scope, before any pre-pass
+// (relocation, local classes, the const forward pass), so none of them ever sees the
+// wrapper — from here on the statement is exactly the long form's shape.
+static void settleDeclOrConvShorthand(parse::Tree& tree,
+                                      std::vector<std::unique_ptr<parse::Node>>& stmts,
+                                      diagnostic::Sink& diag) {
+    for (auto& st : stmts) {
+        if (!st || !st->ambiguous_decl) continue;
+        assert(st->children.size() == 2 && st->children[0] && st->children[1]
+               && st->children[0]->kind == parse::Kind::kVarDeclStmt
+               && !st->children[1]->children.empty()
+               && "ambiguous_decl needs both readings");
+        parse::Node const& decl = *st->children[0];
+        parse::Node const& conv = *st->children[1]->children.back();
+        bool shorthand =
+            !spellsTypeHere(tree, stmts, decl.return_type, decl.return_type_seg_toks,
+                            decl.file_id, decl.tok, diag)
+            && spellsTypeHere(tree, stmts, conv.return_type, conv.return_type_seg_toks,
+                              conv.file_id, conv.tok, diag);
+        std::unique_ptr<parse::Node> keep = std::move(st->children[shorthand ? 1 : 0]);
+        st = std::move(keep);
+    }
+}
+
 Completion resolveStmtList(parse::Tree& tree,
                            std::vector<std::unique_ptr<parse::Node>>& stmts,
                            diagnostic::Sink& diag) {
+    // Settle every decl-or-shorthand statement first — before any pre-pass below.
+    settleDeclOrConvShorthand(tree, stmts, diag);
     // Local-class pre-pass: register every class defined DIRECTLY in this scope
     // (its entry + members land in the current frame, so they shadow and drop
     // with the scope) before resolving statements — so a use may precede the
@@ -7315,6 +7383,8 @@ void resolveFunctionBody(parse::Tree& tree, parse::Node& fn,
     // skips a class already registered here — so these don't double-register.
     // Relocate external qualified defs first (so a `int C:m(){}` beside a body-local
     // `C` registers as C's method before this pre-pass runs).
+    // Every decl-or-shorthand statement is settled before any of these pre-passes.
+    settleDeclOrConvShorthand(tree, fn.children, diag);
     relocateOutOfLineMembers(tree, fn.children, diag, /*runtime_scope=*/true);
     registerLocalClasses(tree, fn.children, diag);
     // Forward-decl pre-pass for kConst: pre-create entries so const init

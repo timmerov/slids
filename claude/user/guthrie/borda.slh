@@ -15,4 +15,10 @@ ElectoralMethod : BordaMethod() {
 
     /* find the winner. */
     virtual void find_winner(bool quiet = kQuiet);
+
+    /* analyze strategic voting. */
+    virtual void strategic_voting();
+
+    /* pretty print strategic voting summary. */
+    virtual void print_strategic_results();
 }

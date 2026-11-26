@@ -3316,7 +3316,9 @@ parens dropped; `x int = get_float();`, `int vol int = 3.14*r*r*h;`,
     identifier-led target via looksLikeConvTarget, or a balanced `(...)`
     IMMEDIATELY followed by `=`), hooked at the name-led assign arm, the
     finishLvalueChain store tail, and the parseVarDeclStmt init slot.
-  - THE DECL SHAPE WINS every collision (the canon's ambiguity clause):
+  - [SUPERSEDED 2026-11-25 — see THE DECL-OR-SHORTHAND FORK below; the
+    collision is settled by names in resolve.]
+    THE DECL SHAPE WINS every collision (the canon's ambiguity clause):
     `x Amt = e` is `ident ident` — a decl with type x, even when x is an
     existing variable ("'x' is a variable, not a type"); `p^ Amt = e` /
     `arr[i] Amt = e` are suffix-run decl shapes. The long form is the escape
@@ -4814,6 +4816,27 @@ undefined at link; was the todo "a qualified and a bare template flavor")
   argument def) — one symbol each; la/lb Twin<int> copied in consumer.sl (`twins = 101 202`,
   nm: la.Twin… / lb.Twin… hooks, ops, methods); test/template/class.sl vlen (Vec<Integer>
   decl, Vec<int> def). Guthrie builds and runs. Every flavor symbol changed: rebuild all.
+
+THE DECL-OR-SHORTHAND FORK (2026-11-25, from guthrie borda.sl `expr LP:Expr = minion^.var_;`
+— "Only constants, aliases, and enums may be defined by qualified name.")
+  - THE GAP. The conversion shorthand (canon test/assign/typeconv.sl: "applies to all lvalue
+    types") was decided in the grammar, which cannot see names, so every decl-shaped
+    collision read as a decl: `x Amt = e` (new or existing x), `x Ns:T = e`, `x Alias = e`,
+    `p^ Amt = e`, `arr[i] Amt = e`, `x Amt = int = e`, `const c Amt = e`. None is ambiguous:
+    the decl needs its lead to be a TYPE, the shorthand needs it NOT to be one.
+  - STILL A DESUGAR. grammar's parseDeclOrConvShorthand parses both readings (the rewind of
+    the `name (group) = rhs` fork); each is the long form's exact node. One parses -> it
+    (`arr[i] Amt = e`); both -> an ambiguous_decl kAssignStmt [decl, shorthand]; neither ->
+    the decl's diagnostics. The const lead's shorthand reading is a typeless const
+    (parseConstConvShorthand).
+  - THE SETTLE. resolve's settleDeclOrConvShorthand runs at the head of every scope, before
+    any pre-pass: lead names a type -> decl; else conv type names a type -> shorthand; else
+    decl. spellsTypeHere probes by resolveDeclType on a copy (diagnostics discarded), plus a
+    by-name match for a class / alias / enum defined in the same scope. A template parameter
+    resolves there, so `v T = x` works in a function template.
+  Coverage: typeconv.sl shna/shea/shnq/shnd/sharc/shpc/shpa/shcc/shkc/acct/shtf/shdc; the
+  old shdw decl-wins negative became two settle-fallback negatives (Unknown type 'shzz';
+  'shvv' is a variable, not a type). Guthrie builds.
 
 CURRENT STATE — per-stage implementation notes live in readme.txt (the
 "KNOWN GAPS" detail that used to sit here was a duplicate of readme's

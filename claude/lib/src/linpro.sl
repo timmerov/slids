@@ -107,45 +107,6 @@ LP(
         int numer_ = 0,
         int denom_ = 1
     ) {
-        /* return the integral value. */
-        int ivalue();
-
-        /* return a floating point value. */
-        float64 fvalue();
-
-        /* operators. */
-        op=(int rhs);
-        op+=(int rhs);
-        op-=(int rhs);
-        op+=(Rational^ rhs);
-        op-=(Rational^ rhs);
-        op*=(Rational^ rhs);
-        op/=(Rational^ rhs);
-        op-(Rational^ rhs);
-        Rational reciprocal();
-    }
-
-    /* a term is a variable index and its coefficient. */
-    Term(
-        int var_idx_,
-        Rational coeff_
-    ) { }
-    alias Terms = Vector<Term>;
-
-    /*
-    every row is owned by a variable, has a constant,
-    and a list of terms.
-    */
-    Row(
-        int owner_,
-        Rational constant_,
-        Terms terms_
-    ) {
-    }
-    alias Rows = Vector<Row>;
-
-    /* coefficients are rational numbers. */
-    Rational() {
         int ivalue() {
             return (int=fvalue());
         }
@@ -214,6 +175,25 @@ LP(
             denom_ = (int=d);
         }
     }
+
+    /* a term is a variable index and its coefficient. */
+    Term(
+        int var_idx_,
+        Rational coeff_
+    ) { }
+    alias Terms = Vector<Term>;
+
+    /*
+    every row is owned by a variable, has a constant,
+    and a list of terms.
+    */
+    Row(
+        int owner_,
+        Rational constant_,
+        Terms terms_
+    ) {
+    }
+    alias Rows = Vector<Row>;
 
     /* inequality relation classes and enum. */
     Comparison : lt() {
@@ -327,6 +307,28 @@ LP(
                 } else {
                     lhs_term^.coeff_ = - rhs_term^.coeff_;
                 }
+            }
+        }
+        op*=(int rhs) {
+            if (relation_ != kErr) {
+                println("**Error** expression multiplication term contains a comparison.");
+            }
+            if (constant_.numer_ != 0) {
+                println("**Error** expression multiplication term contains a non-zero constant.");
+            }
+            for (term : terms_) {
+                term^.coeff_ *= rhs;
+            }
+        }
+        op/=(int rhs) {
+            if (relation_ != kErr) {
+                println("**Error** expression division term contains a comparison.");
+            }
+            if (constant_.numer_ != 0) {
+                println("**Error** expression division term contains a non-zero constant.");
+            }
+            for (term : terms_) {
+                term^.coeff_ /= rhs;
             }
         }
     }

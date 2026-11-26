@@ -314,6 +314,7 @@ std::unique_ptr<Node> cloneNode(Node const& n) {
     c->default_swap_init = n.default_swap_init;
     c->construction_init = n.construction_init;
     c->ambiguous_group = n.ambiguous_group;
+    c->ambiguous_decl = n.ambiguous_decl;
     c->infer_ref = n.infer_ref;
     c->quiet_diag = n.quiet_diag;
     c->require_homogeneous = n.require_homogeneous;

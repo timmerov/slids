@@ -990,10 +990,9 @@ struct Parser {
     // lookahead (no statement puts a bare type keyword in an `=` slot); an
     // identifier lead (`Amt =`, `Money:Cents =`, `Vec<int> =`) and a tuple lead
     // (`(int,int) =`, bare group only — see parenGroupThenEquals) are recognized
-    // by their trailing `=`. The shapes a DECL already claims (`x Amt = e` is
-    // token-identical to `Amt x = e` reversed) never reach a caller of this
-    // gate — parseStmt routes them to parseVarDeclStmt first; the decl wins and
-    // the long form is the escape hatch.
+    // by their trailing `=`. The shapes a DECL also claims (`x Amt = e` is
+    // token-identical to `Amt x = e` reversed) reach this gate through the
+    // DECL-OR-SHORTHAND FORK's second reading (parseDeclOrConvShorthand).
     bool startsConvShorthand() const {
         if (isTypeStart(peek().kind)) return true;
         if (peek().kind == token::Kind::kLParen) return parenGroupThenEquals();
@@ -2536,10 +2535,9 @@ struct Parser {
             // `arr[i] int = e;`, `p^ int = e;` — a type spelling in the `=` slot
             // desugars to `lvalue = (TYPE = expr);` (the same kStoreStmt-of-
             // kConvertExpr the long form builds). Every claimed shape errors
-            // today ("Expected '='"), so nothing valid changes meaning. NOTE the
-            // suffix-run decl shapes never arrive: `p^ Amt = e` / `arr[i] Amt = e`
-            // read as decls (`T^ name` / `T[i] name`) in parseStmt — the decl
-            // wins; the long form is the escape hatch there.
+            // today ("Expected '='"), so nothing valid changes meaning. The
+            // suffix-run decl shapes (`p^ Amt = e` / `arr[i] Amt = e`) arrive as the
+            // DECL-OR-SHORTHAND FORK's second reading (parseDeclOrConvShorthand).
             std::unique_ptr<parse::Node> rhs;
             if (startsConvShorthand()) {
                 rhs = parseConvertChain(stmt_file, /*shorthand=*/true);
@@ -2585,8 +2583,8 @@ struct Parser {
         // slot where `=` belongs desugars to `name = (TYPE = expr);`: the same
         // kAssignStmt-of-kConvertExpr the long form builds, so resolve onward see
         // no new shape (assign-if-exists, infer-declare if not — unchanged). The
-        // type lead here is a primitive keyword (`x int = e` — an identifier lead
-        // was routed to the decl by parseStmt), a template instance
+        // type lead here is a primitive keyword (`x int = e`), an identifier (`x
+        // Amt = e` — the DECL-OR-SHORTHAND FORK's second reading), a template instance
         // (`v Vec<int> = e` — parseStmt's carve-out), or a bare tuple group
         // (`t (int,int) = e` — checked BEFORE the call arm below, which would
         // otherwise read `t (...)` as a call; a call is never followed by
@@ -4113,6 +4111,86 @@ struct Parser {
         return node;
     }
 
+    // THE DECL-OR-SHORTHAND FORK. A decl-shaped statement — `x Amt = e` (`T name`),
+    // `p^ Amt = e` (`T^ name`), `Ns:g Amt = e`, `const c Amt = e` — is ALSO the
+    // conversion SHORTHAND (`lvalue TYPE = expr;`, canon assign/typeconv.sl). Only
+    // names tell them apart: the decl needs its lead to be a TYPE, the shorthand needs
+    // it NOT to be one — so the grammar parses BOTH readings (each the long form's
+    // exact shape) and resolve keeps one (settleDeclOrConvShorthand). Only one reading
+    // parses -> that one, outright (`arr[i] Amt = e`: a sized dim on a decl's type is a
+    // grammar error, so it is the shorthand). Neither -> the decl, re-parsed for its
+    // diagnostics. Both, ending at the same token -> an ambiguous_decl kAssignStmt
+    // [decl, shorthand]. `const_lead`: the statement starts with `const` — the
+    // shorthand reading is then a typeless const whose init is the conversion.
+    std::unique_ptr<parse::Node> parseDeclOrConvShorthand(bool const_lead) {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        int save_pos = pos;
+        std::size_t save_diag = diag.records.size();
+        auto rewind = [&]() {
+            pos = save_pos;
+            fatal = false;
+            diag.records.resize(save_diag);
+        };
+        auto clean = [&]() { return !fatal && diag.records.size() == save_diag; };
+        auto decl = parseVarDeclStmt();
+        bool decl_ok = decl && clean();
+        int decl_end = pos;
+        rewind();
+        auto conv = const_lead ? parseConstConvShorthand() : parseNameLedStmt();
+        bool conv_ok = conv && clean() && endsInShorthandConversion(*conv);
+        int conv_end = pos;
+        if (!decl_ok && !conv_ok) {
+            rewind();
+            return parseVarDeclStmt();   // the decl's diagnostics, as before
+        }
+        if (!decl_ok) return conv;       // pos is already past the shorthand
+        if (!conv_ok || conv_end != decl_end) {
+            rewind();
+            pos = decl_end;
+            return decl;
+        }
+        auto node = newNodeAt(parse::Kind::kAssignStmt, stmt_file, stmt_tok);
+        node->ambiguous_decl = true;
+        node->children.push_back(std::move(decl));
+        node->children.push_back(std::move(conv));
+        return node;
+    }
+
+    // The shorthand reading of a `const`-led fork: `const name TYPE = expr;` — a
+    // TYPELESS const whose init is the conversion (the shape parseVarDeclStmt builds
+    // for `const cx int = 2.9`, where a keyword conv type leaves no decl reading).
+    std::unique_ptr<parse::Node> parseConstConvShorthand() {
+        int stmt_file = peek().file_id;
+        int stmt_tok = pos;
+        advance();   // const
+        if (peek().kind != token::Kind::kIdentifier) {
+            error("Expected variable name.");
+            return nullptr;
+        }
+        auto node = newNodeAt(parse::Kind::kVarDeclStmt, stmt_file, stmt_tok);
+        node->name = peek().text;
+        node->name_tok = pos;
+        node->is_const = true;
+        advance();   // name
+        auto init = parseConvertChain(stmt_file, /*shorthand=*/true);
+        if (!init) return nullptr;
+        node->children.push_back(std::move(init));
+        if (!expect(token::Kind::kSemicolon, ";")) return nullptr;
+        return node;
+    }
+
+    // Is `n` a shorthand-reading statement — an assign / store / decl whose LAST child
+    // is the conversion (or the pointer cast the shorthand builds)? The settle reads
+    // the conversion's target type there.
+    static bool endsInShorthandConversion(parse::Node const& n) {
+        if (n.kind != parse::Kind::kAssignStmt && n.kind != parse::Kind::kStoreStmt
+            && n.kind != parse::Kind::kVarDeclStmt) return false;
+        if (n.children.empty() || !n.children.back()) return false;
+        parse::Kind k = n.children.back()->kind;
+        return k == parse::Kind::kConvertExpr || k == parse::Kind::kCastExpr;
+    }
+
     std::unique_ptr<parse::Node> parseStmt() {
         token::Token const& t = peek();
         if (t.kind == token::Kind::kLBrace) return parseBlock();
@@ -4139,8 +4217,15 @@ struct Parser {
         }
         // A const-led FUNCTION shape (`const int^ fn(...) { }` — a deep-const
         // return type) falls through to the function-def dispatch below.
-        if (t.kind == token::Kind::kConst && !looksLikeFunctionDef())
+        if (t.kind == token::Kind::kConst && !looksLikeFunctionDef()) {
+            // `const c Amt = e` is a typed const (type c, name Amt) OR a typeless
+            // const with the conversion shorthand — the fork keeps both readings.
+            if (peekKind(1) == token::Kind::kIdentifier
+                && (peekKind(2) == token::Kind::kIdentifier
+                    || peekKind(2) == token::Kind::kColonColon))
+                return parseDeclOrConvShorthand(/*const_lead=*/true);
             return parseVarDeclStmt();
+        }
         if (t.kind == token::Kind::kAlias) return parseAliasDecl();
         if (t.kind == token::Kind::kEnum) return parseEnumDecl();
         if (t.kind == token::Kind::kGlobal) return parseGlobalStmt();
@@ -4174,16 +4259,15 @@ struct Parser {
             // and then the assignment / bare-statement tail. (parseIncDecStmt handles only
             // the leading-PREFIX form `++name`.)
             // `<ident> <ident>` is a declaration with an identifier type
-            // (alias / class / enum), e.g. `Integer x = 42;`. ONE carve-out: a
-            // second identifier carrying a type-arg group whose closer is
-            // immediately followed by `=` (`v Vec<int> = e`) is the conversion
-            // SHORTHAND — a declared NAME never carries type-args, so the shape
-            // is decl-impossible. The bare twin `x Amt = e` is token-identical
-            // to a decl (`Amt x = e` reversed) and stays a decl: THE DECL SHAPE
-            // WINS, and the long form `x = (Amt = e)` is the escape hatch.
-            // The POINTER CAST SHORTHAND is decl-impossible too: `p Node^ = q`,
-            // `it Ns:T[] = q` put a `^` / empty `[]` after the second identifier
-            // (a declared name carries only SIZED dims) before the `=`.
+            // (alias / class / enum), e.g. `Integer x = 42;` — or the conversion
+            // SHORTHAND `x Amt = e` (lvalue x, conv type Amt): token-identical, so
+            // the DECL-OR-SHORTHAND FORK keeps both readings and resolve picks by
+            // whether the lead names a type. Two shapes are decl-impossible and go
+            // straight to the shorthand: a second identifier carrying a type-arg
+            // group whose closer is immediately followed by `=` (`v Vec<int> = e`
+            // — a declared NAME never carries type-args), and the POINTER CAST
+            // SHORTHAND `p Node^ = q` / `it Ns:T[] = q` (a `^` / empty `[]` after
+            // the second identifier — a declared name carries only SIZED dims).
             if (next == token::Kind::kIdentifier) {
                 int ta = skipTypeArgGroup(2);
                 bool conv_shorthand = peekKind(2) == token::Kind::kLt && ta > 2
@@ -4205,26 +4289,29 @@ struct Parser {
                     }
                     conv_shorthand = ptr_suffix && peekKind(end) == token::Kind::kEquals;
                 }
-                if (!conv_shorthand) return parseVarDeclStmt();
+                if (!conv_shorthand) return parseDeclOrConvShorthand(false);
                 return parseNameLedStmt();
             }
             // A qualified (`Space:Dir x`), pointer-suffixed (`Integer^ ref`,
             // `Integer[] iter`), or template-alias-use (`Ref<int> p`) identifier-
             // typed decl. looksLikeQualifiedTypedDecl accepts an optional type-arg
             // group and `^` / `[]` suffixes before the var name; a `<` that is a
-            // COMPARISON fails the gate and falls to the name-led statement.
+            // COMPARISON fails the gate and falls to the name-led statement. The
+            // same tokens are the shorthand on a qualified / deref / index lvalue
+            // (`Ns:g Amt = e`, `p^ Amt = e`, `arr[i] Amt = e`) — the fork.
             if ((next == token::Kind::kColon
                  || next == token::Kind::kBitXor
                  || next == token::Kind::kLBracket
                  || next == token::Kind::kLt)
-                && looksLikeQualifiedTypedDecl()) return parseVarDeclStmt();
+                && looksLikeQualifiedTypedDecl())
+                return parseDeclOrConvShorthand(false);
             // ident, `ident:...` (qualified) -> assign / aug-assign / call.
             return parseNameLedStmt();
         }
         // A leading `::` is a global-qualified name: a typed decl (`::A:T x`) or
         // a name leading a call / assign.
         if (t.kind == token::Kind::kColonColon) {
-            if (looksLikeQualifiedTypedDecl()) return parseVarDeclStmt();
+            if (looksLikeQualifiedTypedDecl()) return parseDeclOrConvShorthand(false);
             return parseNameLedStmt();
         }
         // A leading `(...)` is a tuple-typed var decl when a name follows the
