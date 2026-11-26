@@ -558,6 +558,7 @@ LP(
 
     /* find a solution. */
     void solve() {
+
         solved_ = false;
         nrows int = rows_.size();
 
@@ -714,7 +715,7 @@ LP(
         */
 
         /* find a fractional user variable. */
-        frac_row_idx = find_fractional_user_variable();
+        frac_row_idx = find_most_fractional_row();
         if (frac_row_idx < 0) {
             solved_ = true;
             return;
@@ -879,10 +880,11 @@ LP(
     ie closest to 0.5.
     or -1.
     */
-    int find_fractional_user_variable() {
+    int find_most_fractional_row() {
         nrows int = rows_.size();
 
         /* check for fractional Z first. */
+        /*
         for (row_idx : 0..nrows) {
             row = ^rows_[row_idx];
             if (row^.owner_ != 0) {
@@ -893,11 +895,13 @@ LP(
             }
             return row_idx;
         }
+        */
 
         max_row = -1;
         max_fraction float64 = 0.0;
         for (pass : 0..<=1) {
-            for (row_idx : 0..nrows) {
+            /* skip the Z row. */
+            for (row_idx : 1..nrows) {
                 row = ^rows_[row_idx];
                 if (row^.constant_.denom_ == 1) {
                     continue;
