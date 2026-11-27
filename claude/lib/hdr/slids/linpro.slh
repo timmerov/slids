@@ -112,6 +112,9 @@ LP(
     /* add a user row. */
     void add_row(Expr^ expr);
 
+    /* return the cost variable. */
+    Var get_cost_var();
+
     /* find a solution - possibly fractional. */
     void solve();
 

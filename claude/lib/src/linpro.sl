@@ -607,6 +607,12 @@ LP(
         }
     }
 
+    /* return the cost variable. */
+    Var get_cost_var() {
+        /* the S variable is always index 1. */
+        return Var(1);
+    }
+
     /* find a solution. */
     void solve() {
 

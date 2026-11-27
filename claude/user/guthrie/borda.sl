@@ -215,18 +215,27 @@ ElectoralMethod : BordaMethod() {
             only the first row is added to the cost.
             all others are free.
             */
-            for (i : 0..nstrategic_minions) {
-                name = String + "s" + i;
-                is_costly = (i < ncols);
-                strategic_minions[i] = lp.add_var(name, is_costly);
+            idx = 0;
+            for (i : 0..nrows) {
+                for (k : 0..ncols) {
+                    name = String + "s" + idx;
+                    is_costly = (i == 0);
+                    strategic_minions[idx] = lp.add_var(name, is_costly);
+                    ++idx;
+                }
             }
 
-            /* build expressions for the rows and columns of strategic minions. */
+            /*
+            build expressions for the rows and columns of strategic minions.
+            we build but don't use row 0 for code clarity.
+            that's the cost var.
+            */
+            nrow_exprs = nrows + ncols;
             row_exprs.clear();
-            row_exprs.resize(nrows + ncols);
+            row_exprs.resize(nrow_exprs);
             idx = 0;
-            for (i : 0..ncols) {
-                for (k : 0..nrows) {
+            for (i : 0..nrows) {
+                for (k : 0..ncols) {
                     row_exprs[i] += strategic_minions[idx];
                     row_exprs[nrows + k] += strategic_minions[idx];
                     ++idx;
@@ -240,16 +249,24 @@ ElectoralMethod : BordaMethod() {
                 lp.add_row(row);
             }
 
-            /* constraint: all rows and cols = strategic minions. */
-            for (i : 0..(nrows+ncols-1)) {
-                row = LP:Expr + row_exprs[i] + LP:gte + row_exprs[i+1];
+            /*
+            constraint: all rows and cols = strategic minions.
+            the first row is S.
+            and we make a >= cycle.
+            S >= row1 >= row2 >= col0 >= col1 >= col2 >= S
+            */
+            cost_var = lp.get_cost_var();
+            row = LP:Expr + cost_var + LP:gte + row_exprs[1];
+            lp.add_row(row);
+            for (i : 2..nrow_exprs) {
+                row = LP:Expr + row_exprs[i-1] + LP:gte + row_exprs[i];
                 lp.add_row(row);
             }
-            row = LP:Expr + row_exprs[nrows+ncols-1] + LP:gte + row_exprs[0];
+            row = LP:Expr + row_exprs[nrow_exprs-1] + LP:gte + cost_var;
             lp.add_row(row);
 
             /* constraint: honest minions + strategic minions = pool size. */
-            LP:Expr expr = row_exprs[0];
+            expr = LP:Expr + cost_var;
             pool_size = 0;
             for (minion : honest_minions) {
                 expr += minion^.var_;

@@ -4,6 +4,17 @@ Copyright (C) 2012-2026 tim cotter. All rights reserved.
 
 /*
 bucklin electoral method.
+
+for strategic voting, we need:
+W>A pairwise.
+we need the election to end in round R.
+no candidate may have a majority in any round before R.
+A must have the greatest majority in round R.
+the pool of A>W voters vote honestly or strategically.
+R strategy
+1 A
+2 BA CA DA WA?
+3 BCA BDA CBA CDA DBA DCA
 */
 
 import slids.string;
@@ -73,6 +84,34 @@ ElectoralMethod : BucklinMethod() {
         /* accumulate correlations. */
         if (winner_ == g_runner.guthrie_.winner_) {
             ++is_winner_;
+        }
+    }
+
+    /* analyze strategic voting. */
+    virtual void strategic_voting() {
+        /* do nothing. */
+    }
+
+    virtual void print_strategic_results() {
+        Format fmt;
+        fmt.float_style_ = kFixedPoint;
+        fmt.precision_ = 1;
+
+        ntrials float64 = g_runner.ntrials_;
+        nvillains float64 = nvillains_;
+        wins = 100.0 * nvillains / ntrials;
+        coalition_size float64 = 0.0;
+        coalition_pct float64 = 0.0;
+        if (nvillains_ > 0) {
+            nvoters float64 = g_runner.electorate_.nvoters_;
+            coalition_size = nminions_ / nvillains;
+            coalition_pct = 100.0 * coalition_size / nvoters;
+        }
+
+        println(String + " " + name_ + ": " + fmt*wins + "% (" + nvillains_ + ")"
+            + " strategic voters: " + fmt*coalition_pct + "% (" + coalition_size + ")");
+        if (kExplainStrategies) { void;
+            println("  W>A pairwise. BC+ voters who prefer A>W vote A earlier.");
         }
     }
 }
