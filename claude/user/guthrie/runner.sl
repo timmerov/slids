@@ -391,6 +391,10 @@ TestRunner() {
             println(String + "Error: Need at least 3 candidates (" + ncandidates_ + ").");
             stdc:exit(1);
         }
+        if (ncandidates_ >= 26) {
+            println(String + "Error: At most 26 candidates (" + ncandidates_ + ").");
+            stdc:exit(1);
+        }
         if (electorate_.nvoters_ < ncandidates_) {
             println(String + "Error: Need more voters (" + electorate_.nvoters_ + ") than candidates (" + ncandidates_ + ").");
             stdc:exit(1);

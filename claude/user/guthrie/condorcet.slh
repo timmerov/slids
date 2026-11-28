@@ -24,4 +24,10 @@ ElectoralMethod : CondorcetMethod() {
 
     /* pretty print correlation. */
     virtual void print_correlation();
+
+    /* analyze strategic voting. */
+    virtual void strategic_voting();
+
+    /* pretty print strategic voting summary. */
+    virtual void print_strategic_results();
 }

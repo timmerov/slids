@@ -155,6 +155,16 @@ ElectoralMethod : BordaMethod() {
             }
 
             /*
+            if A beats W (the winner) then strategically voting
+            to make A the winner is good strategic voting.
+            we're looking for bad strategic voting.
+            */
+            a_beats_w = g_runner.pairwise_.is_winner(a, winner_);
+            if (a_beats_w) {
+                continue;
+            }
+
+            /*
             the pool of minions is all A>W blocs.
             some are honest.
             some vote strategically.
